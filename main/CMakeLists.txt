@@ -60,6 +60,7 @@ idf_component_register(
     "util/heap_watch.c"
     "util/sock_owners.c"
     "util/ansi_term.c"
+    "util/webaudio_codec.c"
         "util/bandplan.c"
         "util/dxcc.c"
         "util/country.c"

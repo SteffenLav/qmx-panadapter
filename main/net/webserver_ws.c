@@ -13,12 +13,26 @@
 #include "cat.h"
 #include "dsp.h"
 #include "ui.h"          // ui_pan_view_current - the viewport carried in the frame
+#include "rx_audio.h"    // the demodulated audio this stream carries to the browser
+#include "util/webaudio_codec.h"   // mu-law, shared with test/webaudio_codec_harness.c
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
 // Sent to a client that is about to be displaced by a newer one, so it can stop
 // reconnecting and say what happened instead of flapping. There is only ever ONE
 // live spectrum client - see the takeover note in ws_uri_handler().
 #define WS_FRAME_TYPE_TAKEOVER  0x02
+/* Demodulated receiver audio, mu-law, mono, RX_AUDIO_WEB_RATE_HZ.
+ * ⛔ 0x03 AND NOT THE 0x02 docs/web-audio-feasibility.md SPECIFIES - that doc
+ * predates the takeover notice, which took 0x02 first. A browser that predates
+ * this type ignores any first byte that is not WS_FRAME_TYPE_SPECTRUM, so old
+ * pages keep working; one that knows 0x02 as "you were displaced" would have
+ * disconnected itself on the first audio frame. */
+#define WS_FRAME_TYPE_AUDIO     0x03
+/* 100 ms of audio is 1200 samples; the cap allows one 50 ms catch-up burst
+ * after a paused transfer without ever becoming a frame big enough to hurt a
+ * congested link. */
+#define WS_AUDIO_MAX_SAMPLES    1800
+#define WS_AUDIO_HDR_LEN        6
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
 // WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
@@ -162,6 +176,17 @@ static EXT_RAM_BSS_ATTR float s_spec[DSP_FFT_SIZE];
 #define WS_WIRE_HDR_LEN 4
 static uint8_t        s_txbuf[WS_WIRE_HDR_LEN + WS_FRAME_LEN];
 static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
+
+/* Audio goes out as its OWN frame, not appended to the spectrum frame: a
+ * browser that does not understand it must be able to drop it whole, and the
+ * spectrum frame's length is parsed by every page already in the field. PSRAM
+ * like s_spec - written once per 100 ms, handed to lwip which copies it. */
+static EXT_RAM_BSS_ATTR uint8_t s_audio_txbuf[WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN +
+                                              WS_AUDIO_MAX_SAMPLES];
+static EXT_RAM_BSS_ATTR int16_t s_audio_pcm[WS_AUDIO_MAX_SAMPLES];
+static uint16_t s_audio_seq = 0;
+static uint32_t s_audio_frames = 0;   /* audio frames sent, for the fps line */
+
 
 // Frames that needed more than one send() to go out, i.e. instances of the
 // partial write that used to silently corrupt the stream. Reported on the fps
@@ -423,6 +448,11 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
         }
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
+    /* A new socket is a new listener, and it has not asked for audio yet.
+       Without this a takeover inherits the displaced tab's audio stream and
+       the new page shows a muted button over a running demodulator. */
+    if (rx_audio_web_is_enabled()) rx_audio_web_set_enabled(false);
+
     s_ws_fd = fd;
     s_sessions++;
     s_session_active = true;
@@ -491,6 +521,15 @@ static void ws_push_task(void *arg)
         // reappearing during the one operation that already stresses the link.
         if (s_session_active && s_server && s_ws_fd >= 0 && s_ws_paused)
             httpd_sess_update_lru_counter(s_server, s_ws_fd);
+
+        /* ⛔ THE LISTENER'S SOCKET IS THE ONLY THING KEEPING THE DEMODULATOR
+         * RUNNING. Web audio is not persisted and has no timeout of its own: a
+         * closed tab, a reload or a takeover must stop the chain, or a Tab5
+         * whose speaker is off keeps demodulating for ever for nobody. A pause
+         * is NOT a reason to stop - the transfer ends and the same listener is
+         * still there - so this is gated on the session, not on s_ws_paused. */
+        if ((!s_session_active || s_ws_fd < 0) && rx_audio_web_is_enabled())
+            rx_audio_web_set_enabled(false);
 
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not
@@ -678,6 +717,40 @@ static void ws_push_task(void *arg)
         fail_streak = 0;
         fail_streak_at = 0;
 
+        /* ---- Demodulated audio (Sam W7STF, 2026-07-15) ---------------------
+         *
+         * A SEPARATE frame, sent only after the spectrum frame went out
+         * cleanly. The ordering is deliberate: the spectrum is what every
+         * browser came for and audio is what one of them asked for, so when
+         * the link can only carry one of the two it must be the picture that
+         * survives. ws_send_all() is all-or-nothing per frame, so a skipped
+         * audio frame leaves the stream in sync - the browser inserts its own
+         * silence from the sequence gap.
+         *
+         * ⚠ A FAILED AUDIO SEND IS NOT COUNTED AGAINST THE SESSION. The
+         * fail-streak teardown exists for a dead socket, and this frame is
+         * four times the size of the spectrum frame: letting it decide would
+         * close sessions that are carrying the spectrum perfectly well. */
+        if (rx_audio_web_is_enabled()) {
+            int n = rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES);
+            if (n > 0) {
+                uint8_t *p = s_audio_txbuf + WS_WIRE_HDR_LEN;
+                p[0] = WS_FRAME_TYPE_AUDIO;
+                p[1] = 0;                                  /* reserved */
+                p[2] = (uint8_t)s_audio_seq;
+                p[3] = (uint8_t)(s_audio_seq >> 8);
+                p[4] = (uint8_t)RX_AUDIO_WEB_RATE_HZ;      /* the frame says its */
+                p[5] = (uint8_t)(RX_AUDIO_WEB_RATE_HZ >> 8); /* own rate */
+                s_audio_seq++;
+                for (int i = 0; i < n; i++)
+                    p[WS_AUDIO_HDR_LEN + i] = webaud_mulaw_encode(s_audio_pcm[i]);
+
+                ws_tx_result_t atx = ws_send_binary(s_server, s_ws_fd, s_audio_txbuf,
+                                                    (size_t)(WS_AUDIO_HDR_LEN + n), 1500);
+                if (atx == WS_TX_OK) s_audio_frames++;
+            }
+        }
+
         sent++;
         TickType_t now = xTaskGetTickCount();
         /* 60 s window, was 5 s (log audit 2026-09-13): 12 lines a minute for as
@@ -688,8 +761,15 @@ static void ws_push_task(void *arg)
             // Every one of those was, before this fix, a silently corrupted stream
             // and therefore a browser-side disconnect a moment later. A non-zero
             // count here is the fix working, NOT a fault.
-            ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
-                     fps, (unsigned)s_partial_writes);
+            if (s_audio_frames || rx_audio_web_is_enabled())
+                ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u), audio %u frames, "
+                              "%u samples dropped",
+                         fps, (unsigned)s_partial_writes, (unsigned)s_audio_frames,
+                         (unsigned)rx_audio_web_dropped());
+            else
+                ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
+                         fps, (unsigned)s_partial_writes);
+            s_audio_frames = 0;
             sent = 0;
             fps_at = now;
         }

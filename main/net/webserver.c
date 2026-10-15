@@ -2632,6 +2632,33 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "web_audio") == 0) {
+        /* Start/stop demodulated audio on the WebSocket (Sam W7STF).
+         *   {"action":"web_audio","on":true}
+         *
+         * ⛔ HTTP AND NOT A WS TEXT MESSAGE, which is what
+         * docs/web-audio-feasibility.md specifies. The /ws handler registers
+         * handle_ws_control_frames = false and never calls
+         * httpd_ws_recv_frame() - it captures the fd on the handshake and
+         * returns so the single httpd worker is free. Nothing the browser
+         * sends on that socket is ever read, so {"audio":1} over the socket
+         * would have been silently ignored.
+         *
+         * Not persisted, and the WS session's end clears it: a closed tab must
+         * not leave the chain running. */
+        cJSON *jon = cJSON_GetObjectItem(root, "on");
+        if (jon && cJSON_IsBool(jon)) rx_audio_web_set_enabled(cJSON_IsTrue(jon));
+        char body[160];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"on\":%s,\"rate\":%d,\"dropped\":%lu,"
+                 "\"speaker\":%s}",
+                 rx_audio_web_is_enabled() ? "true" : "false",
+                 RX_AUDIO_WEB_RATE_HZ,
+                 (unsigned long)rx_audio_web_dropped(),
+                 rx_audio_is_enabled() ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "rxaudio") == 0) {
         // Live AGC/clip tuning for rx_audio.c - RAM only, not persisted.
         // Added 2026-09-04 so chasing "clicking on stronger signals" doesn't

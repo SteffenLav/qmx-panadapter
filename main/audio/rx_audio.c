@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 
 #include "bsp/m5stack_tab5.h"
+#include "util/webaudio_codec.h"   // the 48k->12k tap and mu-law, shared with the harness
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "es8388_codec.h"
@@ -1177,6 +1178,119 @@ static inline void rxcap_push(const int16_t *out, int pairs)
     if (s_cap_n >= s_cap_cap) s_cap_run = false;   /* one-shot */
 }
 
+/* ---- Web-audio tap ---------------------------------------------------------
+ *
+ * The same samples the speaker gets, decimated to mono 12 kHz for the browser.
+ *
+ * ⭐ THE DEMODULATOR ALREADY EXISTS AND THIS IS DOWNSTREAM OF ALL OF IT.
+ * docs/web-audio-feasibility.md (written at a4d8564, before rx_audio.c) plans
+ * to re-run the FT8 pre-ring branch in dsp.c as a second demodulator. That was
+ * right when it was written and is wrong now: this file demodulates CW/CW-R/
+ * USB/LSB/AM with the mode filters, the AGC, the squelch and the limiter the
+ * operator already tunes, and s_out is "exactly what is played". Tapping it
+ * means the browser and the speaker cannot disagree, and there is one chain to
+ * fix when either is wrong.
+ *
+ * Rate: s_out is at DSP_SAMPLE_RATE_HZ whatever the mode's decimation D is, so
+ * a /4 tap here is a FIXED 12 kHz for every mode and every width. Tapping at
+ * fs_dec instead would hand the browser 6, 12 or 24 kHz depending on which
+ * filter width the operator last touched, and change it mid-stream.
+ *
+ * ⚠ The two channels are NOT always identical - panoramic CW pans them hard
+ * L/R - so this averages rather than taking L like rxcap_push does. A hard-
+ * panned CW pair that was summed without the halving would clip.
+ */
+#define WEBAUD_RATE_HZ  (DSP_SAMPLE_RATE_HZ / WEBAUD_DECIM)   /* 12000 */
+#define WEBAUD_RING_N   (WEBAUD_RATE_HZ)                      /* 1.0 s */
+_Static_assert(WEBAUD_RATE_HZ == RX_AUDIO_WEB_RATE_HZ,
+               "the rate the browser is told and the rate it is sent must be one number");
+
+static volatile bool s_web_en = false;
+static int16_t      *s_web_ring = NULL;        /* PSRAM, mono, WEBAUD_RATE_HZ */
+static volatile uint32_t s_web_w = 0;          /* write index, producer only  */
+static volatile uint32_t s_web_r = 0;          /* read index, consumer only   */
+static volatile uint32_t s_web_dropped = 0;    /* samples lost to a slow reader */
+static webaud_decim_t s_web_dec;
+
+/* Producer. Called from rx_audio_task beside rxcap_push, with the frame that
+ * is about to be played (or that would be, when no codec was ever opened). */
+static inline void webaud_push(const int16_t *out, int pairs)
+{
+    if (!s_web_en || !s_web_ring) return;
+    for (int i = 0; i < pairs; i++) {
+        /* ⚠ AVERAGE, do not take L like rxcap_push does. The two channels are
+           NOT always identical - panoramic CW pans them hard L/R, so taking one
+           ear would drop whichever station sat on the other side of the dial. */
+        float mono = 0.5f * ((float)out[2 * i] + (float)out[2 * i + 1]);
+        int16_t v;
+        if (!webaud_decim_push(&s_web_dec, mono, &v)) continue;
+
+        /* ⛔ ONE WRITER EACH. The producer only ever moves s_web_w and the
+         * consumer only ever moves s_web_r - that is the whole reason this
+         * ring needs no lock between a core-1 DSP task and a core-0 network
+         * task. Dropping the OLDEST sample here instead, which is what a
+         * listener actually wants on resume, would mean this task writing
+         * s_web_r behind the reader's back; the reader would then write its
+         * own stale index back and undo it. The staleness is handled at the
+         * READ end, where it costs nothing to own. */
+        uint32_t w  = s_web_w;
+        uint32_t nw = (w + 1) % WEBAUD_RING_N;
+        if (nw == s_web_r) { s_web_dropped++; continue; }  /* full: no reader.
+           continue, not return: the FIR history has to keep running or the
+           first sample after the reader comes back is a discontinuity. */
+        s_web_ring[w] = v;
+        s_web_w = nw;
+    }
+}
+
+void rx_audio_web_set_enabled(bool en)
+{
+    if (en == s_web_en) return;
+    if (en) {
+        /* Start from empty and from a clean filter: whatever is in the ring is
+           from the last listener and is stale by definition. */
+        s_web_r = s_web_w;
+        webaud_decim_reset(&s_web_dec);
+        s_web_dropped = 0;
+    }
+    s_web_en = en;
+    ESP_LOGI(TAG, "web audio %s", en ? "on" : "off");
+    /* The task blocks for ever when local audio is off, so it has to be told. */
+    if (en && s_task) xTaskNotifyGive(s_task);
+}
+
+bool rx_audio_web_is_enabled(void) { return s_web_en; }
+
+int rx_audio_web_read(int16_t *dst, int max)
+{
+    if (!s_web_en || !s_web_ring || max <= 0) return 0;
+    uint32_t r = s_web_r, w = s_web_w;
+
+    /* ⚠ A BACKLOG IS LATENCY, NOT CONTENT. If the reader was held off - a
+     * paused transfer, a congested link - the ring holds audio that is already
+     * seconds old, and draining it in order plays the band late for as long as
+     * it takes to catch up. Skip to RX_AUDIO_WEB_LAG_MAX of the newest instead
+     * and say how much went. The listener hears a break, which is honest,
+     * rather than a delay that never resolves. */
+    uint32_t avail = (w >= r) ? (w - r) : (WEBAUD_RING_N - r + w);
+    const uint32_t lag_max = WEBAUD_RATE_HZ / 2;        /* 500 ms */
+    if (avail > lag_max) {
+        uint32_t skip = avail - (WEBAUD_RATE_HZ / 5);   /* leave 200 ms */
+        r = (r + skip) % WEBAUD_RING_N;
+        s_web_dropped += skip;
+    }
+
+    int n = 0;
+    while (r != w && n < max) {
+        dst[n++] = s_web_ring[r];
+        r = (r + 1) % WEBAUD_RING_N;
+    }
+    s_web_r = r;
+    return n;
+}
+
+uint32_t rx_audio_web_dropped(void) { return s_web_dropped; }
+
 static void rx_audio_task(void *arg)
 {
     (void)arg;
@@ -1196,7 +1310,14 @@ static void rx_audio_task(void *arg)
     int64_t s_last_ring_retry_us = 0;
 
     while (1) {
-        if (!s_enabled) {
+        /* ⛔ TWO LISTENERS, ONE CHAIN. The browser is a consumer of this task
+         * exactly like the speaker is, and it does NOT need the codec: a unit
+         * that booted with RX audio off has no ES8388 open and never can have
+         * one this session (the DMA pool is gone to the USB host), yet the
+         * whole point of Sam W7STF's request is listening from another room
+         * while the Tab5 sits silent. So the chain runs for `s_enabled ||
+         * s_web_en`, and only the esp_codec_dev_write() is conditional. */
+        if (!s_enabled && !s_web_en) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Fully asleep - zero wakeups, zero cost - until
             // rx_audio_set_enabled(true) gives this notification. This is the
@@ -1205,8 +1326,9 @@ static void rx_audio_task(void *arg)
             continue;
         }
 
-        rxaud_mode_t mode = s_codec_ready ? mode_from_cat_str(cat_get_mode_str())
-                                           : RXAUD_MODE_NONE;
+        bool codec_out = (s_enabled && s_codec_ready);
+        rxaud_mode_t mode = (codec_out || s_web_en) ? mode_from_cat_str(cat_get_mode_str())
+                                                    : RXAUD_MODE_NONE;
         bool active = (mode != RXAUD_MODE_NONE);
 
         if (!active) {
@@ -1394,7 +1516,9 @@ static void rx_audio_task(void *arg)
             s_resume_ramp = DSP_SAMPLE_RATE_HZ / 100;
             int64_t w0 = esp_timer_get_time();
             rxcap_push(s_out, DSP_FFT_SIZE);   /* record exactly what is played */
-            esp_codec_dev_write(s_codec, s_out, DSP_FFT_SIZE * 2 * (int)sizeof(int16_t));
+            webaud_push(s_out, DSP_FFT_SIZE);  /* ...and send the browser the same */
+            if (codec_out)
+                esp_codec_dev_write(s_codec, s_out, DSP_FFT_SIZE * 2 * (int)sizeof(int16_t));
             uint32_t w_us = (uint32_t)(esp_timer_get_time() - w0);
             if (w_us > s_write_us_max) s_write_us_max = w_us;
             s_write_us_sum += w_us;
@@ -1890,7 +2014,18 @@ static void rx_audio_task(void *arg)
          * ⚠ The accumulator resets whenever audio restarts (see !active_prev),
          * or a mode change would be charged as a vast deficit and the corrector
          * would insert a burst. */
-        if (pairs > 0) {
+        /* ⛔ THE SERVO SERVES THE CODEC, AND A BROWSER IS NOT ONE.
+         *
+         * Everything below measures the radio against the ES8388's crystal so
+         * the I2S DMA neither starves nor backs up. With no codec open there
+         * is no second clock to hold to: the browser's own ring absorbs the
+         * radio's 0.24% offset, and running the corrector against a clock
+         * nothing is playing to would stretch the audio for no reason. Pin the
+         * nominal ratio instead - one output sample per input sample, which is
+         * what s_up_inc = 1/D means. */
+        if (pairs > 0 && !codec_out) {
+            s_up_inc = 1.0f / (float)s_decim_d;
+        } else if (pairs > 0) {
             int64_t now_rm = esp_timer_get_time();
             if (s_rate_t0_us == 0) { s_rate_t0_us = now_rm; s_rate_written = 0; }
             int64_t elapsed  = now_rm - s_rate_t0_us;
@@ -1996,8 +2131,16 @@ static void rx_audio_task(void *arg)
         s_out_sq_n += (uint32_t)pairs;
 
         rxcap_push(s_out, pairs);   /* record exactly what is played */
+        webaud_push(s_out, pairs);  /* ...and send the browser the same */
         rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
-        esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
+        /* ⛔ WITHOUT THE CODEC, THIS LOOP HAS NO PACER. The blocking write is
+         * what holds the task to real time; dsp_rxaudio_read()'s 60 ms
+         * timeout is the only thing left when the browser is the sole
+         * listener. That is enough - the radio delivers at its own rate and
+         * the read blocks for a full frame - but it is the reason this task
+         * must never be given a shorter read timeout. */
+        if (codec_out)
+            esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
         s_write_us_sum += write_us;
@@ -2134,6 +2277,14 @@ void rx_audio_init(void)
     // of the runway/growing-crackle bug (2026-09-23): see the note by
     // RX_OUT_HEADROOM's use in the upsample loop for the mechanism.
     s_out       = heap_caps_malloc((DSP_FFT_SIZE + RX_OUT_HEADROOM) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    /* The browser's 1 s mono ring - 24 KB, PSRAM, touched once per output
+       sample by this task and once per 100 ms by ws_push_task. */
+    s_web_ring  = heap_caps_malloc(WEBAUD_RING_N * sizeof(int16_t),   MALLOC_CAP_SPIRAM);
+    webaud_decim_init(&s_web_dec, DSP_SAMPLE_RATE_HZ);
+    /* Deliberately NOT in the fatal list below: the speaker must not be
+       lost because the browser's ring could not be allocated. */
+    if (!s_web_ring) ESP_LOGW(TAG, "web-audio ring alloc failed; "
+                                   "browser audio unavailable this session");
     s_dec_coeff    = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_re = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_im = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);

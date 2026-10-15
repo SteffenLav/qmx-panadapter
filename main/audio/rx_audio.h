@@ -62,6 +62,24 @@ bool rx_audio_is_enabled(void);
  * which is the part that was wrong. Ask this after enabling and say so. */
 bool rx_audio_restart_pending(void);
 
+// ---- Web audio (Sam W7STF, 2026-07-15) -------------------------------------
+// The browser listens to the SAME demodulated audio the speaker gets, taken
+// after the mode filter, the AGC, the squelch and the limiter and decimated to
+// mono 12 kHz. Not persisted: a listener who closes the page must not leave the
+// chain running for ever, so the WS session's end clears it.
+//
+// ⭐ IT DOES NOT NEED THE CODEC. rx_audio_set_enabled() is the SPEAKER; this is
+// independent of it and of rx_audio_restart_pending(), because the use case is
+// a Tab5 sitting silent in another room. The chain runs for either consumer.
+void     rx_audio_web_set_enabled(bool en);
+bool     rx_audio_web_is_enabled(void);
+// Drain up to `max` samples at RX_AUDIO_WEB_RATE_HZ into dst; returns how many.
+int      rx_audio_web_read(int16_t *dst, int max);
+// Samples the producer overwrote because the reader fell behind - the one
+// number that says whether a break-up was the link or the device.
+uint32_t rx_audio_web_dropped(void);
+#define RX_AUDIO_WEB_RATE_HZ 12000
+
 // Output volume, 0..100 (persisted to NVS).
 void rx_audio_set_volume(uint8_t vol_0_100);
 uint8_t rx_audio_get_volume(void);

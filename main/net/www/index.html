@@ -234,6 +234,17 @@
     -webkit-tap-highlight-color: transparent;
   }
   #flatbtn.on { background: var(--accent); color: var(--bg); }
+  #listenbtn {
+    background: #1f2937; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px;
+    width: 2rem; height: 1.8rem; margin-left: 0.3rem;
+    font-family: inherit; font-weight: 700; cursor: pointer; flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #listenbtn.on  { background: var(--accent); color: var(--bg); }
+  /* Asked for and not yet arriving - the device may be in a mode it does not
+     demodulate, so the button must not claim to be playing. */
+  #listenbtn.wait { background: #1f2937; color: var(--warn, #fbbf24); }
   #fps {
     color: var(--ok); font-size: 0.75rem; min-width: 4.5rem;
     text-align: right; flex-shrink: 0;
@@ -1157,6 +1168,12 @@
       <canvas id="smeter" width="240" height="40" title="S-meter"></canvas>
       <div class="top-fill"></div>
       <button id="flatbtn" type="button" title="Flat-spectrum mode">F</button>
+      <!-- Listen: the demodulated audio the Tab5's own speaker gets. It sits
+           here and not in a settings panel because it is a thing you turn on
+           while you are watching the band, and because the browser will only
+           start audio from a real click - this button IS that gesture. -->
+      <button id="listenbtn" type="button"
+              title="Listen to the receiver here (the Tab5's own demodulated audio)">&#9654;</button>
       <div id="fps" class="bad">disconnected</div>
     </div>
   </div>
@@ -7444,6 +7461,13 @@ async function tick() {
       {
         const f = document.getElementById("flatbtn");
         if (f) f.style.display = isFt8 ? "none" : "";
+        /* Listen goes with it, for a harder reason than tidiness: the device
+           PAUSES this whole WebSocket in FT8/FT4 mode (the v0.20.0 gate), so
+           no audio frame can arrive. A button that is on and silent is worse
+           than no button. */
+        const l = document.getElementById("listenbtn");
+        if (l) l.style.display = isFt8 ? "none" : "";
+        if (isFt8 && typeof audioWantOn !== "undefined" && audioWantOn) audioStopAndTell();
       }
       document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
@@ -8654,6 +8678,12 @@ const FRAME_TYPE_SPECTRUM = 0x01;
    reads as a network fault. It cost an hour of chasing a waterfall bug that was
    really two browsers fighting: 340 takeovers in one session. */
 const FRAME_TYPE_TAKEOVER = 0x02;
+/* Demodulated receiver audio, mu-law, mono. ⛔ 0x03 and NOT the 0x02 that
+   docs/web-audio-feasibility.md specifies - the takeover notice took 0x02
+   first, and a page that read an audio frame as "you were displaced" would
+   disconnect itself on the first one. */
+const FRAME_TYPE_AUDIO = 0x03;
+const AUDIO_HDR_LEN = 6;
 let wsDisplaced = false;
 /* When the current socket opened, and the last few close codes - see ws.onclose. */
 let wsOpenedAt = 0;
@@ -10759,6 +10789,219 @@ function wsReclaim() {
 }
 fpsEl.addEventListener("click", wsReclaim);
 
+/* ---- Receiver audio in the browser (Sam W7STF, 2026-07-15) ----------------
+ *
+ * The Tab5 sends the SAME demodulated audio its own speaker gets - after the
+ * mode filter, the AGC and the limiter - as mu-law at 12 kHz on the spectrum
+ * WebSocket. All this end does is unpack it, hold about 150 ms of it, and play
+ * it out at whatever rate this machine's audio hardware runs at.
+ *
+ * ⛔ THE TWO CLOCKS ARE NOT RELATED. The radio's sample clock and this
+ * computer's sound card free-run against each other, typically a fraction of a
+ * percent apart - so the buffer fills or empties over minutes, and the
+ * correction is a slow nudge on the resampling ratio, not a resync. The
+ * firmware does the same thing against the ES8388 and the direction is the
+ * trap there too: too FULL means consume FASTER, so the ratio goes UP. The
+ * inverted sign is not a slow drift, it is crackle that gets steadily worse
+ * (rx_audio.c, 2026-09-22). */
+let audioCtx = null, audioNode = null, audioGain = null;
+let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
+const ULAW = new Float32Array(256);
+(() => {
+  /* G.711 decode, once. The firmware's encoder is the Sun reference and is
+     checked against it for all 65,536 inputs by test/webaudio_codec_harness.c;
+     this is the matching decode table. */
+  for (let i = 0; i < 256; i++) {
+    const u = (~i) & 0xFF;
+    const sign = u & 0x80, exp = (u >> 4) & 0x07, man = u & 0x0F;
+    let v = (((man << 3) + 0x84) << exp) - 0x84;
+    if (sign) v = -v;
+    ULAW[i] = v / 32768;
+  }
+})();
+
+const AUDIO_WORKLET_SRC = `
+class RxPlayer extends AudioWorkletProcessor {
+  constructor(opts) {
+    super();
+    this.srcRate = opts.processorOptions.srcRate;
+    this.buf = new Float32Array(this.srcRate * 4);   /* 4 s is plenty */
+    this.w = 0; this.r = 0;                          /* r is fractional */
+    this.ratio = this.srcRate / sampleRate;
+    this.nominal = this.ratio;
+    this.target = this.srcRate * 0.15;               /* 150 ms of slack */
+    this.port.onmessage = (e) => {
+      if (e.data === "flush") { this.w = 0; this.r = 0; return; }
+      const s = e.data;
+      for (let i = 0; i < s.length; i++) {
+        this.buf[this.w] = s[i];
+        this.w = (this.w + 1) % this.buf.length;
+      }
+    };
+  }
+  avail() {
+    const d = this.w - this.r;
+    return d >= 0 ? d : d + this.buf.length;
+  }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    const have = this.avail();
+    /* Under-run: play silence rather than the buffer's own stale tail. A gap
+       in the stream is a gap; repeating audio to cover it is worse. */
+    if (have < out.length * this.ratio + 2) { out.fill(0); return true; }
+
+    /* Slow rate trim, +/-0.5% maximum, proportional to how far the fill is
+       from target. Too full -> consume faster -> larger ratio. */
+    let err = (have - this.target) / this.target;
+    if (err >  1) err =  1;
+    if (err < -1) err = -1;
+    this.ratio = this.nominal * (1 + 0.005 * err);
+
+    for (let i = 0; i < out.length; i++) {
+      const i0 = Math.floor(this.r) % this.buf.length;
+      const i1 = (i0 + 1) % this.buf.length;
+      const f = this.r - Math.floor(this.r);
+      out[i] = this.buf[i0] * (1 - f) + this.buf[i1] * f;
+      this.r += this.ratio;
+      if (this.r >= this.buf.length) this.r -= this.buf.length;
+    }
+    return true;
+  }
+}
+registerProcessor("rx-player", RxPlayer);
+`;
+
+async function audioStart(srcRate) {
+  if (audioCtx) return true;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+    audioCtx = new Ctx();
+    /* ⛔ TEST THE INSTANCE, NOT THE PROTOTYPE. `Ctx.prototype.audioWorklet`
+       looks like the obvious feature test and it THROWS - audioWorklet is a
+       getter on BaseAudioContext.prototype, and reading it off the prototype
+       with no instance behind it is an illegal invocation. The throw landed in
+       this function's own catch, so every browser reported "no AudioWorklet"
+       and no audio ever started. Caught in the stub + browser, which is the
+       only place it could have been: both web checkers passed on it, because
+       they parse the JavaScript and do not run it. */
+    if (!audioCtx.audioWorklet) { audioCtx = null; return false; }
+    await audioCtx.resume();          /* the click that got us here is the gesture */
+    const url = URL.createObjectURL(new Blob([AUDIO_WORKLET_SRC],
+                                             { type: "application/javascript" }));
+    await audioCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    audioNode = new AudioWorkletNode(audioCtx, "rx-player",
+                                     { processorOptions: { srcRate: srcRate } });
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = 1.0;
+    audioNode.connect(audioGain).connect(audioCtx.destination);
+    return true;
+  } catch (err) {
+    audioCtx = null; audioNode = null;
+    return false;
+  }
+}
+
+/* Local teardown only - the caller decides whether the DEVICE also needs
+   telling. It does not when the socket just closed (the firmware clears web
+   audio on the session's end), and it does when this page is the one giving
+   up, or the Tab5 keeps demodulating for a listener who has gone. */
+function audioStopAndTell() {
+  audioStop();
+  fetch("/api/cmd", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "web_audio", on: false })
+  }).catch(() => {});
+}
+
+function audioStop() {
+  audioWantOn = false;
+  if (audioNode) { try { audioNode.port.postMessage("flush"); } catch (e) {} }
+  if (audioCtx)  { try { audioCtx.suspend(); } catch (e) {} }
+  audioSeq = -1;
+  listenPaint();
+}
+
+/* One audio frame off the socket. The header carries its own sample rate and a
+   sequence number, so a dropped frame is visible here rather than becoming an
+   unexplained click. */
+function audioFrame(buf) {
+  if (!audioWantOn || buf.length <= AUDIO_HDR_LEN) return;
+  const seq  = buf[2] | (buf[3] << 8);
+  const rate = buf[4] | (buf[5] << 8);
+  if (!audioCtx) { audioStart(rate).then(() => {}); return; }
+
+  if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xFFFF)) audioGaps++;
+  audioSeq = seq;
+  audioFrames++;
+
+  const n = buf.length - AUDIO_HDR_LEN;
+  const f = new Float32Array(n);
+  for (let i = 0; i < n; i++) f[i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+  if (audioNode) audioNode.port.postMessage(f, [f.buffer]);
+  /* Repaint on CHANGE, not on every frame: the only things the button shows
+     are "nothing yet" -> "playing" and the gap count, and touching the DOM
+     ten times a second to say the same thing is work the spectrum needs. */
+  if (audioFrames === 1 || audioGaps !== audioGapsPainted) {
+    audioGapsPainted = audioGaps;
+    listenPaint();
+  }
+}
+
+function listenPaint() {
+  const b = document.getElementById("listenbtn");
+  if (!b) return;
+  b.classList.toggle("on",   audioWantOn && audioFrames > 0);
+  b.classList.toggle("wait", audioWantOn && audioFrames === 0);
+  b.innerHTML = audioWantOn ? "&#9632;" : "&#9654;";
+  b.title = !audioWantOn
+    ? "Listen to the receiver here (the Tab5's own demodulated audio)"
+    : (audioFrames === 0
+       ? "Asked for audio - nothing arriving yet. The Tab5 only demodulates "
+         + "CW, CW-R, USB, LSB and AM; in any other mode there is nothing to send."
+       : "Listening. " + audioGaps + " frame gap(s) so far. Click to stop.");
+}
+
+async function listenToggle() {
+  const want = !audioWantOn;
+  try {
+    const r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "web_audio", on: want })
+    });
+    if (!r.ok) { alert("The device refused: HTTP " + r.status); return; }
+    const j = await r.json();
+    if (want) {
+      /* Start the AudioContext from inside the click handler's call chain -
+         a browser will not let audio begin any other way. */
+      const ok = await audioStart(j.rate || 12000);
+      if (!ok) {
+        await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "web_audio", on: false })
+        });
+        alert("This browser has no AudioWorklet, so it cannot play the stream.");
+        return;
+      }
+      audioWantOn = true; audioFrames = 0; audioGaps = 0; audioSeq = -1;
+      if (audioNode) audioNode.port.postMessage("flush");
+    } else {
+      audioStop();
+    }
+  } catch (err) {
+    alert("No answer from the Tab5.");
+    return;
+  }
+  listenPaint();
+}
+
+(() => {
+  const b = document.getElementById("listenbtn");
+  if (b) b.addEventListener("click", listenToggle);
+  listenPaint();
+})();
+
 function connectWs() {
   const url=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
   ws=new WebSocket(url);
@@ -10768,6 +11011,7 @@ function connectWs() {
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
     if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
+    if (buf.length && buf[0]===FRAME_TYPE_AUDIO) { audioFrame(buf); return; }
     if (buf.length<HEADER_LEN+SPEC_W) return;
     if (buf[0]!==FRAME_TYPE_SPECTRUM) return;
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)
@@ -10844,6 +11088,12 @@ function connectWs() {
          1002/1003/1007  protocol or data error                 -> our framing
        Kept in a short history so a PATTERN is visible rather than one instance,
        and shown in the fps slot so it needs no console to read. */
+    /* ⛔ THE DEVICE TURNS AUDIO OFF WHEN THIS SOCKET GOES. It has to - web
+       audio is not persisted and a closed tab must not leave the demodulator
+       running for nobody - so the button has to stop claiming to be playing.
+       The reconnect gets a fresh session, and the listener asks again. */
+    if (audioWantOn) audioStop();
+
     if (wsDisplaced) return;
     const secs = wsOpenedAt ? Math.round((Date.now() - wsOpenedAt) / 1000) : 0;
     wsCloseLog.push(ev.code + (ev.reason ? "/" + ev.reason : "") + " after " + secs + "s");
