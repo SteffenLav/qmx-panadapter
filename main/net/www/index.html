@@ -702,18 +702,26 @@
   }
   #ft8-actions button:hover:not(:disabled),
   #ft8-actions select:hover,
+  #wspr-actions button:hover:not(:disabled),
+  #wspr-actions select:hover { background: var(--accent); color: #000; }
   /* The WSPR page owns the dial, so the top bar's Band/Mode/BW/Zoom are inert
      while it is up - the same rule the Tab5 has always had, and what
      guide/wspr.md has always said. pointer-events:none is the part that
      matters: these pills LOOKED inactive to John W5JSS and still fired,
-     because nothing stopped the click. Freq is deliberately NOT in this set. */
+     because nothing stopped the click. Freq is deliberately NOT in this set.
+
+     ⛔ KEEP THIS RULE ON ITS OWN. In v1.19.0 it was pasted INTO the hover
+     selector list above, so every FT8 action button got pointer-events:none
+     THE MOMENT IT WAS HOVERED. That makes the button stop being the hover
+     target, :hover drops, pointer-events comes back, :hover re-applies - the
+     border flickers at paint rate and a click only lands if it happens to
+     fall in an "auto" frame. Randy N4OPI and Ryan KK6DZB both reported it
+     within a day of the release. */
   .pill.dial-locked {
     opacity: .45;
     pointer-events: none;
     cursor: default;
   }
-  #wspr-actions button:hover:not(:disabled),
-  #wspr-actions select:hover { background: var(--accent); color: #000; }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
   /* Count, not a binary active-colour: Dirk DK7CVD wanted the Options button to
      show something was on, Roy KI0ER pointed out a plain on/off colour would
