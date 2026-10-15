@@ -10927,7 +10927,33 @@ function audioFrame(buf) {
   src.set(audioTail, 0);
   for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
 
-  const ratio = rate / audioCtx.sampleRate;
+  /* ⛔ TRIM THE RATE, DO NOT WAIT TO DROP A CHUNK.
+   *
+   * MEASURED on the bench: 1279 frames, ZERO gaps and ZERO drops, and the
+   * scheduling lead had still crept from 0.9 s to 2.04 s. Nothing was lost -
+   * LATENCY was accumulating, because every catch-up burst after an SD hold
+   * adds to the buffer and nothing ever takes it back out. Left alone it
+   * reaches the ceiling and drops a chunk, which is an audible break every few
+   * minutes for no reason at all. The operator heard exactly that.
+   *
+   * So consume very slightly faster when the buffer is long and slightly
+   * slower when it is short, and the latency walks back to target on its own.
+   * ±1% is inaudible as pitch (a sixth of a semitone) and clears a 1 s excess
+   * in about 100 s.
+   *
+   * ⛔ THE SIGN IS THE WHOLE LOOP. ratio is INPUT samples consumed per OUTPUT
+   * sample, so a buffer that is too FULL needs a LARGER ratio. Inverted, this
+   * is positive feedback and it does not drift, it runs away - rx_audio.c
+   * carries the post-mortem of getting this backwards on the device side
+   * (2026-09-22), where it was heard as crackling that grew until the operator
+   * switched his radio off. */
+  let ratio = rate / audioCtx.sampleRate;
+  if (audioNext > 0) {
+    let err = (audioNext - audioCtx.currentTime - AUDIO_LEAD_S) / AUDIO_LEAD_S;
+    if (err >  1) err =  1;
+    if (err < -1) err = -1;
+    ratio *= (1 + 0.01 * err);
+  }
   /* Outputs are produced while there is a sample on BOTH sides of the read
      position, i.e. while pos + 1 <= src.length - 1. */
   const outN = Math.max(0, Math.ceil((src.length - 1 - audioPhase) / ratio));

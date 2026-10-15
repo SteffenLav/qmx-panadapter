@@ -28,13 +28,24 @@
  * pages keep working; one that knows 0x02 as "you were displaced" would have
  * disconnected itself on the first audio frame. */
 #define WS_FRAME_TYPE_AUDIO     0x03
-/* 100 ms of audio is 1200 samples. The cap is 1 FULL SECOND, because the job
- * it has to do is empty the backlog left by a diag-mirror pause in one tick -
- * a 150 ms cap (the first value here) needed four ticks to clear a 500 ms
- * hold, so the delay rippled on for half a second after the link came back.
- * One frame of 12 KB on resume, ten times a minute at worst, against a link
- * that carries 10 KB/s of spectrum continuously. */
-#define WS_AUDIO_MAX_SAMPLES    12000
+/* 100 ms of audio is 1200 samples; the cap is 300 ms of catch-up.
+ *
+ * ⛔ 12000 (A FULL SECOND) WAS TRIED AND IT BROKE THE STREAM. The reasoning
+ * was that one tick should clear a whole diag-mirror hold. The result was a
+ * 12 KB frame, and this socket's contract is ALL-OR-NOTHING per frame: once
+ * any byte is on the wire the frame must be finished or the session closed,
+ * because a frame abandoned half-written desynchronises everything after it.
+ * A 12 KB frame needs several send() calls on this link, so it hit the budget
+ * mid-frame regularly, and the browser reported exactly what that looks like
+ * from the far end - "WebSocket connection failed: Invalid frame header",
+ * over and over, with the page reconnecting each time. Audio stopped
+ * entirely. The warning was already written at ws_send_all(); I walked into
+ * it anyway by changing a size without re-reading what the size meant.
+ *
+ * 3600 samples is 3.6 KB, the same order as the 1 KB spectrum frame that has
+ * been going out reliably for months. A 500 ms hold now clears in two ticks
+ * instead of one, which the browser's own buffer covers without a sound. */
+#define WS_AUDIO_MAX_SAMPLES    3600
 #define WS_AUDIO_HDR_LEN        6
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
