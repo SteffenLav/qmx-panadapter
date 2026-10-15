@@ -110,6 +110,7 @@ idf_component_register(
         "qmx_term.c"
         "ft8_test.c"
         "js8_chat.c"
+        "js8_submode.c"
         "js8_ftx.c"
         "js8_target.c"
         "ft8_tx.c"

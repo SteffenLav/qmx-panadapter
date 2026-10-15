@@ -10,6 +10,10 @@ Swipe → from the left edge to reach the FT8/FT4/JS8 view, then pick **JS8** fr
 
 **All four JS8 speeds are selectable from v1.19.0** — Slow, Normal, Fast and Turbo — from the **JS8 speed** row in the settings drawer, and from the JS8 tab in the browser. Normal is the default and the one to use: 15-second slots, the same slot length as FT8.
 
+On the Tab5 you can also **tap the big MODE label** in the left pane while JS8 is selected, and pick the speed there. That is where to look if JS8 suddenly decodes nothing.
+
+⚠ **The speed is not a quality setting.** Each one is a different physical layer — slot length, symbol rate and tone spacing all change — so a station on Turbo cannot hear a station on Normal at all, and almost everybody runs Normal. The setting is remembered across a reboot and a power cycle, so if you leave it on Fast, Turbo or Slow, JS8 will stay silent until you put it back. The MODE label says which one is in force: it reads **MODE: JS8** on Normal and **JS8 TURBO** (or FAST, or SLOW) on anything else. FT8 and FT4 are unaffected either way.
+
 ⚠ **Only Normal is proven on air.** The other three are built and they transmit, but no contact has been made on any of them, and the Tab5 has not decoded another station using one. Treat them as untested. Turbo was long thought to be out of reach over the control link; a measurement in v1.19.0 showed the tone command takes about 250 microseconds, so the Tab5's own side of it is comfortably fast enough. **What has not been measured is the radio's side** — whether the QMX can retune that quickly in practice. Until somebody completes a contact, that is an open question and not a promise.
 
 ⚠ **JS8 and FT4 share two of their calling frequencies.** If you were expecting FT4 activity on a frequency and see JS8 instead, that is why — the modes overlap on the band plan, not a fault.

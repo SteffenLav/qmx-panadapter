@@ -75,6 +75,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "ui_clock.h"
 #include "time_sync.h"
 #include "ft8_screen.h"
+#include "js8_submode.h"   /* the submode table and the one refusal rule */
 #include "ft8_screen_view.h"
 #include "wspr_screen_view.h"
 #include "wspr_rx.h"
@@ -3747,48 +3748,36 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
  * dense (0,1,2,4 - 3 does not exist, 8 is Ultra, which this firmware does not
  * implement), so the index and the value are deliberately kept apart. */
 static lv_obj_t *s_js8sub_dd = NULL;
-static const uint8_t s_js8_submode_vals[] = { 0, 1, 2, 4 };
-#define N_JS8_SUBMODES ((int)(sizeof(s_js8_submode_vals)/sizeof(s_js8_submode_vals[0])))
 
 static void drawer_refresh_js8_submode(void)
 {
     if (!s_js8sub_dd) return;
-    uint8_t cur = settings_get_js8_submode();
-    uint32_t sel = 0;
-    for (int i = 0; i < N_JS8_SUBMODES; i++)
-        if (s_js8_submode_vals[i] == cur) { sel = (uint32_t)i; break; }
-    lv_dropdown_set_selected(s_js8sub_dd, sel);
+    lv_dropdown_set_selected(
+        s_js8sub_dd,
+        (uint32_t)js8_submode_index_of(settings_get_js8_submode()));
 }
 
 static void drawer_js8_submode_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
     uint32_t  i  = lv_dropdown_get_selected(dd);
-    if (i >= (uint32_t)N_JS8_SUBMODES) return;
 
-    /* ⛔ REFUSED MID-EXCHANGE, AND IT SAYS SO. Changing submode changes the
-     * physical layer, so it abandons whoever is being worked - and an armed
-     * request already carries tones built for the OLD submode. The API handler
-     * refuses on exactly the same test; a control that silently did nothing
-     * instead would read as a broken dropdown. */
-    if (ft8_qso_is_busy(NULL, 0) ||
-        ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) {
-        ui_toast("Busy - finish or cancel the QSO first");
-        drawer_refresh_js8_submode();     /* snap back to what is really set */
+    /* ⛔ THE RULE IS js8_submode_set()'S, NOT THIS CONTROL'S. The refusal
+     * while a QSO or a burst is live was written out here, again in
+     * webserver.c, and a third copy was about to go into the JS8 screen's own
+     * picker. Three copies of a rule is how two surfaces end up disagreeing
+     * about whether a change was allowed.
+     *
+     * The reason IS shown: a control that silently did nothing would read as
+     * a broken dropdown. The list then snaps back to what is really set. */
+    const char *why = NULL;
+    if (!js8_submode_set(js8_submode_value((int)i), &why)) {
+        ui_toast(why ? why : "JS8 submode not changed");
+        drawer_refresh_js8_submode();
         return;
     }
-
-    settings_set_js8_submode(s_js8_submode_vals[i]);
-    /* The slot loop picks this up through ft8_op_mode_protocol() and rebuilds
-     * the monitor pool at the top of the next slot - nothing to do here.
-     *
-     * ⛔ EXCEPT THE LABEL. The big MODE label names the submode, and this
-     * is one of only two places it can change - the other is /api/cmd. A
-     * station left on Turbo decodes nothing from the Normal stations everyone
-     * runs, and the screen has to say why. */
-    ft8_screen_view_refresh_mode_label();
-    ESP_LOGI("ui", "JS8 submode -> %s",
-             ftx_protocol_label(ft8_op_mode_protocol()));
+    /* The MODE label, the monitor-pool rebuild and the log line are all
+     * js8_submode_set()'s job now. */
 }
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_port_a_mode_cb(lv_event_t *e);
@@ -14681,12 +14670,9 @@ static void drawer_build(void)
         lv_obj_align(js_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_js8sub_dd = lv_dropdown_create(sec);
-        /* Order matches s_js8_submode_vals[]. */
-        lv_dropdown_set_options(s_js8sub_dd,
-                                "Normal - 15 s\n"
-                                "Fast - 10 s\n"
-                                "Turbo - 6 s\n"
-                                "Slow - 30 s");
+        /* The list comes from js8_submode.c, which the JS8 screen's own
+         * picker and the API read too - one table, three controls. */
+        lv_dropdown_set_options(s_js8sub_dd, js8_submode_options_lvgl());
         lv_obj_set_size(s_js8sub_dd, DRAWER_W - 32, 50);
         lv_obj_align(s_js8sub_dd, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_set_style_text_font(s_js8sub_dd, &lv_font_montserrat_28, 0);

@@ -33,6 +33,7 @@
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
 #include "js8_ftx.h"
+#include "js8_submode.h"   /* the submode table and the one refusal rule */
 #include "js8_target.h"
 #include "ft8_qso.h"
 #include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
@@ -3068,6 +3069,102 @@ static const char *mode_label(ft8_op_mode_t mode)
  * not thread-safe and every other web-initiated screen change in this file
  * defers the same way - s_web_cq_pending, s_web_ftx_pending. The repaint
  * happens in the 1 Hz tick below. */
+/* ⭐ THE MODE LABEL IS THE SUBMODE CONTROL, in JS8 only.
+ *
+ * Ryan KK6DZB asked where the speed setting was on the Tab5 in the same
+ * message that reported JS8 decoding nothing. It was in the settings drawer
+ * and nowhere else, and he never found it.
+ *
+ * It goes on the label rather than in the JS8 tab row because the tab row is
+ * FULL: Conversation 8..200, Flush 208..400, Stations 408..600, the target
+ * chip 608..744, SNR 752..844, GRID 852..944 of RIGHT_W = 960. Nothing there
+ * could be shrunk without making the three tabs narrower than their text.
+ *
+ * The label is also the right place on its own merits: it is what NAMES the
+ * submode ("JS8 TURBO"), so the thing that tells an operator something is set
+ * is the thing they tap to change it.
+ *
+ * ⛔ THE TAP CANNOT LAND ON THE LABEL ITSELF. ui_init()'s top-bar hit
+ * zones are direct children of the screen spanning its full 200 px top, and
+ * s_lbl_mode sits at screen y 68..120 inside s_container - LVGL hit-tests a
+ * parent's direct children in reverse creation order, so those zones win over
+ * the whole s_container branch however it is foregrounded internally. The
+ * real target is s_lbl_mode_hit below, a screen-level sibling, exactly the
+ * arrangement s_btn_freq_hit already uses for the frequency button. */
+static lv_obj_t *s_lbl_mode_hit = NULL;   /* screen-level click target */
+static lv_obj_t *s_submode_popup = NULL;
+
+static void submode_popup_close(void)
+{
+    if (s_submode_popup) { lv_obj_del(s_submode_popup); s_submode_popup = NULL; }
+}
+
+static void submode_overlay_cb(lv_event_t *e) { (void)e; submode_popup_close(); }
+
+static void submode_pick_cb(lv_event_t *e)
+{
+    const int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    submode_popup_close();
+
+    /* The refusal rule and the value list are js8_submode_set()'s - see
+     * js8_submode.h. A control that silently did nothing would read as
+     * broken, so the reason is shown. */
+    const char *why = NULL;
+    if (!js8_submode_set(js8_submode_value(idx), &why))
+        ui_toast(why ? why : "JS8 submode not changed");
+}
+
+static void submode_popup_open(lv_event_t *e)
+{
+    (void)e;
+    if (ft8_op_mode_get() != FT8_OP_MODE_JS8) return;   /* JS8 only */
+    submode_popup_close();
+
+    const int n = js8_submode_count();
+    const int btn_h = 64, panel_w = 300;
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, submode_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_submode_popup = ov;
+
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, n * btn_h + 4);
+    lv_obj_set_pos(panel, 16, MID_Y + 60);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_pad_row(panel, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(JS8_ACCENT_HEX), 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_radius(panel, 8, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    const int cur = js8_submode_index_of(settings_get_js8_submode());
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *btn = lv_btn_create(panel);
+        lv_obj_set_size(btn, panel_w - 4, btn_h - 2);
+        lv_obj_set_pos(btn, 0, i * btn_h);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        /* The one in force is filled, the rest are flat - the same way this
+         * screen marks a selected tab. */
+        lv_obj_set_style_bg_color(btn,
+            lv_color_hex(i == cur ? JS8_ACCENT_HEX : UI_COLOR_SURFACE), 0);
+        lv_obj_add_event_cb(btn, submode_pick_cb, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)i);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, js8_submode_label(i));
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(l,
+            lv_color_hex(i == cur ? 0x000000 : 0xFFFFFF), 0);
+        lv_obj_center(l);
+    }
+}
+
 static void mode_label_repaint(void)        /* LVGL task only */
 {
     if (!s_lbl_mode) return;
@@ -3075,6 +3172,22 @@ static void mode_label_repaint(void)        /* LVGL task only */
     lv_label_set_text(s_lbl_mode, mode_label(now));
     lv_obj_set_style_text_color(s_lbl_mode,
                                 lv_color_hex(mode_accent_hex(now)), 0);
+
+    /* The label is only a control in JS8, so the hit target follows the mode
+     * as well as the screen. It is foregrounded every time it is shown, for
+     * the same reason s_btn_freq_hit is: it has to out-rank the top-bar hit
+     * zones, which are created after this object. A submode popup left open
+     * when the mode changes under it would offer to set a submode that no
+     * longer applies. */
+    if (s_lbl_mode_hit) {
+        if (s_active && now == FT8_OP_MODE_JS8) {
+            lv_obj_clear_flag(s_lbl_mode_hit, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_lbl_mode_hit);
+        } else {
+            lv_obj_add_flag(s_lbl_mode_hit, LV_OBJ_FLAG_HIDDEN);
+            submode_popup_close();
+        }
+    }
 }
 
 void ft8_screen_view_refresh_mode_label(void)
@@ -3168,16 +3281,13 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
     // has to be re-foregrounded over it.
     ui_refresh_sim_mode_indicator();
     ft8_screen_clear();  // flush stale decodes from previous mode/band
-    if (s_lbl_mode) {
-        /* Read back from the engine rather than from `mode`: ft8_op_mode_set()
-         * is allowed to REFUSE (an unimplemented protocol), and a label that
-         * showed what was asked for rather than what took effect is exactly the
-         * "screen says JS8 while FT8 goes out" failure that refusal exists to
-         * prevent. */
-        const ft8_op_mode_t now = ft8_op_mode_get();
-        lv_label_set_text(s_lbl_mode, mode_label(now));
-        lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(mode_accent_hex(now)), 0);
-    }
+    /* Read back from the engine rather than from `mode`: ft8_op_mode_set() is
+     * allowed to REFUSE (an unimplemented protocol), and a label that showed
+     * what was asked for rather than what took effect is exactly the "screen
+     * says JS8 while FT8 goes out" failure that refusal exists to prevent.
+     * mode_label_repaint() does that read itself, and also shows or hides the
+     * submode hit target - which is why this is a call and not two lines. */
+    mode_label_repaint();
     /* The sub-mode decides whether the right pane has tabs at all, and whether
      * TXCQ parity is shown. Called here rather than from the refresh timer so
      * the screen changes with the mode, not up to half a second later. */
@@ -4326,6 +4436,26 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);  // shown only while FT8 is active
     lv_obj_add_event_cb(s_btn_freq_hit, ft8_freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
+    /* The MODE label's own screen-level click target - the JS8 submode
+     * picker. Same arrangement and the same reason as s_btn_freq_hit above.
+     * s_left_pane sits at screen (0, MID_Y) with pad_top 8 / pad_left 16 and
+     * s_lbl_mode is at (0,0) inside that padded box, so the label starts at
+     * screen (16, MID_Y+8). The height stops at MID_Y+60 so it stays clear of
+     * s_btn_freq_hit, which begins at MID_Y+63. Kept in sync by hand with the
+     * s_lbl_mode geometry below - if that moves, move this.
+     *
+     * Hidden here and shown only by mode_label_repaint(), which is the one
+     * place that knows whether the sub-mode is JS8. */
+    s_lbl_mode_hit = lv_obj_create(parent);
+    lv_obj_set_size(s_lbl_mode_hit, 288, 52);
+    lv_obj_set_pos(s_lbl_mode_hit, 16, MID_Y + 8);
+    lv_obj_set_style_bg_opa(s_lbl_mode_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_lbl_mode_hit, 0, 0);
+    lv_obj_clear_flag(s_lbl_mode_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lbl_mode_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_lbl_mode_hit, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_lbl_mode_hit, submode_popup_open, LV_EVENT_CLICKED, NULL);
+
     // UTC clock removed — it's in the center bottom bar already
 
     s_lbl_count = lv_label_create(s_left_pane);
@@ -4816,6 +4946,11 @@ void ft8_screen_view_show(void)
         lv_obj_move_foreground(s_btn_freq_hit);
     }
 
+    /* The MODE label's hit target is shown by the same function that paints
+     * the label, because the two have the same condition: it is a control
+     * only while the sub-mode is JS8. */
+    mode_label_repaint();
+
     // Own-call cache and grid-derived location are kept live in rebuild_list()
     // (runs every refresh cycle off the same settings_load_all() call), not
     // just here on screen entry - see the comment there for why.
@@ -4827,6 +4962,8 @@ void ft8_screen_view_hide(void)
     if (!s_container) return;
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     if (s_btn_freq_hit) lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);
+    if (s_lbl_mode_hit) lv_obj_add_flag(s_lbl_mode_hit, LV_OBJ_FLAG_HIDDEN);
+    submode_popup_close();   /* never leave a picker over another screen */
     s_active = false;
     webserver_ws_set_paused(false);  // back to Panadapter - resume the WS spectrum stream
     ESP_LOGI(TAG, "hide");

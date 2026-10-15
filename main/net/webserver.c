@@ -26,6 +26,7 @@
 #include "ui/gps_status_view.h" // the dev "gps_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
+#include "js8_submode.h"   // the submode table and the one refusal rule
 #include "ui/js8_page.h"   // the conversation grid, composed for /api/js8
 #include "ft8_tx.h"
 #include "js8_ftx.h"
@@ -1892,24 +1893,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * config file are writers this handler never sees. */
         cJSON *sm = cJSON_GetObjectItem(root, "submode");
         int want = cJSON_IsNumber(sm) ? sm->valueint : 0;
-        /* Armed counts as busy too, not just keyed: an armed request
-         * carries tones already built for the OLD submode. */
-        bool busy = ft8_qso_is_busy(NULL, 0) ||
-                    ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE;
         cJSON_Delete(root);
         httpd_resp_set_type(req, "application/json");
-        if (busy) {
-            httpd_resp_sendstr(req,
-                "{\"ok\":false,\"err\":\"busy - a QSO or burst is in progress\"}");
+
+        /* ⛔ ONE RULE, THREE CONTROLS. The busy test and the value list used
+         * to be written out here as well as in the drawer; js8_submode_set()
+         * owns both now, and it is also what repaints the Tab5's MODE label -
+         * Ryan KK6DZB set a submode from this page and then had no way to
+         * see, on the device, why JS8 had stopped decoding. */
+        const char *why = NULL;
+        if (!js8_submode_set((uint8_t)want, &why)) {
+            char err[160];
+            snprintf(err, sizeof(err), "{\"ok\":false,\"err\":\"%s\"}",
+                     why ? why : "refused");
+            httpd_resp_sendstr(req, err);
             return ESP_OK;
         }
-        settings_set_js8_submode((uint8_t)want);
-        /* ⛔ THE GLASS HAS TO FOLLOW. The Tab5's MODE label names the
-         * submode, and this handler is one of only two places it changes -
-         * the other is the drawer picker. Ryan KK6DZB set a submode from this
-         * page and then had no way to see, on the device, why JS8 had stopped
-         * decoding. */
-        ft8_screen_view_refresh_mode_label();
         {
             char out[128];
             snprintf(out, sizeof(out),
