@@ -247,7 +247,10 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * to spare. The FILTER does not: at 5000 the top of the passband is the
  * decimator's own skirt, 2.4 dB down, which is the exact failure this
  * harness's header warns about - it does not fail, it quietly rolls off and
- * nobody knows where. Raising this needs D=2, not a bigger constant. */
+ * nobody knows where. Raising this needs D=2, not a bigger constant - and
+ * D=2 buys 400 Hz, because 10.0 kHz is the HF legal maximum below 29 MHz
+ * and 9.6 is where we are. This is an HF radio; the wide AM allowance
+ * above 29.7 MHz reaches only 6 m, and only on the QMX+ 160-6m. */
 #define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
 /* The AM half-bandwidth actually in force. Settable, because the figure above

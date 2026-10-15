@@ -1276,7 +1276,9 @@ static void bw_popup_open(void)
          * at 5000, so the top of a 10 kHz passband is the decimator rolling
          * off, not the station. The limit is the FILTER, never Nyquist.
          *
-         * ▶ 10.0k and the 20 kHz VHF/UHF widths both need D=2. Not built. */
+         * ▶ 10.0k needs D=2, and it buys 400 Hz. The wide AM allowance above
+         * 29.7 MHz is NOT a reason: this is an HF radio. The only band it
+         * reaches above that is 6 m, and only on the QMX+ 160-6m variant. */
         static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600};
         static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
         bw_list = am_bw;

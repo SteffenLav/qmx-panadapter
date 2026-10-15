@@ -52,9 +52,9 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     8.0: broadcast channels are spaced 5 kHz, so 8.0 keeps a full 1 kHz clear
     of the neighbour's carrier while 9.6 leaves only 200 Hz.
 
-    9.6 kHz is the ceiling today. Wider — the 10 kHz legal maximum on HF, and
-    the 20 kHz widths used on VHF and UHF — needs a change further back in the
-    receive chain and is not built yet.
+    9.6 kHz is the ceiling today. The legal maximum on HF is 10 kHz, so the
+    gap is 400 Hz, and closing it needs a change further back in the receive
+    chain. It is not built.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
