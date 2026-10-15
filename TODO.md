@@ -28,8 +28,8 @@ re-derived both from git archaeology and got a WORSE answer - see
 | # | What | Size | Where the thinking already is |
 |---|---|---|---|
 | **A1** | **Web-UI audio + server mode.** His since **2026-07-15** (TODO #43). ⚠ The roadmap claimed for three months that this was "already working in development, held back for a soak". It was not: one WIP commit, 1702 behind, and the "restart" branch is EMPTY. Corrected in `d3a17722` | Medium — but **a reimplementation of a known design, not a restart**. The demodulator ships (the `dsp.c` FT8 branch IS a USB demodulator); `/ws` already carries binary frames and `webserver_ws.c:409` says an older browser ignores an unknown frame type; `ws_push_task` already runs. So: µ-law encode, frame type `0x02`, an AudioWorklet. **96 kbps** on top of the existing ~82. Gate is an overnight WiFi soak - the SDIO link is the scarce resource, not CPU | `docs/web-audio-feasibility.md` |
-| **A2** | **AM audio.** ⚠ **The Tab5 is SILENT in AM today**, confirmed in code: `mode_from_cat_str()` (`rx_audio.c:75`) returns `RXAUD_MODE_NONE` for AM. His words: *"AM is silent, so an AM station means putting the radio in USB"* | Small, self-contained. An `RXAUD_MODE_AM` branch, magnitude + DC block, and an AM case in `ui.c`'s `compute_passband_edges_hz()` | TODO row I(4) |
-| **A3** | **CW decode, two rows to four.** ⚠ I told him "one line" and he corrected me - it is `CW_LINE_ROWS 2` x `CW_LINE_COLS 72` on both surfaces | Nearly free. One constant; `CW_GRID_CELLS` derives from it and both the buffer and the Tab5 paint (`ui.c:4493`) loop over it. ⛔ The **browser hardcodes two row elements** (`rowEls`), and `ui.c` static-asserts `84 - CW_PREFIX_COLS == CW_LINE_COLS` - do not touch the column count | |
+| **A2** | **AM audio.** ✅ **SHIPPED in v1.19.0 and PROVEN ON AIR.** `RXAUD_MODE_AM` demodulates on the Tab5; `compute_passband_edges_hz()` has its AM case. 2026-10-15 added the full width list: 4.0–9.6 kHz at D=4, 10.0 and 20.0 kHz at D=2 (`472f66ca`, `a0cd3171`) — the decimation follows the WIDTH, not the mode | — | [[project-am-demod-on-the-tab5]], [[project-am-d2-path-for-10-and-20-khz]] |
+| **A3** | **CW decode, two rows to four.** ✅ **DONE `5810c034`, FLASHED — ⛔ NOT YET SEEN ON A SCREEN.** `CW_LINE_ROWS` is now the one number; both surfaces derive from it (the browser reads `cw.rows`/`cw.cols` from `/api/status`, no hardcoded row elements). ⚠ The strip grows UPWARD over the waterfall, ~66 px more than two rows — whether that is too much is his call and he has not made it | — | |
 | **A4** | PSD amplitude peak hold, adjustable persistence; then CW-Tune; then the CW peak filter | Moderate, render/DSP | |
 | **A5** | Digital noise reduction for AM and SSB | Largest, and it wants A2 done first. ⭐ The feasibility note says DNR can run **client-side** (RNNoise-class WASM) on demodulated audio and never needs to fit on the P4 | `docs/web-audio-feasibility.md` |
 
@@ -59,7 +59,7 @@ for everyone.
 
 ### C. Decisions owed by the operator
 
-1. **Push?** 12 commits unpushed on top of v1.18.0. ⚠ A count in prose rots -
+1. **Push?** 18 commits unpushed on top of v1.19.0. ⚠ A count in prose rots -
    `git log --oneline origin/main..HEAD` is the authority.
 2. **Randy N4OPI: an ESP32-P4 stamp running the web UI only**, tucked inside the
    QMX+ (M5Stamp ESP32P4 + Stamp C6, ~$20). His own words say it is not a
