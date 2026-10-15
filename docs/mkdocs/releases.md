@@ -4,7 +4,38 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.19.0** - 2026-10-15
+**v1.20.0** - 2026-10-15
+
+**You can listen to the radio in your browser, and AM reaches broadcast widths.**
+
+- ⭐⭐ **Listen to the receiver in the browser** *(Samuel W7STF, asked 2026-07-15)*. Click the **▶** button at the top right of the web page, immediately right of **F**, and you hear the radio through your computer or your phone. What is streamed is the Tab5's own demodulated audio, tapped after the filter and the AGC, so the browser and the speaker cannot disagree about what the radio is doing. It works even on a Tab5 that booted with its speaker off.
+
+- **The speaker and the browser are exclusive, deliberately.** A browser listener mutes the Tab5's speaker and hands the audio back when it stops or the page closes. Audio in two places at once is not something I wanted to build, and one listener at a time is what the design says.
+
+- **Hover the ■ button and it tells you how the stream is doing** — frame gaps, re-primes, and chunks dropped to clock drift. On a quiet network all three stay at zero. CW, CW-R, USB, LSB and AM produce audio; in any other mode the button lights and nothing arrives, and the tooltip says so.
+
+- **The card was interrupting the audio, not the network.** Browser audio broke up about twice a minute, and the cause was the 30-second write that mirrors the diagnostic log to the SD card: measured at 150–700 ms per tick and once at 4.8 s, long enough to run the player dry. That tick is now held off while anybody is listening, and the backlog waits in RAM, which is what the RAM ring is for. The cost, stated plainly: a crash while you are listening loses the tail of the diagnostic log.
+
+- ⭐ **AM reaches 10.0 kHz and 20.0 kHz.** The AM list already spanned 2.0 to 9.6 kHz; the two widest settings needed the decimator run at half the rate, which costs a whole core, so the rate now follows the **width** you chose rather than the mode. Below 4.8 kHz of half-bandwidth nothing changed.
+
+- ⚠ **The QMX has no AM bandwidth of its own to match.** Its firmware reports a fixed 3200 Hz in every mode but CW, and the eight selectable filter widths are CW-only. The Tab5's own AM filter therefore both exceeds and undercuts anything the radio offers, and the widths above are the only ones that matter.
+
+- ⛔ **Every FT8 action button disabled itself the moment you hovered it** *(Randy N4OPI and Ryan KK6DZB, same day)*. A v1.19.0 regression: the rule that locks the dial on the WSPR page had been pasted into the list of hover selectors, so hovering any FT8 button greyed it out. Fixed, and the web checker now refuses that shape.
+
+- **The CW decode strip is four rows**, and the row count is one number rather than two that could disagree.
+
+- **JS8 speed is pickable on the JS8 screen itself**, not just in the drawer, and a non-Normal submode now says which one it is on the glass. ⛔ A JS8 submode other than Normal decodes nothing and survives a power cycle, so a radio left on Fast or Turbo looks like a dead receiver — the label is there to stop exactly that.
+
+- **The JS8 transmit pane prints the words going out**, not "frame 3 of 7", and the frame counter stops counting when the run ends. The JS8 page no longer offers what it cannot do and names what it is.
+
+- **A Flush button in the web UI**, and JS8 lines that are addressed to you are marked as such.
+
+- **The SelfSpotter screen says why the feeds are empty** when receive audio is holding them off, instead of showing nothing and explaining nothing.
+
+
+## Previous Releases
+
+### v1.19.0 - 2026-10-15
 
 **AM is demodulated on the Tab5 itself, and the SWR limit now stops a WSPR burst the way it has always stopped an FT8 one.**
 
@@ -29,8 +60,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The version in the firmware could be a release behind.** The version string was baked in when the project was last configured rather than when it was built, so a binary could report a release it was not. If you ever compared the version on your screen against what you flashed and they disagreed, that is why.
 
 - **Every path that can key the radio is now written down and checked** — eleven places that can arm a transmission, six of which can do it unattended, verified against the code by a tool that runs every release. This exists because v1.18.0 went out without my knowing my own release answered JS8 callers by itself, and a user had to tell me.
-
-## Previous Releases
 
 ### v1.18.0 - 2026-10-12
 
@@ -1040,10 +1069,9 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 ### Next up (post-v1.0.0)
 
-1. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. ⚠ Not started in a usable form: a first pass was written in July 2026 and never merged, and it now has to be redone against the current code. The demodulator it needs already ships as the Tab5's own audio.
-2. **CW page** — canned-message CW TX memories, then decoded-CW display
-3. **Binaural CW audio** — a stereo sound stage so two stations a few tens of hertz apart land in different places in your head (asked for by Roy KI0ER; shaped by Don N2VGU and Michael KZ4LY, whose point that the stage **width** should be a setting rather than a fixed angle is now the plan). Waits on the same audio-output rework as the CW page
-4. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
+1. **CW page** — canned-message CW TX memories, then decoded-CW display
+2. **Binaural CW audio** — a stereo sound stage so two stations a few tens of hertz apart land in different places in your head (asked for by Roy KI0ER; shaped by Don N2VGU and Michael KZ4LY, whose point that the stage **width** should be a setting rather than a fixed angle is now the plan). Waits on the same audio-output rework as the CW page
+3. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
 ### Future Additions
 
@@ -1055,7 +1083,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.19.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

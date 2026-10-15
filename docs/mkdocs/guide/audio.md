@@ -255,18 +255,36 @@ does the restart itself when you press **Save**.
 both - so CAT, the S-meter and the band/mode display go quiet while line in is
 selected.
 
-## Not implemented: audio in the browser
+## Listen in the browser
 
-Audio does **not** reach the web page in this release, and there is no date for it. The
-shape it would take is to stream **I/Q channels only** to the browser and let the PC's own
-CPU do the audio work, because:
+From **v1.20.0** the panadapter streams its own demodulated audio to any browser on
+your network. Open the web page and click the **▶** button at the top right, just to
+the right of **F**. It becomes a **■** while it is playing; click it again to stop.
 
-- **Reduces Tab5 load** — the device sends raw I/Q data (~768 kbps at 48 kHz stereo), no processing
-- **Offloads processing to the PC** — your computer does the heavy lifting
-- **Allows richer audio features** — filtering, EQ, advanced separation, and recording
-- **Works with any audio software** — your browser runs the decoder
+What you hear is exactly what the Tab5's own speaker gets — the same demodulated
+audio, tapped after the filter and the AGC — so the two can never disagree about what
+the radio is doing. It works even if the Tab5 booted with its speaker turned off.
 
-Timeline: pending real-world feedback on the current implementation.
+**The speaker and the browser are exclusive.** While a browser is listening the Tab5
+mutes its own speaker, and it hands the audio back when you stop listening or close the
+page. There is no setting for this: one listener at a time was the point.
+
+Only the modes the Tab5 demodulates produce audio: **CW, CW-R, USB, LSB and AM**. In any
+other mode the button lights up but nothing arrives, and hovering it says so.
+
+**Hover the ■ button for the health of the stream** — it reports frame gaps, re-primes
+and chunks dropped to clock drift. On a quiet network all three stay at zero.
+
+Notes on what this costs and what it does not:
+
+- It runs over the web page's existing connection, so it needs no extra port and no
+  extra setup.
+- It costs about **9 percentage points of one CPU core** — measured — and nothing
+  measurable on the core that serves the web page.
+- Audio is 12 kHz µ-law, which is a telephone-grade codec chosen because it survives a
+  lossy Wi-Fi link without a jitter buffer deep enough to be annoying.
+- **Only one browser gets the page at a time.** Opening the panadapter page in a second
+  browser takes the connection from the first, which takes the audio with it.
 
 ## Feedback
 
