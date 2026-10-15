@@ -28,25 +28,34 @@
  * pages keep working; one that knows 0x02 as "you were displaced" would have
  * disconnected itself on the first audio frame. */
 #define WS_FRAME_TYPE_AUDIO     0x03
-/* 100 ms of audio is 1200 samples; the cap is 300 ms of catch-up.
+/* ⛔ THE CEILING IS TCP_SND_BUF, AND IT IS 2880 BYTES ON THIS DEVICE.
  *
- * ⛔ 12000 (A FULL SECOND) WAS TRIED AND IT BROKE THE STREAM. The reasoning
- * was that one tick should clear a whole diag-mirror hold. The result was a
- * 12 KB frame, and this socket's contract is ALL-OR-NOTHING per frame: once
- * any byte is on the wire the frame must be finished or the session closed,
- * because a frame abandoned half-written desynchronises everything after it.
- * A 12 KB frame needs several send() calls on this link, so it hit the budget
- * mid-frame regularly, and the browser reported exactly what that looks like
- * from the far end - "WebSocket connection failed: Invalid frame header",
- * over and over, with the page reconnecting each time. Audio stopped
- * entirely. The warning was already written at ws_send_all(); I walked into
- * it anyway by changing a size without re-reading what the size meant.
+ * Everything that has ever worked on this socket fits under it: the spectrum
+ * frame is 1054 bytes on the wire and has been reliable for months. A frame
+ * LARGER than the socket's send buffer cannot leave in one write, and this
+ * stream's contract is all-or-nothing per frame - once any byte is out, the
+ * frame must be finished or the session killed - so an oversized frame turns
+ * ordinary back-pressure into an ABANDONED frame, and everything after it is
+ * parsed as garbage.
  *
- * 3600 samples is 3.6 KB, the same order as the 1 KB spectrum frame that has
- * been going out reliably for months. A 500 ms hold now clears in two ticks
- * instead of one, which the browser's own buffer covers without a sound. */
-#define WS_AUDIO_MAX_SAMPLES    3600
+ * Measured on the bench, three sizes, one evening:
+ *   1800 samples = 1810 B on the wire : 1279 frames, zero gaps. Fine.
+ *   3600 samples = 3610 B             : "Invalid frame header", ~200 frames.
+ *   12000 samples = 12010 B           : "Invalid frame header" immediately.
+ * RSSI was -41 dBm and the partial-write counter read 1, so this was never
+ * link quality - it is arithmetic against a constant that is written down in
+ * sdkconfig and that I changed a frame size without reading.
+ *
+ * TCP_SND_BUF was deliberately shrunk 11520 -> 2880 in v0.20.0 for internal
+ * DMA-heap headroom. Raising it again re-opens that trade and needs its own
+ * soak; until then this is the ceiling, and the assert below is what stops
+ * the next person (me) from walking into it a third time.
+ *
+ * The cost of 1800 is that a 500 ms SD hold takes three or four ticks to
+ * clear instead of one, which the browser's 0.9 s buffer covers in silence. */
+#define WS_AUDIO_MAX_SAMPLES    1800
 #define WS_AUDIO_HDR_LEN        6
+
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
 // WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
@@ -198,6 +207,13 @@ static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
 static EXT_RAM_BSS_ATTR uint8_t s_audio_txbuf[WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN +
                                               WS_AUDIO_MAX_SAMPLES];
 static EXT_RAM_BSS_ATTR int16_t s_audio_pcm[WS_AUDIO_MAX_SAMPLES];
+/* The whole frame, RFC 6455 header included, must fit in one TCP send buffer -
+   see the note by WS_AUDIO_MAX_SAMPLES for what happens when it does not. This
+   assert is the only thing that will catch it next time; the symptom at the
+   far end is "Invalid frame header" and a page that reconnects for ever. */
+_Static_assert(WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN + WS_AUDIO_MAX_SAMPLES
+                   <= CONFIG_LWIP_TCP_SND_BUF_DEFAULT,
+               "audio frame is larger than TCP_SND_BUF");
 static uint16_t s_audio_seq = 0;
 static uint32_t s_audio_frames = 0;   /* audio frames sent, for the fps line */
 /* Samples drained from the ring and then NOT sent - a congested link. Reported
