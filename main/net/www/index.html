@@ -10831,6 +10831,7 @@ fpsEl.addEventListener("click", wsReclaim);
 let audioCtx = null, audioGain = null, audioNext = 0;
 let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
 let audioLate = 0, audioDropped = 0;
+let audioLatePainted = 0, audioDroppedPainted = 0;
 /* Resampler state, carried from one frame to the next. audioTail holds the
    last input samples of the previous chunk so the first output of this one can
    interpolate across the join; audioPhase is the fractional read position
@@ -11001,6 +11002,9 @@ function audioFrame(buf) {
        chunk rather than letting the delay grow without limit. */
     audioDropped++;
     audioNext -= ab.duration;
+    listenPaint();          /* this branch RETURNS - repaint before it does */
+    audioGapsPainted = audioGaps; audioLatePainted = audioLate;
+    audioDroppedPainted = audioDropped;
     return;
   }
 
@@ -11010,11 +11014,21 @@ function audioFrame(buf) {
   node.start(audioNext);
   audioNext += ab.duration;
 
-  /* Repaint on CHANGE, not on every frame: the only things the button shows
-     are "nothing yet" -> "playing" and the gap count, and touching the DOM
-     ten times a second to say the same thing is work the spectrum needs. */
-  if (audioFrames === 1 || audioGaps !== audioGapsPainted) {
-    audioGapsPainted = audioGaps;
+  /* Repaint on CHANGE, not on every frame: touching the DOM ten times a
+     second to say the same thing is work the spectrum needs.
+     ⛔ "CHANGE" MEANS EVERY COUNTER THE TOOLTIP SHOWS, not just the gaps.
+     This tested audioGaps alone while listenPaint() also prints audioLate
+     (re-primes) and audioDropped (clock-drift drops) - so the two counters
+     that move during a stall or a speed-up were the two that could never
+     repaint it. Sam W7STF, 2026-10-16: "even when the audio stalled or sped
+     up, the diagnostic values did not change. Should they have?" Yes.
+     ⚠ A title tooltip ALREADY ON SCREEN does not re-read the attribute, so
+     the fresh numbers appear the next time he hovers, not under the cursor
+     he is already holding there. */
+  if (audioFrames === 1 || audioGaps !== audioGapsPainted ||
+      audioLate !== audioLatePainted || audioDropped !== audioDroppedPainted) {
+    audioGapsPainted = audioGaps; audioLatePainted = audioLate;
+    audioDroppedPainted = audioDropped;
     listenPaint();
   }
 }
@@ -11059,6 +11073,7 @@ async function listenToggle() {
       audioWantOn = true;
       audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
       audioLate = 0; audioDropped = 0; audioNext = 0;
+      audioLatePainted = 0; audioDroppedPainted = 0;
     } else {
       audioStop();
     }
