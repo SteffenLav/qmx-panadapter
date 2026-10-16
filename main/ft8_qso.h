@@ -56,6 +56,17 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len);
 // to this slot and not stale ones from previous slots).
 void ft8_qso_advance(int64_t slot_sec);
 
+/* Second look at a slot whose advance already ran EARLY (ft8_test.c advances
+ * the moment a decode addressed to us appears, which used to spend the slot's
+ * only look at the band). Call once, after the candidate list is finished,
+ * with the complete decode table: it refreshes the pile-up and, if and only
+ * if the machine is still calling CQ, re-runs the answer picker so the
+ * strongest caller wins rather than the first decoded.
+ *
+ * It is NOT a second advance - it never steps an exchange. Safe to call from
+ * either decode task; it keeps its own once-per-slot guard. */
+void ft8_qso_slot_late_look(int64_t slot_sec);
+
 /* Close a QSO whose final message has finished transmitting, without waiting
  * for the next slot to be decoded.
  *

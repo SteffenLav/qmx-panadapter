@@ -2032,13 +2032,25 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                  * skip. Running advance() twice would re-scan the same message
                  * and could step the state machine twice.
                  *
-                 * ⚠ The cost, stated: advance() also captures the pileup and
-                 * scans for CQ callers, and running early shows it a PARTIAL
-                 * decode table. That is why the gate is ft8_qso_msg_is_for_us()
-                 * - it is only taken when a QSO is already running, which is
-                 * exactly when the pileup matters least and a prompt reply
-                 * matters most. An idle receiver still advances at the end of
-                 * the slot with the full picture, as before. */
+                 * ⛔ THE COST WAS STATED HERE AND THE REASONING WAS WRONG.
+                 * advance() also captures the pile-up and scans for CQ callers,
+                 * and running early shows it a PARTIAL decode table. This said
+                 * that was acceptable because the gate ft8_qso_msg_is_for_us()
+                 * means "only when a QSO is already running, which is exactly
+                 * when the pileup matters least".
+                 *
+                 * That predicate returns true for every state except IDLE,
+                 * DONE and TIMEOUT - and FT8_QSO_CQ is none of those. A CQ run
+                 * is "busy". So it fired precisely while a pile-up was
+                 * forming, which is when the pile-up matters MOST. Randy
+                 * N4OPI's 2026-10-16 log: 4 of 4 slots with more than one
+                 * station calling him lost every caller decoded after the
+                 * first, one of them 10 dB stronger than the one that won.
+                 *
+                 * Fixed by looking AGAIN at the end of the slot rather than by
+                 * weakening this gate - ft8_qso_slot_late_look() below. The
+                 * early advance keeps its reply latency; it no longer also
+                 * spends the slot's only look at the band. */
                 if (may_early_advance && !out->early_advanced &&
                     ft8_qso_msg_is_for_us(text)) {
                     out->early_advanced = true;
@@ -2764,7 +2776,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
        advanced), so this test is belt-and-braces rather than the only guard -
        which it has to be, now that the core-0 worker can early-advance too and
        these two flags are set from two different tasks. */
-    if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
+    if (!r_main.early_advanced && !r_worker.early_advanced) {
+        ft8_qso_advance(slot_sec);
+    } else {
+        /* An early advance ran, so the state machine has already had its one
+         * step this slot - but it took that step on a PARTIAL decode table,
+         * and everything decoded afterwards was invisible to the pile-up and
+         * to the CQ answer picker. Randy N4OPI's 2026-10-16 log: 4 of 4 slots
+         * with more than one station calling him lost the later caller, one of
+         * them 10 dB stronger than the station that won.
+         *
+         * So look again now that the list is finished. This does NOT advance
+         * the machine - see ft8_qso_slot_late_look(). */
+        ft8_qso_slot_late_look(slot_sec);
+    }
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-

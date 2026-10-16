@@ -2829,6 +2829,130 @@ static void finish_wait_done(const char *target)
         }
 }
 
+/* The CQ-run answer scan, as its own function because it has TWO callers.
+ *
+ * ⛔ WHY IT MOVED OUT OF ft8_qso_advance_body(). advance() runs ONCE per
+ * slot, and ft8_test.c advances EARLY the moment any decode addressed to us
+ * appears, so on a slot with an early advance this scan - and
+ * capture_pileup_callers() at the top of advance() - saw only the decodes
+ * published up to that instant. "Strongest answer wins" quietly became
+ * "first decoded wins", and later callers never entered the pile-up at all.
+ *
+ * Randy N4OPI, 2026-10-16, MEASURED in his own diag log: 4 of 4 slots with
+ * more than one station calling him lost the later caller. In slot 143
+ * N2LEE answered at snr +6 and W5BYU at -4; W5BYU was decoded 74 ms earlier
+ * and won. N2LEE called four more times and was never worked.
+ *
+ * The early advance itself is right and stays - it exists because an exchange
+ * step was costing a whole cycle on a busy band. What was wrong is that one
+ * advance also consumed the slot's only LOOK at the band.
+ *
+ * late_look = the end-of-slot re-run with the complete table. It scans and
+ * answers, but does NOT re-run the no-answer housekeeping (CQ auto-stop,
+ * tone relocation, re-arm): the early advance already did that this slot,
+ * and running it twice would charge one quiet slot twice. */
+static void cq_listen_for_answers(int64_t slot_sec, int freq, bool late_look)
+{
+    char caller[FT8_CALL_MAX_LEN] = {0};
+    int  caller_freq = freq;
+    int  caller_snr  = 0;
+    char report[FT8_FD_EXCH_LEN] = {0};
+    bool got_rr73 = false, got_73 = false;
+    if (scan_for_reply_to_me(slot_sec, caller, sizeof(caller),
+                             &caller_freq, &caller_snr,
+                             report, sizeof(report), &got_rr73, &got_73)) {
+        ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
+                 caller, caller_freq, caller_snr, got_rr73, got_73);
+
+        // MANUAL PICK (Eric K3FNB): the operator chooses who to work rather
+        // than the first answer winning. Only the CHOICE is manual - a tapped
+        // caller runs the normal automated exchange from there.
+        //
+        // Deliberately keeps calling CQ instead of standing down. An activator
+        // wants the pile-up to keep building while they pick, and going silent
+        // would look like the radio had stopped. capture_pileup_callers() has
+        // already recorded this caller at the top of advance(), so they are
+        // tappable in the pile-up list without anything extra here.
+        qmx_settings_t mp;
+        settings_load_all(&mp);
+        if (mp.ft8_filters.cq_manual_pick) {
+            ESP_LOGI(TAG, "CQ: manual pick is on - %s is waiting in the pile-up, "
+                          "not answering automatically", caller);
+            return;
+        }
+
+        ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
+        cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
+    } else if (!late_look) {
+        // Auto-stop limit reached and the extra listening slot after the
+        // final call brought no answer - end the CQ session. Deliberately
+        // IDLE, not TIMEOUT: nothing went wrong, the operator asked for
+        // exactly this pause.
+        lock();
+        bool exhausted = s_cq_exhausted;
+        int  sent      = s_cq_calls_sent;
+        unlock();
+        if (exhausted) {
+            lock();
+            s_state         = FT8_QSO_IDLE;
+            s_have_cur      = false;
+            s_have_cq_saved = false;
+            s_cq_exhausted  = false;
+            s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
+            unlock();
+            ft8_tx_disarm();
+            ft8_status_set("CQ stopped after %d calls - no answer", sent);
+            ESP_LOGI(TAG, "CQ auto-stop: %d calls unanswered - session ended", sent);
+            return;
+        }
+        // No answer - check whether someone has drifted onto our tone
+        // since we started calling, and move off it if so. Otherwise
+        // on_tx_complete keeps the CQ armed at the same tone; idle
+        // fallback only.
+        relocate_tone_if_clashing(true);
+        arm_current_if_idle();
+    }
+}
+
+/* The end-of-slot second look, for a slot whose advance ran EARLY.
+ *
+ * The early advance is a reply-latency fix and it works; the defect was that
+ * it also spent the slot's only look at the band, so everything decoded after
+ * the first message addressed to us was invisible to the pile-up and to the
+ * CQ answer picker. See cq_listen_for_answers() for the measurement.
+ *
+ * So: when ft8_test has early-advanced, it calls this once the candidate list
+ * is finished, with the COMPLETE decode table.
+ *
+ * ⛔ WHAT IT DELIBERATELY DOES NOT DO. It is not a second advance. It does
+ * not step an exchange, it leaves every WAIT state, DONE and TIMEOUT alone,
+ * and it answers
+ * nobody unless the machine is still sitting in CQ - which it can only be if
+ * the early advance did NOT start a contact. The state machine's
+ * one-advance-per-slot invariant is untouched; what changes is only what the
+ * radio is allowed to have SEEN.
+ *
+ * Its own once-per-slot guard, because two decode tasks can reach it. */
+void ft8_qso_slot_late_look(int64_t slot_sec)
+{
+    static int64_t s_last_late_slot = -1;
+    lock();
+    bool again = (s_last_late_slot == slot_sec);
+    if (!again) s_last_late_slot = slot_sec;
+    ft8_qso_state_t st = s_state;
+    int             freq = s_freq_hz;
+    unlock();
+    if (again) return;
+
+    /* The pile-up first, and unconditionally: a caller who turns up late in
+     * the list is exactly the one the early advance could not see, and the
+     * operator should be able to tap them even in a state that answers
+     * nobody automatically. */
+    capture_pileup_callers(slot_sec);
+
+    if (st == FT8_QSO_CQ) cq_listen_for_answers(slot_sec, freq, true);
+}
+
 static void ft8_qso_advance_body(int64_t slot_sec)
 {
     /* ⛔ THE EXPIRY CHECK IS NOT CALLED HERE ANY MORE.
@@ -3078,65 +3202,7 @@ static void ft8_qso_advance_body(int64_t slot_sec)
 
     // ---- CQ: listen for anyone answering us --------------------------------
     if (st == FT8_QSO_CQ) {
-        char caller[FT8_CALL_MAX_LEN] = {0};
-        int  caller_freq = freq;
-        int  caller_snr  = 0;
-        char report[FT8_FD_EXCH_LEN] = {0};
-        bool got_rr73 = false, got_73 = false;
-        if (scan_for_reply_to_me(slot_sec, caller, sizeof(caller),
-                                 &caller_freq, &caller_snr,
-                                 report, sizeof(report), &got_rr73, &got_73)) {
-            ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
-                     caller, caller_freq, caller_snr, got_rr73, got_73);
-
-            // MANUAL PICK (Eric K3FNB): the operator chooses who to work rather
-            // than the first answer winning. Only the CHOICE is manual - a tapped
-            // caller runs the normal automated exchange from there.
-            //
-            // Deliberately keeps calling CQ instead of standing down. An activator
-            // wants the pile-up to keep building while they pick, and going silent
-            // would look like the radio had stopped. capture_pileup_callers() has
-            // already recorded this caller at the top of advance(), so they are
-            // tappable in the pile-up list without anything extra here.
-            qmx_settings_t mp;
-            settings_load_all(&mp);
-            if (mp.ft8_filters.cq_manual_pick) {
-                ESP_LOGI(TAG, "CQ: manual pick is on - %s is waiting in the pile-up, "
-                              "not answering automatically", caller);
-                return;
-            }
-
-            ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
-            cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
-        } else {
-            // Auto-stop limit reached and the extra listening slot after the
-            // final call brought no answer - end the CQ session. Deliberately
-            // IDLE, not TIMEOUT: nothing went wrong, the operator asked for
-            // exactly this pause.
-            lock();
-            bool exhausted = s_cq_exhausted;
-            int  sent      = s_cq_calls_sent;
-            unlock();
-            if (exhausted) {
-                lock();
-                s_state         = FT8_QSO_IDLE;
-                s_have_cur      = false;
-                s_have_cq_saved = false;
-                s_cq_exhausted  = false;
-                s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
-                unlock();
-                ft8_tx_disarm();
-                ft8_status_set("CQ stopped after %d calls - no answer", sent);
-                ESP_LOGI(TAG, "CQ auto-stop: %d calls unanswered - session ended", sent);
-                return;
-            }
-            // No answer - check whether someone has drifted onto our tone
-            // since we started calling, and move off it if so. Otherwise
-            // on_tx_complete keeps the CQ armed at the same tone; idle
-            // fallback only.
-            relocate_tone_if_clashing(true);
-            arm_current_if_idle();
-        }
+        cq_listen_for_answers(slot_sec, freq, false);
         return;
     }
 
