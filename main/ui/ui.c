@@ -3174,8 +3174,15 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * a quality knob: two stations must agree on it before they can hear each
  * other at all. */
 #define DRAWER_SEC_JS8SUB     50
+/* Shut down, instead of pulling the power. The sibling of DRAWER_SEC_REBOOT
+ * and for the same reason: until this existed the only way to turn the Tab5
+ * off from software was not to, and an operator who is not in the room had no
+ * way at all. Randy N4OPI, 2026-10-16: his headless QMX+ shuts itself off on
+ * low volts and the Tab5 goes on draining the same pack - he has already lost
+ * a set of 18650s to undervoltage that way. */
+#define DRAWER_SEC_POWEROFF   51
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
-// size array indexed by an enum will be overrun" section. IDs are 0..47.
+// size array indexed by an enum will be overrun" section. IDs are 0..51.
 //
 // ⚠ THIS WARNING WAS HERE AND I WALKED PAST IT, 2026-10-03. DRAWER_SEC_REBOOT
 // was added as 46 against a bound of 46, so every drawer build wrote one past
@@ -3187,7 +3194,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     51
+#define N_DRAWER_SECTIONS     52
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3198,6 +3205,7 @@ _Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_JS8SUB  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_POWEROFF < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3269,6 +3277,9 @@ static const drawer_item_t GRP_NETWORK[] = {
     { DRAWER_SEC_USEDHCP, "Use DHCP (clear the static IP)", true },
     { DRAWER_SEC_SDEJECT, "Eject the microSD card", true },
     { DRAWER_SEC_REBOOT,  "Restart the Tab5", true },
+    // Advanced, unlike Restart beside it: a restart comes back and this does
+    // not, so it should not sit under the finger of someone browsing.
+    { DRAWER_SEC_POWEROFF, "Power off the Tab5", false },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     // Basic, not Advanced: it is off by default, so an operator who never finds
@@ -3387,6 +3398,7 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 static void drawer_set_mode(ui_mode_t mode);
 // Defined next to the other restart-the-device callback, used up in the drawer
 // build - see drawer_usedhcp_btn_cb for why that button has to exist (#307).
+static void drawer_poweroff_btn_cb(lv_event_t *e);
 static void drawer_usedhcp_btn_cb(lv_event_t *e);
 static void drawer_sdeject_btn_cb(lv_event_t *e);
 static void drawer_reboot_btn_cb(lv_event_t *e);
@@ -13697,6 +13709,23 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
+    /* Power off, directly under Restart. They are the same control with
+     * different endings, and an operator looking for one will look here for
+     * the other. Its own section so the Advanced/Basic filter can hide it. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_POWEROFF, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x8A3030), 0);   /* not PRIMARY: it does not come back */
+        lv_obj_add_event_cb(btn, drawer_poweroff_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Power off the Tab5");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
 
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
@@ -16456,6 +16485,40 @@ static void drawer_reboot_btn_cb(lv_event_t *e)
     lv_timer_handler();
     vTaskDelay(pdMS_TO_TICKS(1200));
     esp_restart();
+}
+
+/* Power off from the glass. ui_power_off_safely() stands the robot down,
+ * disarms TX and sends TA0;/RX; to the radio BEFORE the power goes, so this
+ * can never be the thing that leaves a QMX keyed - which is the whole reason
+ * it exists rather than a bare bsp_generate_poweroff_signal().
+ *
+ * Two taps, like Use DHCP beside it and the ADIF delete-all: the one control
+ * on the drawer that does not come back must not fire on a brush past it.
+ *
+ * ⚠ UNTESTED, AND SAYING SO IS THE POINT: whether the board stays off while
+ * 5 V is still present on its USB-C input has never been tried. Randy N4OPI
+ * powers his Tab5 exactly that way and it is the case this was asked for, so
+ * that is the thing to measure before anyone promises it in a release note. */
+static void drawer_poweroff_btn_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    lv_obj_t *lbl = lv_obj_get_child(btn, 0);
+    static bool armed = false;
+
+    if (!armed) {
+        armed = true;
+        if (lbl) lv_label_set_text(lbl, "Tap again to power off");
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xC08000), 0);
+        return;
+    }
+    armed = false;
+    if (lbl) lv_label_set_text(lbl, "Power off the Tab5");
+
+    ESP_LOGW(TAG, "operator asked for power off from the drawer");
+    ui_toast_ms("Powering off - the radio is put back into receive first.", 2000);
+    lv_timer_handler();
+    vTaskDelay(pdMS_TO_TICKS(600));
+    ui_power_off_safely();
 }
 
 static void drawer_usedhcp_btn_cb(lv_event_t *e)

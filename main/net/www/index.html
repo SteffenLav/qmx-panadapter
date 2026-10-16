@@ -1417,6 +1417,7 @@
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
         <a href="/ss.bmp" id="ss-link" target="_blank" title="Opens in a new tab straight away - quickest way to just look at the screen">Tab5 screenshot</a> <a href="#" id="ss-save" title="Saves a PNG file - slower, but the format forums and apps accept">(save PNG)</a>
         <a href="#" id="reboot-link" title="Restart the Tab5 now. Receiving stops for about ten seconds. Until now this was only reachable after a firmware update.">Reboot the Tab5</a>
+        <a href="#" id="poweroff-link" class="danger" title="Shut the Tab5 down. The radio is put back into receive FIRST, so a transmission in progress cannot be left keyed. It does NOT come back on its own - someone has to press the button, or cut and restore its power.">Power off the Tab5</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
@@ -3169,6 +3170,44 @@ function adifImportMessage(j) {
 
   { const rb = document.getElementById("reboot-link");
     if (rb) rb.addEventListener("click", (e) => { e.preventDefault(); plainRestart(); }); }
+
+  /* Power off. Deliberately NOT wireReset(): that helper's copy promises a
+     reboot, and this is the one action on the menu that does not come back.
+     Randy N4OPI runs a headless QMX+ from batteries inside the radio - when
+     the radio shuts itself off on low volts the Tab5 keeps draining the same
+     pack, and he has already lost a set of 18650s to undervoltage that way.
+     ui_power_off_safely() on the device stands the robot down and puts the
+     radio in RX before the power goes, so this cannot leave a keyed radio.
+     ⚠ Whether the board stays off while 5 V is still present on its USB-C
+     input is UNTESTED - say so here rather than in a release note nobody
+     reads at the moment they need it. */
+  { const po = document.getElementById("poweroff-link");
+    if (po) po.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Power the Tab5 off?\n\n" +
+                   "• The radio is put back into receive first.\n" +
+                   "• Decoding, spotting and this web page all stop.\n" +
+                   "• It does NOT come back on its own - someone has to press " +
+                   "its button, or cut and restore its power.\n\n" +
+                   "If it is powered from a USB-C supply that stays live, it " +
+                   "may come straight back on. That case is untested.")) return;
+      const prev = po.textContent;
+      po.textContent = "Powering off …";
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "power_off", confirm: "POWEROFF" })
+        });
+        /* It answers BEFORE powering down precisely so this can tell "it
+           worked" from "it crashed" - see webserver.c. */
+        if (!r.ok) { alert("The device refused: HTTP " + r.status); return; }
+        alert("Powering off. This page will stop responding.");
+      } catch (err) {
+        alert("No answer from the Tab5. It may already be off.");
+      } finally {
+        po.textContent = prev;
+      }
+    }); }
 
   wireReset("reset-settings-link", "reset_settings",
     "Reset ALL app settings and memory channels to defaults?\n\n" +
