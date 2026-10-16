@@ -4498,7 +4498,13 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.excl.0.en",   "bool", "  ...enabled", ""],
   ["FT8 filters", "filters.excl.1.text", "text", "Exclude if it contains (2)", ""],
   ["FT8 filters", "filters.excl.1.en",   "bool", "  ...enabled", ""],
-  ["FT8 filters", "filters.excl_worked_before", "bool", "Exclude stations worked before", "Per band - the same call on another band is still new"],
+  /* ⛔ IT WAS CALLED "Exclude stations worked before" AND IT EXCLUDES NOTHING
+     FROM THE LIST. Randy N4OPI, 2026-10-16: "I would expect that with this
+     checked, worked before stations wouldn't show up at all." They always do.
+     What it gates is the four places the machine picks somebody by itself;
+     the row's grey is unconditional and comes from the log, not from here. */
+  ["FT8 filters", "filters.excl_worked_before", "bool", "Never auto-call a station worked before",
+   "Stops the MACHINE calling them - CQ answers, the pile-up, Auto-work and the robot all pass over a call already in your log on this band. It does not hide anything: a worked station is greyed in the decode list whether this is on or off, and you can still work it by tapping it. Per band, so the same call on another band is new"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",

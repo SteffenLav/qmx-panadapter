@@ -563,7 +563,7 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
     const char *band = freq_to_band(freq_hz);
     // Unknown band (freq 0: no QMX / CAT not up - e.g. FT8 simulation mode):
     // fall back to a call-only match instead of returning false. Returning
-    // false made "Exclude worked before" silently pass EVERYONE whenever the
+    // false made "Never auto-call worked-before" silently pass EVERYONE whenever the
     // frequency was unreadable - observed in sim mode as the same phantom
     // being worked and logged back-to-back with the filter checked. Matching
     // any band is the conservative direction for a filter whose job is

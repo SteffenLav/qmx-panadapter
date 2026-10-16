@@ -67,7 +67,13 @@ Tap the **Options** button to open the Options modal:
 - **Include callsigns containing** — show any call with these substrings (e.g., `/P` for portable)
 - **Exclude callsigns** — hide these calls
 - **Exclude if contains** — hide any call matching these substrings
-- **Exclude worked before** — skip calls you've already logged QSOs with
+- **Never auto-call worked-before** — the one entry in this list that does *not*
+  change the list. Every other filter here hides rows; this one only stops the
+  **machine** calling a station already in your log on this band — CQ answers,
+  the pile-up, Auto-work and the robot all pass over them. Worked stations stay
+  in the decode list either way, greyed, and you can still tap one to work it.
+  Per band: the same call on another band counts as new. (It was called
+  "Exclude stations worked before", which read as a promise about the list.)
 - **Show only CQ callers** — hide replies, show only CQ messages
 - **Show CQs in my run** — off by default. While you are running your own CQ, other
   stations' plain CQ calls are hidden so that replies addressed to you are not buried

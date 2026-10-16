@@ -391,7 +391,22 @@ static void modal_build(void)
     lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_skip_tx1, *lbl_robot;
     lv_obj_t *lbl_cq_show_others;
 
-    s_cb_worked_before = make_labeled_checkbox(panel, "Exclude worked-before", 4, 330, &lbl_worked_before);
+    /* ⛔ "EXCLUDE" WAS THE WRONG WORD AND IT COST A REPORT. Randy N4OPI,
+     * 2026-10-16: "I would expect that with this checked, worked before
+     * stations wouldn't show up at all ... So maybe I don't understand what
+     * the checkbox is supposed to do or it isn't working for me."
+     *
+     * It never hid anything. It gates the four places the MACHINE picks
+     * somebody - the CQ-run answer picker, the pile-up capture, auto-work and
+     * the robot - and the decode row's grey is UNCONDITIONAL and per band
+     * (ft8_screen_view.c), so the list looks identical either way. A label
+     * that says "exclude" beside a list is a promise about the list.
+     *
+     * ⚠ 29 characters. The left column is proven to 37 ("Skip TX1 (send
+     * report first, no grid)" at y=510), so this is inside a measured bound
+     * rather than a guessed one - and the full explanation lives on the web,
+     * the same split this file already uses for "Show CQs in my run". */
+    s_cb_worked_before = make_labeled_checkbox(panel, "Never auto-call worked-before", 4, 330, &lbl_worked_before);
     lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 390, &lbl_plain_cq);

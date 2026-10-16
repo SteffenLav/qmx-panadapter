@@ -86,7 +86,7 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 - **Hold the button to open the ADIF log** — the log stays reachable even while the button reads "Pileup" (a one-time hint appears the first time it flips).
 - Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. The reply is the correct **next** message for that station, built from whatever they actually last transmitted — usually a signal report for someone who has just called you, but an `R`+report if they came back later with a report of their own (v1.3.2; the same laddering as tapping a decode-list row).
 - A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
-- Stations you've worked before still appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer.
+- Stations you've worked before still appear in the pileup unless **Never auto-call worked-before** is checked — the pileup follows the same rule as the auto-answer.
 
 The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Options modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
 

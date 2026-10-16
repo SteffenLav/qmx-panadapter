@@ -201,7 +201,7 @@ static int64_t            s_manual_target_ts;
 // them from the pileup capture for a grace period so a finished contact never
 // re-enters the pileup (Dirk DK7CVD's lingering-call report), without the
 // blanket worked-before skip that also hid legitimate dupe callers whenever
-// the operator had "Exclude worked before" OFF.
+// the operator had "Never auto-call worked-before" OFF.
 #define DONE_GRACE_TTL_S 180
 static char               s_last_done_call[FT8_CALL_MAX_LEN];
 static int64_t            s_last_done_ts;
@@ -2179,7 +2179,7 @@ static void capture_pileup_callers(int64_t slot_sec)
         unlock();
         if (exempt) continue;
         // Worked-before is only a pileup exclusion when the operator has
-        // asked for it ("Exclude worked before") - matching what the CQ-run
+        // asked for it ("Never auto-call worked-before") - matching what the CQ-run
         // answer picker does. The old unconditional skip silently hid
         // legitimate dupe callers from the pileup while the machine was
         // perfectly willing to WORK them (filter off) - inconsistent, and in
