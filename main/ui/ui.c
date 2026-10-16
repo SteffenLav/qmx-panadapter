@@ -4320,11 +4320,41 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
 // to leave it.
 static lv_obj_t *s_pause_banner = NULL;
 
+/* ⛔ THE BANNER MUST NOT BE ON TOP OF THE RADIO-MENUS SCREEN. It is a
+ * full-width 40 px CLICKABLE strip at (0,0) whose tap handler hands the radio
+ * straight back to the Tab5 - and qmx_term_view draws its own header, 62 px
+ * at (0,0), with the title, the state and the key buttons centred inside it.
+ * This timer re-raised the banner over that header once a second, so a finger
+ * going for a header button caught the banner instead.
+ *
+ * Bryan N0LUF, 2026-10-16: his QMX+ TCXO Frequency was being rewritten to
+ * 00.000.650 and TCXO Cal Error to 650 while he worked through System Config,
+ * twice badly enough that the radio could not be reached over serial without
+ * a factory reset. His diag log shows what did it: in BOTH terminal sessions
+ * in that capture the pause he had asked for was dropped 2.8 s and 3.6 s
+ * after the terminal opened, and we then re-asserted Q9 1; and resumed
+ * FA/MD/FW polling at 50 ms into a radio sitting in its own menu.
+ *
+ * Nothing is lost by hiding it there: being on that screen IS the paused
+ * state, the title says "Radio menus", and qmx_term_view's close path already
+ * resumes CAT ("terminal exited cleanly - radio is back on CAT commands").
+ * The banner comes back by itself if CAT is still paused when it closes. */
 static void pause_banner_keepalive_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_pause_banner || !cat_user_pause_active()) return;
+    if (!s_pause_banner) return;
+    if (qmx_term_view_is_open()) {
+        // Hidden, not merely lowered: a hidden object takes no taps at all,
+        // and "cannot be clicked" is the property this needs to have.
+        if (!lv_obj_has_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN))
+            lv_obj_add_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (!cat_user_pause_active()) return;
     if (reader_view_is_active()) return;   // don't draw over the docs Reader
+    // Back from the terminal with CAT still paused - put it back.
+    if (lv_obj_has_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_clear_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_pause_banner);
 }
 
@@ -4342,7 +4372,11 @@ void ui_set_cat_paused(bool paused)
     // thread, and what makes the web caller (httpd task) safe.
     if (!display_lock(100)) return;
     if (s_pause_banner) {
-        if (paused) {
+        // Same rule as the keepalive above, and here as well as there:
+        // pausing from the WEB while the operator is in the radio's menus
+        // would otherwise flash the banner over that header until the next
+        // 1 Hz tick, which is long enough to catch a finger.
+        if (paused && !qmx_term_view_is_open()) {
             lv_obj_clear_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(s_pause_banner);
         } else {
