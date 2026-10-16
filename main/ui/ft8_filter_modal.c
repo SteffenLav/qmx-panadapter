@@ -402,10 +402,14 @@ static void modal_build(void)
      * (ft8_screen_view.c), so the list looks identical either way. A label
      * that says "exclude" beside a list is a promise about the list.
      *
-     * ⚠ 29 characters. The left column is proven to 37 ("Skip TX1 (send
-     * report first, no grid)" at y=510), so this is inside a measured bound
-     * rather than a guessed one - and the full explanation lives on the web,
-     * the same split this file already uses for "Show CQs in my run". */
+     * ⭐ 372.4 px at montserrat_24, measured off the compiled font with
+     * tools/measure_label.py - NOT a character count, which is the proxy
+     * that let "Show CQs during my run" (22 ch, 307 px) ship clipped while
+     * a 37-character label beside it was fine. The widest label this column
+     * already renders is "Skip TX1 (send report first, no grid)" at 415.4 px
+     * (y=510), so this one cannot clip where that one does not. The full
+     * explanation lives on the web, the same split this file already uses
+     * for "Show CQs in my run". */
     s_cb_worked_before = make_labeled_checkbox(panel, "Never auto-call worked-before", 4, 330, &lbl_worked_before);
     lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
