@@ -241,7 +241,11 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
 // worked-before knew nothing and the partner's trailing 73 re-entered the
 // pileup. No-op if a machine QSO is already in progress (its own path logs).
 // LVGL thread only.
-void ft8_qso_notify_manual_final(const char *target_call);
+// `final_extra` is the closing message's third field as the modal armed it -
+// "RR73" or "73". It is what gets re-sent if the partner never decodes it, so
+// passing the wrong one (or NULL, which means "73") answers them with a
+// message that does not mean what ours did. See s_final_sent_kind in ft8_qso.c.
+void ft8_qso_notify_manual_final(const char *target_call, const char *final_extra);
 
 // Note the station the operator is working MANUALLY (called on every manual
 // Transmit arm). Keeps the partner out of the pileup capture and lets the

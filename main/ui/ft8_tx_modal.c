@@ -130,7 +130,8 @@ static void transmit_btn_cb(lv_event_t *e)
         // QSO to ADIF and drops the partner from the pileup - same wrap-up an
         // auto QSO gets. No-op if a machine QSO is already active.
         if (s_pending_req.kind == FT8_TX_KIND_73)
-            ft8_qso_notify_manual_final(s_pending_req.target_call);
+            ft8_qso_notify_manual_final(s_pending_req.target_call,
+                                        s_pending_req.extra_field);
         modal_close();
     } else {
         ESP_LOGW(TAG, "arm refused: %s", err);

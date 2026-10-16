@@ -1684,7 +1684,8 @@ static void web_reply_drain(void)
     }
     if (ft8_tx_arm(&req, err, sizeof(err))) {
         if (req.target_call[0]) ft8_qso_note_manual_target(req.target_call);
-        if (req.kind == FT8_TX_KIND_73) ft8_qso_notify_manual_final(req.target_call);
+        if (req.kind == FT8_TX_KIND_73)
+            ft8_qso_notify_manual_final(req.target_call, req.extra_field);
         web_result_set("Armed: %s", req.display_text);
         ESP_LOGI(TAG, "web reply: armed '%s'", req.display_text);
     } else {

@@ -246,6 +246,36 @@ typedef struct {
 } final_track_t;
 static final_track_t      s_final[FINAL_TRACK_MAX];
 
+/* ⛔ WHAT THE FINAL ACTUALLY WAS, CAPTURED WHERE IT IS ARMED.
+ *
+ * finish_wait_done() used to read s_cur_req through `s_have_cur ? ... :
+ * FT8_TX_KIND_73` when filling the track entry. s_have_cur is ALWAYS false by
+ * then - rearm_current() clears it the moment the one-shot final is armed, and
+ * finish_wait_done() clears it again on its own first line - so both ternaries
+ * always took the else branch and EVERY tracked final was recorded as
+ * FT8_TX_KIND_73 / "73".
+ *
+ * The cost was silent and specific: a CQ-runner whose RR73 was missed re-sent
+ * "73". RR73 and 73 do not mean the same thing - RR73 is what confirms we got
+ * their report - so the partner was answered with the wrong message for the
+ * whole 6-try budget. Don WB0LQW, 2026-10-16.
+ *
+ * Reading s_cur_req without the s_have_cur guard would have "worked" and been
+ * wrong for a different reason: that struct is live state, and nothing
+ * promises it still describes the final by the time the QSO wraps up. The
+ * value is therefore copied out at the ONE place that knows it is the final -
+ * rearm_current()'s one_shot branch, under the same lock that clears
+ * s_have_cur.
+ *
+ * s_final_sent_valid is the guard, not decoration: today the only state that
+ * reaches WAIT_DONE without arming a final is the hound path, which is
+ * excluded from tracking anyway. If a future path joins it, the fallback
+ * below keeps the old behaviour AND says so in the log, rather than silently
+ * re-sending the previous contact's final. */
+static ft8_tx_kind_t      s_final_sent_kind  = FT8_TX_KIND_73;
+static char               s_final_sent_extra[16] = "73";
+static bool               s_final_sent_valid = false;
+
 // True while at least one just-worked partner is still asking for a final. Set
 // once per RX slot by advance(); read by rearm_current(), which is the single
 // choke point for CQ arming. This is what stops us calling CQ over somebody who
@@ -1000,7 +1030,15 @@ static void rearm_current(void)
     bool one_shot  = (st == FT8_QSO_WAIT_DONE);
     bool repeating = (st == FT8_QSO_CQ || st == FT8_QSO_WAIT_RPT ||
                       st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73);
-    if (have && one_shot) s_have_cur = false;   // final is sent once
+    if (have && one_shot) {
+        s_have_cur = false;   // final is sent once
+        // Remember WHICH final, for the re-send tracker - see the note on
+        // s_final_sent_kind. This is the last moment the answer is known.
+        s_final_sent_kind = req.kind;
+        snprintf(s_final_sent_extra, sizeof(s_final_sent_extra), "%s",
+                 req.extra_field[0] ? req.extra_field : "73");
+        s_final_sent_valid = true;
+    }
     int cq_sent = s_cq_calls_sent;
     unlock();
 
@@ -2659,10 +2697,20 @@ static void finish_wait_done(const char *target)
             if (s_hound_active) {
                 s_hound_active  = false;   // session over; the next start decides afresh
             } else {
+                if (!s_final_sent_valid) {
+                    ESP_LOGW(TAG, "no final was armed for %s - tracking a plain 73. "
+                                  "A non-hound path reached WAIT_DONE without arming; "
+                                  "that is the thing to look at, not this line.", target);
+                    s_final_sent_kind = FT8_TX_KIND_73;
+                    snprintf(s_final_sent_extra, sizeof(s_final_sent_extra), "73");
+                }
                 final_track_add(target, s_freq_hz,
-                                 s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73,
-                                 s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
+                                 s_final_sent_kind, s_final_sent_extra);
             }
+            // Consumed on BOTH branches. The hound branch tracks nothing, but
+            // leaving the flag set would hand the next contact this one's
+            // final if that contact never armed one.
+            s_final_sent_valid = false;
             unlock();
 
             // A completed QSO with this call supersedes any older resumable
@@ -3712,7 +3760,7 @@ bool ft8_qso_get_working_target(char *buf, size_t len)
     return buf[0] != '\0';
 }
 
-void ft8_qso_notify_manual_final(const char *target_call)
+void ft8_qso_notify_manual_final(const char *target_call, const char *final_extra)
 {
     if (!target_call || !target_call[0]) return;
 
@@ -3758,6 +3806,14 @@ void ft8_qso_notify_manual_final(const char *target_call)
     s_target[sizeof(s_target) - 1] = '\0';
     s_from_cq       = false;
     s_have_cur      = false;   // the final is already armed by the modal
+    // ...which is why the final has to be recorded HERE: rearm_current()'s
+    // one_shot branch, where a machine QSO captures it, never runs for a
+    // hand-armed close. Without this the re-send tracker would fall back to a
+    // plain "73" and answer an operator's RR73 with the wrong message.
+    s_final_sent_kind  = FT8_TX_KIND_73;
+    snprintf(s_final_sent_extra, sizeof(s_final_sent_extra), "%s",
+             (final_extra && final_extra[0]) ? final_extra : "73");
+    s_final_sent_valid = true;
     s_have_cq_saved = false;
     s_min_scan_utc  = 0;
     s_missed_slots  = 0;
