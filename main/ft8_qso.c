@@ -2156,6 +2156,9 @@ static void capture_pileup_callers(int64_t slot_sec)
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
+    char skipped[FT8_PILEUP_MAX][FT8_CALL_MAX_LEN];
+    int  n_skipped = 0;
+
     for (int i = 0; i < n; i++) {
         if (snap[i].last_utc != slot_sec) continue;
         char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
@@ -2177,7 +2180,7 @@ static void capture_pileup_callers(int64_t slot_sec)
                        strcmp(tok2, s_last_done_call) == 0 &&
                        (now_s - s_last_done_ts) < DONE_GRACE_TTL_S);
         unlock();
-        if (exempt) continue;
+        if (exempt) continue;   // being worked / just worked - not "waiting"
         // Worked-before is only a pileup exclusion when the operator has
         // asked for it ("Never auto-call worked-before") - matching what the CQ-run
         // answer picker does. The old unconditional skip silently hid
@@ -2185,8 +2188,31 @@ static void capture_pileup_callers(int64_t slot_sec)
         // perfectly willing to WORK them (filter off) - inconsistent, and in
         // sim practice sessions it emptied the pileup almost entirely.
         if (qs_cap.ft8_filters.excl_worked_before &&
-            adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
+            adif_log_contains_call_on_band(tok2, cat_get_frequency())) {
+            /* ⭐ THE OTHER HALF OF THE SILENCE. A caller refused HERE never
+             * reaches the pile-up at all, so try_start_pileup_pounce()'s own
+             * reasons cannot mention them - the list is simply short, and
+             * "short" and "empty" and "everyone refused" all used to print
+             * nothing. Randy N4OPI's 2026-10-16 report could not be settled
+             * because of exactly this gap. One line per slot, only when
+             * somebody who DID call us was dropped. */
+            if (n_skipped < (int)(sizeof(skipped) / sizeof(skipped[0])))
+                snprintf(skipped[n_skipped++], sizeof(skipped[0]), "%s", tok2);
+            continue;
+        }
         ft8_pileup_note_caller(tok2, snap[i].last_snr_db, snap[i].last_freq, slot_sec);
+    }
+
+    if (n_skipped > 0) {
+        char buf[sizeof(skipped)];
+        size_t off = 0;
+        for (int i = 0; i < n_skipped && off < sizeof(buf) - 1; i++) {
+            int w = snprintf(buf + off, sizeof(buf) - off, "%s%s", off ? " " : "", skipped[i]);
+            if (w < 0) break;
+            off += (size_t)w;
+        }
+        ESP_LOGI(TAG, "pileup capture: %d caller(s) dropped by 'Never auto-call "
+                      "worked-before': %s", n_skipped, buf);
     }
 }
 
@@ -2198,38 +2224,119 @@ static void capture_pileup_callers(int64_t slot_sec)
 // them for free. Returns true if a pounce was started (state now WAIT_*), false
 // if disabled / nobody eligible / build refused (caller falls back to CQ/idle).
 // Strongest-SNR first: best chance of a clean completion, standard pileup order.
+/* Why a pile-up entry was passed over, and the ONE place that decides it.
+ *
+ * ⛔ THE FOUR TESTS USED TO BE WRITTEN TWICE - once to pick the strongest
+ * caller and again to re-pick after the busy-partner exclusion - which is two
+ * places to keep in step and two places a new rule could be forgotten.
+ *
+ * ⭐ AND NOTHING SAID WHY. Randy N4OPI, 2026-10-16: his log shows a station
+ * calling him on his own CQ tone for four slots, never worked, and the machine
+ * resuming CQ over the top. Whether that caller was in the pile-up and refused,
+ * or never captured at all, CANNOT BE TOLD FROM THAT LOG - the pile-up printed
+ * nothing about what it held or what it rejected. A silent filter and an empty
+ * list read identically. That is what this enum and the lines below fix: the
+ * next report of this shape is answerable from the capture. */
+typedef enum {
+    PILE_OK = 0,
+    PILE_SKIP_WORKED_BEFORE,
+    PILE_SKIP_WORKED_RECENTLY,
+    PILE_SKIP_GREYLIST,
+} pile_skip_t;
+
+static const char *pile_skip_name(pile_skip_t r)
+{
+    switch (r) {
+    case PILE_SKIP_WORKED_BEFORE:   return "worked-before";
+    case PILE_SKIP_WORKED_RECENTLY: return "worked just now";
+    case PILE_SKIP_GREYLIST:        return "grey-listed";
+    default:                        return "ok";
+    }
+}
+
+static pile_skip_t pileup_candidate_skip(const char *call, const qmx_settings_t *qs)
+{
+    if (qs->ft8_filters.excl_worked_before &&
+        adif_log_contains_call_on_band(call, cat_get_frequency()))
+        return PILE_SKIP_WORKED_BEFORE;
+    // Never inside the grace window, checkbox or not. Deliberately NOT applied
+    // in capture_pileup_callers(): a recently-worked caller stays VISIBLE so the
+    // operator can still pick them by hand - this only stops the machine doing
+    // it unattended.
+    if (ft8_qso_worked_recently(call, cat_get_frequency()))
+        return PILE_SKIP_WORKED_RECENTLY;
+    // Grey-listed (repeated failed pounces) - don't auto-drain into them.
+    if (qs->greylist_en && ft8_greylist_contains(call))
+        return PILE_SKIP_GREYLIST;
+    return PILE_OK;
+}
+
+/* Strongest eligible entry, or -1. Fills `why` (one reason per entry) so the
+ * caller can say what it passed over without running the tests again. */
+static int pileup_pick_best(const ft8_pileup_entry_t *pile, int n,
+                            const qmx_settings_t *qs, pile_skip_t *why)
+{
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        if (!pile[i].call[0]) { why[i] = PILE_OK; continue; }
+        why[i] = pileup_candidate_skip(pile[i].call, qs);
+        if (why[i] != PILE_OK) continue;
+        if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+    }
+    return best;
+}
+
+/* One log line naming everybody in the list and why each was passed over.
+ * Emitted only when the list is NOT empty and nobody could be taken - the case
+ * that used to look exactly like "there was nobody there". */
+static void log_pileup_refusal(const ft8_pileup_entry_t *pile, int n,
+                               const pile_skip_t *why, const char *headline)
+{
+    char buf[FT8_PILEUP_MAX * 32];
+    size_t off = 0;
+    for (int i = 0; i < n && off < sizeof(buf) - 1; i++) {
+        if (!pile[i].call[0]) continue;
+        int w = snprintf(buf + off, sizeof(buf) - off, "%s%s(%s)",
+                         off ? " " : "", pile[i].call, pile_skip_name(why[i]));
+        if (w < 0) break;
+        off += (size_t)w;
+    }
+    ESP_LOGI(TAG, "auto-pileup: %s - %d in the list: %s", headline, n,
+             off ? buf : "(none)");
+}
+
 static bool try_start_pileup_pounce(void)
 {
     qmx_settings_t qs;
     settings_load_all(&qs);
-    if (!qs.ft8_filters.auto_pileup)            return false;
+
+    /* ⭐ THE LIST FIRST, THE SETTINGS SECOND, so the log can say "there were
+     * four people waiting and the switch was off" - a different fault from
+     * "nobody was waiting", and until now the two printed identically:
+     * nothing at all. ft8_pileup_get_all() is a memcpy under a mutex. */
+    ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
+    int n = ft8_pileup_get_all(pile, FT8_PILEUP_MAX);
+    pile_skip_t why[FT8_PILEUP_MAX] = {0};
+
+    if (!qs.ft8_filters.auto_pileup) {
+        if (n > 0) log_pileup_refusal(pile, n, why, "'Auto-work the pileup' is OFF");
+        return false;
+    }
     // Manual pick wins over auto-work-pileup. Both decide WHO to work next, and
     // an operator who asked to choose has not asked to have the strongest caller
     // chosen for them a moment later - leaving both live would quietly defeat the
     // setting they just turned on.
-    if (qs.ft8_filters.cq_manual_pick)          return false;
-    if (!qs.my_callsign[0] || !qs.my_grid[0])   return false;
-
-    ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
-    int n = ft8_pileup_get_all(pile, FT8_PILEUP_MAX);
-    if (n <= 0) return false;
-
-    int best = -1;
-    for (int i = 0; i < n; i++) {
-        if (!pile[i].call[0]) continue;
-        // Skip anyone already worked on this band if that filter is on - same
-        // rule the robot enforces, so auto-work never re-calls a logged station.
-        if (qs.ft8_filters.excl_worked_before &&
-            adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
-        // ...and never inside the grace window, checkbox or not. Deliberately
-        // NOT applied to capture_pileup_callers() above: a recently-worked
-        // caller stays VISIBLE in the pileup so the operator can still pick
-        // them by hand - this only stops the machine doing it unattended.
-        if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
-        // Grey-listed (repeated failed pounces) - don't auto-drain into them.
-        if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
-        if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+    if (qs.ft8_filters.cq_manual_pick) {
+        if (n > 0) log_pileup_refusal(pile, n, why, "'Pick callers myself' is ON");
+        return false;
     }
+    if (!qs.my_callsign[0] || !qs.my_grid[0]) {
+        if (n > 0) log_pileup_refusal(pile, n, why, "no callsign/grid set");
+        return false;
+    }
+    if (n <= 0) return false;      // genuinely nobody waiting - the quiet case
+
+    int best = pileup_pick_best(pile, n, &qs, why);
 
     /* ⛔ AND NOT WHILE THEY ARE MID-QSO WITH SOMEBODY ELSE (Gyula HA3HZ,
      * 2026-08-30: "I did not call and did not mark YL3PK before, but the
@@ -2262,17 +2369,14 @@ static bool try_start_pileup_pounce(void)
         ESP_LOGI(TAG, "auto-pileup: skipping %s - busy with %s",
                  pile[best].call, busy_with);
         pile[best].call[0] = '\0';          /* take them out of THIS pass only */
-        best = -1;
-        for (int i = 0; i < n; i++) {
-            if (!pile[i].call[0]) continue;
-            if (qs.ft8_filters.excl_worked_before &&
-                adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
-            if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
-            if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
-            if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
-        }
+        best = pileup_pick_best(pile, n, &qs, why);
     }
-    if (best < 0) return false;
+    if (best < 0) {
+        /* The case that used to be silent and is the whole reason the reasons
+         * exist: the list was NOT empty, and every one of them was refused. */
+        log_pileup_refusal(pile, n, why, "nobody eligible");
+        return false;
+    }
 
     // Reply on a clear tone (not their own), parity derived from the slot we last
     // heard them call us in (parity is periodic, so a several-minute-old
