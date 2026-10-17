@@ -14,6 +14,7 @@
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_spiffs.h"
+#include "esp_timer.h"
 #include "sd_archive.h"
 #include "settings.h"
 #include "ui.h"
@@ -24,6 +25,9 @@ int shim_log_errors     = 0;
 int shim_log_quiet      = 0;
 int shim_heap_fail_after = -1;
 int shim_lock_depth     = 0;
+int64_t shim_now_us     = 0;
+
+int64_t esp_timer_get_time(void) { return shim_now_us; }
 
 const char *esp_err_to_name(esp_err_t e)
 {

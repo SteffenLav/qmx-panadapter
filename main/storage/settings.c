@@ -3,6 +3,7 @@
 #include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
 #include "unit_gps/unit_gps.h"  // PORT.A's other backend - the mode sequencer below
 #include "ui.h"                 // CW_CENTER_* - the grid the radio accepts (#359)
+#include "cw_decode.h"         // row count, applied on set (wrap modulus, not a draw count)
 #include "sd_archive.h"
 
 #include <string.h>
@@ -117,6 +118,7 @@ static const char *TAG = "settings";
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_FREQ_SEP       "freq_sep"
 #define KEY_CW_DECODE       "cw_dec_en"
+#define KEY_CW_ROWS         "cw_dec_rows" /* rows of decoded CW drawn, 2 or 4 */
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
 #define KEY_STILL_NOTICE   "still_note"
@@ -207,6 +209,7 @@ static const char *TAG = "settings";
 #define DEF_WF_CONTRAST   (45.0f)
 #define DEF_WF_BLEND      (100)
 #define DEF_WF_WINDOW     (0)
+#define DEF_CW_ROWS       (4)    /* four since 2026-10-15 (Sam W7STF); Bryan N0LUF may pick 2 */
 #define DEF_WF_ROWS       (10)   /* rows/s - the rate the waterfall has always run at */
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
@@ -446,7 +449,11 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_PORT_A_MODE     135  /* PORT.A owner: relay | unit_gps (#15) */
 #define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable */
 #define DIRTY_RX_SOURCE       137  /* RX input source: qmx_usb | line_in */
-#define DIRTY_LINEIN_GAIN     138  /* line-in analogue gain, dB; 21 spare */
+#define DIRTY_LINEIN_GAIN     138  /* line-in analogue gain, dB */
+/* 142, not 139: tools/check_dirty_bits.py refused the build because 139 is
+   DIRTY_PA_CEILING, defined elsewhere in this file. The "spare" counts in
+   the comments above had gone stale - the checker is the authority. */
+#define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -677,6 +684,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap.freq_sep_style);
         if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap.cw_decode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_ROWS))   nvs_set_u8(s_nvs, KEY_CW_ROWS,   snap.cw_decode_rows);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap.still_notice_done ? 1 : 0);
@@ -881,6 +889,7 @@ static void load_from_nvs(qmx_settings_t *out)
     /* Decoded CW is ON by default - it is the point of the feature - so like
        rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
     out->cw_decode_en = true;
+    out->cw_decode_rows = DEF_CW_ROWS;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
      * can - see the notice in ui.c. still_notice_done stays false so an
@@ -1190,6 +1199,11 @@ static void load_from_nvs(qmx_settings_t *out)
        one rather than printing something nobody has seen. */
     if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
+    /* Only 2 or 4 are offered; anything else on flash is a value this build
+       does not know, so it falls back to the default rather than being
+       clamped into a shape the UI cannot show. */
+    if (nvs_get_u8(s_nvs, KEY_CW_ROWS, &u8v) == ESP_OK && (u8v == 2 || u8v == 4))
+        out->cw_decode_rows = u8v;
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
@@ -3000,6 +3014,32 @@ void settings_set_cw_decode_en(bool v)
     s_pending.cw_decode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_DECODE);
+}
+
+uint8_t settings_get_cw_decode_rows(void)
+{
+    if (!s_ready || !s_mutex) return DEF_CW_ROWS;   // default until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.cw_decode_rows;
+    xSemaphoreGive(s_mutex);
+    return (v == 2 || v == 4) ? v : DEF_CW_ROWS;
+}
+
+/* ⛔ APPLIES IT TO cw_decode.c TOO, and that is not a convenience. The row
+ * count is the WRAP MODULUS, so a stored value that never reached the decoder
+ * would leave the two disagreeing: the text would keep wrapping over four rows
+ * while two were drawn, and half of every pass would land where nobody can see
+ * it. One place sets both, so they cannot drift. The call wipes the line. */
+void settings_set_cw_decode_rows(uint8_t rows)
+{
+    if (rows != 2 && rows != 4) return;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = (s_pending.cw_decode_rows == rows);
+    if (!same) s_pending.cw_decode_rows = rows;
+    xSemaphoreGive(s_mutex);
+    cw_decode_set_rows(rows);        // idempotent; returns at once if unchanged
+    if (!same) mark_dirty(DIRTY_CW_ROWS);
 }
 
 void settings_set_freq_sep_style(uint8_t v)

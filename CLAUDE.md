@@ -58,7 +58,10 @@ python tools/check_patches.py     # the authority - refuses the build if any is 
 ## ⛔ What can key the radio is a FILE, not a memory
 
 `python tools/check_unattended_tx.py` is the authority over
-`docs/unattended-tx-inventory.md` — 11 arming sites, **6 unattended**. Run it
+`docs/unattended-tx-inventory.md` — **run it for the number**. This line said
+11 arming sites while the checker and the inventory both said 12 (corrected
+2026-10-17); a count in prose cannot keep up, the same rot the patches section
+above records. Today: 12 sites, **6 unattended**. Run it
 every release; if the table changed, say so in the notes. ⛔ Never call a
 capability "not completed" or "not yet": say implemented or not, then proven or
 not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).

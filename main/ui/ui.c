@@ -3765,6 +3765,52 @@ static void drawer_cw_decode_cb(lv_event_t *e)
     settings_set_cw_decode_en(lv_obj_has_state(cb, LV_STATE_CHECKED));
 }
 
+/* Rows of decoded CW: 4 <-> 2, on one button that says what it will become.
+ *
+ * Bryan N0LUF, 2026-10-16: "Maybe an option to select 2 or 4 lines as well?"
+ * A two-value choice does not need a dropdown, and the strip grows upward from
+ * a fixed bottom edge, so two rows hand back about 66 px of waterfall.
+ *
+ * ⛔ The setter is the one that also tells cw_decode.c, which WIPES the line -
+ * the count is the wrap modulus, not a draw count. The label is rewritten
+ * here rather than waiting for a redraw, because the drawer is open and the
+ * operator is looking at it. */
+static lv_obj_t *s_lbl_cw_rows_btn;
+
+static void cw_rows_btn_text(void)
+{
+    if (!s_lbl_cw_rows_btn) return;
+    lv_label_set_text(s_lbl_cw_rows_btn,
+                      (settings_get_cw_decode_rows() == 2) ? "Decoded CW: 2 lines"
+                                                           : "Decoded CW: 4 lines");
+}
+
+static void drawer_cw_rows_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_set_cw_decode_rows((settings_get_cw_decode_rows() == 2) ? 4 : 2);
+    cw_rows_btn_text();
+}
+
+/* Wipe the decoded-CW window from the Tab5 (Bryan N0LUF asked for it in the
+ * browser; the same line is on both screens, so the glass needs a way too).
+ *
+ * ⛔ IT IS A DRAWER BUTTON, NOT A TAP ON THE STRIP. cw_strip_init() records
+ * why the strip itself is not clickable: it lies over the waterfall, which is
+ * tap-to-tune, and its bottom edge is the memory-channel swipe zone. A label
+ * that ate those taps would be a bug, not a feature - and the browser's own
+ * Clear button exists for the same reason, as a control inside a pane that
+ * stays transparent to the mouse.
+ *
+ * The microSD transcript is NOT touched: what was received is still on the
+ * card, only the window is wiped. */
+static void drawer_cw_clear_cb(lv_event_t *e)
+{
+    (void)e;
+    cw_decode_clear();
+    ui_toast("Decoded CW cleared");
+}
+
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 /* #347. Index -> Hz; 0 is OFF, meaning tune exactly where the finger went. */
@@ -4616,13 +4662,53 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         return;
     }
 
+    /* ⚠ HOW MANY ROWS IS A SETTING NOW (Bryan N0LUF, 2026-10-16), and the
+     * number comes from the DECODER, not from settings and not from
+     * CW_LINE_ROWS. That constant is only the ceiling; cw_decode.c wraps the
+     * text over exactly this many rows, so reading it anywhere else would let
+     * the two disagree - half of every pass decoded into rows that are not
+     * drawn, or a drawn row that can never be written.
+     *
+     * ⛔ THE STRIP KEEPS ITS BOTTOM EDGE, SO FEWER ROWS LEAVES THE TOP SLOTS
+     * UNUSED, not the bottom ones. The objects are built one per slot at a
+     * fixed y (see cw_strip_init), slot CW_LINE_ROWS-1 sitting just above the
+     * band plan. Grid row r therefore uses slot `base + r`. Using slot 0 for
+     * row 0 would float a two-row strip near the middle of the waterfall with
+     * a gap underneath it. */
+    int rows = cw_decode_rows();
+    if (rows < 1) rows = 1;
+    if (rows > CW_LINE_ROWS) rows = CW_LINE_ROWS;
+    const int base = CW_LINE_ROWS - rows;
+
     /* The grid itself is maintained in cw_decode.c, because the browser draws
      * the same line and two copies of "where does the next character go" would
      * drift. This just asks for it. */
     unsigned total = cw_decode_total();
     bool fresh = (total != s_cw_seen);
-    if (!fresh && !lv_obj_has_flag(s_cw_now[0], LV_OBJ_FLAG_HIDDEN)) return;
+    /* ⛔ s_cw_now[base], NOT s_cw_now[0]. With two rows chosen, slot 0 is one
+     * of the two that are deliberately hidden - so testing it would find the
+     * strip "hidden" on every tick and repaint twice a second for ever.
+     * `rows != s_cw_rows_drawn` is the other half: a count change with no new
+     * character still has to redraw, and cw_decode_set_rows() wipes the grid
+     * without moving the character total. */
+    static int s_cw_rows_drawn = -1;
+    const bool rows_changed = (rows != s_cw_rows_drawn);
+    if (!fresh && !rows_changed &&
+        !lv_obj_has_flag(s_cw_now[base], LV_OBJ_FLAG_HIDDEN)) return;
     s_cw_seen = total;
+
+    if (rows_changed) {
+        s_cw_rows_drawn = rows;
+        /* Every slot stands down: the ones going out of use must not keep a
+         * line of old text, and the prefix moves to sit beside the top row IN
+         * USE. Only on a change - lv_obj_align() twice a second would be work
+         * for nothing. */
+        cw_strip_hide_all();
+        const int row_px = (int)lv_font_get_line_height(&qmx_mono_25) + 8;
+        const int y_off  = -(BOTTOM_BAR_H + BANDPLAN_H + CW_LIFT_PX);
+        lv_obj_align(s_cw_prefix, LV_ALIGN_BOTTOM_LEFT, 0,
+                     y_off - (rows - 1) * row_px);
+    }
 
     /* Enough characters to fill the width at this font; the ring keeps the
      * rest for the CW page. */
@@ -4653,15 +4739,18 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     if (tail[0] == '\0') {
         /* The top row carries the word; every other object stands down, so
          * nothing from a previous session is left behind it. */
-        lv_label_set_text(s_cw_now[0], "listening...");
+        /* Slot `base`, the TOP ROW IN USE - slot 0 only when all four are
+         * shown. With two rows chosen, slot 0 is hidden, so the word would
+         * have gone to an invisible label. */
+        lv_label_set_text(s_cw_now[base], "listening...");
         for (int r = 0; r < CW_LINE_ROWS; r++) {
-            if (r && s_cw_now[r]) lv_obj_add_flag(s_cw_now[r], LV_OBJ_FLAG_HIDDEN);
-            if (s_cw_prev[r])     lv_obj_add_flag(s_cw_prev[r], LV_OBJ_FLAG_HIDDEN);
+            if (r != base && s_cw_now[r]) lv_obj_add_flag(s_cw_now[r], LV_OBJ_FLAG_HIDDEN);
+            if (s_cw_prev[r])             lv_obj_add_flag(s_cw_prev[r], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_clear_flag(s_cw_now[0], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_cw_now[base], LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_cw_prefix, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_cw_prefix);
-        lv_obj_move_foreground(s_cw_now[0]);
+        lv_obj_move_foreground(s_cw_now[base]);
         return;
     }
 
@@ -4687,15 +4776,17 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * LVGL 9.2 has no label recolour, and the existing comment below already
      * chose separate labels over colour markup to keep the column arithmetic
      * honest. This follows it. */
+    const int cells = rows * CW_LINE_COLS;
+
     char now_s[CW_LINE_ROWS][CW_LINE_COLS + 1], prev_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
     int  col = cw_decode_line_col();
     if (col < 0) col = 0;
-    if (col > CW_GRID_CELLS) col = CW_GRID_CELLS;
+    if (col > cells) col = cells;
     /* One walk over the whole grid, split into rows only at the end. The row
      * boundary is not a special case for the cursor or the colouring - the
      * write position runs straight through, so the wrap down to line two is the
      * same event as any other character. */
-    for (int r = 0; r < CW_LINE_ROWS; r++) {
+    for (int r = 0; r < rows; r++) {
         for (int i = 0; i < CW_LINE_COLS; i++) {
             int  g = r * CW_LINE_COLS + i;
             char c = disp[g] ? disp[g] : ' ';
@@ -4705,15 +4796,22 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         now_s[r][CW_LINE_COLS] = prev_s[r][CW_LINE_COLS] = '\0';
     }
 
-    for (int r = 0; r < CW_LINE_ROWS; r++) {
-        if (s_cw_now[r])  lv_label_set_text(s_cw_now[r],  now_s[r]);
-        if (s_cw_prev[r]) lv_label_set_text(s_cw_prev[r], prev_s[r]);
+    /* The slots above `base` are not in use - see the note where base is
+     * computed. They are hidden here as well as on a count change, because
+     * the "listening..." branch above leaves exactly one row visible. */
+    for (int r = 0; r < base; r++) {
+        if (s_cw_now[r])  lv_obj_add_flag(s_cw_now[r],  LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_prev[r]) lv_obj_add_flag(s_cw_prev[r], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int r = 0; r < rows; r++) {
+        if (s_cw_now[base + r])  lv_label_set_text(s_cw_now[base + r],  now_s[r]);
+        if (s_cw_prev[base + r]) lv_label_set_text(s_cw_prev[base + r], prev_s[r]);
     }
 
     /* Raise the pairs before the prefix and the top row, so the ordering
      * below is the one that ends up on screen. */
-    for (int r = 0; r < CW_LINE_ROWS; r++) {
-        lv_obj_t *const pair[] = { s_cw_now[r], s_cw_prev[r] };
+    for (int r = 0; r < rows; r++) {
+        lv_obj_t *const pair[] = { s_cw_now[base + r], s_cw_prev[base + r] };
         for (size_t i = 0; i < sizeof(pair) / sizeof(pair[0]); i++) {
             if (!pair[i]) continue;
             lv_obj_clear_flag(pair[i], LV_OBJ_FLAG_HIDDEN);
@@ -14251,7 +14349,9 @@ static void drawer_build(void)
     {
         // The green "CW" heading that used to sit here is gone: the group
         // heading above already says Radio, and "CW center" names itself.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244 + 60);   /* 194 + nudge row + decode row */
+        /* 194 + nudge row + decode row + the lines/clear row (Bryan N0LUF).
+           ⛔ Must stay equal to the `y +=` at the end of this block. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244 + 60 + 60);
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
@@ -14346,12 +14446,41 @@ static void drawer_build(void)
             lv_obj_set_style_text_color(dl, lv_color_hex(0xFFFFFF), 0);
             lv_obj_set_style_text_font(dl, &lv_font_montserrat_28, 0);
             lv_obj_align(dl, LV_ALIGN_TOP_LEFT, 52, 244);
+
+            /* Bryan N0LUF, 2026-10-16: how many lines, and a way to wipe them.
+               Side by side on one row under the checkbox - both only mean
+               anything while decoded CW is shown, so they belong with it. */
+            lv_obj_t *rb = lv_btn_create(sec);
+            lv_obj_set_size(rb, (DRAWER_W - 40) / 2, 52);
+            lv_obj_align(rb, LV_ALIGN_TOP_LEFT, 0, 296);
+            lv_obj_set_style_bg_color(rb, lv_color_hex(0x2a3138), 0);
+            lv_obj_set_style_border_color(rb, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            lv_obj_set_style_border_width(rb, 2, 0);
+            lv_obj_add_event_cb(rb, drawer_cw_rows_cb, LV_EVENT_CLICKED, NULL);
+            s_lbl_cw_rows_btn = lv_label_create(rb);
+            lv_obj_set_style_text_font(s_lbl_cw_rows_btn, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_color(s_lbl_cw_rows_btn, lv_color_hex(0xffffff), 0);
+            lv_obj_center(s_lbl_cw_rows_btn);
+            cw_rows_btn_text();
+
+            lv_obj_t *cb2 = lv_btn_create(sec);
+            lv_obj_set_size(cb2, (DRAWER_W - 40) / 2, 52);
+            lv_obj_align(cb2, LV_ALIGN_TOP_LEFT, (DRAWER_W - 40) / 2 + 8, 296);
+            lv_obj_set_style_bg_color(cb2, lv_color_hex(0x2a3138), 0);
+            lv_obj_set_style_border_color(cb2, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            lv_obj_set_style_border_width(cb2, 2, 0);
+            lv_obj_add_event_cb(cb2, drawer_cw_clear_cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *cl = lv_label_create(cb2);
+            lv_label_set_text(cl, "Clear window");
+            lv_obj_set_style_text_font(cl, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_color(cl, lv_color_hex(0xffffff), 0);
+            lv_obj_center(cl);
         }
 
         /* ⛔ This MUST match the height passed to drawer_section() above. A
          * section whose height and advance disagree overlaps the next one -
          * the reflow bug this file has hit more than once. */
-        y += 244 + 60;
+        y += 244 + 60 + 60;
     }
 
     /* CW profiles (#359). Its own section directly under the CW controls: a

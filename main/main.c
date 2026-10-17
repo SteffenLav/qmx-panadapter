@@ -587,16 +587,23 @@ void app_main(void)
     /* #302: the stored frequency punctuation, applied before any UI is built.
        Every caller reads g_freq_style at format time, so this is the only
        place it has to be set. */
+    uint8_t cw_rows_boot = 0;
     {
         /* Heap, not stack - same reasoning as the cfg block above. */
         qmx_settings_t *fs = heap_caps_malloc(sizeof(*fs), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (fs) {
             settings_load_all(fs);
             g_freq_style = (fs->freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+            cw_rows_boot = fs->cw_decode_rows;
             heap_caps_free(fs);
         }
     }
     cw_decode_init();
+    /* AFTER cw_decode_init(): it creates the mutex that cw_decode_set_rows()
+       takes, and clears the grid the setter would otherwise have just wiped.
+       The stored choice has to reach the decoder, not only the UI, because it
+       is the wrap modulus - see cw_decode_set_rows(). */
+    if (cw_rows_boot == 2 || cw_rows_boot == 4) cw_decode_set_rows(cw_rows_boot);
     /* No USB host means no CDC-ACM to find. Starting CAT anyway leaves its
      * link task retrying a device that cannot appear, and the UI showing a
      * radio that is not there. */

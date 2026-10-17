@@ -499,6 +499,11 @@ typedef struct {
     // panadapter in CW/CW-R. Default ON - it is the point of the feature - but
     // it is an overlay on someone else's waterfall, so it has an off switch.
     bool     cw_decode_en;
+    /* How many rows of that overlay to draw, 2 or 4. Bryan N0LUF, 2026-10-16.
+       Four is what it has been since 2026-10-15 and stays the default; two
+       gives about 66 px of waterfall back. It is the WRAP modulus inside
+       cw_decode.c, not a draw count - see cw_decode_set_rows(). */
+    uint8_t  cw_decode_rows;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     uint8_t  freq_sep_style;    // #302: 0 = 14.074.000 (default), 1 = 14,074,000 (Don N2VGU)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
@@ -1014,6 +1019,10 @@ bool    settings_get_hp_mute_en(void);
 // four times. Reads the staged copy, so it reflects a change immediately.
 bool settings_get_cw_decode_en(void);
 void settings_set_cw_decode_en(bool v);
+/* Rows of decoded CW to draw, 2 or 4. The setter also applies it to
+   cw_decode.c, which WIPES the line - see cw_decode_set_rows(). */
+uint8_t settings_get_cw_decode_rows(void);
+void settings_set_cw_decode_rows(uint8_t rows);
 void settings_set_distance_in_miles(bool v);
 /* Narrow read - the WSPR decode list formats up to 18 rows per repaint on
  * taskLVGL, where settings_load_all()'s multi-kilobyte copy has crashed this

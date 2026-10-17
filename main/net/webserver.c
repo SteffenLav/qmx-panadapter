@@ -683,7 +683,12 @@ static esp_err_t status_handler(httpd_req_t *req)
                  * same silent truncation the comment above records from the
                  * evening the two-line pane shipped, in the other direction.
                  * One definition, and the page draws what it is told. */
-                cJSON_AddNumberToObject(c, "rows", CW_LINE_ROWS);
+                /* ⚠ cw_decode_rows(), NOT CW_LINE_ROWS. Since 2026-10-17 the
+                 * constant is only the maximum and the count in use is a
+                 * setting (Bryan N0LUF). Sending the constant would have the
+                 * page draw four rows while the decoder wrapped over two -
+                 * two of them permanently blank. */
+                cJSON_AddNumberToObject(c, "rows", cw_decode_rows());
                 cJSON_AddNumberToObject(c, "cols", CW_LINE_COLS);
                 cJSON_AddItemToObject(root, "cw", c);
             }
@@ -2631,6 +2636,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  (unsigned long)n, (unsigned long)cap, DSP_SAMPLE_RATE_HZ);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "cw_clear") == 0) {
+        /* Wipe the decoded-CW window (Bryan N0LUF, 2026-10-16: "it might be
+         * cool for a click inside the decoder area of the screen to clear the
+         * buffer... With so many lines of wrapping text it sometimes gets a
+         * bit too busy and hard to quickly find where the cyan and green
+         * boundary of fresh decode is").
+         *
+         * ⛔ Clears the DECODER, not a copy in the page, so the Tab5's own
+         * strip clears with it. Two surfaces drawing one line is the whole
+         * point of cw_decode.c owning it; a browser-side wipe would have made
+         * them disagree until the next pass.
+         *
+         * It does NOT touch the microSD transcript - what was received is
+         * still on the card. Only the window is wiped. */
+        cw_decode_clear();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
     } else if (action && strcmp(action, "web_audio") == 0) {
         /* Start/stop demodulated audio on the WebSocket (Sam W7STF).
@@ -5745,6 +5768,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "fd_class",     c.fd_class);
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "cw_decode_en", c.cw_decode_en);
+    cJSON_AddNumberToObject(root, "cw_decode_rows", (double)c.cw_decode_rows);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddNumberToObject(root, "freq_sep_style", (double)c.freq_sep_style);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
@@ -5971,6 +5995,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "cw_decode_en")))
         settings_set_cw_decode_en(cJSON_IsTrue(it));
+    /* 2 or 4 only; the setter refuses anything else rather than storing it,
+       so a bad value cannot produce a pane nobody has seen. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_decode_rows")))
+        settings_set_cw_decode_rows((uint8_t)it->valueint);
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))
         settings_set_distance_in_miles(cJSON_IsTrue(it));
     /* #302: 0 = 14.074.000, 1 = 14,074,000. Anything else is refused by the
@@ -6260,6 +6288,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
     BOOLTOP("cw_decode_en", settings_set_cw_decode_en);
+    // Rows of decoded CW, 2 or 4 (Bryan N0LUF). A number, not a switch, and
+    // the setter refuses anything else.
+    {
+        cJSON *cr = cJSON_GetObjectItem(root, "cw_decode_rows");
+        if (cJSON_IsNumber(cr)) settings_set_cw_decode_rows((uint8_t)cr->valuedouble);
+    }
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
     BOOLTOP("field_day_en",      settings_set_field_day_en);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "fd_class"))))   settings_set_fd_class(s);

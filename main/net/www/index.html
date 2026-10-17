@@ -645,6 +645,19 @@
              white-space: pre; overflow: hidden;
              background: rgba(0,0,0,.7); padding: 2px 6px;
              pointer-events: none; }   /* the waterfall under it is click-to-tune */
+  /* ⛔ THE PANE STAYS pointer-events:none AND THE BUTTON OPTS BACK IN.
+     Bryan N0LUF, 2026-10-16, asked for a click inside the decoder area to
+     clear the buffer - and in the same message noticed that a click there
+     currently tunes the radio, because the pane is transparent to the mouse on
+     purpose. Making the whole pane clickable would take click-to-tune away
+     from the bottom quarter of the waterfall to pay for it. So only this
+     button takes the click, and every other pixel of the pane still tunes. */
+  #cw-clear { position: absolute; right: 6px; bottom: 4px; pointer-events: auto;
+              background: rgba(0,0,0,.65); color: var(--dim);
+              border: 1px solid #3a4149; border-radius: 4px;
+              padding: 1px 8px; font-size: 12px; line-height: 1.6;
+              cursor: pointer; opacity: .55; transition: opacity .15s; }
+  #cw-clear:hover { opacity: 1; color: #30e0e0; border-color: #30e0e0; }
   #cw-head { color: #30e060; }         /* green header, as on the Tab5 */
   /* .cw-row-text is every row built below the first; #cw-text is row 1, which
      is in the markup because the header sits beside it. #cw-text2 was the old
@@ -1195,7 +1208,7 @@
 
   <div id="split-handle" title="Drag to resize"></div>
 
-  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div id="cw-rows"></div></div></div>
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div id="cw-rows"></div><button id="cw-clear" type="button" title="Wipe the decoded CW window, here and on the Tab5. What was received is still in the microSD transcript.">Clear</button></div></div>
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
@@ -4597,6 +4610,14 @@ const SET_FIELDS = [
      "On (the default): the spectrum and waterfall hold still and the VFO marker moves across them, so a signal stays where you last saw it while you tune. Off: the old behaviour, where the view re-centres on the dial at every step and the marker stays in the middle. Either way, the hatched region on the right is frequency the radio genuinely cannot hear"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "cw_decode_en", "bool", "Show decoded CW", "The radio decodes CW itself; this shows it along the bottom of the panadapter in CW mode"],
+  /* Bryan N0LUF: "Maybe an option to select 2 or 4 lines as well?" The strip
+     grows upward from a fixed bottom edge, so two rows hand back about 66 px
+     of waterfall. Changing it wipes the window - the decoder wraps over
+     exactly these rows, so old text in rows it no longer uses would be a
+     ghost. */
+  ["Radio & display", "cw_decode_rows", "sel", "Lines of decoded CW",
+     "Four fills more of the waterfall; two hands that space back. Switching wipes what is on screen now - the microSD transcript keeps it",
+     [["4","4 lines"],["2","2 lines"]]],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   // #302 (Don N2VGU): the options SHOW the two formats rather than naming a
   // convention - "European"/"USA" would make the reader work out what they get,
@@ -11173,6 +11194,25 @@ async function listenToggle() {
   const b = document.getElementById("listenbtn");
   if (b) b.addEventListener("click", listenToggle);
   listenPaint();
+})();
+
+/* Clear the decoded-CW window - Bryan N0LUF. The DEVICE is cleared, not a copy
+   here, so the Tab5's own strip clears with it; wiping only the page would
+   have the two disagree until the next poll overwrote it anyway.
+   stopPropagation because this button sits INSIDE the pane that is
+   deliberately transparent to the mouse - without it the click would also
+   reach the waterfall and retune. */
+(() => {
+  const b = document.getElementById("cw-clear");
+  if (!b) return;
+  b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cw_clear" })
+    }).catch(() => {});
+  });
 })();
 
 function connectWs() {

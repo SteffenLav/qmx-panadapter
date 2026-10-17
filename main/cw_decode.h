@@ -149,6 +149,9 @@ unsigned cw_decode_total(void);
  *
  * ⚠ THE STRIP GROWS UPWARD over the waterfall - the bottom edge, just above
  * the band plan, is fixed. Four rows cover about 66 px more of it than two. */
+/* ⚠ 2026-10-17: this is now the MAXIMUM, not the count. How many are actually
+ * in use is a setting - cw_decode_rows() below - and the buffer stays this
+ * size whatever it says. Raising this line still raises the ceiling. */
 #define CW_LINE_ROWS 4
 #define CW_GRID_CELLS (CW_LINE_ROWS * CW_LINE_COLS)
 
@@ -171,6 +174,20 @@ int cw_decode_wpm(void);
 
 // Forget everything (mode change, or the operator clearing the window).
 void cw_decode_clear(void);
+
+/* How many of the CW_LINE_ROWS rows are in use, and setting it.
+ *
+ * Bryan N0LUF, 2026-10-16: "Maybe an option to select 2 or 4 lines as well?"
+ * Four rows cover about 66 px more of the waterfall than two.
+ *
+ * ⛔ THIS IS THE WRAP MODULUS, not a draw count, which is why it lives with
+ * the write position and not in either screen. Drawing two rows while the text
+ * still wrapped over four would decode half of every pass into rows nobody can
+ * see. Both screens ask for this number; neither decides it.
+ *
+ * ⛔ Changing it WIPES the grid - see the note at the definition. */
+int  cw_decode_rows(void);
+void cw_decode_set_rows(int rows);
 
 // Bytes currently staged for the microSD transcript, without copying any of
 // them - for logging/diagnostics only (e.g. "N bytes still waiting" on a

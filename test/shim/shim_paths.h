@@ -19,24 +19,8 @@
 void shim_set_spiffs_dir(const char *dir);
 const char *shim_path(const char *p);   /* returns a rotating static buffer */
 
-/* MinGW has neither of these. gmtime_r is the reentrant POSIX form; on this
-   single-threaded harness gmtime() is equivalent. fsync has nothing to flush
-   through on a plain file here. Both are force-included into the firmware
-   source only, so the device build is untouched. */
-#if defined(_WIN32) && !defined(SHIM_HAVE_POSIX)
-#include <time.h>
-#include <unistd.h>
-static inline struct tm *shim_gmtime_r(const time_t *t, struct tm *out)
-{
-    struct tm *g = gmtime(t);
-    if (!g) return NULL;
-    *out = *g;
-    return out;
-}
-#define gmtime_r(t, o) shim_gmtime_r((t), (o))
-static inline int shim_fsync(int fd) { (void)fd; return 0; }
-#define fsync(fd)      shim_fsync(fd)
-#endif
+#include "shim_mingw.h"
+
 
 #define fopen(p, m)   fopen(shim_path(p), (m))
 #define remove(p)     remove(shim_path(p))
