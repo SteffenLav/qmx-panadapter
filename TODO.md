@@ -55,6 +55,8 @@ number when something new arrives; never close a gap.
 | **T24** | GPIO53 meter check | Eric Moritz |
 | **T25** | Per-tone FT8 spacing over USB | Jim (jpwatters) |
 | **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
+| **T27** | Audit which operator switches are Tab5-only and expose them | — |
+| **T28** | ⚠ Does any OTHER setting need a restart with no notice? | — |
 
 ⚠ **T03 is the only one with a date**: the drafts are written 2026-10-18,
 when he is back on groups.io.
@@ -130,6 +132,21 @@ when he is back on groups.io.
 6. **The QMX timeout experiment** - deferred by the operator on 10-15.
 
 ### E17. Small, cost already known
+
+▶ **Added 2026-10-17, found while failing to measure T21.**
+
+- **T27 — which operator switches are Tab5-only?** `rx_audio_en` and
+  `rx_audio_vol` were: every knob around them was on the API, the switch that
+  decides whether any of them run was not. Fixed for those two (`b1caf7aa`).
+  A sweep says 70 of 159 `qmx_settings_t` fields are never named in
+  `webserver.c`, but most are internal state, upload cursors or nested groups
+  whose struct name differs from the JSON key - so that is a LEAD, not a
+  finding. The audit is the work.
+- **T28 — which other settings take effect only after a restart, silently?**
+  RX audio does, for a correct reason (the codec opens at boot, before the USB
+  host takes the DMA RAM), and said so only on the serial console. One grep
+  for the pattern is the whole job.
+
 
 1. ⭐ **The web Listen button is not discoverable.** TWO users never found it
    (Bryan N0LUF, Randy N4OPI), one of them after reading the manual; Sam had
