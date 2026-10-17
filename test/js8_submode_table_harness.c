@@ -1,7 +1,17 @@
 /* Host test: the JS8 submode table and the ONE refusal rule.
  *
- * Build and run, from the repo root - tools/run_js8_submode_table.sh is
- * exactly this:
+ * Build and run, from the repo root:
+ *
+ *   sh tools/run_js8_submode_table.sh
+ *
+ * ⛔ A SCRIPT, NOT THE gcc LINE BELOW. Two `cp` steps have to happen first
+ * (see the warning further down), and tools/run_harnesses.py cannot do those
+ * from a gcc line - so since this harness landed (2026-10-15) the runner
+ * built it without them and reported a BUILD FAIL that was never a defect in
+ * the code under test.
+ * The runner now prefers an `sh ...` line when the header offers one.
+ *
+ * The script is exactly this:
  *
  *   mkdir -p build/hosttest && cp -r test/stub/. build/hosttest/
  *   cp main/js8_submode.c main/js8_submode.h build/hosttest/

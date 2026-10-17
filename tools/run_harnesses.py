@@ -33,6 +33,23 @@ GCCDIR = Path(os.environ["LOCALAPPDATA"]) / (
 LEADER = re.compile(r"^\s*(\*|//|/\*)\s?")
 
 
+def script_command(src: Path):
+    """A `sh test/build_*.sh` line from the header, if the harness has one.
+
+    A few harnesses cannot be a single gcc line. adif_worked_cache_harness
+    force-includes a path-redirect header into the firmware source ONLY, so
+    its shim must be compiled in a separate step; it also runs the binary more
+    than once, because one of its cases needs a virgin process. Such a harness
+    owns a build script, and this runner hands it the whole job: build AND run,
+    no -o rewrite and no second run here.
+    """
+    for raw in src.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+        line = LEADER.sub("", raw).strip()
+        if line.startswith("sh ") and ".sh" in line:
+            return line
+    return None
+
+
 def build_command(src: Path):
     """The gcc line from the header, following backslash continuations."""
     parts, collecting = [], False
@@ -69,6 +86,20 @@ def main():
         name = src.stem
         if only and only not in name:
             continue
+        script = script_command(src)
+        if script:
+            r = subprocess.run(script, shell=True, cwd=ROOT, env=env,
+                               stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, timeout=600)
+            if r.returncode == 0:
+                print(f"  {name:<26} pass  (via {script.split()[1]})")
+                npass += 1
+            else:
+                print(f"  {name:<26} RUN FAIL  (via {script.split()[1]})")
+                failures.append((name, "script", (r.stdout + r.stderr).strip()))
+                nfail += 1
+            continue
+
         cmd = build_command(src)
         if not cmd:
             print(f"  {name:<26} SKIP  (no build line in its header)")

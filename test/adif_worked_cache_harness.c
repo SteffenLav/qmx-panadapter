@@ -1,12 +1,12 @@
 /* Host test for the worked-call cache in main/adif/adif_log.c.
  *
- *   gcc -std=gnu11 -Wall -Wextra -o test/adif_worked_cache_harness \
- *       -Itest/shim -Imain/adif -Imain \
- *       test/adif_worked_cache_harness.c test/shim/shim.c \
- *       -include test/shim/shim_paths.h main/adif/adif_log.c main/adif/adif_check.c
+ *   sh test/build_adif_worked_cache.sh
  *
- * (build.sh beside this file does it, including the -include split that keeps
- * shim.c away from the path macros.)
+ * ⛔ A SCRIPT, NOT A gcc LINE, and tools/run_harnesses.py understands that.
+ * Two things here cannot be one command: shim.c must NOT see the path-redirect
+ * macros that are force-included into the firmware source, and the binary has
+ * to run more than once because two cases need a virgin process (the cache
+ * capacity is static and only ever grows).
  *
  * ⛔ WHY THIS EXISTS. Gyula HA3HZ, 2026-10-17: with ~1000 QSOs logged, a
  * station he had just worked kept showing as NOT worked before. Deleting the
