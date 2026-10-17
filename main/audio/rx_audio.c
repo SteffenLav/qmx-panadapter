@@ -2656,7 +2656,17 @@ void rx_audio_set_enabled(bool en)
         // Codec is only opened at boot (before the USB host takes the DMA
         // RAM). Turning RX audio on mid-session can't open it safely, so it
         // takes effect after a restart.
+        //
+        // ⛔ AND THE OPERATOR HAS TO BE TOLD, ON THE GLASS. Until 2026-10-17
+        // this warning went to the serial console and nowhere else: the box
+        // ticks, stays ticked, and nothing happens, with no explanation on
+        // any surface the operator can see. Found while trying to measure
+        // T21 - I ticked it, read frame_count=0, and only the capture said
+        // why. Three operators asked about silent audio in the same week
+        // (Bryan N0LUF, Randy N4OPI, Sam W7STF); this is one of the ways to
+        // arrive there. The restart requirement itself is correct and stays.
         ESP_LOGW(TAG, "RX audio enabled - restart required to take effect");
+        ui_toast("RX audio needs a restart before it plays");
         return;
     }
     if (s_task) xTaskNotifyGive(s_task);   // wake it out of the indefinite block

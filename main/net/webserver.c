@@ -5704,6 +5704,16 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
                                     settings_get_rxaud_am_half_bw_h100() * 200);
             cJSON_AddNumberToObject(ra, "agc_release_ms", settings_get_rxaud_agc_release_ms());
             cJSON_AddBoolToObject  (ra, "agc_off",        settings_get_rxaud_agc_off());
+            /* ⛔ THE ENABLE AND THE VOLUME WERE TAB5-ONLY until 2026-10-17.
+               Every knob around them was reachable - gain, pan, AGC, AM
+               bandwidth - but not the switch that decides whether any of it
+               runs, nor the volume. Found by ticking the box and still
+               reading frame_count=0 with no way to set it back from here.
+               "en" reports what the AUDIO PATH is actually doing
+               (rx_audio_is_enabled()), not merely what is stored, because
+               the two differ until the restart below happens. */
+            cJSON_AddBoolToObject  (ra, "en",             rx_audio_is_enabled());
+            cJSON_AddNumberToObject(ra, "vol",            rx_audio_get_volume());
             cJSON_AddBoolToObject  (ra, "hp_mute_en",     settings_get_hp_mute_en());
             cJSON_AddItemToObject(root, "rxaudio", ra);
         }
@@ -6443,6 +6453,28 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
              * audio to the headphone auto-mute after v1.16.4. It is on the
              * Tab5 so a user with no sound can reach it there; it is here so
              * they can reach it from a phone. Applies immediately. */
+            /* ⚠ TURNING IT ON NEEDS A RESTART and the caller must be told,
+               not left to discover it. The codec is opened at boot, before
+               the USB host takes the DMA RAM, so a mid-session enable cannot
+               open it safely - see rx_audio_set_enabled(). Switching OFF
+               takes effect at once. */
+            if (cJSON_IsBool(v = cJSON_GetObjectItem(ra, "en"))) {
+                bool want = cJSON_IsTrue(v);
+                settings_set_rx_audio_en(want);
+                rx_audio_set_enabled(want);
+                /* How a caller DETECTS the restart requirement without a
+                   second field to keep in step: read the group back. "en"
+                   reports the live audio path, so a POST of true followed by
+                   a GET of false means "stored, waiting for a restart". The
+                   Tab5 also toasts it. */
+            }
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "vol"))) {
+                int vol = v->valueint;
+                if (vol < 0) vol = 0;
+                if (vol > 100) vol = 100;
+                settings_set_rx_audio_vol((uint8_t)vol);
+                rx_audio_set_volume((uint8_t)vol);
+            }
             if (cJSON_IsBool(v = cJSON_GetObjectItem(ra, "hp_mute_en"))) {
                 settings_set_hp_mute_en(cJSON_IsTrue(v));
                 ESP_LOGI(TAG, "web: headphone auto-mute -> %s",
