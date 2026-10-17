@@ -49,12 +49,13 @@ number when something new arrives; never close a gap.
 | **T18** | DNR for AM and SSB | Sam W7STF (A5) |
 | **T19** | Server mode, screen off | Sam W7STF (A1) |
 | **T20** | I/Q server — a direction, or is A1 the end of it? | — |
-| **T21** | ⭐ WWV pitch drift — **CAUSE MEASURED 2026-10-17**: AM CPU cost rails the resampler clamp. 6 kHz rails, 4 kHz does not, USB never does. Width sweep rules out a wrong ratio. The FIX is open: make AM cheaper, or cap the width | Sam W7STF |
+| **T21** | ⭐ WWV pitch drift — **NO CAUSE YET.** 2026-10-17 matched windows killed the AM-rails theory (USB rails MORE). What stands: AM costs 2.6x USB per frame, unexplained by decimation or taps. Needs a profiler | Sam W7STF |
 | **T22** | Saved diag log destroys 4 bytes per 32-byte block | John W5JSS |
 | **T23** | QMX+ decodes only "T T T T" | Gyula HA3HZ |
 | **T24** | GPIO53 meter check | Eric Moritz |
 | **T25** | Per-tone FT8 spacing over USB | Jim (jpwatters) |
 | **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
+| **T29** | ⭐ Why does AM cost 2.6x USB per frame? Not decimation, not taps | — |
 | **T27** | Audit which operator switches are Tab5-only and expose them | — |
 | **T28** | ⚠ Does any OTHER setting need a restart with no notice? | — |
 
