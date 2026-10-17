@@ -1292,8 +1292,8 @@ static void bw_popup_open(void)
          * pins core 1 at 0.0% idle with nobody listening - measured, and the
          * table is in rx_audio.h beside RX_AUDIO_AM_HALF_BW_MAX_HZ. 9.6 kHz is
          * what D=4 carries. */
-        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600};
-        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
+        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000};   /* 8.0/9.6 withdrawn 2026-10-17 - unmeasured, not unaffordable; see rx_audio.h */
+        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k"};
         bw_list = am_bw;
         lbl_list = am_lbl;
         n_bw = 6;

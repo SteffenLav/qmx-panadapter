@@ -2612,8 +2612,15 @@ uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x10
  * as 100, was clamped to 48, and the operator's 20.0 kHz pick would have come
  * back as 4.8 kHz after the next boot with nothing said. Raised with D=2 on
  * 2026-10-15; found by checking every writer of the ceiling, not by hearing
- * it. 100 = 10000 Hz = RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
-void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 48); }
+ * it.
+ *
+ * ⛔ 2026-10-17: 48 -> 30 (6.0 kHz). 8.0 and 9.6 kHz are withdrawn - NOT
+ * because they cost too much (AM 4.0 and 6.0 measured the same CPU duty,
+ * so width is free within D=4) but because they were never measured end to
+ * end, and T21’s pitch drift is still unexplained. The invariant this
+ * comment exists for is unchanged: keep this equal to
+ * RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 30); }
 
 /* ⛔ CLAMPED ON READ AS WELL AS ON WRITE, and that is the whole point of
  * this not being a bare RXA_GET_U8.
@@ -2635,10 +2642,10 @@ uint8_t settings_get_rxaud_am_half_bw_h100(void)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     uint8_t v = s_pending.rxaud_am_half_bw_h100;
     xSemaphoreGive(s_mutex);
-    if (v > 48) {
-        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 9.6 kHz ceiling "
-                      "(10.0/20.0 kHz were withdrawn) - using 9.6 kHz", v);
-        v = 48;
+    if (v > 30) {
+        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 6.0 kHz ceiling "
+                      "(8.0 and above were withdrawn) - using 6.0 kHz", v);
+        v = 30;
     }
     return v;
 }

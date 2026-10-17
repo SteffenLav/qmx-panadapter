@@ -7254,7 +7254,9 @@ function buildBwDropdown() {
        10500, which is why it stops where it does. 9.6k was the old D=4
        ceiling and stays as a step. 20.0 kHz is a shortwave broadcaster's full
        audio; 10.0 kHz is the legal maximum for amateur AM below 29 MHz. */
-    const widths = [2000, 3000, 4000, 6000, 8000, 9600];   // 10.0/20.0 withdrawn: D=2 pins core 1
+    const widths = [2000, 3000, 4000, 6000];   // 10.0/20.0 withdrawn: D=2 pins core 1.
+    // 8.0/9.6 withdrawn 2026-10-17: never measured end to end, and T21 is open.
+    // NOT a cost limit - AM 4.0 and 6.0 measured the same duty. See rx_audio.h.
     widths.forEach(w => {
       const btn = document.createElement("button");
       btn.textContent = (w / 1000).toFixed(1) + " kHz";
