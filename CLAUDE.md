@@ -87,6 +87,27 @@ See [patches detail](../../../memory/project_standing_patches.md).
 3. A stale file + process still running = dead capture (check content, not timestamps)
 4. `bench standdown <name>` stops capture + clears watchdog
 
+## "todo-table" — he asks for it by name, show exactly this
+
+Re-read `TODO.md` first (newest work queue at the top) and reconcile against the
+repo. It is a fresh table every time, never a replay of the last one.
+
+⛔ **Only work that is NOT IMPLEMENTED.** Leave out anything whose remaining
+work is verifying, flashing or looking at something already built — he does not
+want the unverified list here. An unexplained symptom with no known cause IS new
+work and stays in.
+
+Grouped by **implementation effort**, in this order, columns `Item | Who | Note`:
+
+1. **Minutes** — writing, or one question to a user
+2. **Small** — the mechanism already exists
+3. **Moderate** — a day; name what it is blocked on, usually a decision of his
+4. **Large** — multi-day or architectural
+5. **Investigation** — cause unknown
+
+Close with the two to take first and why. Name the reporter in `Who`; a row
+nobody asked for says `—`.
+
 ## Project documentation
 
 Detailed sections moved to memory for session speed:
