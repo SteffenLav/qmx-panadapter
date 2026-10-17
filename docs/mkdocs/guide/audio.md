@@ -247,8 +247,15 @@ verified. Treat it as unfinished. Changing the source needs a restart, and the T
 does the restart itself when you press **Save**.
 
 ⛔ **In line-in mode the USB radio connection is off by design.** One or the other, not
-both - so CAT, the S-meter and the band/mode display go quiet while line in is
-selected.
+both - so CAT and the S-meter go quiet while line in is selected. The Tab5 stops
+pretending to have a dial with it: the frequency readout reads **Line-in mode**, the
+band shows `---` and the band-plan strip is hidden, because an audio spectrum has no
+band plan and no RF frequency. The frequency axis under the display reads audio Hz.
+
+The left half of the spectrum is empty and there is a step in the middle. That is
+correct and it is the honest picture: the jack carries one real channel, the second is
+synthesised, and a synthesised channel cannot recover what the missing one would have
+told you. The step sits at audio 0 Hz, which is the centre of the span.
 
 ## Listen in the browser
 

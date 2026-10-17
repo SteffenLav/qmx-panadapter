@@ -5696,6 +5696,15 @@ static void update_bandplan_strip(uint32_t freq_hz)
 {
     s_bp_calls++;
     if (!s_bandplan_obj) return;
+    /* ⛔ NO BAND PLAN OVER AN AUDIO SPECTRUM. A coloured strip of CW and
+     * SSB segments under a 0-24 kHz audio display is pure invention - there
+     * is no dial for it to describe. Hidden rather than blanked so it takes
+     * no taps either: it is a draggable tuning control. */
+    if (dsp_source_is_real()) {
+        lv_obj_add_flag(s_bandplan_obj, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(s_bandplan_obj, LV_OBJ_FLAG_HIDDEN);
     if (!bp_type_c_init) {
         memset(bp_seg_type_c, BP_TYPE_CACHE_NONE, sizeof bp_seg_type_c);
         for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
@@ -8588,8 +8597,23 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t mhz = freq_hz / 1000000;
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
-    { char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
-      snprintf(buf, sizeof(buf), "Freq: %s Hz", fs); }
+    /* ⛔ LINE-IN HAS NO DIAL, SO IT MUST NOT SHOW ONE.
+     *
+     * The operator picks a band on the Tab5, ui_bandplan_move_view() calls
+     * this locally, and the top bar duly printed an RF frequency - with no
+     * radio attached and an audio spectrum underneath it. Tony tony1tf,
+     * GitHub #19: "I chose 80m on the TAB5, but it should be showing audio
+     * frequencies." Half the screen was telling him the truth and the other
+     * half was pretending.
+     *
+     * The guide claimed the band display "goes quiet" in line-in mode. It
+     * did not - nothing gated it on the source. It does now. */
+    if (dsp_source_is_real()) {
+        snprintf(buf, sizeof(buf), "Line-in mode");
+    } else {
+        char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        snprintf(buf, sizeof(buf), "Freq: %s Hz", fs);
+    }
     (void)mhz; (void)khz; (void)hz;
     if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
@@ -8699,8 +8723,14 @@ void ui_refresh_freq_label(uint32_t freq_hz)
     if (freq_hz == s_freq_shown_hz) return;   // already correct - the normal case
 
     char buf[32];
-    { char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
-      snprintf(buf, sizeof(buf), "Freq: %s Hz", fs); }
+    /* Same rule as ui_update_frequency() - see the note there. Both writers,
+     * or the FA poll would quietly put the dial back. */
+    if (dsp_source_is_real()) {
+        snprintf(buf, sizeof(buf), "Line-in mode");
+    } else {
+        char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        snprintf(buf, sizeof(buf), "Freq: %s Hz", fs);
+    }
     // Short timeout: this runs on every FA poll, so a busy moment simply means
     // the next poll ~150 ms later picks it up. No warning log for the same
     // reason - it would be noise, and the retry IS the recovery.
@@ -8756,6 +8786,11 @@ void ui_update_band(const char *band)
         s_band_changed_pending = true;
     }
 
+    /* ⛔ AND NO BAND NAME EITHER. Written into s_current_band rather than
+     * only into the label, because the top-bar reconcile AND the web status
+     * JSON both read that string - gate the label alone and the other two
+     * surfaces go on naming a band the operator is not on. */
+    if (dsp_source_is_real()) band = "---";
     strncpy(s_current_band, band, sizeof(s_current_band) - 1);
     s_current_band[sizeof(s_current_band) - 1] = '\0';
     if (display_lock(100)) {
