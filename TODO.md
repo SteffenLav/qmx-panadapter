@@ -49,7 +49,7 @@ number when something new arrives; never close a gap.
 | **T18** | DNR for AM and SSB | Sam W7STF (A5) |
 | **T19** | Server mode, screen off | Sam W7STF (A1) |
 | **T20** | I/Q server — a direction, or is A1 the end of it? | — |
-| **T21** | ⭐ WWV 1-second tone changes pitch on the Tab5 | Sam W7STF |
+| **T21** | ⭐ WWV pitch drift — **CAUSE MEASURED 2026-10-17**: AM rails the resampler clamp, USB never does. The FIX is open | Sam W7STF |
 | **T22** | Saved diag log destroys 4 bytes per 32-byte block | John W5JSS |
 | **T23** | QMX+ decodes only "T T T T" | Gyula HA3HZ |
 | **T24** | GPIO53 meter check | Eric Moritz |
