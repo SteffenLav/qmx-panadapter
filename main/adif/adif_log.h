@@ -43,8 +43,9 @@ int adif_log_count(void);
 const char *adif_log_file_path(void);
 
 // True if `call` appears in any previously logged QSO (ANY band).
-// Uses an in-memory cache (up to ADIF_WORKED_CACHE entries) loaded at init.
-// O(n) linear scan — fine for the cache size used.
+// Uses an in-memory (callsign, band) cache in PSRAM, loaded at init and grown
+// on demand to hold a full SPIFFS log. O(n) linear scan over a uint32 hash,
+// so a string is only compared on a hash hit.
 bool adif_log_contains_call(const char *call);
 
 // True if `call` was previously logged ON THE BAND that contains freq_hz.

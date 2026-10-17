@@ -40,13 +40,39 @@ static bool              s_mounted = false;
 // Worked-call cache: unique (callsign, band) pairs from every logged QSO.
 // Band-aware so the same station on a new band counts as NOT worked before
 // (a fresh band-slot). ADIF_BAND_MAX fits "160M" + NUL.
-#define ADIF_WORKED_CACHE 1024
+//
+// ⚠ 2026-10-17, Gyula HA3HZ: this was a FIXED 1024 entries and cache_add()
+// dropped everything past it in silence. With ~1000 QSOs logged (a 200 KB
+// ADIF) the table was full at boot, so every NEW QSO was written to the file
+// but never entered the cache - the decode row stayed green for a station
+// just worked, and "Never auto-call worked-before" stopped filtering it.
+// Deleting the log made it work again, which is how he found it. The table
+// now grows, and the ceiling is loud instead of silent.
+//
+// ADIF_WORKED_MAX is sized from the partition, not from taste: `storage` is
+// 1 MB of SPIFFS and a record is ~180 bytes, so a completely full log is
+// ~5800 records and cannot reach 8192 unique pairs.
+#define ADIF_WORKED_CHUNK 1024
+#define ADIF_WORKED_MAX   8192
 #define ADIF_CALL_MAX     16
 #define ADIF_BAND_MAX     6
 typedef struct {
+    uint32_t hash;                  // of call only; a prefilter, never a match
     char call[ADIF_CALL_MAX];
     char band[ADIF_BAND_MAX];
 } worked_entry_t;
+
+// FNV-1a over the callsign. The scan runs per decode row and per spot row
+// (see the note at spots_lane.c), so growing the table 8x would have cost 8x
+// in strcmp. Comparing one uint32 first rejects almost every entry before a
+// string is touched, which keeps the longer scan cheaper than the short one
+// used to be. A collision only costs the strcmp that was there before.
+static uint32_t call_hash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h;
+}
 // PSRAM, allocated in adif_log_init(). As a static array this was 22.5 KB of
 // internal .bss - the single largest consumer in the whole firmware - and every
 // byte of it was pointless: the cache is scanned linearly, on demand, from the
@@ -58,6 +84,8 @@ typedef struct {
 // reboots.
 static worked_entry_t *s_worked;
 static int            s_worked_count = 0;
+static int            s_worked_cap   = 0;
+static bool           s_worked_full  = false;  // ceiling hit; say so once
 
 // ---------------------------------------------------------------------------
 
@@ -87,24 +115,56 @@ static void write_field(FILE *f, const char *name, const char *value)
     fprintf(f, "<%s:%zu>%s", name, strlen(value), value);
 }
 
+// Grow the cache by one chunk. Returns false at the ceiling or on allocation
+// failure, and says which - a full cache is a correctness fault (stations
+// silently read as not worked), so it must never be inferred from behaviour
+// again.
+static bool cache_grow(void)
+{
+    if (s_worked_cap >= ADIF_WORKED_MAX) {
+        if (!s_worked_full) {
+            s_worked_full = true;
+            ESP_LOGE(TAG, "worked-call cache full at %d pairs - stations beyond "
+                          "this read as NOT worked before", s_worked_cap);
+        }
+        return false;
+    }
+    int want = s_worked_cap + ADIF_WORKED_CHUNK;
+    if (want > ADIF_WORKED_MAX) want = ADIF_WORKED_MAX;
+    worked_entry_t *p = heap_caps_realloc(s_worked, (size_t)want * sizeof(worked_entry_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) {
+        if (!s_worked_full) {
+            s_worked_full = true;
+            ESP_LOGE(TAG, "no PSRAM to grow the worked-call cache past %d pairs - "
+                          "stations beyond this read as NOT worked before", s_worked_cap);
+        }
+        return false;
+    }
+    s_worked     = p;
+    s_worked_cap = want;
+    return true;
+}
+
 // Add a (callsign, band) pair to the worked cache (deduplicates on the pair,
-// ignores overflow). band may be NULL/"" (e.g. an out-of-band log entry).
+// grows on demand). band may be NULL/"" (e.g. an out-of-band log entry).
 static void cache_add(const char *call, const char *band)
 {
-    if (!s_worked) return;          // allocation failed at init; cache disabled
     if (!call || !call[0]) return;
     if (!band) band = "";
+    uint32_t h = call_hash(call);
     for (int i = 0; i < s_worked_count; i++) {
+        if (s_worked[i].hash != h) continue;
         if (strcmp(s_worked[i].call, call) == 0 &&
             strcmp(s_worked[i].band, band) == 0) return;  // already present
     }
-    if (s_worked_count < ADIF_WORKED_CACHE) {
-        strncpy(s_worked[s_worked_count].call, call, ADIF_CALL_MAX - 1);
-        s_worked[s_worked_count].call[ADIF_CALL_MAX - 1] = '\0';
-        strncpy(s_worked[s_worked_count].band, band, ADIF_BAND_MAX - 1);
-        s_worked[s_worked_count].band[ADIF_BAND_MAX - 1] = '\0';
-        s_worked_count++;
-    }
+    if (s_worked_count == s_worked_cap && !cache_grow()) return;
+    s_worked[s_worked_count].hash = h;
+    strncpy(s_worked[s_worked_count].call, call, ADIF_CALL_MAX - 1);
+    s_worked[s_worked_count].call[ADIF_CALL_MAX - 1] = '\0';
+    strncpy(s_worked[s_worked_count].band, band, ADIF_BAND_MAX - 1);
+    s_worked[s_worked_count].band[ADIF_BAND_MAX - 1] = '\0';
+    s_worked_count++;
 }
 
 // Extract an ADIF field value (<FIELD:len>value) from a single record line.
@@ -236,12 +296,10 @@ void adif_log_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
 
-    s_worked = heap_caps_calloc(ADIF_WORKED_CACHE, sizeof(worked_entry_t),
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_worked) {
-        // Not fatal: worked-before lookups just answer "no". Logging still works.
-        ESP_LOGE(TAG, "no PSRAM for the worked-call cache - worked-before disabled");
-    }
+    // First chunk up front so a boot-time PSRAM shortage is reported here and
+    // not on the first QSO. It then grows from load_from_file() as needed.
+    // Not fatal: worked-before lookups just answer "no". Logging still works.
+    (void)cache_grow();
 
     esp_vfs_spiffs_conf_t conf = {
         .base_path              = "/spiffs",
@@ -548,10 +606,11 @@ const char *adif_log_file_path(void)
 bool adif_log_contains_call(const char *call)
 {
     if (!call || !call[0]) return false;
+    uint32_t h = call_hash(call);
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
-        if (strcmp(s_worked[i].call, call) == 0) found = true;
+        if (s_worked[i].hash == h && strcmp(s_worked[i].call, call) == 0) found = true;
     }
     if (s_lock) xSemaphoreGive(s_lock);
     return found;
@@ -569,9 +628,11 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
     // any band is the conservative direction for a filter whose job is
     // avoiding duplicates.
     bool any_band = (band[0] == '\0');
+    uint32_t h = call_hash(call);
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
+        if (s_worked[i].hash != h) continue;
         if (strcmp(s_worked[i].call, call) == 0 &&
             (any_band || strcmp(s_worked[i].band, band) == 0)) found = true;
     }

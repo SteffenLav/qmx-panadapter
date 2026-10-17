@@ -124,3 +124,6 @@ tools/ne_*m_land.geojson
 # graphify knowledge-graph output (graph.json, cache/, HTML viz) -
 # a build artefact, regenerate with /graphify <path> --update
 graphify-out/
+
+# Host harness build output (test/build_*.sh)
+build_host/
