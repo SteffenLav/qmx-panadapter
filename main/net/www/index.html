@@ -10918,13 +10918,34 @@ const ULAW = new Float32Array(256);
   }
 })();
 
+/* ⛔ resume() IS RACED AGAINST A TIMEOUT, NOT SIMPLY AWAITED. When a browser
+   blocks audio (no usable gesture, or the site is muted in the browser's own
+   autoplay settings) Firefox leaves the promise PENDING for ever rather than
+   rejecting it. A bare await therefore never returns, listenPaint() is never
+   reached, and the button sits unchanged - which reads to the operator as
+   "the page did nothing". The timeout turns that into a state we can read. */
+async function audioResume() {
+  try {
+    await Promise.race([
+      audioCtx.resume(),
+      new Promise(res => setTimeout(res, 1500))
+    ]);
+  } catch (e) { /* state is the authority below, not the exception */ }
+  return audioCtx.state === "running";
+}
+
 async function audioStart() {
-  if (audioCtx) { await audioCtx.resume(); return true; }
+  if (audioCtx) return await audioResume();
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return false;
     audioCtx = new Ctx();
-    await audioCtx.resume();      /* the click that got us here is the gesture */
+    /* the click that got us here is the gesture */
+    if (!(await audioResume())) {
+      try { audioCtx.close(); } catch (e) {}
+      audioCtx = null;
+      return false;
+    }
     audioGain = audioCtx.createGain();
     audioGain.gain.value = 1.0;
     audioGain.connect(audioCtx.destination);
@@ -11096,25 +11117,43 @@ function listenPaint() {
 
 async function listenToggle() {
   const want = !audioWantOn;
+
+  /* ⛔ THE AudioContext IS CREATED FIRST, BEFORE ANY await. It used to be
+     created after the /api/cmd round trip, and that is a gesture bug: the
+     permission to start audio belongs to the click, and an await spends the
+     click's activation window before the context exists. Chrome keeps a
+     sticky activation per page and forgives it; Firefox uses a TRANSIENT one
+     and does not, so the same page that plays on Chrome can sit silent on
+     Firefox with the device happily sending frames. Creating it synchronously
+     here costs nothing and removes the whole class.
+     ⚠ 2026-10-17: a candidate for Bryan N0LUF's silent Firefox/Linux Mint
+     page, NOT a measured cause - his mode could equally have been one the
+     Tab5 does not demodulate. Fixed because it is wrong either way. */
+  let started = false;
+  if (want) {
+    started = await audioStart();
+    if (!started) {
+      alert("This browser would not start audio.\n\n"
+          + "Either it has no Web Audio, or it is blocking sound for this "
+          + "page. In Firefox, check the padlock/shield in the address bar "
+          + "and set Autoplay to \"Allow Audio and Video\" for this address, "
+          + "then click Listen again.");
+      return;
+    }
+  }
+
   try {
     const r = await fetch("/api/cmd", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "web_audio", on: want })
     });
-    if (!r.ok) { alert("The device refused: HTTP " + r.status); return; }
-    const j = await r.json();
+    if (!r.ok) {
+      if (started) audioStop();
+      alert("The device refused: HTTP " + r.status);
+      return;
+    }
+    await r.json();
     if (want) {
-      /* Start the AudioContext from inside the click handler's call chain -
-         a browser will not let audio begin any other way. */
-      const ok = await audioStart();
-      if (!ok) {
-        await fetch("/api/cmd", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "web_audio", on: false })
-        });
-        alert("This browser has no Web Audio, so it cannot play the stream.");
-        return;
-      }
       audioWantOn = true;
       audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
       audioLate = 0; audioDropped = 0; audioNext = 0;
@@ -11123,6 +11162,7 @@ async function listenToggle() {
       audioStop();
     }
   } catch (err) {
+    if (started) audioStop();
     alert("No answer from the Tab5.");
     return;
   }
