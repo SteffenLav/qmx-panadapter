@@ -197,6 +197,23 @@ typedef struct {
     uint32_t read_us_max;
     uint32_t write_us_avg;
     uint32_t write_us_max;
+    /* ⭐ THE PITCH, AND IT WAS OBSERVABLE NOWHERE UNTIL 2026-10-17 (T21).
+     * Sam W7STF reports the WWV 1-second tone changing pitch over time on the
+     * Tab5 itself. Pitch is set by exactly one number - s_up_inc, the phase
+     * advance per output sample - and it appeared in no log line, no API
+     * field and no header, so the symptom could only ever be argued about.
+     *
+     * Reported as PARTS PER MILLION from nominal (1/D), because that is the
+     * quantity the ear hears: 1000 ppm is a tenth of a percent, about 1.7
+     * cents, and a steady tone that wanders by tens of ppm is inaudible while
+     * one that wanders by hundreds is not. Nominal reads 0.
+     *
+     * NOT since-the-last-call like the fields above - these three are an
+     * instantaneous reading plus a running total: */
+    int32_t  resample_ppm;      /* s_up_inc vs nominal, ppm. 0 = no correction */
+    int32_t  resample_ppm_min;  /* lowest and highest seen since the last call, */
+    int32_t  resample_ppm_max;  /* so a wander between two samples cannot hide */
+    uint32_t resample_railed;   /* times the +/-2% clamp was hit, cumulative */
 } rx_audio_diag_t;
 
 void rx_audio_take_diag(rx_audio_diag_t *out);

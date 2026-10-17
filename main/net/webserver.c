@@ -2724,6 +2724,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(resp, "pan_overlap",  rx_audio_get_pan_overlap());
         cJSON_AddNumberToObject(resp, "pan_width",    rx_audio_get_pan_width());
         cJSON_AddNumberToObject(resp, "clips_since_last_read", (double)clips);
+        /* T21 - the resampler increment as ppm from nominal, which is what
+           sets playback pitch. min/max span the time since the LAST call,
+           so polling every few seconds still catches a wander between
+           polls instead of aliasing past it. */
+        cJSON_AddNumberToObject(resp, "resample_ppm",     (double)diag.resample_ppm);
+        cJSON_AddNumberToObject(resp, "resample_ppm_min", (double)diag.resample_ppm_min);
+        cJSON_AddNumberToObject(resp, "resample_ppm_max", (double)diag.resample_ppm_max);
+        cJSON_AddNumberToObject(resp, "resample_railed",  (double)diag.resample_railed);
         // frame_us_* excludes the I2S write on purpose - compare against
         // ~21333 (DSP_FFT_SIZE/DSP_SAMPLE_RATE_HZ) to see if the math itself
         // is keeping up. read_timeouts>0 means the forward ring is starved -

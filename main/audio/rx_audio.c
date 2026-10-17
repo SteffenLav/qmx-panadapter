@@ -670,6 +670,12 @@ static float s_lim_gain = 1.0f;
 static float s_up_phase = 0.0f;
 static float s_up_inc   = 1.0f / (float)RX_DECIM_D_NARROW;   /* set_decim_factor() resets it */
 static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its clamp */
+/* T21 instrumentation. Signed, and deliberately NOT reset by the rate loop:
+   rx_audio_take_diag() clears the min/max so each reader sees the span since
+   ITS last call, while s_resample_ppm stays live. */
+static volatile int32_t s_resample_ppm     = 0;
+static volatile int32_t s_resample_ppm_min = INT32_MAX;
+static volatile int32_t s_resample_ppm_max = INT32_MIN;
 static float    s_up_target    = 0.0f;   /* smoothed increment from the measured source rate */
 static uint32_t s_in_pairs_win = 0;      /* input pairs seen in the current measuring window */
 static int64_t  s_in_win_us    = 0;      /* when that window started */
@@ -2132,6 +2138,18 @@ static void rx_audio_task(void *arg)
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
 
+            /* T21: record the pitch, in ppm from nominal. Taken HERE, right
+             * where the value is decided, rather than sampled by the reader -
+             * the rate loop runs per frame and a reader polling every few
+             * seconds would alias straight past a wander. min/max make a
+             * wander between two API calls impossible to miss. */
+            {
+                int32_t ppm = (int32_t)lrintf((s_up_inc / inc_nom - 1.0f) * 1.0e6f);
+                s_resample_ppm = ppm;
+                if (ppm < s_resample_ppm_min) s_resample_ppm_min = ppm;
+                if (ppm > s_resample_ppm_max) s_resample_ppm_max = ppm;
+            }
+
             /* ±2% is far more than any real unit needs (0.24% here) and is the
                only thing between a wrong measurement and a pitch change, so it
                says so when it is reached instead of sitting at the rail. */
@@ -2210,7 +2228,8 @@ static void rx_audio_task(void *arg)
                 uint32_t favg = fc ? (uint32_t)(s_frame_us_sum / fc) : 0;
                 uint32_t gn = s_gap_iv_n;
                 ESP_LOGI(TAG, "diag: frame %lu/%luus (n=%lu)  write max=%luus  "
-                         "LATE %lu/%lu  OUT %lu smp/s  drift +%lu/-%lu  I2Sovf %lu  "
+                         "LATE %lu/%lu  OUT %lu smp/s  drift +%lu/-%lu  "
+                         "pitch %+ld ppm (%+ld..%+ld, railed %lu)  I2Sovf %lu  "
                          "read to=%lu  clips=%lu  gap iv %lu/%lu/%lums (n=%lu)",
                          (unsigned long)favg, (unsigned long)s_frame_us_max, (unsigned long)fc,
                          (unsigned long)s_write_us_max,
@@ -2220,6 +2239,13 @@ static void rx_audio_task(void *arg)
                                           / (uint64_t)(now_us - s_win_start_us))
                              : 0),
                          (unsigned long)s_rate_ins, (unsigned long)s_rate_drop,
+                         /* T21: the number that IS the pitch. Printed every
+                            10 s so the standing serial capture carries it -
+                            a wander only shows as a series. */
+                         (long)s_resample_ppm,
+                         (long)(s_resample_ppm_min == INT32_MAX ? s_resample_ppm : s_resample_ppm_min),
+                         (long)(s_resample_ppm_max == INT32_MIN ? s_resample_ppm : s_resample_ppm_max),
+                         (unsigned long)s_rate_railed,
                          (unsigned long)s_i2s_ovf,
                          (unsigned long)s_read_timeout_count, (unsigned long)s_clip_count,
                          (unsigned long)(gn ? s_gap_iv_min_ms : 0),
@@ -2735,6 +2761,16 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     out->read_us_max    = s_read_us_max;
     out->write_us_avg   = loops ? (uint32_t)(s_write_us_sum / loops) : 0;
     out->write_us_max   = s_write_us_max;
+    /* T21. An untouched window (no audio running) would report
+       INT32_MAX/INT32_MIN, which reads as a wild excursion rather than as
+       'nothing happened' - so an empty span collapses to the live value. */
+    int32_t pmin = s_resample_ppm_min, pmax = s_resample_ppm_max;
+    out->resample_ppm     = s_resample_ppm;
+    out->resample_ppm_min = (pmin == INT32_MAX) ? s_resample_ppm : pmin;
+    out->resample_ppm_max = (pmax == INT32_MIN) ? s_resample_ppm : pmax;
+    out->resample_railed  = s_rate_railed;
+    s_resample_ppm_min = INT32_MAX;
+    s_resample_ppm_max = INT32_MIN;
     s_frame_us_max       -= s_frame_us_max;
     s_frame_us_sum        = 0;
     s_frame_count         -= frames;
