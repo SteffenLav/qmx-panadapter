@@ -20,7 +20,7 @@
   "benches": [
     {
       "name": "dev",
-      "role": "MAIN, on v1.14.4 (released 2026-09-18, tag on 4c2b71b). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-v1121.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
+      "role": "MAIN, on v1.20.0-15-g21e628c9 (flashed 2026-10-17). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
         "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
         "what 'bench flash dev' builds from. A stale entry here does not read",
