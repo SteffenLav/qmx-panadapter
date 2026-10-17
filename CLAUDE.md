@@ -97,7 +97,12 @@ work is verifying, flashing or looking at something already built — he does no
 want the unverified list here. An unexplained symptom with no known cause IS new
 work and stays in.
 
-Grouped by **implementation effort**, in this order, columns `Item | Who | Note`:
+⛔ **Every row carries its `Tnn` ID** from the ID INDEX in `TODO.md` — that is
+how he refers to them. IDs are permanent: never renumber, never reuse, never
+close a gap. A new item takes the next free number and is added to the index in
+the same change.
+
+Grouped by **implementation effort**, in this order, columns `ID | Item | Who | Note`:
 
 1. **Minutes** — writing, or one question to a user
 2. **Small** — the mechanism already exists

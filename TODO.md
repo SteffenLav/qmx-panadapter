@@ -21,6 +21,44 @@ that order still stands.
 ⚠ Status words mean what CLAUDE.md says they mean: **implemented or not**,
 then **proven or not**. "Not yet" is not a status.
 
+### ▶ ID INDEX — quote these, they never change
+
+IDs are **permanent and never reused**. They do not encode effort or section, so
+an item can move between groups without being renumbered. Add the next free
+number when something new arrives; never close a gap.
+
+| ID | Item | Who |
+|---|---|---|
+| **T01** | DTR column changelog entry | Randy N4OPI |
+| **T02** | Ask: glyph *as well as* the cyan/green boundary? | Sam W7STF |
+| **T03** | The five replies | Gyula, Randy, Sam, Don, Ryan |
+| **T04** | Audit the **diagrams** | — |
+| **T05** | De-duplicate the two gesture tables | — |
+| **T06** | Transmitted morse in its own colour | Sam W7STF |
+| **T07** | Print the JS8 message as it sends | Ryan KK6DZB |
+| **T08** | Handle the directed `SNR?` command (cmd 0) | Gyula HA3HZ |
+| **T09** | Web/Tab5 option parity | Gyula HA3HZ |
+| **T10** | A "getting audio" manual section | Bryan N0LUF, Sam W7STF |
+| **T11** | Make the web Listen button findable | Bryan N0LUF + Randy N4OPI |
+| **T12** | Ticking "worked-before" should HIDE the rows | Randy N4OPI |
+| **T13** | Hold the Mid-QSO row until 73 or abort | Don WB0LQW |
+| **T14** | JS8 three-pane layout | Ryan KK6DZB |
+| **T15** | JS8 canned messages / macros | Gyula HA3HZ |
+| **T16** | Decode several JS8 submodes at once | Ryan KK6DZB |
+| **T17** | PSD peak hold → CW-Tune → CW peak filter | Sam W7STF (A4) |
+| **T18** | DNR for AM and SSB | Sam W7STF (A5) |
+| **T19** | Server mode, screen off | Sam W7STF (A1) |
+| **T20** | I/Q server — a direction, or is A1 the end of it? | — |
+| **T21** | ⭐ WWV 1-second tone changes pitch on the Tab5 | Sam W7STF |
+| **T22** | Saved diag log destroys 4 bytes per 32-byte block | John W5JSS |
+| **T23** | QMX+ decodes only "T T T T" | Gyula HA3HZ |
+| **T24** | GPIO53 meter check | Eric Moritz |
+| **T25** | Per-tone FT8 spacing over USB | Jim (jpwatters) |
+| **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
+
+⚠ **T03 is the only one with a date**: the drafts are written 2026-10-18,
+when he is back on groups.io.
+
 ### A17. Announcements and promises
 
 1. ⛔ **The DTR column shipped with NO changelog entry**, while Randy N4OPI was
