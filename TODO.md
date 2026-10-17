@@ -1,16 +1,119 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-17
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
-**Repo state:** **v1.18.0 released 2026-10-12** (PA-voltage ceiling, Bryan N0LUF's Output power write fix, JS8 compound callsigns proven on air, the SPIFFS diag-log budget). Prior: v1.17.1 (2026-10-11), v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
+**Repo state:** **v1.20.0 released 2026-10-16.** ⛔ Do not read the number off this line — `git tag --sort=-creatordate` and `git log --oneline origin/main..HEAD` are the authority, for the reason stated two lines below. On 2026-10-17 there were 16 commits unpushed on top of it. Earlier: v1.19.0 (2026-10-15), v1.18.0 (2026-10-12, PA-voltage ceiling, Bryan N0LUF's Output power write fix, JS8 compound callsigns proven on air, the SPIFFS diag-log budget). Prior: v1.17.1 (2026-10-11), v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
 
 ⛔ **THE HEADLINE IN THIS FILE WAS TEN DAYS AND FOUR RELEASES STALE** (it read "v1.5.0 released 2026-08-06", then "v1.16.10 is out"). A version banner in prose cannot keep up with a release cadence of days, which is the same rot `CLAUDE.md` records for its patch count. **Read `git tag --sort=-creatordate` for what shipped; read this file only for what is OPEN.**
 
 ---
 
-## ▶▶ THE WORK QUEUE, 2026-10-13 — READ THIS FIRST
+## ▶▶ THE WORK QUEUE, 2026-10-17 — READ THIS FIRST
+
+Everything picked up between 2026-10-14 and 2026-10-17 that is neither built
+nor settled. The queue below it is dated 2026-10-13, so **nothing from 10-14
+onward had ever been copied in** - which is exactly how these fall between
+chairs. Items here are not re-ordered against Sam's promised list in A below;
+that order still stands.
+
+⚠ Status words mean what CLAUDE.md says they mean: **implemented or not**,
+then **proven or not**. "Not yet" is not a status.
+
+### A17. Announcements and promises
+
+1. ⛔ **The DTR column shipped with NO changelog entry**, while Randy N4OPI was
+   asked to report on it. **Verified still absent 2026-10-17**: no `DTR` in
+   `docs/version-history.md`, the release notes or `README.md`. He was asked to
+   look at a column nothing described. Owed since 10-14.
+2. ✅ **"Never exceed PA voltage" to Bryan N0LUF - CLOSED, it shipped.**
+   Present in `docs/mkdocs/releases.md`, `docs/version-history.md` and
+   `docs/mkdocs/guide/wspr.md`. Three separate 10-12 handoffs carried it as
+   "PROMISE OWED" after it had already gone out. Recorded here so it stops
+   being re-raised.
+3. **Five replies undrafted on purpose**: Gyula, Randy, Sam, Don, Ryan.
+   Sending is batched - Sunday 2026-10-18 at the earliest. Bryan and Gyula now
+   also need the 10-17 answers (see E17).
+
+### B17. Measurements owed — nothing can be concluded without them
+
+1. ⭐ **Sam W7STF: the WWV 1-second tone changes pitch over time, on the Tab5
+   itself.** A clock or resampler symptom, not a web one. Logged 10-16 as
+   "Unexplained and NOT investigated" and still untouched. This is the only
+   item in this queue that is a possible defect in something already shipped.
+2. ⛔ **Does the board stay off with 5 V still present on USB-C?** Randy
+   N4OPI's exact setup (QMX+ pack → 12→5 V converter → USB-C). `power_off` is
+   built and now surfaced on both screens; whether it *stays* off is UNTESTED,
+   and that measurement gates any release note that claims it.
+3. **Eric Moritz' GPIO53 meter check** - a multimeter on the pin. Owed since
+   2026-10-06, the oldest thing in this file.
+4. **The web listen soak** - never quantified. Open since 10-16.
+5. **Gyula HA3HZ's QMX+ decodes only "T T T T"** - the decisive
+   antenna-disconnect test was never run. He asked for help; nothing in our
+   code is implicated until it is.
+6. **Jim (jpwatters): our own per-tone FT8 spacing over USB has NEVER been
+   measured.** +14 ms is key-down, a different quantity. `tx_compare.py --usb`.
+7. **Randy's slot 147** - `ffc6e33b` is on the bench and will now say what the
+   pile-up held and why a candidate was refused. Needs a capture to catch it
+   again.
+
+### C17. Built, flashed, never seen or heard
+
+1. ⛔ **`b4abf434` was flashed and NEVER LISTENED TO** - it raises the
+   browser's gain.
+2. **The CW strip at 2 rows, and the Clear button** (`21e628c9`, flashed
+   2026-10-17). The slot mapping keeps the strip's bottom edge and moves the
+   prefix; proven on the host, never on the glass. The web Clear button has
+   not been clicked in a browser.
+3. **`ad313b83`** (JS8 free text under the wrong callsign) - published in
+   v1.17.1 and still unverified.
+4. **The JS8 composer has never been typed into** with the snap-on or a BLE
+   keyboard.
+
+### D17. Decisions owed by the operator
+
+1. **Randy N4OPI: should ticking "never auto-call worked-before" HIDE the
+   rows?** Today the grey is unconditional (`ft8_screen_view.c:1097` never
+   reads the setting) and the checkbox only gates who the machine calls.
+   `5deb388d` relabelled it so it stops promising otherwise; his actual
+   request was never decided.
+2. **Don WB0LQW: hold the Mid-QSO row until 73 arrives or he aborts.** Today
+   it clears the moment the final is sent (`s_state = FT8_QSO_DONE`). A
+   feature, not a fix.
+3. **Ryan KK6DZB: decode several JS8 submodes at once.** JS8Call does;
+   `ft8_op_mode_protocol_for()` runs only the selected one, so switching to
+   Fast makes every Normal station invisible. Real work, not a tweak.
+4. **Samuel W7STF's write-position glyph** - does he want a marker *as well
+   as* the cyan/green pass boundary, which exists because he asked for it? One
+   question settles it before a second indicator for the same thing gets
+   built.
+5. **Server mode (screen off)** - not built, proposed as a task card only.
+6. **The QMX timeout experiment** - deferred by the operator on 10-15.
+
+### E17. Small, cost already known
+
+1. ⭐ **The web Listen button is not discoverable.** TWO users never found it
+   (Bryan N0LUF, Randy N4OPI), one of them after reading the manual; Sam had
+   to tell them it exists. ⚠ This, and not Firefox, was Bryan's silent audio -
+   `f81a8d50` fixed two real gesture defects that he never hit. Needs a design
+   decision: label it, move it, or surface it on first use.
+2. **Transmitted morse in its own colour** (Sam W7STF). Cheap: the radio
+   already sends the flag and we discard it - `cw_decode_parse_tb()` parses the
+   `t` field and `cw_decode.c:326` passes `NULL`. Capture it, mark the cells
+   written while t>0, give them a third colour in both renderers.
+3. **Web/Tab5 option parity**: `ft8_early_decode` is in the web FT8 filters
+   group but in the Tab5 *drawer*; "Allow grey-listing" is a Tab5 Options
+   checkbox with no web entry. Measured 10-16, nothing done.
+4. **A manual section on getting audio** - RF gain, the Listen button, where
+   the volume controls actually act. Two users asked this week and another
+   user answered both times.
+5. **The docs audit covered prose and structure, NOT diagrams.**
+6. **The two gesture tables are still duplicated** - parked deliberately.
+
+---
+
+## ▶ THE WORK QUEUE, 2026-10-13 — superseded above, still the agreed ORDER
 
 Agreed order, written after replying to five operators. **The order in A is
 what Sam W7STF has been TOLD**, in a reply that was sent, so it is not free to
