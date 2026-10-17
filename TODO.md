@@ -49,13 +49,13 @@ number when something new arrives; never close a gap.
 | **T18** | DNR for AM and SSB | Sam W7STF (A5) |
 | **T19** | Server mode, screen off | Sam W7STF (A1) |
 | **T20** | I/Q server — a direction, or is A1 the end of it? | — |
-| **T21** | ⭐ WWV pitch drift — **NO CAUSE.** The AM-rails theory is dead; railing is transient after mode/width changes and is not reproducible between runs. Blocked behind T29 | Sam W7STF |
+| **T21** | ⏸ **WAITING ON SAM — one question.** Which AM bandwidth was he on when the tone drifted? If 10 or 20 kHz, the cap already closed it. If 6 kHz or below it is STILL LIVE, because the cap does not touch it. Do not close on the assumption | Sam W7STF |
 | **T22** | Saved diag log destroys 4 bytes per 32-byte block | John W5JSS |
 | **T23** | QMX+ decodes only "T T T T" | Gyula HA3HZ |
 | **T24** | GPIO53 meter check | Eric Moritz |
 | **T25** | Per-tone FT8 spacing over USB | Jim (jpwatters) |
 | **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
-| **T29** | ⭐ Why does AM cost **1.68x** USB by CPU duty? 2026-10-17: stage-2 taps, PSRAM delay lines (tried, 4%) and nco_step all eliminated. ⛔ Measure DUTY (frames/s x frame_us), never frame_avg | — |
+| **T29** | ⏸ **PARKED 2026-10-17, operator’s call.** AM costs 1.68x USB by duty, but identically at 4 and 6 kHz, so the 6 kHz cap changes nothing and NO symptom is measured at or below it (read-timeouts zero in every window). Reopen only if something actually fails | — |
 | **T27** | Audit which operator switches are Tab5-only and expose them | — |
 | **T28** | ⚠ Does any OTHER setting need a restart with no notice? | — |
 
