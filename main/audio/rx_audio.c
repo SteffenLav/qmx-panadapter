@@ -179,7 +179,7 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  * it would be wider still. AM pays the CPU for its own width and nothing
  * else does. */
 #define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM        // AM up to 9.6 kHz RF
-#define RX_DECIM_D_AM_WIDE RX_AUDIO_DECIM_D_AM_WIDE   // AM at 10.0 and 20.0 kHz
+#define RX_DECIM_D_AM_WIDE RX_AUDIO_DECIM_D_AM_WIDE   // measured, NOT selectable - see decim_for_mode()
 /* ⛔ THERE IS NO D_MIN, AND THE BUFFERS DO NOT NEED ONE. This used to define
  * RX_DECIM_D_MIN and claim the buffers were sized from it. They are not, and
  * it was READ NOWHERE - a dead constant carrying a rule nothing enforced,
@@ -204,8 +204,18 @@ static int s_decim_d = RX_DECIM_D_NARROW;
 static inline int decim_for_mode(rxaud_mode_t m, int half_bw_hz)
 {
     if (m != RXAUD_MODE_AM) return RX_DECIM_D_NARROW;
-    return (half_bw_hz > RX_AUDIO_AM_D4_MAX_HALF_BW_HZ)
-               ? RX_DECIM_D_AM_WIDE : RX_DECIM_D_AM;
+    /* ⛔ ALWAYS D=4 NOW. This used to pick D=2 above
+     * RX_AUDIO_AM_D4_MAX_HALF_BW_HZ, for the 10.0 and 20.0 kHz widths. Those
+     * widths are withdrawn (see RX_AUDIO_AM_HALF_BW_MAX_HZ, which is now that
+     * same 4800 Hz), so the branch could never be taken again and a branch
+     * that cannot be taken is a trap for whoever reads this next.
+     *
+     * RX_DECIM_D_AM_WIDE and the threshold stay DEFINED: test/am_demod_harness.c
+     * still measures the D=2 skirt, and that measurement is the evidence for
+     * why D=2 was tried at all. Defined and unreachable is the honest state;
+     * deleted would lose the record. */
+    (void)half_bw_hz;
+    return RX_DECIM_D_AM;
 }
 // Headroom for the continuous clock-drift resampler (see rx_audio_preopen's
 // s_out allocation and the upsample loop). Sized for the resample clamp's

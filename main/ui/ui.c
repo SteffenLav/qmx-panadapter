@@ -1288,11 +1288,15 @@ static void bw_popup_open(void)
          * Operator, 2026-10-15: "where is 20 kHz for BC?". SWL is an HF use
          * and I dropped it on an HF-only argument. 10.0 kHz remains the
          * legal maximum for amateur AM below 29 MHz. */
-        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600, 10000, 20000};
-        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k","10.0k","20.0k"};
+        /* ⛔ 10.0 AND 20.0 kHz WITHDRAWN 2026-10-17. Both needed D=2, which
+         * pins core 1 at 0.0% idle with nobody listening - measured, and the
+         * table is in rx_audio.h beside RX_AUDIO_AM_HALF_BW_MAX_HZ. 9.6 kHz is
+         * what D=4 carries. */
+        static const uint32_t am_bw[]  = {2000, 3000, 4000, 6000, 8000, 9600};
+        static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
         bw_list = am_bw;
         lbl_list = am_lbl;
-        n_bw = 8;
+        n_bw = 6;
     } else {
         return;
     }

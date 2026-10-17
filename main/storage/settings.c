@@ -2599,8 +2599,35 @@ uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x10
  * back as 4.8 kHz after the next boot with nothing said. Raised with D=2 on
  * 2026-10-15; found by checking every writer of the ceiling, not by hearing
  * it. 100 = 10000 Hz = RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
-void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 100); }
-uint8_t settings_get_rxaud_am_half_bw_h100(void)   { RXA_GET_U8(rxaud_am_half_bw_h100, 30); }
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 48); }
+
+/* ⛔ CLAMPED ON READ AS WELL AS ON WRITE, and that is the whole point of
+ * this not being a bare RXA_GET_U8.
+ *
+ * The ceiling came DOWN on 2026-10-17, from 100 (20.0 kHz) to 48 (9.6 kHz),
+ * when the two widths that needed D=2 were withdrawn. The setter's clamp only
+ * ever sees a NEW value - it cannot touch the 50 or 100 already sitting in an
+ * upgrader's NVS from v1.19/v1.20. Without this, that operator comes back on
+ * a width no list contains: the picker matches nothing, and the stored value
+ * survives every boot because nothing rewrites it.
+ *
+ * This is the same hazard as the bug recorded above, pointing the other way.
+ * That one would have stored 20.0 kHz as 4.8 silently; this one would have
+ * kept 20.0 kHz alive silently after it was removed. A ceiling that moves has
+ * to be enforced wherever the value is READ, not only where it is written. */
+uint8_t settings_get_rxaud_am_half_bw_h100(void)
+{
+    if (!s_ready) return 30;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.rxaud_am_half_bw_h100;
+    xSemaphoreGive(s_mutex);
+    if (v > 48) {
+        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 9.6 kHz ceiling "
+                      "(10.0/20.0 kHz were withdrawn) - using 9.6 kHz", v);
+        v = 48;
+    }
+    return v;
+}
 void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack_ms,   DIRTY_RXA_ATTACK,  1, 50); }
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }
 void settings_set_rxaud_agc_release_ms(uint16_t v) { RXA_SET_U16(rxaud_agc_release_ms, DIRTY_RXA_RELEASE, 10, 500); }

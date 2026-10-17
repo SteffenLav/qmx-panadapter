@@ -40,8 +40,8 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
-    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0, 9.6, 10.0 or
-    20.0 kHz**, quoted as the width of the whole signal, the way amateur AM
+    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**,
+    quoted as the width of the whole signal, the way amateur AM
     figures always are. 6.0 kHz is the default and the standard — 3 kHz per
     sideband, what most commercial rigs hard-code. The same list is on the
     web page's **BW** button.
@@ -53,19 +53,14 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     8.0: broadcast channels are spaced 5 kHz, so 8.0 keeps a full 1 kHz clear
     of the neighbour's carrier while 9.6 leaves only 200 Hz.
 
-    **10.0 kHz** is the legal maximum for amateur AM on HF. **20.0 kHz** is
-    for broadcast listening: it passes a station's full ±5 kHz of audio, which
-    is the best a shortwave broadcaster transmits. It is wider than the 5 kHz
-    channel spacing, so use it on a clear channel and expect the neighbour
-    when there is one.
-
-    The two wide settings are expensive. They run the receive chain at half
-    the decimation the other six use, and on the bench that takes the second
-    CPU core from about 25% idle to under 1%. The audio stays clean, but
-    there is no headroom left for anything else, so pick 10.0 or 20.0 kHz
-    when you want the bandwidth and drop back to 9.6 or below when you do
-    not. The six narrower widths cost exactly what they always did, and CW
-    and SSB are untouched at any setting.
+    9.6 kHz is the widest the Tab5 offers. Two wider settings, 10.0 and
+    20.0 kHz, were available briefly and have been withdrawn: both ran the
+    receive chain at half the decimation the others use, which leaves the
+    second CPU core with no idle time at all, and the audio stutters. 9.6 kHz
+    is 400 Hz short of the 10.0 kHz legal maximum for amateur AM on HF, a
+    difference you cannot hear, and it still carries a broadcaster's full
+    4.5 kHz of audio. Every width in the list plays cleanly; that is why the
+    other two are not in it. CW and SSB are untouched at any setting.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
