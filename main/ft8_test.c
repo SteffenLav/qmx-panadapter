@@ -1394,6 +1394,10 @@ static bool set_time_from_qmx_rtc(bool *out_applied)
 // keep waiting and periodically update the status line so the user
 // knows we're still looking.
 //
+// TWO EXCEPTIONS, and they are the same exception twice: FT8 Simulation Mode
+// and a real audio source (the 3.5 mm jack) both run with NO RADIO AT ALL.
+// Sim mode is below; line-in is inside the loop, with its own note.
+//
 // EXCEPTION: FT8 Simulation Mode needs no radio at all (phantom stations,
 // ft8_tx.c's interlock never keys anything), yet this wait sat ahead of the
 // entire slot loop - so with no QMX the sim could inject CQs (its own task)
@@ -1410,6 +1414,35 @@ static void wait_for_cat_ready(void)
         settings_load_all(&s);
         if (s.sim_mode_en) {
             ESP_LOGI(TAG, "sim mode ON - not waiting for QMX (no radio needed)");
+            return;
+        }
+        /* ⛔ AND THE SECOND CASE OF THE SAME THING: A REAL AUDIO SOURCE.
+         *
+         * line_in.h starts the jack INSTEAD of bsp_usb_host_start() and is
+         * "mutually exclusive with the QMX, decided at boot". So on line-in
+         * there is no USB host, no QMX, and cat_is_ready() can NEVER become
+         * true - this loop was not waiting for something slow, it was waiting
+         * for something that cannot happen, for ever, before the first slot.
+         *
+         * Tony tony1tf, GitHub #19, v1.17.1: audio in, spectrum on the glass,
+         * WSPR decoding well off the same input, and FT8 never decoding a
+         * thing at any LO placement. wspr_rx.c has no cat_is_ready() anywhere,
+         * which is the whole of why WSPR worked and FT8 did not. He spent his
+         * time moving the local oscillator; nothing had got as far as looking
+         * at audio.
+         *
+         * The sim-mode escape above already made this argument - "needs no
+         * radio at all, yet this wait sat ahead of the entire slot loop" -
+         * and a real source is the same sentence with a different subject.
+         *
+         * ⚠ WHAT STILL NEEDS THE RADIO is handled below, not here: the QMX
+         * RTC query fails without CAT and falls through to SNTP, and if there
+         * is no time source at all the task parks and says so. Decoding is
+         * what this gate was wrongly blocking. */
+        if (rx_source_is_real(settings_get_rx_source())) {
+            ESP_LOGI(TAG, "RX source is the audio jack - not waiting for a QMX "
+                          "(there is none by design); FT8 runs off line-in");
+            ft8_status_set("Line-in: decoding audio");
             return;
         }
         int64_t now = esp_timer_get_time();
