@@ -57,6 +57,7 @@ number when something new arrives; never close a gap.
 | **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
 | **T29** | ⏸ **PARKED 2026-10-17, operator’s call.** AM costs 1.68x USB by duty, but identically at 4 and 6 kHz, so the 6 kHz cap changes nothing and NO symptom is measured at or below it (read-timeouts zero in every window). Reopen only if something actually fails | — |
 | **T27** | Audit which operator switches are Tab5-only and expose them | — |
+| **T30** | ⛔ **CW sidetone stops on a QMX+, and the level will not store while the Tab5 is connected.** Factory reset recovers it for a while. Hypothesis, NOT measured: our 150 ms FA; polling disturbs a menu edit on the radio's own front panel — same shape as Bryan N0LUF's TCXO corruption (`2dd477d8`), different setting. Asked him for **Sidetone abs/rel** and whether RX audio goes quiet too | eaunoiq (#20) |
 | **T28** | ⚠ Does any OTHER setting need a restart with no notice? | — |
 
 ⚠ **T03 is the only one with a date**: the drafts are written 2026-10-18,
