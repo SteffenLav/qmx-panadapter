@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.20.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.20.1.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.20.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.20.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -559,10 +559,12 @@ halves of the passband hard left and right.
 
 **AM is demodulated here too, from v1.19.0** — on the Tab5, from the raw I/Q,
 which is why its bandwidth is yours to choose and not the radio's fixed 3.2 kHz.
-Pick 4.0, 6.0, 8.0 or 9.6 kHz from the **BW** control in the top bar while the
-radio is in AM. 6.0 kHz is the default and the safe one on a crowded band;
-9.6 kHz carries a broadcast station's full audio and reaches far enough to let
-the next channel in, because shortwave channels are spaced only 5 kHz apart.
+Pick 2.0, 3.0, 4.0 or 6.0 kHz from the **BW** control in the top bar while the
+radio is in AM. 6.0 kHz is the default and the widest on offer from v1.20.1 —
+wider settings existed earlier and were withdrawn, either because they stuttered
+or because they had never been run end to end. Shortwave channels are spaced
+only 5 kHz apart, so 6.0 kHz already reaches into the neighbour's carrier on a
+crowded band.
 
 This is the part of the panadapter that is not a picture. On a crowded CW band
 it does something no amount of screen resolution can.
@@ -1004,7 +1006,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.20.0 is here.** Next on the bench:
+**v1.20.1 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.

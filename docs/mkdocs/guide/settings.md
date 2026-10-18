@@ -668,6 +668,24 @@ Two buttons in the settings drawer:
   Pulling the card without ejecting risks losing the last thing written to it.
 - **Restart the Tab5** reboots cleanly from the screen instead of the power
   button. The card is released first.
+- **Power off the Tab5** (from v1.20.1) shuts the unit down from the screen,
+  directly under Restart. It is in the **Advanced** section, not Basic, because
+  unlike Restart it does not come back. It asks twice: the first tap changes the
+  button to *Tap again to power off*.
+
+    This is a real shutdown, not a sleep, and it holds with 5 V still present on
+    the USB-C input - measured, because that is how a Tab5 powered from the
+    radio's own battery pack is wired *(Randy N4OPI, whose QMX+ is headless and
+    who had already lost a set of 18650s to undervoltage)*.
+
+    **The radio is put back into receive first.** The robot is stood down,
+    transmit is disarmed, `TA0;` then `RX;` go to the radio, and settings are
+    flushed - so a transmission in progress cannot be left keyed by shutting the
+    Tab5 down. The same control is in the browser, under Miscellaneous.
+
+    ⚠ The **power button** on the case cuts power in hardware. No firmware runs,
+    so none of the above happens. Use the screen button if the radio might be
+    transmitting.
 
 The card is now also released automatically before a firmware update. Before
 v1.16.11 a reset caught the card mid-transaction, and because the Tab5 cannot

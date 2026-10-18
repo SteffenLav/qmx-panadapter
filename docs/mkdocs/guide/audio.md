@@ -104,7 +104,7 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
-    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**,
+    in the top bar to choose it: **2.0, 3.0, 4.0 or 6.0 kHz**,
     quoted as the width of the whole signal, the way amateur AM
     figures always are. 6.0 kHz is the default and the standard — 3 kHz per
     sideband, what most commercial rigs hard-code. The same list is on the
@@ -112,19 +112,27 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     Go **narrower** when someone is sitting on top of you: 2.0 and 3.0 kHz
     sound like a telephone line and that is the point, they keep a signal
-    copyable in heavy QRM. Go **wider** on a clear channel — 9.6 kHz carries a
-    broadcaster's full 4.5 kHz of audio. On a crowded shortwave evening prefer
-    8.0: broadcast channels are spaced 5 kHz, so 8.0 keeps a full 1 kHz clear
-    of the neighbour's carrier while 9.6 leaves only 200 Hz.
+    copyable in heavy QRM. 6.0 kHz is the widest on offer and the one to use
+    on a clear channel. Broadcast channels are spaced 5 kHz, so 6.0 already
+    reaches into the neighbour's carrier on a crowded shortwave evening.
 
-    9.6 kHz is the widest the Tab5 offers. Two wider settings, 10.0 and
-    20.0 kHz, were available briefly and have been withdrawn: both ran the
-    receive chain at half the decimation the others use, which leaves the
-    second CPU core with no idle time at all, and the audio stutters. 9.6 kHz
-    is 400 Hz short of the 10.0 kHz legal maximum for amateur AM on HF, a
-    difference you cannot hear, and it still carries a broadcaster's full
-    4.5 kHz of audio. Every width in the list plays cleanly; that is why the
-    other two are not in it. CW and SSB are untouched at any setting.
+    **6.0 kHz is the widest the Tab5 offers, from v1.20.1.** Four wider
+    settings were available earlier and have been withdrawn, for two
+    different reasons.
+
+    **10.0 and 20.0 kHz** ran the receive chain at half the decimation the
+    others use. Measured on the bench, that leaves the second CPU core with
+    no idle time at all and the audio stutters.
+
+    **8.0 and 9.6 kHz cost nothing extra** — matched 60-second windows
+    measured AM at 4.0 and at 6.0 kHz at the same processor load, so width is
+    free up to that point and those two would have been free as well. They
+    are withdrawn because they were never run end to end: they entered the
+    list on a filter measurement and a listening report, and nothing since
+    has confirmed them. The list now holds only widths that have actually
+    been measured playing.
+
+    CW and SSB are untouched at any setting.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
