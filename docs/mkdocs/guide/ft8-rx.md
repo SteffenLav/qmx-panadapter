@@ -33,7 +33,8 @@ The list shows every decoded FT8 message:
 | **COUNTRY** | Country, spelled out where it fits and shortened where it does not - never a 3-letter code (v1.15.0) |
 | **SNR** | Signal-to-noise estimate, colour-banded by strength |
 | **TONE** | The station's audio tone within the FT8 passband (v1.3.1) |
-| **DT** | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 (v1.3.1) |
+| **DT** | Slot-timing offset in seconds, corrected against the band consensus — an on-time station reads ~0.0. This is the WSJT-X-style number. It reads `--` until at least **two separate stations** have been heard, because with one station the correction is that station's own offset minus itself, which is zero by construction and not a measurement (v1.3.1, corrected in v1.17.0) |
+| **DTR** | *Browser only.* The **raw** slot-boundary-relative offset, uncorrected. It includes about 0.5 s of one-way receive audio latency (the QMX SDR plus USB buffering), so it is **not** comparable with WSJT-X's DT — but it is the number that moves when a transmitter's timing moves, which is what you want when you are checking your own TX. Both columns sort on the raw value (v1.17.0) |
 | **KM / MI** | Great-circle distance from your grid. A `~` means the station never sent a grid, so the distance is worked out from its country and is approximate (v1.14.4) |
 | **HRD** | Times decoded since last appearance |
 

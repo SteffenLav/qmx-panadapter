@@ -2,6 +2,70 @@
 
 **Audio decoding is a BETA feature.** These implementations are first-generation and subject to further development. Real-world feedback shapes the roadmap.
 
+## Getting audio — start here if you hear nothing
+
+Silence is usually one of five things, and they are listed here in the order they
+actually catch people out. Work down the list; each step says where the control is.
+
+### 1. Check the mode
+
+Only **CW, CW-R, USB, LSB and AM** produce audio. **DiGi and FM produce none, by
+design** — see [Which modes produce audio](#which-modes-produce-audio).
+
+This catches more people than anything else, because **FT8, FT4, JS8 and WSPR all run
+in DiGi**. If you are on a digital mode and expecting to hear the band, you will not.
+Switch to USB to listen.
+
+### 2. RX audio is off by default, and enabling it needs a restart
+
+Open the **settings drawer** → **Audio Settings** and tick **RX Audio
+(speaker/headphone)**. Then **restart the Tab5**.
+
+The restart is not optional and it is not a bug: the audio codec is opened at boot,
+before the USB host claims the DMA memory, so it cannot be opened safely part-way
+through a session. From **v1.20.1** the Tab5 tells you this with a toast when you tick
+the box. Before that it said so only in the serial log, which is how three operators
+arrived at silent audio in one week.
+
+The same switch and volume are on the web API from v1.20.1, in the `rxaudio` group of
+`/api/settings`.
+
+### 3. In the browser, press the play button
+
+The browser does **not** start playing on its own. Click the **▶** button at the top
+right of the page, just to the right of **F**. It turns into **■** while it plays.
+
+This is the single most-missed step — two users reported "no web audio" in one week
+and in both cases the stream was working and the button had never been pressed. See
+[Listen in the browser](#listen-in-the-browser).
+
+### 4. Know which volume control does what
+
+There are three, and they act in different places:
+
+| Control | Where | What it changes |
+|---|---|---|
+| **QMX volume** | Drawer → Radio | The **radio's own AF gain**, over CAT — the same number the QMX shows when you click its volume knob. Affects everything downstream, including the browser stream |
+| **RX Volume** | Drawer → Audio Settings | The **Tab5's** speaker and headphone level only. Does not affect the browser stream |
+| Your browser's own volume | The browser or the operating system | The browser stream only |
+
+A fourth control sets the level before any of these: **QMX RF gain** (Drawer → Radio),
+per band, 0–99 dB, QMX default 54. If signals look weak on the waterfall as well as
+sounding weak, this is the one to look at — not the volume.
+
+!!! note "Full volume and still quiet?"
+
+    The level is governed by an **automatic gain control**, not by the volume slider.
+    If a signal is quieter than you expect at full volume, the AGC ceiling is holding
+    it back — see [The AGC controls](#the-agc-controls).
+
+### 5. The speaker and the browser are exclusive
+
+While a browser is listening, the Tab5 **mutes its own speaker**, and hands the audio
+back when you stop listening or close the page. One listener at a time is deliberate.
+So if the Tab5 went quiet, check whether a browser somewhere on your network is holding
+the stream.
+
 ## Panoramic CW Split
 
 Listen to two CW stations on different frequencies, panned left and right across the stereo stage. The CW receiver demodulates each sideband independently, allowing separation by frequency.

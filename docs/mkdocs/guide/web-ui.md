@@ -99,7 +99,16 @@ have actually changed, so they cost the WiFi link almost nothing between refresh
 In FT8/FT4 the browser used to show a transmit banner and
 nothing else - you could see that your radio was transmitting, but not who was
 answering. The FT8 panel now carries the **decode list**: callsign, message, **country**,
-SNR, DT, audio tone, **distance and bearing**, slot (E/O) and age.
+SNR, **DT and DTR**, audio tone, **distance and bearing**, slot (E/O) and age.
+
+**DT and DTR are two different quantities, not a repeat.** **DT** is corrected
+against the band consensus and is character-for-character what the Tab5 prints —
+the WSJT-X-style number, blank until two separate stations have been heard.
+**DTR** is the raw boundary-relative offset and carries about 0.5 s of receive
+audio latency, so it is not comparable with WSJT-X, but it is the one that moves
+when a transmitter's timing moves. Hover either heading for the same explanation
+on the page. *(Randy N4OPI, who put the two screens side by side and found them
+disagreeing under one heading.)*
 
 The country column replaced a GRID column, because the grid was already sitting
 in the message text next to it. The country is the one thing in that row you
