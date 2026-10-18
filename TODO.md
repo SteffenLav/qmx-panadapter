@@ -29,7 +29,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
-| **T01** | DTR column changelog entry | Randy N4OPI |
+| ~~T01~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - DTR described in ft8-rx.md, web-ui.md and the v1.17.0 entry | Randy N4OPI |
 | **T02** | Ask: glyph *as well as* the cyan/green boundary? | Sam W7STF |
 | **T03** | The five replies | Gyula, Randy, Sam, Don, Ryan |
 | **T04** | Audit the **diagrams** | — |
@@ -38,7 +38,7 @@ number when something new arrives; never close a gap.
 | **T07** | Print the JS8 message as it sends | Ryan KK6DZB |
 | **T08** | Handle the directed `SNR?` command (cmd 0) | Gyula HA3HZ |
 | **T09** | Web/Tab5 option parity | Gyula HA3HZ |
-| **T10** | A "getting audio" manual section | Bryan N0LUF, Sam W7STF |
+| ~~T10~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - "Getting audio" opens audio.md, 5 steps | Bryan N0LUF, Sam W7STF |
 | **T11** | Make the web Listen button findable | Bryan N0LUF + Randy N4OPI |
 | **T12** | Ticking "worked-before" should HIDE the rows | Randy N4OPI |
 | **T13** | Hold the Mid-QSO row until 73 or abort | Don WB0LQW |
