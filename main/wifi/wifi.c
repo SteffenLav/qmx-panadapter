@@ -1492,6 +1492,21 @@ void panadapter_wifi_apply_preferred(void)
         if (strcmp(known[k].ssid, pref) != 0) continue;
         ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
                  pref, s_ssid);
+        /* ⛔ ARM THE VERDICT HERE TOO, or the backoff never engages for a
+         * preference saved by hand.
+         *
+         * Found by testing the bench, 2026-10-19: setting the preference to a
+         * remembered network that is not on the air ('Cityinn Hotel') switched
+         * blind, failed four times, fell back to 'BV50' - and then re-checked
+         * every two minutes for the rest of the session, because
+         * s_pref_take_armed was only set by pref_take_if_present(). The GOT_IP
+         * verdict therefore never ran, so a switch that plainly did not stick
+         * was never counted as a failure.
+         *
+         * This path switches WITHOUT a scan - it is the operator saying "go
+         * there now" - which makes a miss MORE likely here than on the
+         * periodic path, not less. */
+        s_pref_take_armed = true;
         apply_creds_live(known[k].ssid, known[k].pass);
         reconnect_deferred();
         return;
