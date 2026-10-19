@@ -32,14 +32,14 @@ number when something new arrives; never close a gap.
 | ~~T01~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - DTR described in ft8-rx.md, web-ui.md and the v1.17.0 entry | Randy N4OPI |
 | **T02** | Ask: glyph *as well as* the cyan/green boundary? | Sam W7STF |
 | **T03** | The five replies | Gyula, Randy, Sam, Don, Ryan |
-| **T04** | Audit the **diagrams** | — |
-| **T05** | De-duplicate the two gesture tables | — |
+| ~~T04~~ | ✅ **CLOSED 2026-10-19 by measurement, not by doing it.** The whole docs tree has TWO diagrams (`panadapter-mockup-ideal.svg`, `panadapter-mockup-artifacts.svg`), both referenced only from `docs/panadapter-display-design.md` - an internal design doc that is NOT in `docs/mkdocs/` or `mkdocs.yml`, so no user ever sees them. No mermaid, no ASCII layouts in the manual. ⚠ The real finding is the opposite of the row: the published manual for a 5-inch touch UI has NO diagrams at all. Whether it should is a decision for the operator | — |
+| ~~T05~~ | ✅ **DONE 2026-10-19** - not by deleting the copy. `reference/gestures.md` is now declared authoritative and Quick Start step 6 says its four rows are a summary and which page wins. Deleting the quick-start table would send a beginner mid-setup to another page; the drift risk was that neither said which was the source | — |
 | ~~T06~~ | ✅ **BUILT 2026-10-19** (`ad34fc05`) - TB's t-field now reaches both screens; TX cells drawn in UI_COLOR_TX_ACTIVE on the Tab5 (third disjoint label layer) and `.cw-tx` in the browser. ⛔ NOT seen on a screen, and it needs an actual CW transmission before t > 0 ever happens. Attribution is approximate at the seam by a character or two | Sam W7STF |
 | **T07** | Print the JS8 message as it sends | Ryan KK6DZB |
 | **T08** | Handle the directed `SNR?` command (cmd 0) | Gyula HA3HZ |
 | **T09** | Web/Tab5 option parity | Gyula HA3HZ |
 | ~~T10~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - "Getting audio" opens audio.md, 5 steps | Bryan N0LUF, Sam W7STF |
-| **T11** | Make the web Listen button findable | Bryan N0LUF + Randy N4OPI |
+| ~~T11~~ | ✅ **DONE 2026-10-19** - it says "Listen" / "Stop" now, not a bare ▶/■ glyph. Chosen over moving it (hides it from whoever HAS found it) and over a first-run hint (annoys everyone once, helps only those who have not looked). ⛔ NOT seen in a browser | Bryan N0LUF + Randy N4OPI |
 | **T12** | Ticking "worked-before" should HIDE the rows | Randy N4OPI |
 | **T13** | Hold the Mid-QSO row until 73 or abort | Don WB0LQW |
 | **T14** | JS8 three-pane layout | Ryan KK6DZB |

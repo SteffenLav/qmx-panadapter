@@ -124,6 +124,13 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 You'll see faint "breathing" grip handles on the edges — they show you where to swipe.
 
+!!! note "This is the short version"
+    [Gestures & Controls](reference/gestures.md) is the authoritative list and
+    covers the top-bar selectors, the drawer and the spectrum gestures as well.
+    The four rows above are a summary for getting started — **if the two ever
+    disagree, the reference page is right**, and a change to the gestures
+    belongs there first.
+
 ## Step 7: Start Listening
 
 You're now receiving. The **spectrum** shows signal strength across the band, and the **waterfall** scrolls down showing signal activity over time.

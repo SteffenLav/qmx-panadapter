@@ -2,6 +2,13 @@
 
 The entire app is controlled via **one-finger swipes from screen edges** and **taps on the top bar**.
 
+!!! info "This page is the authoritative list"
+    [Step 6 of the Quick Start](../quick-start.md) repeats the three edge
+    swipes as a summary, deliberately — a reader setting the device up should
+    not have to leave that page. Change the gestures **here** first, and check
+    that summary afterwards. The duplication is allowed; the two disagreeing
+    is not.
+
 ## Edge Swipes
 
 | Gesture | From | Effect |
