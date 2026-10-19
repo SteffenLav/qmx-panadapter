@@ -12,6 +12,14 @@ Swipe → from the left edge to cycle **Panadapter -> FT8/FT4/JS8 -> WSPR** and 
 
 Everything in WSPR is built on a **two-minute cycle**, aligned to UTC. A transmission starts a second or two after each even minute and lasts about 110 seconds, so one cycle carries exactly one beacon.
 
+![The WSPR cycle: a 110.6 s transmission starting one second into an even minute
+inside a two-minute cycle, the capture and 115 s decode budget on a receive cycle,
+and the transmit schedule as two counts of cycles](../img/wspr-cycle.svg)
+
+Exactly: 162 symbols of 0.683 s is **110.6 s** of the 120 s cycle. The schedule at the
+bottom is the part worth studying before you switch transmitting on — it is two
+counts, not a percentage.
+
 That slow rhythm is why the page looks calm compared with the FT8 screen. There is no countdown urging you on and no QSO furniture, because there is nothing to answer. The countdown at the top left simply tells you where you are in the current window.
 
 **Your clock has to be right.** WSPR's decoder searches only a narrow slice of time either side of the cycle boundary, so a clock that is out by more than a couple of seconds will hear nothing and be heard by nobody. The Tab5 keeps itself right from SNTP over WiFi, from the QMX's own clock, or from its internal RTC — see [Time Sync](time-sync.md). If you are running with no network and no GPS, check the clock before you trust an empty screen.

@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 430" width="920" height="430"
+     role="img" aria-labelledby="t d">
+  <title id="t">Which clock source wins</title>
+  <desc id="d">Time sources in order of authority, highest first: a Unit GPS on
+  PORT.A, which carries its own date; the QMX+ GPS second-tick, but only when the
+  QMX GPS flag is set, in which case it outranks SNTP; SNTP whenever WiFi is up;
+  the Tab5 RTC; the QMX time-of-day as an offline fallback only; and manual entry
+  as a last resort. Separately, the Tab5 RTC is what seeds the clock at boot,
+  before any better source is available — that is an order of events, not an
+  order of authority.</desc>
+
+  <rect x="0" y="0" width="920" height="430" rx="6" fill="#fbfbfd"/>
+
+  <style>
+    .h    { font:600 14px system-ui,sans-serif; fill:#17203a; }
+    .s    { font:12px system-ui,sans-serif; fill:#3d4663; }
+    .ctl  { font:600 12px system-ui,sans-serif; fill:#8a2f2f; }
+    .note { font:italic 12px system-ui,sans-serif; fill:#50405e; }
+    .wire { stroke:#44506b; stroke-width:1.8; fill:none; }
+    .cond { stroke:#8a5520; stroke-width:1.5; fill:none; stroke-dasharray:5 3; }
+  </style>
+  <defs>
+    <marker id="ts" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44506b"/>
+    </marker>
+  </defs>
+
+  <text class="h" x="40" y="40">Which clock source wins — highest authority first</text>
+
+  <!-- the ladder -->
+  <rect x="40" y="58" width="300" height="44" rx="4" fill="#eefaf1" stroke="#2f6b45" stroke-width="1.6"/>
+  <text class="h" x="56" y="78">Unit GPS on PORT.A</text>
+  <text class="s" x="56" y="94">a satellite clock, and it carries its own DATE</text>
+
+  <rect x="40" y="116" width="300" height="52" rx="4" fill="#fff6ec" stroke="#8a5520" stroke-width="1.6"/>
+  <text class="h" x="56" y="136">QMX+ GPS second-tick</text>
+  <text class="s" x="56" y="152">phase-locked to the second boundary, ~±25 ms</text>
+  <text class="s" x="56" y="165">re-locked every 5 minutes</text>
+  <text class="ctl" x="352" y="140">only when the QMX GPS flag is set</text>
+  <text class="s"   x="352" y="156">then it OUTRANKS SNTP — drift-free and</text>
+  <text class="s"   x="352" y="169">independent of WiFi, so better than ours</text>
+
+  <rect x="40" y="182" width="300" height="44" rx="4" fill="#eef2ff" stroke="#3b4a73" stroke-width="1.6"/>
+  <text class="h" x="56" y="202">SNTP over WiFi</text>
+  <text class="s" x="56" y="218">authoritative whenever WiFi is up</text>
+
+  <rect x="40" y="240" width="300" height="44" rx="4" fill="#fff" stroke="#44506b" stroke-width="1.5"/>
+  <text class="h" x="56" y="260">Tab5 RTC</text>
+  <text class="s" x="56" y="276">holds the clock until something better arrives</text>
+
+  <rect x="40" y="298" width="300" height="44" rx="4" fill="#fff" stroke="#44506b" stroke-width="1.5"/>
+  <text class="h" x="56" y="318">QMX time-of-day</text>
+  <text class="s" x="56" y="334">offline fallback ONLY — see the note</text>
+
+  <rect x="40" y="356" width="300" height="40" rx="4" fill="#f3f3f6" stroke="#8a8f9e" stroke-width="1.3"/>
+  <text class="h" x="56" y="376">Manual entry</text>
+  <text class="s" x="56" y="390">last resort — no network, no GPS</text>
+
+  <!-- descending arrow -->
+  <path class="wire" d="M28,58 L28,396" marker-end="url(#ts)"/>
+  <text class="s" x="22" y="230" text-anchor="middle" transform="rotate(-90 22 230)">lower authority</text>
+
+  <!-- why the QMX clock is fallback-only -->
+  <rect x="520" y="196" width="370" height="70" rx="4" fill="#fde8e8" stroke="#8a2f2f" stroke-width="1.3"/>
+  <text class="ctl" x="536" y="216">Why the QMX clock ranks so low</text>
+  <text class="s"   x="536" y="233">Without GPS discipline the QMX's own RTC drifts freely.</text>
+  <text class="s"   x="536" y="248">Trusting it above SNTP would break FT8 timing whenever</text>
+  <text class="s"   x="536" y="261">it had wandered — so it is used only when SNTP is stale.</text>
+
+  <!-- boot seed, a different axis -->
+  <rect x="520" y="290" width="370" height="76" rx="4" fill="#fff" stroke="#44506b" stroke-width="1.3"/>
+  <text class="ctl" x="536" y="310">⚠ The boot order is NOT the authority order</text>
+  <text class="s"   x="536" y="327">The Tab5 RTC is applied first of all, at boot, before SNTP</text>
+  <text class="s"   x="536" y="340">or the QMX can answer. That makes it the first source in</text>
+  <text class="s"   x="536" y="353">TIME, not the highest in authority — anything above it on</text>
+  <text class="s"   x="536" y="366">this ladder replaces it as soon as it arrives.</text>
+
+  <text class="note" x="520" y="60">WSPR and FT8 both search only a narrow slice of time either</text>
+  <text class="note" x="520" y="76">side of the slot boundary, so a clock that is out by a couple of</text>
+  <text class="note" x="520" y="92">seconds hears nothing and is heard by nobody. That is why this</text>
+  <text class="note" x="520" y="108">ladder exists rather than one source.</text>
+</svg>

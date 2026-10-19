@@ -4,6 +4,16 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 
 ### 1. Time Sources (Priority Order)
 
+![Clock sources in order of authority: Unit GPS on PORT.A, the QMX+ GPS second-tick
+when the GPS flag is set, SNTP over WiFi, the Tab5 RTC, the QMX time-of-day as an
+offline fallback, and manual entry last — with a note that the boot order is not the
+authority order](../img/time-sources.svg)
+
+⚠ **The boot order is not the authority order.** The Tab5 RTC is applied first of
+all, at boot, before SNTP or the QMX can answer — that makes it the first source in
+*time*, not the highest in authority. Anything above it replaces it as soon as it
+arrives.
+
 1. **Unit GPS v1.1 on PORT.A** (if selected in Settings -> Device -> Port mode) — satellite UTC **including the full date**, phase-locked to the second, works offline
 2. **GPS-disciplined QMX** (auto-detected) — phase-locked to the GPS second, ~10 ms, works offline; on radio firmware 1.04_004 and later it brings the **date** as well
 3. **WiFi + SNTP** (if available) — ~10 ms, re-syncs every ~1 hour
