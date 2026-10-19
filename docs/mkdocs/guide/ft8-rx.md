@@ -27,7 +27,18 @@ The list shows every decoded FT8 message:
 
 ![The FT8 slot: a 12.64 s transmission in a 15 s slot, the 2.36 s of dead air after
 it, where our own transmission starts, and what DT and DTR each measure from the slot
-boundary](../img/ft8-slot.svg)
+```qmxdiagram
+type: timeline
+title: One FT8 slot - 15 s, and what DT and DTR measure
+span: 15
+seg: 0-12.64 steel a transmission - 12.64 s, 79 symbols
+seg: 12.64-15 dim dead air - 2.36 s
+mark: 0-0.014 red our TX starts at +14 ms
+tick: 0, 5, 10, 15
+note: steel | DTR is the RAW offset of a received signal from the slot boundary. It carries about 0.5 s of receive latency - the QMX SDR plus USB buffering - so it is not comparable with WSJT-X
+note: trace | DT is that same offset corrected against the band consensus, so the shared latency cancels and an on-time station reads about 0.0. This is the WSJT-X-style number
+note: dim | the decode runs after the capture, in the dead air and into the next slot. That is why a reply must be decided before the next boundary, not after it. FT4 is the same shape at 7.5 s - a 5.04 s burst and 2.46 s of dead air
+```
 
 **DT and DTR are two different quantities**, which the table below spells out and the
 picture above shows: DTR is the raw offset from the slot boundary and carries about

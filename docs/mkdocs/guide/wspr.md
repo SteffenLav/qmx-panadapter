@@ -14,7 +14,18 @@ Everything in WSPR is built on a **two-minute cycle**, aligned to UTC. A transmi
 
 ![The WSPR cycle: a 110.6 s transmission starting one second into an even minute
 inside a two-minute cycle, the capture and 115 s decode budget on a receive cycle,
-and the transmit schedule as two counts of cycles](../img/wspr-cycle.svg)
+```qmxdiagram
+type: timeline
+title: One WSPR cycle - 2 minutes
+span: 120
+seg: 1-111.6 red transmitting - 110.6 s, 162 symbols of 0.683 s
+seg: 111.6-120 dim ~8 s
+tick: 0, 30, 60, 90, 120
+note: red | a transmission starts one second into an even minute, by the protocol
+note: trace | on a RECEIVE cycle the whole two minutes is captured, and the decode has a 115 s budget to work through as many candidates as fit
+note: dim | the schedule is two COUNTS of cycles, not a percentage: transmit this many, then receive this many, repeating. Transmit 2 and receive 8 is one pair of bursts every 20 minutes. Transmit cycles = 0 is how transmitting is turned off
+note: amber | the first burst after you switch transmitting on is always the very next cycle, whatever the schedule says - the duty has nothing useful to say about the first one
+```
 
 Exactly: 162 symbols of 0.683 s is **110.6 s** of the 120 s cycle. The schedule at the
 bottom is the part worth studying before you switch transmitting on — it is two

@@ -7,13 +7,23 @@
 Silence is usually one of five things, and they are listed here in the order they
 actually catch people out. Work down the list; each step says where the control is.
 
-![The receiver audio chain: I/Q from the QMX over USB, demodulated on the Tab5, then
-either to its own speaker or to a browser — with the four volume controls marked at
-the points where each one acts](../img/audio-chain.svg)
+```qmxdiagram
+type: flow
+title: From the radio to your ears, and where each control acts
+node: QMX / QMX+ - receiving, set to DiGi / IQ mode
+branch: QMX RF gain - per band, 0-99 dB. Acts before anything else
+branch: QMX volume - the radio's own AF gain. Reaches everything downstream, the browser stream included
+node: USB - 48 000 I/Q pairs per second, one cable
+node: Tab5 DSP - 48 kHz. The same I/Q feeds the spectrum and the demodulator
+node: AGC - ceiling, attack and release, or a fixed gain
+node: the demodulated audio goes to ONE of these at a time
+branch: Tab5 speaker and headphones - I2S codec, 48 kHz stereo. RX Volume acts here, and nowhere else
+branch: a browser - 12 kHz mono mu-law over the WebSocket, 3 s buffer. Your computer's own volume acts here
+note: dim | one listener at a time, deliberately: while a browser holds the stream the Tab5 mutes its own speaker, and hands it back when you stop
+```
 
-The picture is the short version of the whole page: **four controls act at four
-different places**, which is why "turn it up" is not one question. The red marks show
-where each one takes effect.
+**Four controls act at four different places**, which is why "turn it up" is not one
+question.
 
 ### 1. Check the mode
 

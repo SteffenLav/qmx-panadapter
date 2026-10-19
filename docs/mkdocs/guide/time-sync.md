@@ -7,7 +7,21 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 ![Clock sources in order of authority: Unit GPS on PORT.A, the QMX+ GPS second-tick
 when the GPS flag is set, SNTP over WiFi, the Tab5 RTC, the QMX time-of-day as an
 offline fallback, and manual entry last — with a note that the boot order is not the
-authority order](../img/time-sources.svg)
+```qmxdiagram
+type: flow
+title: Which clock source wins - highest authority first
+node: Unit GPS on PORT.A - a satellite clock, and it carries its own DATE
+node: QMX+ GPS second-tick - only when the QMX GPS flag is set, and then it OUTRANKS SNTP
+branch: phase-locked to the second boundary, about +/-25 ms, re-locked every 5 minutes
+branch: drift-free and independent of WiFi, so better than our own SNTP
+node: SNTP over WiFi - authoritative whenever WiFi is up
+node: Tab5 RTC - holds the clock until something better arrives
+node: QMX time-of-day - offline fallback ONLY
+branch: undisciplined, the QMX's own clock drifts freely; trusting it above SNTP would break FT8 timing whenever it had wandered
+node: manual entry - last resort, no network and no GPS
+note: amber | the BOOT order is not the authority order. The Tab5 RTC is applied first of all, before SNTP or the QMX can answer, which makes it first in TIME and not highest in authority - anything above it replaces it as soon as it arrives
+note: dim | WSPR and FT8 both search only a narrow slice of time either side of the slot boundary, so a clock out by a couple of seconds hears nothing and is heard by nobody
+```
 
 ⚠ **The boot order is not the authority order.** The Tab5 RTC is applied first of
 all, at boot, before SNTP or the QMX can answer — that makes it the first source in

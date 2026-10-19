@@ -60,7 +60,21 @@ See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md
 
 ![What plugs into what: one USB cable from the Tab5 as host to the radio carrying
 both the CAT commands and the I/Q audio, separate USB-C power to the Tab5, the
-antenna on the radio, and an optional GPS receiver](../img/connections.svg)
+```qmxdiagram
+type: flow
+title: What plugs into what
+node: antenna - to the RADIO, never to the Tab5
+node: QMX / QMX+ - the receiver and the PA. Everything on the air happens here
+node: ONE USB cable carries both services
+branch: USB-A at the Tab5, which is the HOST, to USB-C at the radio
+branch: data lines required - a charge-only lead looks plugged in and does nothing
+branch: 3 m or less. It also carries 5 V to the radio, which is optional
+node: M5Stack Tab5 - spectrum, waterfall, decoding and the web UI
+branch: CAT commands out, I/Q audio back, over that same cable
+branch: separately powered from USB-C, 5 V at 2 A minimum
+branch: a GPS receiver is optional, on PORT.A or on the 30-pin bus
+note: dim | nothing RF reaches the Tab5. It only ever sees audio and text over USB
+```
 
 **One cable does two jobs.** The same USB lead carries the CAT commands out and the
 I/Q audio back — there is no second cable and no audio lead. The Tab5 is the **host**,
