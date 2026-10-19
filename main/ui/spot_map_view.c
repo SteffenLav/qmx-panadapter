@@ -542,7 +542,16 @@ static int gather_self_spots(self_spot_t *out, int max)
 #define MAP_FIT_FALLBACK 0.90f     /* used only before the pane has a size */
 #define MAP_FIT_MAX_ZOOM 12.0f     /* a single nearby spot must not fill the world */
 
-static void map_fit_to_spots(void)
+/* Fit the view to the self-spots. `centre_me` = our own station in the MIDDLE
+ * rather than merely inside the box - the "Me centred" dropdown entry.
+ *
+ * ⛔ FIT'S OWN BEHAVIOUR IS NOT TOUCHED BY THAT FLAG. The first version of
+ * this change made the box symmetric for every caller, which silently
+ * redefined what the dropdown's "Fit" does. Operator, 2026-10-19: "I would,
+ * however, still like to keep Fit in the dropdown." So the two are separate
+ * entries and separate wrappers, and Fit is byte-for-byte what it always
+ * was. */
+static void map_fit_impl(bool centre_me)
 {
     // EXT_RAM_BSS_ATTR - missed the first time round, same ~18 KB internal-.bss
     // class this file's other two copies (map_draw_cb's own and gather_self_spots'
@@ -578,25 +587,25 @@ static void map_fit_to_spots(void)
 
     /* ⭐ OUR OWN STATION IN THE MIDDLE, not merely inside the box.
      *
-     * BD4AHS, 2026-10-18 (nearly 300 FT8 QSOs on v1.20.1): "when showing the
-     * map in the self-spotter window, it would be great if the map could be
-     * centered on the current position of the station. From the perspective of
-     * the station operator, this would make the map more intuitive to read."
+     * BD4AHS, 2026-10-18 (nearly 300 FT8 QSOs on v1.20.1): "it would be great
+     * if the map could be centered on the current position of the station.
+     * From the perspective of the station operator, this would make the map
+     * more intuitive to read."
      *
-     * The fit above bounds our QTH together with every spot and centres THAT
-     * box, so an operator whose reports all come from one direction ends up
-     * against an edge with the great circles fanning off one side - which is
-     * exactly his case, and the more lopsided the propagation the worse it
-     * reads. Making the box symmetric about our own position puts us in the
-     * middle while still containing every spot, so nothing is pushed off
-     * screen; it only costs some zoom when the spots are one-sided.
+     * The plain fit bounds our QTH together with every spot and centres THAT
+     * box, so an operator whose reports all arrive from one direction sits
+     * against an edge with the great circles fanning off one side. BD4AHS at
+     * ~121 E is at wx 0.84 - far right of centre - and one-sided propagation
+     * drags him further out, which is exactly what he is describing.
      *
-     * ⚠ Does NOT centre the unzoomed world view. project() applies the pan
-     * only while s_map_zoom > 1, so with no spots at all (the early return
-     * above) the whole map is drawn as before and we sit wherever we really
-     * are. Changing that would reframe every other caller and show empty space
-     * past the map edges. */
-    {
+     * ⚠ WHO THIS HELPS DEPENDS ON THEIR GRID, and for some stations it can do
+     * nothing at all. Operator, 2026-10-19, on his own JO65 square: he is at
+     * wx ~0.535, already the middle, so horizontally this moves him nowhere -
+     * and at 55.7 N he is at wy ~0.19, only 19% down from the top edge, so
+     * centring him VERTICALLY would pull blank space in above Scandinavia.
+     * The map data stops at the poles; there is nothing up there to show.
+     * Hence the clamp below rather than an unconditional pan. */
+    if (centre_me) {
         const float ax = ((float)s_my_lon + 180.0f) / 360.0f;
         const float ay = (90.0f - (float)s_my_lat) / 180.0f;
         float rx = (x1 - ax) > (ax - x0) ? (x1 - ax) : (ax - x0);
@@ -636,8 +645,28 @@ static void map_fit_to_spots(void)
     s_map_pan_dx = 0.5f - (ax + (cx - ax) * z);
     s_map_pan_dy = 0.5f - (ay + (cy - ay) * z);
 
-    ESP_LOGI(TAG, "map fit: %d spot(s), zoom %.2f, pan %.3f/%.3f",
-             n, z, s_map_pan_dx, s_map_pan_dy);
+    /* ⛔ AND NEVER PAN PAST THE EDGE OF THE MAP, for the centring case.
+     *
+     * project() maps world w to a(1-z) + w*z + pan, so the visible window
+     * covers w in [-(a(1-z)+pan)/z, (1 - a(1-z) - pan)/z]. Requiring that to
+     * stay inside [0,1] bounds the pan to [(1-z)(1-a), a(z-1)] - which at
+     * z == 1 collapses to exactly 0, so a fully zoomed-out view honestly does
+     * not move. That is the constraint the operator named: centring a
+     * high-latitude station would otherwise show empty space beyond the pole.
+     *
+     * Only for centre_me. Fit keeps the pan it has always computed. */
+    if (centre_me) {
+        const float lox = (1.0f - z) * (1.0f - ax), hix = ax * (z - 1.0f);
+        const float loy = (1.0f - z) * (1.0f - ay), hiy = ay * (z - 1.0f);
+        if (s_map_pan_dx < lox) s_map_pan_dx = lox;
+        if (s_map_pan_dx > hix) s_map_pan_dx = hix;
+        if (s_map_pan_dy < loy) s_map_pan_dy = loy;
+        if (s_map_pan_dy > hiy) s_map_pan_dy = hiy;
+    }
+
+    ESP_LOGI(TAG, "map %s: %d spot(s), zoom %.2f, pan %.3f/%.3f",
+             centre_me ? "centred on me" : "fit", n, z,
+             s_map_pan_dx, s_map_pan_dy);
 
     /* ⛔ INVALIDATE, or a re-open of an ALREADY-VISIBLE overlay keeps the old
      * framing. spot_map_view_show() runs on every top-edge swipe and on the
@@ -648,6 +677,9 @@ static void map_fit_to_spots(void)
      * the pixels were stale. */
     map_mark_dirty();
 }
+
+static void map_fit_to_spots(void)  { map_fit_impl(false); }
+static void map_centre_on_me(void)  { map_fit_impl(true);  }
 
 static lv_point_precise_t project(const lv_area_t *area, int32_t w, int32_t h, float lon, float lat)
 {
@@ -2857,11 +2889,23 @@ static void zoom_dropdown_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
     uint32_t idx = lv_dropdown_get_selected(dd);
-    static const float kZoom[] = { 0.0f /* Fit */, 1, 2, 3, 4, 5, 10, 20, 50 };
+    /* Indices 0 and 1 are the two COMPUTED views; the rest are fixed factors.
+     * The sentinel for "Me centred" keeps this array index-aligned with the
+     * options string, so inserting an entry cannot silently shift x1..x50. */
+    static const float kZoom[] = { 0.0f /* Fit */, 0.0f /* Me centred */,
+                                   1, 2, 3, 4, 5, 10, 20, 50 };
     if (idx >= sizeof(kZoom) / sizeof(kZoom[0])) return;
     if (idx == 0) {
         s_view_is_users = false;   /* map_fit_to_spots() sets it back anyway - explicit for clarity */
         map_fit_to_spots();
+    } else if (idx == 1) {
+        /* BD4AHS's request, deliberately NOT folded into "Fit" - operator,
+         * 2026-10-19: "I would, however, still like to keep Fit in the
+         * dropdown." Clamped to the map edges inside map_fit_impl(), so for a
+         * station already near the middle, or near a pole, it is a small move
+         * or none at all. */
+        s_view_is_users = false;
+        map_centre_on_me();
     } else {
         s_map_zoom = kZoom[idx];
         s_view_is_users = true;
@@ -3061,7 +3105,7 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_align(zoom_lbl, LV_ALIGN_LEFT_MID, ZOOM_X, 0);
 
     lv_obj_t *zoom_dd = lv_dropdown_create(hdr);
-    lv_dropdown_set_options(zoom_dd, "Fit\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
+    lv_dropdown_set_options(zoom_dd, "Fit\nMe centred\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
     lv_obj_set_size(zoom_dd, ZOOM_DD_W, 46);
     lv_obj_align(zoom_dd, LV_ALIGN_TOP_LEFT, ZOOM_X + ZOOM_LBL_W + ZOOM_GAP, (HEADER_H - 46) / 2);
     lv_obj_set_style_text_font(zoom_dd, &lv_font_montserrat_24, 0);
