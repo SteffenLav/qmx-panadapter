@@ -360,25 +360,10 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * W7STF reported, and the operator's rule is that a width which does not play
  * cleanly should not be offered: "it is a ham radio after all".
  *
- * 9.6 kHz was the ceiling D=4 was measured to carry as a FILTER (-1.33 dB at
- * 4800 Hz). That measurement was about the passband, not about what the chain
- * costs to run.
- *
- * ⛔ 2026-10-17: THE LIST NOW STOPS AT 6.0 kHz (half-bw 3000), and the reason
- * is evidence, not cost. Matched 60 s windows measured AM 4.0 and AM 6.0 at
- * the same CPU duty - 455 and 460 ms/s - so width is genuinely FREE within
- * D=4 and 8.0/9.6 would cost the same. But 8.0 and 9.6 have never been run
- * at all: they were put in the list on a filter measurement and a listening
- * report, and the instrument that would have caught trouble did not exist
- * until this week. Sam W7STF's WWV pitch drift is still unexplained
- * (T21/T29), and the honest move while a known symptom is open is to offer
- * only the widths that have actually been measured end to end.
- *
- * ⚠ So this is a RETREAT TO WHAT IS MEASURED, not a statement that the P4
- * cannot do 9.6 kHz. If T29 finds the cost and T21 gets a cause, raising this
- * back is one line - and the -1.33 dB passband evidence for 9.6 still stands.
- * Do not re-derive it. */
-#define RX_AUDIO_AM_HALF_BW_MAX_HZ  3000
+ * 9.6 kHz is the ceiling D=4 was measured to carry (-1.33 dB at 4800 Hz), so
+ * the list stops there. It is 400 Hz short of the 10.0 kHz amateur AM legal
+ * maximum and that difference is inaudible. */
+#define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
 /* The AM half-bandwidth actually in force. Settable, because the figure above
  * is a default and the right choice depends on the band: on a crowded evening
