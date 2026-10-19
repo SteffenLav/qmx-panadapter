@@ -34,7 +34,7 @@ number when something new arrives; never close a gap.
 | **T03** | The five replies | Gyula, Randy, Sam, Don, Ryan |
 | **T04** | Audit the **diagrams** | — |
 | **T05** | De-duplicate the two gesture tables | — |
-| **T06** | Transmitted morse in its own colour | Sam W7STF |
+| ~~T06~~ | ✅ **BUILT 2026-10-19** (`ad34fc05`) - TB's t-field now reaches both screens; TX cells drawn in UI_COLOR_TX_ACTIVE on the Tab5 (third disjoint label layer) and `.cw-tx` in the browser. ⛔ NOT seen on a screen, and it needs an actual CW transmission before t > 0 ever happens. Attribution is approximate at the seam by a character or two | Sam W7STF |
 | **T07** | Print the JS8 message as it sends | Ryan KK6DZB |
 | **T08** | Handle the directed `SNR?` command (cmd 0) | Gyula HA3HZ |
 | **T09** | Web/Tab5 option parity | Gyula HA3HZ |
