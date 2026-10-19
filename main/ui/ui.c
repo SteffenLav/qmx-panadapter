@@ -1202,6 +1202,27 @@ static void bw_popup_open(void)
     static const char    *cw_lbl[]  = {"50","100","150","200","250","300","400","500"};
     static const uint32_t ssb_bw[]  = {2500, 2700, 2900, 3200};
     static const char    *ssb_lbl[] = {"2.5k","2.7k","2.9k","3.2k"};
+
+    /* ⛔ THE COUNT IS DERIVED, NEVER TYPED. v1.20.1 shipped `n_bw = 6` beside a
+     * four-entry am_bw[] - the 10-17 trim cut the list and left the literal -
+     * so the loop below ran twice past the end of BOTH arrays, dereferencing
+     * whatever .rodata followed am_lbl[] as a string pointer and handing
+     * am_bw[4..5] to a phantom button's click handler. Two of the six rows in
+     * the AM bandwidth popup were garbage and tapping one applied a nonsense
+     * width.
+     *
+     * Restoring the widths (6ab36b1b) made the count correct again by
+     * accident. This makes it correct by construction: a trimmed list cannot
+     * leave a stale count behind, because there is no count to leave. The
+     * paired label array is checked at compile time where the two are
+     * declared together - the lengths disagreeing is the same defect wearing
+     * a different hat.
+     *
+     * Same class as the half-removed FT4 gate in CLAUDE.md: the edit that
+     * removes one half of a pair and not the other. */
+    #define BW_N(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
+    _Static_assert(BW_N(cw_bw)  == BW_N(cw_lbl),  "cw_bw and cw_lbl must stay the same length");
+    _Static_assert(BW_N(ssb_bw) == BW_N(ssb_lbl), "ssb_bw and ssb_lbl must stay the same length");
     const char *cur_mode = cat_get_mode_str();
     const uint32_t *bw_list;
     const char **lbl_list;
@@ -1222,7 +1243,7 @@ static void bw_popup_open(void)
         if (mask == 0) {
             bw_list = cw_bw;
             lbl_list = cw_lbl;
-            n_bw = 8;
+            n_bw = BW_N(cw_bw);
         } else {
             int k = 0;
             for (int i = 0; i < CW_FILTER_COUNT; i++) {
@@ -1238,7 +1259,7 @@ static void bw_popup_open(void)
     } else if (strcmp(cur_mode, "USB") == 0 || strcmp(cur_mode, "LSB") == 0) {
         bw_list = ssb_bw;
         lbl_list = ssb_lbl;
-        n_bw = 4;
+        n_bw = BW_N(ssb_bw);
     } else if (strcmp(cur_mode, "AM") == 0) {
         /* ⛔ IN AM THIS CONTROL IS NOT THE RADIO'S FILTER. The QMX has one
          * fixed audio filter, 150-3200 Hz, and it sits in the radio's own
@@ -1296,7 +1317,8 @@ static void bw_popup_open(void)
         static const char    *am_lbl[] = {"2.0k","3.0k","4.0k","6.0k","8.0k","9.6k"};
         bw_list = am_bw;
         lbl_list = am_lbl;
-        n_bw = 6;
+        _Static_assert(BW_N(am_bw) == BW_N(am_lbl), "am_bw and am_lbl must stay the same length");
+        n_bw = BW_N(am_bw);
     } else {
         return;
     }
