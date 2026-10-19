@@ -10898,6 +10898,34 @@ fpsEl.addEventListener("click", wsReclaim);
  * (2026-09-22). */
 let audioCtx = null, audioGain = null, audioNext = 0;
 let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
+/* ⛔ RIDE THROUGH A RECONNECT INSTEAD OF GOING SILENT UNTIL SOMEBODY CLICKS.
+ *
+ * Samuel W7STF, 2026-10-18: "I am still experiencing these web-UI disconnects.
+ * It is fairly frequent... If the web-UI cannot support audio for hours on end
+ * without disconnects, that is unfortunate. Is there any way to make the
+ * overall connection to the web-UI more fault-tolerant and provide
+ * 'ride-through', in this case of the audio?"
+ *
+ * The disconnects themselves are a separate question - the close code in the
+ * fps slot is the evidence for that, and his vary. But the audio did not have
+ * to die with them: the device clears web audio when the session ends (it has
+ * to - a closed tab must not leave the demodulator running for nobody), and
+ * this page then simply waited to be asked again. Every brief network wobble
+ * therefore cost a manual click, and two users have already failed to find that
+ * button at all.
+ *
+ * So the page remembers that audio WAS wanted and re-asks on the next open.
+ * audioStop() only suspends the AudioContext - it never closes it - so the
+ * context resuming here is the same one the operator's original click unlocked,
+ * and no new gesture is needed.
+ *
+ * ⚠ CLEARED BY EVERY DELIBERATE STOP (the Listen button, and the FT8 switch via
+ * audioStopAndTell), never by a socket closing. "The operator stopped it" and
+ * "the link dropped" must not be the same state, or this would restart audio
+ * somebody had just switched off. */
+let audioResumeWanted = false;
+let audioResumeFails  = 0;
+const AUDIO_RESUME_MAX_FAILS = 3;
 let audioLate = 0, audioDropped = 0;
 let audioLatePainted = 0, audioDroppedPainted = 0;
 /* Resampler state, carried from one frame to the next. audioTail holds the
@@ -10985,6 +11013,7 @@ async function audioStart() {
    audio on the session's end), and it does when this page is the one giving
    up, or the Tab5 keeps demodulating for a listener who has gone. */
 function audioStopAndTell() {
+  audioResumeWanted = false;   /* deliberate - see audioResumeWanted */
   audioStop();
   fetch("/api/cmd", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -11000,11 +11029,52 @@ function audioStop() {
   listenPaint();
 }
 
+/* Re-ask for audio after the socket came back - see audioResumeWanted.
+ *
+ * Bounded: a device or browser that refuses three times in a row stops being
+ * asked, and the button says so rather than sitting on "wait" for ever. The
+ * count is cleared by a frame actually arriving, so a long session with
+ * occasional wobbles never exhausts it. */
+async function audioResumeAfterReconnect() {
+  if (!audioResumeWanted) return;
+  if (audioResumeFails >= AUDIO_RESUME_MAX_FAILS) return;
+
+  if (!(await audioStart())) {
+    audioResumeFails++;
+    if (audioResumeFails >= AUDIO_RESUME_MAX_FAILS) {
+      audioResumeWanted = false;
+      fpsEl.title = "Audio did not come back by itself after a reconnect - "
+                  + "click Listen to start it again.";
+    }
+    listenPaint();
+    return;
+  }
+  try {
+    const r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "web_audio", on: true })
+    });
+    if (!r.ok) { audioStop(); audioResumeFails++; return; }
+    await r.json();
+    audioWantOn = true;
+    audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
+    audioLate = 0; audioDropped = 0; audioNext = 0;
+    audioLatePainted = 0; audioDroppedPainted = 0;
+  } catch (err) {
+    audioStop();
+    audioResumeFails++;
+  }
+  listenPaint();
+}
+
 /* One audio frame off the socket. The header carries its own sample rate and a
    sequence number, so a dropped frame is visible here rather than becoming an
    unexplained click. */
 function audioFrame(buf) {
   if (!audioWantOn || buf.length <= AUDIO_HDR_LEN) return;
+  /* Audio is genuinely flowing, so the auto-resume budget is spent on nothing -
+     give it back, or a long session with occasional wobbles would use it up. */
+  audioResumeFails = 0;
   const seq  = buf[2] | (buf[3] << 8);
   const rate = (buf[4] | (buf[5] << 8)) || 12000;
   if (!audioCtx || audioCtx.state !== "running") return;
@@ -11182,6 +11252,7 @@ async function listenToggle() {
       audioLate = 0; audioDropped = 0; audioNext = 0;
       audioLatePainted = 0; audioDroppedPainted = 0;
     } else {
+      audioResumeWanted = false;   /* the operator stopped it - see the flag */
       audioStop();
     }
   } catch (err) {
@@ -11222,7 +11293,11 @@ function connectWs() {
   ws=new WebSocket(url);
   ws.binaryType="arraybuffer";
   ws.onopen=()=>{ wsOpenedAt = Date.now();
-                  fpsEl.textContent="connected"; fpsEl.classList.remove("bad"); };
+                  fpsEl.textContent="connected"; fpsEl.classList.remove("bad");
+                  /* Bring the audio back if the drop took it - see
+                     audioResumeWanted. Not awaited: onopen must not block the
+                     first spectrum frames behind an /api/cmd round trip. */
+                  audioResumeAfterReconnect(); };
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
     if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
@@ -11307,7 +11382,11 @@ function connectWs() {
        audio is not persisted and a closed tab must not leave the demodulator
        running for nobody - so the button has to stop claiming to be playing.
        The reconnect gets a fresh session, and the listener asks again. */
-    if (audioWantOn) audioStop();
+    /* Remember it was wanted BEFORE the local teardown clears the flag, so the
+       next open can bring it back by itself - Samuel W7STF's ride-through, see
+       audioResumeWanted. A takeover is not a wobble: that browser has been
+       displaced deliberately and must not claw the audio back. */
+    if (audioWantOn) { audioResumeWanted = !wsDisplaced; audioStop(); }
 
     if (wsDisplaced) return;
     const secs = wsOpenedAt ? Math.round((Date.now() - wsOpenedAt) / 1000) : 0;
