@@ -626,7 +626,21 @@ static void pref_scan_if_adrift(void)
         if (strcmp(known[k].ssid, pref) == 0) { remembered = true; break; }
     if (!remembered) return;
 
+    /* ⛔ BACK OFF ON CONSECUTIVE MISSES TOO, not only on failed takes.
+     *
+     * The take counter can only grow when something armed the verdict, and a
+     * preference that is simply never on the air produces no takes at all - so
+     * the interval stayed at two minutes and the unit scanned every two
+     * minutes for the rest of the session. Measured on the bench 2026-10-19
+     * with the preference set to a network that does not exist here.
+     *
+     * Misses are the cheaper signal and they need nothing armed: five of them
+     * (ten minutes of looking) is enough to say "this network is not around
+     * today" and start looking less often. Either counter can drive the
+     * backoff; the larger one wins, and finding the network resets both. */
     int shift = s_pref_take_fails;
+    const int miss_shift = s_pref_misses / 5;
+    if (miss_shift > shift) shift = miss_shift;
     if (shift > PREF_TAKE_BACKOFF_MAX) shift = PREF_TAKE_BACKOFF_MAX;
     const int64_t interval = PREF_RECHECK_INTERVAL_US << shift;
 
@@ -1151,6 +1165,14 @@ static void wifi_task(void *arg)
                  * element of known[] is NUL-terminated, only that the array is
                  * 588 bytes, so -Werror=format-truncation rejects the plain
                  * form. The widths are the field sizes less the terminator. */
+                /* Third and last place that switches to the preference, so it
+                 * arms the verdict like the other two - and this is the one
+                 * Randy N4OPI's report is actually about ("on first boot after
+                 * upgrading the firmware"). Measured on the bench 2026-10-19:
+                 * the boot override fell back to the working network and
+                 * printed no verdict at all, because only the periodic take
+                 * armed it. */
+                s_pref_take_armed = true;
                 snprintf(s_ssid, sizeof(s_ssid), "%.32s", known[k].ssid);
                 snprintf(s_pass, sizeof(s_pass), "%.64s", known[k].pass);
                 break;
