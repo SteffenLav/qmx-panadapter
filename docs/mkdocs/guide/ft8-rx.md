@@ -25,6 +25,15 @@ You'll see:
 
 The list shows every decoded FT8 message:
 
+![The FT8 slot: a 12.64 s transmission in a 15 s slot, the 2.36 s of dead air after
+it, where our own transmission starts, and what DT and DTR each measure from the slot
+boundary](../img/ft8-slot.svg)
+
+**DT and DTR are two different quantities**, which the table below spells out and the
+picture above shows: DTR is the raw offset from the slot boundary and carries about
+half a second of receive latency, while DT is that offset corrected against the band
+consensus, so the shared latency cancels and an on-time station reads about zero.
+
 | Column | Meaning |
 |---|---|
 | **SL** | Slot parity: **E** (blue) or **O** (amber) |

@@ -121,6 +121,17 @@ Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts 
 
 **CQ tone selection** — the panadapter automatically picks a quiet frequency (6.25 Hz tone spacing, 200–2800 Hz audio range, no other stations nearby). If your chosen tone gets busy during a QSO, the panadapter **auto-relocates to the nearest clear frequency** to avoid stepping on other stations.
 
+## Where your transmission sits in the slot
+
+![The FT8 slot: a 12.64 s transmission in a 15 s slot, the 2.36 s of dead air after
+it, where our own transmission starts, and what DT and DTR each measure from the slot
+boundary](../img/ft8-slot.svg)
+
+Your burst starts **14 ms after the slot boundary** and runs 12.64 s, so the last
+2.36 s of every slot is dead air. That gap is the whole reason a reply has to be
+decided before the next boundary rather than after it — the decode of the slot you
+just heard is still running in it.
+
 ## What the TX status line is telling you
 
 The left pane carries a persistent status line under the slot countdown. The
