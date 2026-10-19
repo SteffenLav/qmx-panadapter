@@ -64,14 +64,20 @@
   <text class="s" x="545" y="205" text-anchor="middle">ceiling, attack, release</text>
   <text class="s" x="545" y="220" text-anchor="middle">or fixed gain</text>
 
-  <!-- split: speaker branch -->
-  <path class="wire" d="M620,180 L660,180 L660,282 L700,282" marker-end="url(#a)"/>
+  <!-- ONE line leaves the AGC and then branches. Operator, 2026-10-19: two
+       separate lines out of the box read as two different signals, when it is
+       one demodulated stream going to two destinations. The junction dot is
+       what makes the lower tap a branch rather than a crossing. -->
+  <path class="wire" d="M620,193 L660,193"/>
+  <path class="wire" d="M660,193 L660,380"/>
+  <circle cx="660" cy="282" r="3.5" fill="#44506b"/>
+  <path class="wire" d="M660,282 L700,282" marker-end="url(#a)"/>
   <rect class="out" x="700" y="252" width="200" height="60" rx="5"/>
   <text class="h" x="800" y="275" text-anchor="middle">Tab5 speaker / headphones</text>
   <text class="s" x="800" y="294" text-anchor="middle">I2S codec, 48 kHz stereo</text>
 
-  <!-- split: web branch -->
-  <path class="wire" d="M620,206 L660,206 L660,380 L700,380" marker-end="url(#a)"/>
+  <!-- web branch: the trunk above already carries it down to here -->
+  <path class="wire" d="M660,380 L700,380" marker-end="url(#a)"/>
   <rect class="web" x="700" y="350" width="200" height="60" rx="5"/>
   <text class="h" x="800" y="373" text-anchor="middle">Browser</text>
   <text class="s" x="800" y="392" text-anchor="middle">12 kHz mono mu-law, WebSocket</text>
