@@ -7,6 +7,14 @@
 Silence is usually one of five things, and they are listed here in the order they
 actually catch people out. Work down the list; each step says where the control is.
 
+![The receiver audio chain: I/Q from the QMX over USB, demodulated on the Tab5, then
+either to its own speaker or to a browser — with the four volume controls marked at
+the points where each one acts](../img/audio-chain.svg)
+
+The picture is the short version of the whole page: **four controls act at four
+different places**, which is why "turn it up" is not one question. The red marks show
+where each one takes effect.
+
 ### 1. Check the mode
 
 Only **CW, CW-R, USB, LSB and AM** produce audio. **DiGi and FM produce none, by
@@ -41,7 +49,8 @@ and in both cases the stream was working and the button had never been pressed. 
 
 ### 4. Know which volume control does what
 
-There are three, and they act in different places:
+There are three, and they act in different places — see
+[the chain above](#getting-audio-start-here-if-you-hear-nothing) for where:
 
 | Control | Where | What it changes |
 |---|---|---|
