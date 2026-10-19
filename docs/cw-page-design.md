@@ -326,3 +326,87 @@ hardware question.
 **Status for release notes: the CW page keys the radio (operator-confirmed off
 air, 2026-09-30). What it cannot do is abort a message once sent.**
 Do not describe CW transmit as working until item 1 or 2 above passes.
+
+---
+
+# Where we stand against the competition (2026-10-19)
+
+Asked for by the operator after Ian G4LXX's feedback: a fair look at the
+competitive CW software to see whether we are missing something important.
+
+## The one fact that frames all of it
+
+**We do no CW DSP whatsoever.** `main/cw_decode.c` is not a decoder - it is a
+parser for the QMX's `TB;` reply. Every decoded character on the CW page comes
+from the QMX's own internal decoder, read over CAT roughly twice a second. The
+Tab5 contributes the display, the QSO ladder and the logging; the radio
+contributes the decoding.
+
+That is a defensible design - the radio also does the keying, so timing and
+envelope are the radio's - but it decides what we can and cannot compete on.
+
+## What the competition does that we cannot
+
+**CW Skimmer (VE3NEA/Afreet) decodes every signal in the passband at once.**
+That is its whole point: Bayesian multi-channel decoding, callsigns written
+beside each trace on the waterfall, and the extracted calls exported as DX
+cluster spots over a built-in Telnet server. The vendor claims up to 700
+parallel signals with a wideband receiver. With a 3 kHz radio it is limited to
+3 kHz of spectrum - which is roughly our situation too, except that we decode
+*one* signal within it rather than all of them.
+
+We decode exactly one channel: whatever sits in the QMX's passband. A band full
+of CW shows as traces on our waterfall with no text against any of them.
+
+**This is the important gap, and it is the one we are best placed to close.**
+We already have the IQ stream, we already draw the waterfall, and we already
+have a spot lane that labels traces with callsigns from the cluster feeds. A
+Tab5-side CW decoder running on the IQ we already capture could label CW
+traces the same way - with our own callsigns, heard here, rather than the
+cluster's. Nothing about the current architecture gets us there, because the
+decoding is not ours.
+
+**We own none of the decoder's controls.** CW Skimmer ships a noise blanker,
+an AGC, a variable-bandwidth CW filter and an I/Q recorder. MRP40 users
+single out its AFC for locking onto a signal. We have no equivalent of any of
+them and cannot add one: the knobs belong to the QMX.
+
+**Type-ahead and macros are table stakes for contest work.** Contest loggers'
+stored macros are generally considered better than external keyboard programs,
+and operators rely on changing speed *inside* a message (faster for `5NN`,
+slower for the exchange). We have six CW memories and the ladder; we have no
+type-ahead, no mid-message speed change, and no abort. Ralph DL1HR's request
+is the first of these, and the `KY` 80-character buffer with a `TB` t-field
+counter is the natural mechanism for it.
+
+## What we have that they do not
+
+- The QSO ladder with plain-language hints ("Someone is calling CQ - you may
+  answer", "That was their park reference"). No competitor does this; they
+  show text and leave the interpretation to the operator.
+- POTA park-reference capture and ADIF logging in the same place as the decode.
+- The panadapter around it, on a 5" touch screen, with no PC involved.
+- The radio keys itself, so the keying is not a sound card's.
+
+## How honest this comparison is
+
+- CW Skimmer's features are from the vendor's own pages and Wikipedia, and are
+  reliable.
+- The decode-quality ranking is **one** long-time user's side-by-side of MRP40
+  against CW Skimmer (MRP40 judged better on accuracy, word spacing and lag).
+  It is undated and names no versions. Treat it as a direction, not a result.
+- Searches for fldigi's CW feature set and for any Morse Expert accuracy data
+  returned nothing usable. The 2026 "best decoder" listicles are affiliate
+  pages and were discarded.
+- ⛔ **Nobody has compared OUR decode against any of them on the same signals.**
+  The obvious test is the one nobody has run: the same recorded CW audio
+  through the QMX and through MRP40, counting errors.
+
+## What this suggests, in order
+
+1. A Tab5-side CW decoder on the IQ stream, labelling traces on the waterfall.
+   The big one, and the only item here that changes what the product *is*.
+2. Type-ahead keying (Ralph), with the t-field as the throttle.
+3. Ian's activation-frequency pin and one-tap return - small, and asked for.
+4. Measure our decode against MRP40 on identical audio before claiming
+   anything about decode quality either way.
