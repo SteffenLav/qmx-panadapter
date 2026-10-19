@@ -3118,7 +3118,20 @@ void wspr_screen_view_tick(void)
 
     /* status straight from the slot loop - change-detected, because writing an
      * identical string still costs LVGL an invalidate. */
-    const char *st = wspr_rx_running() ? wspr_rx_status() : "receiver stopped";
+    /* Recovery first, so the status below reports the outcome of this tick
+     * rather than the previous one. A no-op unless the receiver is faulted and
+     * the memory it was refused has since arrived. */
+    wspr_rx_retry_if_faulted();
+
+    /* ⛔ "receiver stopped" IS THE WRONG WORDING FOR A FAILURE, and it was the
+     * only wording available: the out-of-memory status was written by the task
+     * and then discarded, because the same wspr_rx_running() test that chose
+     * the message was false. John W5JSS, 2026-10-18, spent a session on a page
+     * whose receiver had died on entry and was never told. */
+    const char *fault = wspr_rx_fault();
+    const char *st = wspr_rx_running() ? wspr_rx_status()
+                   : fault             ? fault
+                                       : "receiver stopped";
     if (strncmp(st, s_last_status, sizeof(s_last_status)) != 0) {
         snprintf(s_last_status, sizeof(s_last_status), "%s", st);
         lv_label_set_text(s_lbl_status, s_last_status);

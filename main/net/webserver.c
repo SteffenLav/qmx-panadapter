@@ -6141,8 +6141,45 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * the same deliberate treatment as sim_mode_en above. wspr_tx_dbm is a
      * DECLARED power published with every spot - a wrong value here is
      * misinformation about the operator's station, not a display bug. */
-    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_dial_hz")))
-        settings_set_wspr_dial_hz((uint32_t)it->valuedouble);
+    /* ⛔ AND RETUNE THE RADIO, which this did not do for as long as it existed.
+     *
+     * John W5JSS, 2026-10-18: "I tried changing the band in the WSPR drawer,
+     * but the QMX didn't update unless I turned on TX." He was driving from the
+     * browser, and this handler wrote the stored dial and stopped there. The
+     * Tab5's own band picker (wspr_screen_view.c's bp_apply) does four things:
+     * stores the dial, resets the waterfall floor for the new band, writes the
+     * frequency with cat_set_frequency_forced(), and moves the top bar. Three
+     * of them were missing here, so the page said 20 m while the radio stayed
+     * on 15 m - and his log says so outright:
+     *
+     *   W (29504045) wspr_view: dial MISMATCH: the radio is tuned to
+     *       21.094600 MHz but this page is set to 14.095600 MHz
+     *
+     * which also means the spots he did hear would have been reported to
+     * wsprnet on the wrong frequency. The page's own dial push is a bounded
+     * one-shot armed by entering the page, so nothing else was going to
+     * correct it.
+     *
+     * ⚠ The same class the comment two blocks down is pleased about catching
+     * ("that is precisely the swr_limit_x10 bug the v1.6.0 parity pass found").
+     * A POST case existed here, so the diff of the two surfaces showed a match;
+     * what differed was what the setter is expected to DO on each side.
+     *
+     * cat_set_frequency_forced() + ui_update_frequency() from the httpd task is
+     * the established pattern - the set_freq action above does exactly this,
+     * and for the same reason: do not wait to be told by the FA poll. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_dial_hz"))) {
+        const uint32_t dial = (uint32_t)it->valuedouble;
+        const bool changed = (dial != settings_get_wspr_dial_hz());
+        settings_set_wspr_dial_hz(dial);
+        if (changed && dial) {
+            wspr_rx_wf_floor_reset();      /* the new band has its own noise floor */
+            cat_set_frequency_forced(dial);
+            ui_update_frequency(dial);
+            ESP_LOGW(TAG, "WSPR dial set to %lu Hz from the web - radio retuned",
+                     (unsigned long)dial);
+        }
+    }
     /* wspr_net_en was in the GET but had NO POST case - the browser would have
      * shown it, accepted a change and silently dropped it. That is precisely
      * the swr_limit_x10 bug the v1.6.0 parity pass found; caught here by
@@ -6222,7 +6259,23 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
          * measurably takes 5.4 W to 1.6 W. */
         if (v < 0)  v = 0;
         if (v > 37) v = 37;
+        /* ⛔ AND APPLY IT, the same as the Tab5 dropdown does. Sibling of the
+         * wspr_dial_hz gap above, found by sweeping it rather than from a
+         * report. ui.c's wspr_pa_cal_apply_and_show() calls
+         * wspr_pa_apply_declared_dbm() on every change; this handler stored the
+         * figure and stopped - so declaring a different power from the browser
+         * while WSPR ran left the radio at the voltage calibrated for the OLD
+         * one, and every spot went to wsprnet declaring the new one. Declared
+         * power that does not match what the finals are fed is the same fault
+         * John W5JSS reported as "2 W instead of 1 W", reachable with nothing
+         * broken at all.
+         *
+         * Only on a change: the function is also the drawer-refresh path and
+         * writing on every POST would re-send the voltage for any unrelated
+         * setting saved from the same form. */
+        const bool dbm_changed = ((int8_t)v != settings_get_wspr_tx_dbm());
         settings_set_wspr_tx_dbm((int8_t)v);
+        if (dbm_changed) wspr_pa_apply_declared_dbm((int8_t)v);
     }
 
     cJSON *cq = cJSON_GetObjectItem(root, "cq");

@@ -66,6 +66,7 @@
 #include "common/monitor.h"
 
 #include "dsp.h"
+#include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
 #include "dsp/iq_balance.h"
 #include "cat/cat.h"
@@ -445,6 +446,18 @@ static volatile uint32_t s_decode_jobs_done   = 0;
  * WSPR cycle is 120 s so a pathological case wants room. */
 #define FT8_ALLOC_TRIES    16
 #define FT8_ALLOC_WAIT_MS 1000
+/* ⛔ SWEPT FROM THE OTHER SIDE OF THE SAME BUG. wspr_rx.c's identical loop gave
+ * up 1868 ms before THIS task released the memory it was waiting for (John
+ * W5JSS, 2026-10-18 - the capture is quoted at WSPR_ALLOC_MAX_WAIT_TRIES). The
+ * counting mistake is the same here and the direction is just reversed: 16
+ * seconds is a guess at how long wspr_rx takes to let go, and wspr_rx_running()
+ * is the fact. A second spent waiting for a receiver that is demonstrably still
+ * up does not spend the budget; it spends this ceiling.
+ *
+ * Not measured against a real FT8-starved-by-WSPR case - unlike the WSPR side,
+ * no log has shown this one firing. It is the sibling, fixed because it is the
+ * same defect, not because it has bitten anyone yet. */
+#define FT8_ALLOC_MAX_WAIT_TRIES 45   /* hard ceiling, held or not */
 
 static volatile bool  s_ft8_task_alive = false;
 
@@ -3041,12 +3054,17 @@ static void ft8_task(void *arg)
      * build_monitor_pool). So the WHOLE set is retried: a partial pool is freed
      * and the attempt repeated once the previous page has let go. */
     bool pool_ok = false;
-    for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
+    int  charged = 0;        /* iterations with nothing visibly holding it */
+    for (int waited = 0;
+         charged < FT8_ALLOC_TRIES && waited < FT8_ALLOC_MAX_WAIT_TRIES;
+         waited++) {
         if (!s_cap_scratch)
             s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
         if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
         free_monitor_objects();                    /* partial pool; scratch kept */
-        if (attempt == 0)
+        /* The holder we can name - see FT8_ALLOC_MAX_WAIT_TRIES. */
+        if (!wspr_rx_running()) charged++;
+        if (waited == 0)
             ESP_LOGW(TAG, "capture buffers not available yet (%u KB PSRAM free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));

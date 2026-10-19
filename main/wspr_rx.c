@@ -22,6 +22,7 @@
 #include "freertos/semphr.h"
 
 #include "dsp.h"
+#include "ft8_test.h"        /* ft8_task_is_alive() - see the capture-buffer wait */
 #include "ui_mode.h"
 #include "util/psram_task.h"
 #include "util/maidenhead.h"
@@ -660,6 +661,20 @@ void wspr_rx_tx_schedule_reset(bool tx_en, uint8_t tx_cycles, uint8_t rx_cycles)
      * the duty mid-session still re-rolls normally - that is an adjustment,
      * not a fresh start, and forcing a burst there would let a duty change be
      * used to key the radio on demand. */
+    /* ⛔ DO NOT PROMISE A BURST THERE IS NO TASK TO SEND. The schedule task
+     * exits with the receiver, so on a faulted page this logged "first burst is
+     * the next cycle" and then nothing ever keyed - three times in John W5JSS's
+     * log, 2026-10-18. A message that states an outcome must not be reachable
+     * when that outcome cannot happen. */
+    /* The accessors, not s_run/s_fault: both are declared further down this
+     * file and this function sits above them. */
+    if (!wspr_rx_running()) {
+        const char *why = wspr_rx_fault();
+        ESP_LOGW(TAG, "TX enabled but the receiver is not running (%s) - nothing "
+                      "will transmit until it starts", why ? why : "stopped");
+        return;
+    }
+
     const int64_t cycle_now = now_ms() / WSPR_CYCLE_MS;
     if (s_next_tx_cycle < 0) {
         s_next_tx_cycle   = cycle_now + 1;
@@ -819,6 +834,57 @@ static void set_status(const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(s_cap_status, sizeof(s_cap_status), fmt, ap);
     va_end(ap);
+}
+
+/* Why the receiver is NOT running, when that is a failure rather than a
+ * choice. Outlives the task that set it - see the call site - and is cleared by
+ * a successful start and by leaving the page. Empty means "no fault", which is
+ * not the same as "running". */
+static char s_fault[56] = "";
+
+/* Bounded recovery budget for a faulted receiver - see
+ * wspr_rx_retry_if_faulted(), which is where the bound is argued. Reset by
+ * leaving the page. */
+#define WSPR_FAULT_RETRIES 3
+static int s_retry_left = WSPR_FAULT_RETRIES;
+
+static void set_fault(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_fault, sizeof(s_fault), fmt, ap);
+    va_end(ap);
+}
+
+const char *wspr_rx_fault(void)
+{
+    return s_fault[0] ? s_fault : NULL;
+}
+
+/* ⛔ WHO OWNS Max. PA VOLTAGE, which is NOT the same question as "is the
+ * receiver running".
+ *
+ * ui.c's Output power area skips its CAT write while `wspr_rx_running()`,
+ * because WSPR sets the voltage from its own Declared power. John W5JSS,
+ * 2026-10-18: his receiver had died on page entry, so that gate opened while he
+ * was still looking at the WSPR page, and his next band change wrote his own
+ * 6.3 V over WSPR's 4.3 V:
+ *
+ *   I (29504045) declared-power calibration: 20M: Max. PA voltage set to 4.3V
+ *                = 1.0 W for 30 dBm
+ *   E (29518139) could not allocate the capture buffers
+ *   I (29621972) cat: Sent: FA00014095600;        <- band back to 20 m
+ *   W (29622284) cat: PA voltage -> 6.3 V (ok)    <- ~2 W
+ *   I (29629407) wspr_rx: TX enabled
+ *
+ * and wspr_pa_apply_declared_dbm() could not put it back, because it too
+ * returns early on !s_run. Between them the declared power said 1 W and the
+ * radio was set for 2 W. A faulted page still owns the register: the operator
+ * is on WSPR, the declared power is what the page shows, and nothing else
+ * should be writing there. */
+bool wspr_rx_owns_pa(void)
+{
+    return s_run || s_fault[0] != '\0';
 }
 
 static void set_dec_status(const char *fmt, ...)
@@ -1312,6 +1378,32 @@ uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
  * previous page can hold its pool after the mode has changed. */
 #define WSPR_ALLOC_TRIES    21
 #define WSPR_ALLOC_WAIT_MS 1000
+/* ⛔ 21 SECONDS WAS 1.8 SECONDS SHORT, AND THE CLOCK WAS THE WRONG THING TO
+ * COUNT. John W5JSS, 2026-10-18, straight from his diag log:
+ *
+ *   I (29497007) ui: Base mode: FT8 -> WSPR (instant)
+ *   W (29497063) wspr_rx: capture buffers not available yet (2404 KB free)
+ *                         - waiting for the previous page to release
+ *   E (29518139) wspr_rx: could not allocate the capture buffers
+ *                         (5625 KB + 1 x 2812 KB)
+ *   I (29520007) ft8_test: ft8_task exiting; processed 1 slots
+ *
+ * The float buffer went through; the 2.8 MB int16 window failed 21 times at one
+ * second apart and then the loop gave up - 1868 ms before FT8 let go. He then
+ * sat on a WSPR page with no receiver behind it for the rest of the session,
+ * which is where all three of his symptoms came from.
+ *
+ * The comment above says FT8 "can hold its own multi-megabyte pool for up to a
+ * full slot, fifteen seconds". Measured here it held for 23 s - the mode change
+ * landed just after a slot had opened (cap=20705 ms), and the decode runs after
+ * the capture. So the figure the budget was sized from was itself too small.
+ *
+ * ⭐ COUNTING SECONDS IS THE WRONG TEST. ft8_task_is_alive() says whether the
+ * memory is being held by something that is demonstrably on its way out, so an
+ * iteration spent waiting for a live FT8 task no longer spends the budget - it
+ * spends the separate ceiling below. Raising WSPR_ALLOC_TRIES to 25 would have
+ * fixed THIS capture and left the next one to whoever hits a slower teardown. */
+#define WSPR_ALLOC_MAX_WAIT_TRIES 45   /* hard ceiling, held or not */
 
 static int16_t      *s_pcm[WSPR_PCM_SLOTS];
 static volatile bool s_pcm_busy[WSPR_PCM_SLOTS];
@@ -2300,7 +2392,11 @@ static void wspr_rx_task(void *arg)
      * genuinely does arrive; this just waits for it, and says so. */
     float *cap = NULL;
     bool   pcm_ok = false;
-    for (int attempt = 0; attempt < WSPR_ALLOC_TRIES; attempt++) {
+    int    charged = 0;      /* iterations with nothing visibly holding it */
+    bool   held_logged = false;
+    for (int waited = 0;
+         charged < WSPR_ALLOC_TRIES && waited < WSPR_ALLOC_MAX_WAIT_TRIES;
+         waited++) {
         if (!cap) cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         /* TWO int16 windows - the ping-pong. Only the int16 side is doubled:
@@ -2316,11 +2412,30 @@ static void wspr_rx_task(void *arg)
         }
         if (cap && pcm_ok) break;
         if (!s_run) break;                      /* asked to stop while waiting */
-        if (attempt == 0)
+
+        /* The holder we can actually name. While it is alive the memory is
+         * coming, so this second does not count against WSPR_ALLOC_TRIES -
+         * only against WSPR_ALLOC_MAX_WAIT_TRIES. */
+        const bool held = ft8_task_is_alive();
+        if (!held) charged++;
+
+        if (waited == 0)
             ESP_LOGW(TAG, "capture buffers not available yet (%u KB free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
-        set_status("waiting for memory");
+        if (held && !held_logged) {
+            held_logged = true;
+            ESP_LOGW(TAG, "ft8_task is still alive and holds it - waiting for its "
+                          "teardown (up to %d s), not spending the %d s budget",
+                     WSPR_ALLOC_MAX_WAIT_TRIES, WSPR_ALLOC_TRIES);
+        }
+        if (!held && held_logged) {
+            held_logged = false;
+            ESP_LOGW(TAG, "ft8_task has exited - %u KB free now, %d s of budget left",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                     WSPR_ALLOC_TRIES - charged);
+        }
+        set_status(held ? "waiting for FT8 to release memory" : "waiting for memory");
         vTaskDelay(pdMS_TO_TICKS(WSPR_ALLOC_WAIT_MS));
     }
     if (!cap || !pcm_ok) {
@@ -2336,6 +2451,17 @@ static void wspr_rx_task(void *arg)
          * so leaving the page really does give the memory back. */
         wspr_decode_capture_changed();
         set_status("out of memory");
+        /* ⛔ AND MAKE IT SURVIVE THIS TASK, because the page reads
+         * `wspr_rx_running() ? wspr_rx_status() : "receiver stopped"` - so the
+         * one line that explains the failure was discarded by the very
+         * condition it was describing, and the operator was shown wording that
+         * means "you stopped it".
+         *
+         * John W5JSS, 2026-10-18, reported this as three separate faults - no
+         * decodes, the band selector not reaching the radio, and a burst at the
+         * wrong power - without ever being told the receiver had died on page
+         * entry. It is one fault with no surface. */
+        set_fault("out of memory - receiver did not start");
         /* This exit bypasses wspr_rx_stop() entirely, so the PA would stay
          * reduced for every later mode. See the note there. */
         wspr_pa_guard_release();
@@ -2936,6 +3062,7 @@ bool wspr_rx_start(void)
      * entered must survive starting the loop, or an experiment silently
      * reverts to defaults the moment it is run. */
     if (s_guards.near_hz <= 0.0) wspr_guards_defaults(&s_guards);
+    s_fault[0] = '\0';      /* this attempt owns the verdict, not the last one */
     s_run = true;
     ui_mode_set(UI_MODE_WSPR);
 
@@ -3466,6 +3593,52 @@ void wspr_rx_stop(void)
      * Measured 2026-08-27. The whole failure looked like a memory bug and was
      * a mode bug; the heap was the symptom, not the cause. */
     if (ui_mode_get() == UI_MODE_WSPR) ui_mode_set(UI_MODE_PANADAPTER);
+
+    /* Leaving the page ends the fault with it: it describes why THIS visit has
+     * no receiver, and it is what wspr_rx_owns_pa() reads - a stale one would
+     * keep the Output power control gated on a page nobody is looking at. */
+    s_fault[0] = '\0';
+    s_retry_left = WSPR_FAULT_RETRIES;
+}
+
+/* ⭐ THE MEMORY ARRIVES 1.8 SECONDS LATE, SO TRY AGAIN RATHER THAN LEAVING A
+ * DEAD PAGE UP. Called from the WSPR page's 1 Hz tick.
+ *
+ * John W5JSS's log is the argument for retrying at all: ft8_task exited 1868 ms
+ * after the give-up, and PSRAM was back to 10.4 MB a few seconds later. The
+ * receiver could have started on its own and he would have had a working page
+ * instead of a silent one.
+ *
+ * ⛔ BOUNDED, AND NOT ON A TIMER. CLAUDE.md records the FT8 respawn watchdog
+ * firing ~390 times and degrading the device it was rescuing, leaking three
+ * TCBs a go. Three attempts per page visit, and only when the memory is
+ * actually there - a retry that cannot succeed is just the same failure again
+ * with more log. The count is reset by leaving the page, so recovery is always
+ * available, it just is not automatic for ever.
+ *
+ * ⚠ wspr_rx_start() forces wspr_tx_en OFF if it finds it on. On this path that
+ * means a retry can disarm a transmit the operator armed moments ago - which is
+ * the safe direction, and the alternative is re-arming a beacon on behalf of
+ * someone who has not seen that the receiver failed. */
+void wspr_rx_retry_if_faulted(void)
+{
+    if (s_run || !s_fault[0]) return;
+    if (s_retry_left <= 0) return;
+    if (ui_mode_get() != UI_MODE_WSPR) return;
+
+    /* Both buffers, plus the stage-1 stream the decoder builds from them. No
+     * point taking the radio off the page to fail the same way. */
+    const size_t need = (size_t)CAP_SAMPLES * sizeof(float)
+                      + (size_t)CAP_SAMPLES * sizeof(int16_t) * WSPR_PCM_SLOTS
+                      + 1536 * 1024;
+    const size_t have = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    if (have < need) return;
+
+    s_retry_left--;
+    ESP_LOGW(TAG, "retrying the receiver: %u KB free now, needed %u KB "
+                  "(%d attempt(s) left this visit)",
+             (unsigned)(have / 1024), (unsigned)(need / 1024), s_retry_left);
+    wspr_rx_start();
 }
 
 void wspr_rx_set_guards(int enforce_near, double near_hz,

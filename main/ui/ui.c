@@ -2925,12 +2925,21 @@ static void output_power_area_refresh(void)
     // "declared-power calibration: 20M: Max. PA voltage set to 2.3V for
     // 23 dBm" immediately followed 52 ms later by this control's own
     // "PA voltage -> 12.0 V" clobbering it (Steffen OZ1LAV, 2026-09-16).
-    // wspr_rx_running(), not the current UI mode - the WSPR page can be
-    // left showing while another screen is up front, same reasoning as
+    // Not the current UI mode - the WSPR page can be left showing while
+    // another screen is up front, same reasoning as
     // wspr_pa_guard_periodic_check()'s own "running, not visible" test.
+    //
+    // ⛔ wspr_rx_owns_pa(), NOT wspr_rx_running(). They differ in exactly the
+    // case that bit John W5JSS on 2026-10-18: his WSPR receiver failed to
+    // start (the previous page still held the PSRAM), so "running" was false
+    // while he was still sitting on the WSPR page with a declared power of
+    // 30 dBm on screen. This gate opened, his next band change wrote 6.3 V
+    // over WSPR's calibrated 4.3 V, and wspr_pa_apply_declared_dbm() could not
+    // put it back because it refuses on the same !s_run test. The page owns
+    // the register whether or not its loop is alive.
     if (have_target) {
         settings_set_pwr_target_watts(band, s_outpwr_w[idx]);
-        if (!outpwr_tx_busy() && !wspr_rx_running()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
+        if (!outpwr_tx_busy() && !wspr_rx_owns_pa()) cat_request_pa_voltage_x10(s_outpwr_v[idx]);
     }
     outpwr_relayout();
 }

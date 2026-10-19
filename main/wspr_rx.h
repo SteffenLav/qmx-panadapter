@@ -248,6 +248,25 @@ char wspr_rx_mark_for_freq(float freq_hz, int64_t cycle_utc);
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);
 
+/* Why the receiver is not running, when that is a FAILURE rather than the
+ * operator's choice - NULL when there is no fault. The page must show this
+ * instead of "receiver stopped", which reads as deliberate: the status string
+ * explaining an out-of-memory start used to be thrown away by the same
+ * `wspr_rx_running()` test that selected the wording (John W5JSS, 2026-10-18). */
+const char *wspr_rx_fault(void);
+
+/* True while WSPR owns Max. PA voltage - running, OR up and faulted. Not the
+ * same as wspr_rx_running(), and ui.c's Output power area must gate on THIS:
+ * a faulted page left that gate open and the operator's own voltage was
+ * written over WSPR's declared power. See the definition for the capture. */
+bool wspr_rx_owns_pa(void);
+
+/* Bounded recovery for a receiver that failed to start because the previous
+ * page still held the PSRAM. Call from the WSPR page's periodic tick; it is a
+ * no-op unless the receiver is faulted, the memory has since arrived and the
+ * page still has retries left. */
+void wspr_rx_retry_if_faulted(void);
+
 /* Seconds until the next cycle boundary while the receiver is WAITING for one,
  * or -1 when it is capturing, decoding or stopped. A WSPR capture can only
  * start on an even UTC minute, so entering the page part-way through a cycle
