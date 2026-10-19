@@ -639,6 +639,9 @@
      cyan for what has just been written, green for what it is overwriting. */
   .cw-now  { color: #30E0E0; }
   .cw-prev { color: #30E060; }
+  /* Our own transmission. #ff6020 is UI_COLOR_TX_ACTIVE in ui_theme.h, so "this
+     is me transmitting" is one colour on the Tab5 and in the browser. */
+  .cw-tx   { color: #ff6020; }
   #cw-line { position: absolute; left: 0; right: 0; bottom: 6px;
              font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
              font-size: clamp(0.7rem, 1.15vw, 1.05rem); line-height: 1.5;
@@ -7693,16 +7696,35 @@ async function tick() {
             [...cwRows.children].map(d => d.lastElementChild));
           const haveCol = (typeof cw.col === "number" &&
                            cw.col >= 0 && cw.col <= cw.line.length);
+          /* ⭐ OUR OWN KEYING IN THE TX COLOUR (Sam W7STF, T06). cw.tx is a
+             '0'/'1' string the same length as cw.line, straight from TB's
+             t-field - the device decides what counts as TX, exactly as it
+             decides cw.col, so the two screens cannot disagree about it.
+             Length-checked: a device older than the field sends nothing, and a
+             mismatched length is not something to guess at. */
+          const txm = (typeof cw.tx === "string" && cw.tx.length === cw.line.length)
+                      ? cw.tx : null;
           for (let r = 0; r < rowEls.length; r++) {
             const from = r * COLS, to = from + COLS;
             const rowTxt = cw.line.slice(from, to);
-            if (!haveCol) { rowEls[r].textContent = rowTxt; continue; }
-            /* Where the cursor falls inside THIS row: before it means the whole
-               row is this pass, after it means none of it is. */
-            const cut = Math.max(0, Math.min(rowTxt.length, cw.col - from));
-            rowEls[r].innerHTML =
-              "<span class='cw-now'>"  + escHtml(rowTxt.slice(0, cut)) + "</span>" +
-              "<span class='cw-prev'>" + escHtml(rowTxt.slice(cut))    + "</span>";
+            if (!haveCol && !txm) { rowEls[r].textContent = rowTxt; continue; }
+            /* Per-cell class, coalesced into runs so one span covers a stretch
+               rather than every character getting its own element. Three
+               classes now, and TX wins the cell - the same precedence the Tab5
+               uses, where a TX cell is blanked out of both other layers. */
+            let html = "", runCls = null, runTxt = "";
+            for (let i = 0; i < rowTxt.length; i++) {
+              const g = from + i;
+              const cls = (txm && txm[g] === "1") ? "cw-tx"
+                        : (!haveCol || g < cw.col) ? "cw-now" : "cw-prev";
+              if (cls !== runCls) {
+                if (runCls) html += "<span class='" + runCls + "'>" + escHtml(runTxt) + "</span>";
+                runCls = cls; runTxt = "";
+              }
+              runTxt += rowTxt[i];
+            }
+            if (runCls) html += "<span class='" + runCls + "'>" + escHtml(runTxt) + "</span>";
+            rowEls[r].innerHTML = html;
           }
           el.hidden = false;
         } else {

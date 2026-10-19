@@ -4587,6 +4587,12 @@ static void wspr_tick_cb(lv_timer_t *t) { (void)t; wspr_screen_view_tick(); }
  * above the band plan - does not move whatever CW_LINE_ROWS becomes. */
 static lv_obj_t *s_cw_now[CW_LINE_ROWS];    /* this pass, cyan  */
 static lv_obj_t *s_cw_prev[CW_LINE_ROWS];   /* previous pass, green */
+/* ⭐ A THIRD DISJOINT LAYER: our own transmission, in the TX colour. Sam W7STF
+ * (T06). It is a third label per row rather than colour markup for the reason
+ * the pair already documents - LVGL 9.2 has no label recolour, and overlaying
+ * glyphs leaves a fringe of the one underneath. A TX cell is blanked out of
+ * BOTH other layers, so the three stay disjoint and interleave cleanly. */
+static lv_obj_t *s_cw_tx[CW_LINE_ROWS];     /* our own keying, TX orange */
 static unsigned  s_cw_seen;          /* change detector - repaint only on new text */
 
 /* The line is a fixed grid of columns that WRAPS and overwrites itself, the way
@@ -4646,6 +4652,7 @@ static void cw_strip_hide_all(void)
     for (int r = 0; r < CW_LINE_ROWS; r++) {
         if (s_cw_now[r])  lv_obj_add_flag(s_cw_now[r],  LV_OBJ_FLAG_HIDDEN);
         if (s_cw_prev[r]) lv_obj_add_flag(s_cw_prev[r], LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_tx[r])   lv_obj_add_flag(s_cw_tx[r],   LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -4810,6 +4817,11 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     const int cells = rows * CW_LINE_COLS;
 
     char now_s[CW_LINE_ROWS][CW_LINE_COLS + 1], prev_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
+    char tx_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
+    /* Which cells were our own keying - see s_cw_tx. Sized to the whole grid
+     * because cw_decode_line_tx() fills by cells, not by the rows on show. */
+    uint8_t txmask[CW_GRID_CELLS] = {0};
+    cw_decode_line_tx(txmask, sizeof(txmask));
     int  col = cw_decode_line_col();
     if (col < 0) col = 0;
     if (col > cells) col = cells;
@@ -4821,10 +4833,15 @@ static void cw_strip_tick_cb(lv_timer_t *t)
         for (int i = 0; i < CW_LINE_COLS; i++) {
             int  g = r * CW_LINE_COLS + i;
             char c = disp[g] ? disp[g] : ' ';
-            now_s[r][i]  = (g <  col) ? c : ' ';
-            prev_s[r][i] = (g >= col) ? c : ' ';
+            /* TX wins the cell and is blanked from the other two, so the
+             * three layers remain disjoint. The this-pass/previous-pass
+             * boundary still runs through the received text as before. */
+            const bool tx = (g < CW_GRID_CELLS) && txmask[g];
+            now_s[r][i]  = (!tx && g <  col) ? c : ' ';
+            prev_s[r][i] = (!tx && g >= col) ? c : ' ';
+            tx_s[r][i]   = ( tx)             ? c : ' ';
         }
-        now_s[r][CW_LINE_COLS] = prev_s[r][CW_LINE_COLS] = '\0';
+        now_s[r][CW_LINE_COLS] = prev_s[r][CW_LINE_COLS] = tx_s[r][CW_LINE_COLS] = '\0';
     }
 
     /* The slots above `base` are not in use - see the note where base is
@@ -4833,16 +4850,19 @@ static void cw_strip_tick_cb(lv_timer_t *t)
     for (int r = 0; r < base; r++) {
         if (s_cw_now[r])  lv_obj_add_flag(s_cw_now[r],  LV_OBJ_FLAG_HIDDEN);
         if (s_cw_prev[r]) lv_obj_add_flag(s_cw_prev[r], LV_OBJ_FLAG_HIDDEN);
+        if (s_cw_tx[r])   lv_obj_add_flag(s_cw_tx[r],   LV_OBJ_FLAG_HIDDEN);
     }
     for (int r = 0; r < rows; r++) {
         if (s_cw_now[base + r])  lv_label_set_text(s_cw_now[base + r],  now_s[r]);
         if (s_cw_prev[base + r]) lv_label_set_text(s_cw_prev[base + r], prev_s[r]);
+        if (s_cw_tx[base + r])   lv_label_set_text(s_cw_tx[base + r],   tx_s[r]);
     }
 
     /* Raise the pairs before the prefix and the top row, so the ordering
      * below is the one that ends up on screen. */
     for (int r = 0; r < rows; r++) {
-        lv_obj_t *const pair[] = { s_cw_now[base + r], s_cw_prev[base + r] };
+        lv_obj_t *const pair[] = { s_cw_now[base + r], s_cw_prev[base + r],
+                                   s_cw_tx[base + r] };
         for (size_t i = 0; i < sizeof(pair) / sizeof(pair[0]); i++) {
             if (!pair[i]) continue;
             lv_obj_clear_flag(pair[i], LV_OBJ_FLAG_HIDDEN);
@@ -4908,6 +4928,11 @@ static void cw_strip_init(void)
         struct { lv_obj_t **obj; uint32_t colour; } pair[] = {
             { &s_cw_now[r],  0x30E0E0 },   /* this pass, cyan */
             { &s_cw_prev[r], 0x30E060 },   /* the previous pass, green */
+            /* Our own keying, in the same orange the TX indicators use, so
+             * "this is me" means one colour across the whole UI. Third and
+             * last, so the i == 0 background rule below still names the one
+             * layer that paints it. */
+            { &s_cw_tx[r],   UI_COLOR_TX_ACTIVE },
         };
         for (size_t i = 0; i < sizeof(pair) / sizeof(pair[0]); i++) {
             lv_obj_t *l = lv_label_create(lv_scr_act());

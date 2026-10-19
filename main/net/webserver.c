@@ -677,6 +677,19 @@ static esp_err_t status_handler(httpd_req_t *req)
                  * copies of "where does the next character go" drift. */
                 cJSON_AddNumberToObject(c, "col", cw_decode_line_col());
                 cJSON_AddNumberToObject(c, "wpm", cw_decode_wpm());
+                /* ⭐ WHICH CELLS WERE OUR OWN KEYING (Sam W7STF, T06). Sent as
+                 * a '0'/'1' string the same length as "line", so the browser
+                 * can colour it per cell without knowing anything about TB's
+                 * t-field - same reason "col" is sent rather than re-derived.
+                 * A string, not a bitmask: it costs a few hundred bytes on a
+                 * poll that already carries the line itself, and a mask would
+                 * need endianness and bit order agreeing in two places. */
+                uint8_t txm[CW_GRID_CELLS];
+                size_t  txn = cw_decode_line_tx(txm, sizeof(txm));
+                char    txs[CW_GRID_CELLS + 1];
+                for (size_t i = 0; i < txn; i++) txs[i] = txm[i] ? '1' : '0';
+                txs[txn] = '\0';
+                cJSON_AddStringToObject(c, "tx", txs);
                 /* ⭐ THE GRID SHAPE, SENT. The browser had COLS = 72 and two
                  * hardcoded row elements, so CW_LINE_ROWS 2 -> 4 would have
                  * left it drawing half the line with no error anywhere - the
