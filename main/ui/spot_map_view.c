@@ -576,6 +576,35 @@ static void map_fit_to_spots(void)
     }
     if (n == 0) return;                     /* nothing heard - leave the whole world */
 
+    /* ⭐ OUR OWN STATION IN THE MIDDLE, not merely inside the box.
+     *
+     * BD4AHS, 2026-10-18 (nearly 300 FT8 QSOs on v1.20.1): "when showing the
+     * map in the self-spotter window, it would be great if the map could be
+     * centered on the current position of the station. From the perspective of
+     * the station operator, this would make the map more intuitive to read."
+     *
+     * The fit above bounds our QTH together with every spot and centres THAT
+     * box, so an operator whose reports all come from one direction ends up
+     * against an edge with the great circles fanning off one side - which is
+     * exactly his case, and the more lopsided the propagation the worse it
+     * reads. Making the box symmetric about our own position puts us in the
+     * middle while still containing every spot, so nothing is pushed off
+     * screen; it only costs some zoom when the spots are one-sided.
+     *
+     * ⚠ Does NOT centre the unzoomed world view. project() applies the pan
+     * only while s_map_zoom > 1, so with no spots at all (the early return
+     * above) the whole map is drawn as before and we sit wherever we really
+     * are. Changing that would reframe every other caller and show empty space
+     * past the map edges. */
+    {
+        const float ax = ((float)s_my_lon + 180.0f) / 360.0f;
+        const float ay = (90.0f - (float)s_my_lat) / 180.0f;
+        float rx = (x1 - ax) > (ax - x0) ? (x1 - ax) : (ax - x0);
+        float ry = (y1 - ay) > (ay - y0) ? (y1 - ay) : (ay - y0);
+        x0 = ax - rx; x1 = ax + rx;
+        y0 = ay - ry; y1 = ay + ry;
+    }
+
     /* Per-axis fraction from a fixed pixel margin - see MAP_FIT_MARGIN_PX. */
     float fx = MAP_FIT_FALLBACK, fy = MAP_FIT_FALLBACK;
     if (s_map_obj) {
