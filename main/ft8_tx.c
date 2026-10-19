@@ -25,6 +25,8 @@
 
 #include "ft8/message.h"
 #include "ft8/encode.h"
+#include "ft8/js8.h"
+#include "ft8/js8_text.h"
 
 #include "cat/cat.h"
 #include "storage/settings.h"
@@ -73,9 +75,12 @@ static const char *TAG = "ft8_tx";
 
 // Protocol of the currently-selected FT8/FT4 sub-mode, for build-time use
 // (the request itself then carries this in req->protocol - see ft8_tx.h).
+// ⚠ This was a two-way ternary and therefore built JS8 requests as FT8 ones -
+// the same class J3 swept out of 14 other places. One mapping now, in
+// ft8_test.c.
 static inline ftx_protocol_t cur_proto(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8;
+    return ft8_op_mode_protocol();
 }
 
 // Encode to the tone alphabet matching `proto` - ft8_lib exposes separate
@@ -85,6 +90,53 @@ static inline void encode_tones(const uint8_t *payload, uint8_t *tones, ftx_prot
 {
     if (proto == FTX_PROTOCOL_FT4) ft4_encode(payload, tones);
     else                           ft8_encode(payload, tones);
+}
+
+/* Fill req->tones for a message whose rendered line is `text`.
+ *
+ * ⭐ FT8 AND JS8 ENCODE FROM DIFFERENT THINGS, and this is the one place that
+ * says so. FT8/FT4 encode from the three fields through the 77-bit packer;
+ * JS8's frames are a different shape entirely, so it encodes from the LINE,
+ * via js8_text.c. Keeping FT8 on its own path rather than re-parsing its text
+ * leaves the 77-bit encoder and its hash handling exactly as they were.
+ *
+ * ⛔ A JS8 refusal is NOT a failure to be smoothed over. The FT8 ladder opens
+ * a pounce with "<them> <me> <grid>" and JS8 has no Directed grid step, so that
+ * line has no frame - see js8_text.c. The caller must send a report instead;
+ * inventing something for it would key the radio with a message no JS8Call
+ * station answers. The error text says which line was refused so the operator
+ * sees it rather than a silent non-arm. */
+static bool encode_request_tones(ft8_tx_request_t *req, const char *text,
+                                 const char *call_to, const char *my_call,
+                                 const char *third,
+                                 char *out_err, size_t out_err_len)
+{
+    if (ftx_protocol_is_js8(req->protocol)) {
+        uint8_t frame[JS8_FRAME_BYTES];
+        uint8_t itype = 0;
+        if (!js8_text_to_frame(text, frame, &itype)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' has no JS8 form", text);
+            ESP_LOGW(TAG, "JS8 encode refused: '%s'", text);
+            return false;
+        }
+        js8_encode(frame, itype, req->protocol, req->tones);
+        return true;
+    }
+
+    ftx_message_t msg;
+    // hash_if: lets pack28 encode a NONSTANDARD target call (PJ4/K1ABC etc.)
+    // as its 22-bit hash instead of failing outright - the partner's decoder
+    // resolves their own hash trivially. NULL was why replying to special
+    // calls never even armed ("Can't encode message").
+    ftx_message_rc_t rc = ftx_message_encode_std(&msg, ft8_hash_if(), call_to, my_call, third);
+    if (rc != FTX_MESSAGE_RC_OK) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Can't encode message (rc=%d)", (int)rc);
+        return false;
+    }
+    encode_tones(msg.payload, req->tones, req->protocol);
+    return true;
 }
 
 // CQ audio-frequency auto-selection scan parameters.
@@ -135,6 +187,20 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr)
     if (swr) *swr = s_last_swr;
     if (s_last_pwr_swr_us < 0) return -1.0f;
     return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
+}
+
+/* ⭐ THE LATCH IS THE STATION'S, NOT FT8'S, and it is deliberately NOT
+ * duplicated for WSPR. "The antenna is bad enough to stop transmitting" is a
+ * fact about the aerial on the roof, not about which mode noticed it: a trip
+ * raised by a WSPR burst must refuse the next FT8 burst too, and the reverse.
+ * A second parallel latch would be the copy-that-drifts shape this project
+ * keeps paying for. It lives here because the UI and the web page already read
+ * it from here; wspr_tx.c raises it through this function. */
+void ft8_tx_trip_swr(float swr)
+{
+    if (s_swr_tripped) return;        /* first trip wins - keep its value */
+    s_swr_trip_value = swr;
+    s_swr_tripped    = true;
 }
 
 bool ft8_tx_swr_tripped(float *swr_out)
@@ -242,7 +308,7 @@ static inline bool slot_is_even(int64_t slot_start_unix_sec, ftx_protocol_t prot
 // even after the actual TX-firing parity was fixed.
 int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t proto)
 {
-    int period_ms = (proto == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(proto);
     struct timeval tv;
     gettimeofday(&tv, NULL);
     int64_t now_ms  = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -529,24 +595,35 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
         strncpy(out_req->target_call, target_call, sizeof(out_req->target_call) - 1);
     }
 
-    // Third field: explicit extra overrides my_grid for QSO exchange messages.
-    const char *third = extra ? extra : s.my_grid;
+    /* Third field: explicit extra overrides my_grid for QSO exchange messages.
+     *
+     * ⛔ THE GRID GOES OUT AS FOUR CHARACTERS, NEVER SIX.
+     *
+     * FT8's standard message and JS8's heartbeat both carry a 4-character
+     * locator; neither has a field for the subsquare. Passing the stored grid
+     * straight through does not merely lose the extra two characters - in JS8
+     * it loses the CALLSIGN. js8_text_rest_is_grid() tests strlen()==4, so
+     * "JO65TR" is not recognised as a grid, is not stripped, and then passes
+     * the "looks like a callsign" test (it has letters and digits), so it is
+     * taken AS the callsign and the real one is discarded:
+     *
+     *   'CQ OZ2LAV JO65TR' -> frame -> 'CQ JO65TR'
+     *
+     * Measured on the field Tab5 (OZ2LAV, JO65TR) 2026-10-10: the round-trip
+     * guard refused every CQ, so the station could not call CQ at all. The
+     * guard was right; the input was wrong.
+     *
+     * ⚠ The stored setting is NOT truncated - wspr_rx.c and ft8_screen_view.c
+     * feed it to maidenhead_to_latlon() for distance, where the subsquare is
+     * worth having. Only the transmitted form is cut.
+     *
+     * wspr_tx.c:151 already did exactly this, with the same reasoning. The
+     * idiom existed; FT8/JS8 just never adopted it. */
+    char grid4[5];
+    snprintf(grid4, sizeof(grid4), "%.4s", s.my_grid);
+    const char *third = extra ? extra : grid4;
     if (!third[0]) {
         if (out_err) snprintf(out_err, out_err_len, "No grid set (Settings)");
-        return false;
-    }
-
-    // Encode now — never at burst time. Errors surface here in the UI, not
-    // mid-burst where there's nothing we can do about them.
-    ftx_message_t msg;
-    // hash_if: lets pack28 encode a NONSTANDARD target call (PJ4/K1ABC etc.)
-    // as its 22-bit hash instead of failing outright - the partner's decoder
-    // resolves their own hash trivially. NULL was why replying to special
-    // calls never even armed ("Can't encode message").
-    ftx_message_rc_t rc = ftx_message_encode_std(&msg, ft8_hash_if(), call_to, s.my_callsign, third);
-    if (rc != FTX_MESSAGE_RC_OK) {
-        if (out_err) snprintf(out_err, out_err_len,
-                              "Can't encode message (rc=%d)", (int)rc);
         return false;
     }
 
@@ -562,9 +639,16 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
     out_req->protocol       = cur_proto();
     out_req->want_even_slot = needs_parity ? !slot_is_even(target_last_utc, out_req->protocol) : false;
     out_req->use_parity     = needs_parity && (target_last_utc != 0);
-    encode_tones(msg.payload, out_req->tones, out_req->protocol);
+    // Render first, then encode: JS8 encodes FROM the line (see
+    // encode_request_tones), and the line is also what the operator reads.
     snprintf(out_req->display_text, sizeof(out_req->display_text),
              "%s %s %s", call_to, s.my_callsign, third);
+    // Encode now — never at burst time. Errors surface here in the UI, not
+    // mid-burst where there's nothing we can do about them.
+    if (!encode_request_tones(out_req, out_req->display_text,
+                              call_to, s.my_callsign, third, out_err, out_err_len)) {
+        return false;
+    }
     if (extra) strncpy(out_req->extra_field, extra, sizeof(out_req->extra_field) - 1);
 
     static const char * const kind_names[] = { "reply", "CQ", "roger-rpt", "73" };
@@ -590,6 +674,17 @@ bool ft8_tx_build_request_fd(ft8_tx_kind_t kind,
 
     if (kind != FT8_TX_KIND_REPLY && kind != FT8_TX_KIND_ROGER_RPT) {
         if (out_err) snprintf(out_err, out_err_len, "Bad kind for Field Day message");
+        return false;
+    }
+    /* ⛔ The FD exchange is an FT8 message type (0.3/0.4) and this builder
+     * forces FTX_PROTOCOL_FT8 below. For FT4 that is harmless - the operator
+     * gets an FT8 burst on an FT8-length slot. For JS8 it is NOT: the slot
+     * engine is decoding JS8, so the burst would be unintelligible to the
+     * JS8 stations the operator believes they are working, and to us. Refuse,
+     * rather than transmit an FT8 frame under a JS8 label. */
+    if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Field Day has no JS8 message - switch to FT8");
         return false;
     }
     if (!target_call || !target_call[0]) {
@@ -666,7 +761,80 @@ bool ft8_tx_build_request_text(const char *message_text,
             if (out_err) snprintf(out_err, out_err_len, "Empty message");
             return false;
         }
+        /* ⛔ A SAVED PRESET CAN STILL CARRY A SIX-CHARACTER GRID.
+         *
+         * Truncating my_grid where the default preset is built (ft8_cq_modal)
+         * fixes new text only. A preset the operator saved earlier keeps the
+         * six-character locator in its STRING, and would still be refused by
+         * the round-trip guard below - the instance fixed, the class not.
+         *
+         * So cut it here as well, where every text path passes: if the last
+         * token is a full LL##LL locator, drop the subsquare. Both FT8's
+         * standard message and JS8's heartbeat carry four characters, so
+         * nothing that could have been transmitted is lost.
+         *
+         * Only the LAST token, and only a complete 6-character locator - a
+         * CQ qualifier ("CQ POTA OZ1LAV JO65") must not be touched, and a
+         * 4-character grid is already right. */
+        {
+            char *last = strrchr(trimmed, ' ');
+            char *tok  = last ? last + 1 : trimmed;
+            if (strlen(tok) == 6 &&
+                tok[0] >= 'A' && tok[0] <= 'R' && tok[1] >= 'A' && tok[1] <= 'R' &&
+                tok[2] >= '0' && tok[2] <= '9' && tok[3] >= '0' && tok[3] <= '9' &&
+                tok[4] >= 'A' && tok[4] <= 'X' && tok[5] >= 'A' && tok[5] <= 'X') {
+                ESP_LOGI(TAG, "grid '%s' -> '%.4s' (the wire carries 4 characters)",
+                         tok, tok);
+                tok[4] = '\0';
+            }
+        }
         message_text = trimmed;
+    }
+
+    out_req->kind          = FT8_TX_KIND_CQ;
+    out_req->audio_freq_hz = audio_freq_hz;
+    out_req->use_parity    = false;
+    out_req->want_even_slot = false;
+    out_req->protocol      = cur_proto();
+    snprintf(out_req->display_text, sizeof(out_req->display_text), "%s", message_text);
+
+    /* JS8 has its own round-trip guard, and it is a stronger one: the frame
+     * carries exactly the fields js8_text.c renders, so text -> frame -> text
+     * is an identity for everything with a JS8 form. The one documented
+     * exception is a CQ suffix ("CQ POTA OZ1LAV" -> "CQ OZ1LAV"), which JS8's
+     * Heartbeat has no field for - the same class of loss FT8's guard already
+     * permits for tokens the 77-bit packer drops. */
+    if (ftx_protocol_is_js8(out_req->protocol)) {
+        uint8_t frame[JS8_FRAME_BYTES];
+        uint8_t itype = 0;
+        if (!js8_text_to_frame(message_text, frame, &itype)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' has no JS8 form", message_text);
+            ESP_LOGW(TAG, "JS8 encode refused: '%s'", message_text);
+            return false;
+        }
+        char seen[JS8_TEXT_MAX] = "";
+        if (!js8_frame_to_text(frame, seen, sizeof(seen))) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would not survive transmission", message_text);
+            ESP_LOGW(TAG, "JS8 round-trip guard: '%s' packed but will not render", message_text);
+            return false;
+        }
+        if (strcmp(message_text, seen) != 0) {
+            qmx_settings_t s;
+            settings_load_all(&s);
+            if (!ft8_msg_roundtrip_ok(message_text, seen, s.my_callsign)) {
+                if (out_err) snprintf(out_err, out_err_len,
+                                      "'%s' would go out as '%s' - not transmitted",
+                                      message_text, seen);
+                ESP_LOGW(TAG, "JS8 round-trip guard REFUSED: '%s' -> '%s'",
+                         message_text, seen);
+                return false;
+            }
+        }
+        js8_encode(frame, itype, out_req->protocol, out_req->tones);
+        ESP_LOGI(TAG, "built JS8 text: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
+        return true;
     }
 
     ftx_message_t msg;
@@ -705,13 +873,7 @@ bool ft8_tx_build_request_text(const char *message_text,
         }
     }
 
-    out_req->kind          = FT8_TX_KIND_CQ;
-    out_req->audio_freq_hz = audio_freq_hz;
-    out_req->use_parity    = false;
-    out_req->want_even_slot = false;
-    out_req->protocol      = cur_proto();
     encode_tones(msg.payload, out_req->tones, out_req->protocol);
-    snprintf(out_req->display_text, sizeof(out_req->display_text), "%s", message_text);
 
     ESP_LOGI(TAG, "built text CQ: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
     return true;
@@ -903,7 +1065,7 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
     // consecutive slots, then silent for two, repeating) - this is what fixed
     // that. For FT8 (period exactly 15000 ms) the result is numerically
     // identical to the old formula, so FT8 behaviour is unchanged.
-    int period_ms = (s_armed.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(s_armed.protocol);
     bool is_even = ((slot_start_ms / period_ms) % 2) == 0;
     if (s_state == FT8_TX_ARMED &&
         (!s_armed.use_parity || is_even == s_armed.want_even_slot)) {
@@ -914,8 +1076,27 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
     unlock();
 
     if (fire) {
-        ESP_LOGI(TAG, "slot @%lldms: armed request '%s' matches - going ACTIVE",
-                 (long long)slot_start_ms, out->display_text);
+        /* ⭐ HOW LATE ARE WE, EXACTLY. Randy N4OPI, 2026-10-04: two stations
+         * emailed him that his transmissions were 2 and 2.5 s late, which he
+         * had never had in ten years on a PC. Part of that is the late-fire
+         * rescue doing its job, but nobody had measured the BASELINE - what a
+         * plain CQ, with nothing to wait for, costs between the boundary and
+         * the first symbol.
+         *
+         * ⛔ Measure it HERE, from the same clock that defines slot_start_ms.
+         * The first attempt derived it by cross-referencing the decode task's
+         * "slot N UTC x" line against this one, and that is wrong: the decode
+         * runs a slot BEHIND the capture, so those two anchors are ~15 s apart
+         * and the subtraction silently produced a plausible number. One
+         * gettimeofday() against the boundary we were handed cannot drift that
+         * way. */
+        struct timeval tvn;
+        gettimeofday(&tvn, NULL);
+        int64_t now_ms = (int64_t)tvn.tv_sec * 1000 + tvn.tv_usec / 1000;
+        ESP_LOGI(TAG, "slot @%lldms: armed request '%s' matches - going ACTIVE "
+                      "(+%lld ms into the slot)",
+                 (long long)slot_start_ms, out->display_text,
+                 (long long)(now_ms - slot_start_ms));
     }
     return fire;
 }
@@ -925,7 +1106,7 @@ bool ft8_tx_slot_would_run(int64_t slot_start_ms)
     // Same parity/state test as ft8_tx_should_run_this_slot(), minus the
     // ARMED -> ACTIVE transition - a pure query for the hold-for-decode gate.
     lock();
-    int period_ms = (s_armed.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    int period_ms = ftx_protocol_slot_ms(s_armed.protocol);
     bool is_even = ((slot_start_ms / period_ms) % 2) == 0;
     bool would = (s_state == FT8_TX_ARMED &&
                   (!s_armed.use_parity || is_even == s_armed.want_even_slot));
@@ -1052,8 +1233,29 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     // re-read from the live ft8_op_mode_get() mid-burst - see ft8_tx.h).
     const bool    is_ft4         = (req->protocol == FTX_PROTOCOL_FT4);
     const int     nn             = is_ft4 ? FT4_NN : FT8_NN;
-    const int64_t symbol_period_us = is_ft4 ? FT4_SYMBOL_PERIOD_US : FT8_SYMBOL_PERIOD_US;
-    const float   tone_spacing_hz  = is_ft4 ? FT4_TONE_SPACING_HZ : FT8_TONE_SPACING_HZ;
+    /* ⛔ ASKED, NOT TERNARIED. These two lines used to read
+     *   is_ft4 ? FT4_... : FT8_...
+     * which is the exact shape constants.h warns about: a two-way ternary
+     * cannot express a six-way fact, and it put every JS8 submode on FT8's
+     * 160 ms / 6.25 Hz. Turbo would have keyed 79 symbols at a third of its
+     * rate and nobody would ever have decoded it. */
+    const int64_t symbol_period_us = ftx_protocol_symbol_period_us(req->protocol);
+    const float   tone_spacing_hz  = ftx_protocol_tone_spacing_hz(req->protocol);
+    const int     slot_ms          = ftx_protocol_slot_ms(req->protocol);
+
+    /* ⛔ JS8 would reach here with FT8's timing - which is CORRECT for Normal,
+     * 1920 samples per symbol and 79 symbols - but with FT8's TONES, because
+     * ft8_encode() above has no JS8 branch. The frame would be unintelligible
+     * and would look like a JS8 transmission on the band.
+     *
+     * ftx_protocol_is_implemented() is what keeps that from happening, and the
+     * check is here as well as at the mode selector: this is the last point
+     * before the radio is keyed. */
+    if (!ftx_protocol_is_implemented(req->protocol)) {
+        ESP_LOGE(TAG, "refusing to transmit %s - not implemented in this build",
+                 ftx_protocol_name(req->protocol));
+        return;
+    }
 
     // Final pre-flight: a cheap *cached-string* read (cat_get_mode_str()
     // just returns the digit from the last MD; poll response - no CAT round
@@ -1067,7 +1269,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         ESP_LOGW(TAG, "TX aborted before key-up: mode drifted to '%s' (need DiGi)", mode);
     } else {
         ESP_LOGI(TAG, "TX burst starting (%s): '%s' base=%d Hz%s",
-                 is_ft4 ? "FT4" : "FT8", req->display_text, req->audio_freq_hz,
+                 ftx_protocol_name(req->protocol), req->display_text, req->audio_freq_hz,
                  sim ? (is_ft4 ? "  [FT4 - simulation mode]"
                                : "  [SIMULATION - radio not keyed]")
                      : (FT8_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]"));
@@ -1078,7 +1280,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // vTaskSuspend, which risks deadlocking on the driver's internal
         // mutex if the poll task is suspended mid-transfer. Not needed in
         // sim mode - nothing here touches the CDC link.
-        if (!sim) cat_poll_set_paused(true);
+        if (!sim) cat_poll_hold(CAT_HOLD_TX_BURST);
 
         int64_t t0 = esp_timer_get_time();
         // DT-follow-partner: shift the burst to land on the partner's beat when
@@ -1101,12 +1303,28 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             }
         }
         sleep_until(t0, 0);       // wait for the (boundary+follow) start; no-op when follow==0
+        /* ⭐ THE SECOND HALF OF THE SAME QUESTION (see "going ACTIVE" above).
+         * That line says how late the slot loop REACHED the TX check; this one
+         * says how late the radio is actually keyed. The difference between the
+         * two is everything this function does in between - the poll hold, the
+         * DT-follow shift and sleep_until. Without both points, a baseline of
+         * ~0.9 s cannot be attributed to either, and attributing it to the
+         * wrong one is how the first estimate went wrong. */
+        {
+            struct timeval tvk;
+            gettimeofday(&tvk, NULL);
+            int64_t key_ms = (int64_t)tvk.tv_sec * 1000 + tvk.tv_usec / 1000;
+            int     per_ms = slot_ms;
+            ESP_LOGI(TAG, "key down at +%lld ms into the slot", 
+                     (long long)(key_ms % per_ms));
+        }
         tx_cmd(t0, sim, "TX;");   // key down - radio's own envelope shaping
 
         // Live power/SWR: fire ONE non-blocking PC;SW; once the PA has settled
         // (symbol 6 ≈ 1 s in), then read the async response a few symbols later
         // (symbol 14). Both steps fit inside the 160 ms inter-symbol slack (the
-        // send is a ~ms CDC write bounded to 50 ms; the read just parses
+        // send is a CDC write measured at ~250 us (M2, 2026-10-14 - the "50 ms"
+        // this line used to quote is the write's TIMEOUT, not its cost); the read just parses
         // buffers), so symbol timing is undisturbed - unlike cat_query_power_swr()'s
         // ~600 ms blocking wait, which is why that one only runs at burst end.
         // Result populates s_last_* so the "TRANSMITTING:" line shows the CURRENT
@@ -1152,12 +1370,23 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             sleep_until(t0, (int64_t)i * symbol_period_us);
             tx_cmd(t0, sim, "TA%.2f;", (double)freq);
             // Live power/SWR mid-burst query is FT8-only timing (tuned to FT8's
-            // 160 ms symbol slack at symbols 6/14); skipped for FT4 (forced sim
-            // anyway - !sim is always false here when is_ft4).
+            // 160 ms symbol slack at symbols 6/14) and is skipped for FT4 on
+            // those grounds alone - see the note on the branch below. This
+            // comment used to add "forced sim anyway - !sim is always false here
+            // when is_ft4", contradicting the correction eight lines below it.
 #if FT8_TX_SEND_LIVE
-            // FT8 only. FT4's symbol period is 48 ms and a CDC write is bounded
-            // at 50 ms, so a mid-burst query does not fit in the slack and would
-            // shift symbol timing. FT4 relies on the post-burst check below,
+            // FT8 only. FT4's symbol period is 48 ms, and a mid-burst query
+            // does not fit in the slack, so it would shift symbol timing.
+            // ⚠ THE REASON THIS COMMENT USED TO GIVE WAS WRONG: it said "a CDC
+            // write is bounded at 50 ms", which is the TIMEOUT argument passed to
+            // cdc_acm_host_data_tx_blocking(), not what a write costs. M2
+            // measured 1800 writes on 2026-10-14: p50 250 us, p99 1.9 ms, max
+            // 3.6 ms (cat_ta_latency_probe, docs/js8-feasibility.md fact 1). The
+            // WRITE was never the problem here. What does not fit is the ROUND
+            // TRIP - send PC;SW;, wait for the radio to answer - and that cost
+            // has NOT been measured. So the behaviour stands on an unmeasured
+            // assumption now rather than a mismeasured one; do not "fix" it by
+            // enabling FT4 sampling until the round trip is timed. FT4 relies on the post-burst check below,
             // which still latches the transmitter off for every LATER burst -
             // the fault is caught one burst later, not never.
             // (Comments here and in ft8_test.c used to claim FT4 TX was
@@ -1232,8 +1461,11 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                  *
                  * Same rule as never writing 599 into an ADIF record: a number
                  * nobody measured must not be presented as a measurement. FT4
-                 * genuinely cannot be sampled mid-burst (48 ms symbols, a CDC
-                 * write is bounded at 50 ms), so the honest answer is no
+                 * is not sampled mid-burst (48 ms symbols; the PC;SW; ROUND TRIP
+                 * does not fit - ⚠ this used to cite a "50 ms CDC write bound",
+                 * which is a timeout, not a cost, and M2 has since measured the
+                 * write at 250 us; see the symbol loop above), so the honest
+                 * answer is no
                  * reading at all - see #300 for why the post-burst query is not
                  * a substitute either. */
                 // Simulated burst (settings' sim mode): no real PA to query,
@@ -1352,7 +1584,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         }
 #endif
 
-        if (!sim) cat_poll_set_paused(false);
+        if (!sim) cat_poll_release(CAT_HOLD_TX_BURST);
 
         ESP_LOGI(TAG, "TX burst %s%s: '%s' (%lld ms on-air)",
                  sim ? "[SIM] " : "", aborted ? "ABORTED" : "complete", req->display_text,

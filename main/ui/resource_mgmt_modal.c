@@ -5,6 +5,12 @@
 #include "ui.h"
 #include "settings.h"
 #include "audio/rx_audio.h"
+#include "audio/line_in.h"      // line_in_running/_set_gain_db/_peak_dbfs
+#include "esp_attr.h"           // RTC_NOINIT_ATTR - the reopen one-shot
+#include "esp_system.h"         // esp_restart
+#include "display/display.h"   // go dark before the restart
+#include "util/psram_task.h"    // the restart delay must leave the LVGL task
+#include "storage/settings.h"   // rx_source_t and the line-in gain rules
 #include "lvgl.h"
 #include "esp_log.h"
 #include <string.h>
@@ -281,6 +287,20 @@ static void audio_cb(lv_event_t *e)
     bool on = lv_obj_has_state((lv_obj_t *)lv_event_get_target(e), LV_STATE_CHECKED);
     rx_audio_set_enabled(on);
     ESP_LOGI(TAG, "RX audio %s from resource panel", on ? "enabled" : "disabled");
+    /* ⛔ SAY IT WHEN THE SWITCH CANNOT DO ANYTHING YET. The codec is opened at
+     * boot or not at all (rx_audio.h), so switching audio on mid-session is
+     * silently inert - Samuel W7STF spent fifteen minutes and a reboot finding
+     * that out. The firmware knew the whole time and only told the log. */
+    /* ⛔ A DIALOG, NOT A TOAST. The operator has to DO something about this -
+     * restart the Tab5 - and a toast leaves after 12 s whether it was read or
+     * not. Samuel W7STF lost fifteen minutes to exactly that. */
+    if (on && rx_audio_restart_pending())
+        ui_notice("Restart needed",
+                  "RX audio is switched on, but it will not play until the Tab5 "
+                  "is restarted. The audio hardware can only be started at boot, "
+                  "before USB and WiFi claim the memory it needs.\n\n"
+                  "Your QMX will need a power cycle after that restart, as it "
+                  "does after any Tab5 restart.");
     refresh_gating();
 }
 
@@ -513,10 +533,394 @@ static const row_def_t ROW_DEFS[ROW_COUNT] = {
     { ROW_PSKTX,   "PSK Reporter - report my decodes",    psktx_cb },
 };
 
-static void close_btn_cb(lv_event_t *e)
+/* ===================== AUDIO INPUT SOURCE =============================
+ *
+ * Placed at the TOP of this window, above everything else, because it decides
+ * whether the rest of the window applies at all: on the 3.5 mm jack there is
+ * no RX audio output and no CAT, so half the controls below are moot.
+ *
+ * (-) THE SELECTOR DOES NOT SWITCH ANYTHING LIVE. The source is latched at
+ * boot - the USB host and the I2S channel layout are both one-shot in
+ * app_main(), and tearing the USB host down mid-session is the operation that
+ * wedges the QMX (#74). So the dropdown records a choice and the note under
+ * it says a restart is needed. A control that looked like it had switched the
+ * input and had not would be worse than no control.
+ *
+ * (!) TWO ENTRIES ARE SHOWN BUT CANNOT BE CHOSEN. Generic IQ and the internal
+ * microphones are declared in rx_source_t and have no code behind them. They
+ * are listed rather than hidden so the window says what the hardware can and
+ * cannot do; picking one snaps back and says why. Hiding them would make the
+ * same question get asked again.
+ */
+static lv_obj_t *s_dd_source     = NULL;
+static lv_obj_t *s_lbl_src_note  = NULL;
+static lv_obj_t *s_sld_lin_gain  = NULL;
+static lv_obj_t *s_lbl_lin_gain  = NULL;
+static lv_obj_t *s_bar_lin_level = NULL;
+static lv_obj_t *s_lbl_lin_level = NULL;
+static lv_timer_t *s_level_timer = NULL;
+
+/* Dropdown order IS rx_source_t's numbering, so no mapping table can drift
+ * out of step with the enum. */
+static const char *SRC_OPTIONS =
+    "QMX / QMX+  (USB)\n"
+    "Generic IQ  (not yet)\n"
+    "Line in  -  3.5 mm jack\n"
+    "Internal mics  (not yet)";
+
+static void src_note_set(const char *txt, uint32_t colour)
+{
+    if (!s_lbl_src_note) return;
+    lv_label_set_text(s_lbl_src_note, txt);
+    lv_obj_set_style_text_color(s_lbl_src_note, lv_color_hex(colour), 0);
+}
+
+/* The OPEN option list is a separate object with its own style, so setting a
+ * font on the dropdown alone leaves the list at the LVGL default - which is
+ * what made this unreadable. Same treatment the drawer's dropdowns get
+ * (ui.c's drawer_dropdown_cmap_open_cb): montserrat_28, and the height cap
+ * lifted so four options show at once instead of scrolling. */
+static void source_list_open_cb(lv_event_t *e)
+{
+    lv_obj_t *list = lv_dropdown_get_list(lv_event_get_target(e));
+    if (!list) return;
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
+    lv_obj_set_height(list, LV_SIZE_CONTENT);
+}
+
+/* ⛔ THE DROPDOWN STORES NOTHING. It holds a PENDING choice that Save
+ * commits and Cancel throws away.
+ *
+ * That is the whole reason this window gained Save/Cancel in place of Close:
+ * changing the source has to be followed by a restart, so an immediate store
+ * left the board in a state where the window said one thing and the hardware
+ * was doing another until the operator happened to reboot. Save now does the
+ * restart itself.
+ *
+ * ⚠ SAVE AND CANCEL GOVERN THE SOURCE ONLY. Every other control in this
+ * window - the feed check boxes, the volume and AGC sliders, the line-in
+ * gain - is live and already stored the moment it is touched, exactly as
+ * before. Making all of them transactional would be a much larger change to
+ * controls whose whole point is that you hear the effect while you drag
+ * them. The note by the buttons says so, rather than leaving it to be
+ * discovered by pressing Cancel and finding the volume did not go back. */
+static uint8_t s_src_pending;
+
+static void source_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t want = (uint8_t)lv_dropdown_get_selected(dd);
+
+    if (!rx_source_implemented(want)) {
+        /* Put the control back rather than letting Save commit a source that
+         * would boot into nothing. */
+        lv_dropdown_set_selected(dd, s_src_pending);
+        src_note_set(LV_SYMBOL_WARNING " That source is not implemented yet - "
+                     "it is listed so you can see the hardware supports it.",
+                     0xFFA040);
+        return;
+    }
+
+    s_src_pending = want;
+    if (want != settings_get_rx_source()) {
+        src_note_set(LV_SYMBOL_WARNING " Press Save to change the input. The "
+                     "Tab5 restarts, because the source is chosen at boot.",
+                     0xFFA040);
+    } else {
+        src_note_set("Chosen once at boot. The jack and the radio cannot both "
+                     "be live - the USB host and the audio input need the "
+                     "same memory.", UI_COLOR_TEXT_SECONDARY);
+    }
+}
+
+static void lin_gain_cb(lv_event_t *e)
+{
+    int v = lv_slider_get_value(lv_event_get_target(e));
+    uint8_t db = line_in_gain_db_normalize((uint8_t)v);
+    settings_set_line_in_gain_db(db);
+    /* Live, unlike the source: one I2C register write on a running codec.
+     * No-op when the jack is not the running source. */
+    if (line_in_running()) line_in_set_gain_db(db);
+    if (s_lbl_lin_gain) lv_label_set_text_fmt(s_lbl_lin_gain, "%u dB", (unsigned)db);
+}
+
+/* The level meter. THIS is how the gain actually gets set - the right value
+ * depends entirely on what the operator has plugged in, and no default can
+ * know that. Peak over the last ~100 ms, straight from line_in.c.
+ *
+ * Only runs while the window is open: a 10 Hz timer walking LVGL objects
+ * behind a hidden modal is exactly the kind of idle cost this panel exists
+ * to control. */
+static void level_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_bar_lin_level || !line_in_running()) return;
+    if (!s_modal || lv_obj_has_flag(s_modal, LV_OBJ_FLAG_HIDDEN)) return;
+
+    float db = line_in_peak_dbfs();
+    int shown = (int)(db < -60.0f ? -60.0f : db);
+    lv_bar_set_value(s_bar_lin_level, shown, LV_ANIM_OFF);
+
+    /* ⭐ CLIP BEATS THE NUMBER. Past full scale the samples stop growing, so
+     * the peak reading parks at 0 dBFS and looks like a strong clean signal
+     * while the waveform is being flattened. Say CLIP instead of the figure,
+     * because the figure is the thing that misleads. */
+    const bool clipping = line_in_clip_count() > 0;
+    if (clipping) lv_label_set_text(s_lbl_lin_level, "CLIP - turn it down");
+    else          lv_label_set_text_fmt(s_lbl_lin_level, "%d dBFS", shown);
+
+    /* Red while clipping or within 3 dB of it, amber with little headroom
+     * left, green otherwise - the same three-band rule the mic test build
+     * used, because that is the one Tony has already read off a screen. */
+    uint32_t col = (clipping || db > -3.0f) ? 0xE05050
+                 : (db > -12.0f            ? 0xE0C040 : 0x40C040);
+    lv_obj_set_style_bg_color(s_bar_lin_level, lv_color_hex(col), LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(s_lbl_lin_level,
+        lv_color_hex(clipping ? 0xE05050 : UI_COLOR_TEXT), 0);
+}
+
+/* Builds the source block at the top of the scrolling strip and advances y. */
+static void build_source_block(int *py)
+{
+    const int ROW_H = 46;
+    const int SLD_X = 210, SLD_W = 700, SLD_VAL_X = 930;
+    int y = *py;
+
+    lv_obj_t *cap = lv_label_create(s_scroll);
+    lv_label_set_text(cap, "Audio source");
+    lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(cap, &lv_font_montserrat_24, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, y + 12);
+
+    s_dd_source = lv_dropdown_create(s_scroll);
+    lv_dropdown_set_options_static(s_dd_source, SRC_OPTIONS);
+    /* 50 px tall and montserrat_28 - the same shape every dropdown in the
+     * drawer uses (ui.c's PORT.A and sleep pickers). The first version set
+     * no font at all and inherited LVGL's default, which the operator could
+     * not read on a 1280x720 panel at arm's length. */
+    lv_obj_set_size(s_dd_source, SLD_W, 50);
+    lv_obj_align(s_dd_source, LV_ALIGN_TOP_LEFT, SLD_X, y);
+    lv_obj_set_style_text_font(s_dd_source, &lv_font_montserrat_28, 0);
+    s_src_pending = settings_get_rx_source();
+    lv_dropdown_set_selected(s_dd_source, s_src_pending);
+    lv_obj_add_event_cb(s_dd_source, source_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_dd_source, source_list_open_cb, LV_EVENT_CLICKED, NULL);
+    y += 50 + 10;
+
+    s_lbl_src_note = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(s_lbl_src_note, &lv_font_montserrat_20, 0);
+    lv_label_set_long_mode(s_lbl_src_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_src_note, SLD_X + SLD_W);
+    lv_obj_align(s_lbl_src_note, LV_ALIGN_TOP_LEFT, 0, y);
+    src_note_set("Chosen once at boot. The jack and the radio cannot both be "
+                 "live - the USB host and the audio input need the same memory.",
+                 UI_COLOR_TEXT_SECONDARY);
+    y += ROW_H;
+
+    /* ⭐ WHICH CONTACTS. Tony A (tony1tf), GitHub #17, with the plug in his
+     * hand: "a 4way 3.5mm plug with Mic on the nearest ring". The ring
+     * nearest the body is ring 2, so signal is ring 2 and screen is the
+     * sleeve. M5Stack publish no Tab5 schematic and their own Module Audio
+     * page states the CTIA/OMTP convention in a way that contradicts the
+     * usual definition, so the standard's NAME is deliberately not printed -
+     * the physical contact is what somebody wiring a lead needs.
+     *
+     * The 3-pole warning follows from the same fact and is the failure
+     * people will actually hit: an ordinary TRS plug puts its sleeve across
+     * the socket's ring 2 and sleeve, so the input is shorted to ground and
+     * the meter simply never moves. Without this line that reads as a dead
+     * feature. */
+    lv_obj_t *wire = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(wire, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(wire, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_long_mode(wire, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(wire, SLD_X + SLD_W);
+    lv_obj_align(wire, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_label_set_text(wire,
+        "Jack wiring: 4-pole (TRRS) plug only. Signal on the ring nearest the "
+        "plug body, screen on the sleeve. A 3-pole plug shorts the input to "
+        "ground and reads nothing.");
+    y += ROW_H + 10;
+
+    /* Gain and meter only exist for the jack. Built always (so the layout
+     * does not jump when the source changes) but disabled unless the jack is
+     * the RUNNING source - the stored setting is not what the codec is
+     * using until the restart has happened. */
+    const bool jack_live = line_in_running();
+    const uint8_t g0 = settings_get_line_in_gain_db();
+
+    lv_obj_t *gcap = lv_label_create(s_scroll);
+    lv_label_set_text(gcap, "Line-in gain");
+    lv_obj_set_style_text_color(gcap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(gcap, &lv_font_montserrat_24, 0);
+    lv_obj_align(gcap, LV_ALIGN_TOP_LEFT, 0, y);
+
+    s_sld_lin_gain = lv_slider_create(s_scroll);
+    lv_obj_set_size(s_sld_lin_gain, SLD_W, 14);
+    lv_obj_align(s_sld_lin_gain, LV_ALIGN_TOP_LEFT, SLD_X, y + 10);
+    lv_slider_set_range(s_sld_lin_gain, 0, LINE_IN_GAIN_DB_MAX);
+    lv_slider_set_value(s_sld_lin_gain, g0, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_sld_lin_gain, lin_gain_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_lbl_lin_gain = lv_label_create(s_scroll);
+    lv_label_set_text_fmt(s_lbl_lin_gain, "%u dB", (unsigned)g0);
+    lv_obj_set_style_text_color(s_lbl_lin_gain, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_lbl_lin_gain, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lbl_lin_gain, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
+    y += ROW_H;
+
+    lv_obj_t *lcap = lv_label_create(s_scroll);
+    lv_label_set_text(lcap, "Input level");
+    lv_obj_set_style_text_color(lcap, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(lcap, &lv_font_montserrat_24, 0);
+    lv_obj_align(lcap, LV_ALIGN_TOP_LEFT, 0, y);
+
+    s_bar_lin_level = lv_bar_create(s_scroll);
+    lv_obj_set_size(s_bar_lin_level, SLD_W, 14);
+    lv_obj_align(s_bar_lin_level, LV_ALIGN_TOP_LEFT, SLD_X, y + 10);
+    lv_bar_set_range(s_bar_lin_level, -60, 0);
+    lv_bar_set_value(s_bar_lin_level, -60, LV_ANIM_OFF);
+
+    s_lbl_lin_level = lv_label_create(s_scroll);
+    lv_label_set_text(s_lbl_lin_level, jack_live ? "--" : "jack not active");
+    lv_obj_set_style_text_color(s_lbl_lin_level, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_lbl_lin_level, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lbl_lin_level, LV_ALIGN_TOP_LEFT, SLD_VAL_X, y + 4);
+    y += ROW_H;
+
+    /* The meter is not decoration - it is the control. No default gain can
+     * know what the operator has plugged in, so say what to aim for rather
+     * than leaving a bar graph to be interpreted. */
+    lv_obj_t *hint = lv_label_create(s_scroll);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(hint, SLD_X + SLD_W);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_label_set_text(hint,
+        "Live peak, updated 10x a second. Raise the gain until speech or "
+        "noise peaks sit around -12 dB (amber), and back off if it says CLIP.");
+    y += ROW_H;
+
+    if (!jack_live) {
+        lv_obj_add_state(s_sld_lin_gain, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(gcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_color(lcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    } else if (!s_level_timer) {
+        /* 100 ms matches line_in.c's publish interval - polling faster would
+         * redraw the same number. */
+        s_level_timer = lv_timer_create(level_timer_cb, 100, NULL);
+    }
+
+    /* A separator so the source block reads as its own thing rather than as
+     * the first two feed rows. */
+    lv_obj_t *sep = lv_obj_create(s_scroll);
+    lv_obj_set_size(sep, PANEL_W - 2 * PANEL_PAD - 2 * 2 - SCROLL_PAD_R, 2);
+    lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(sep, 0, 0);
+    lv_obj_clear_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
+    y += 20;
+
+    *py = y;
+}
+
+/* ⛔ ONE-SHOT: REOPEN THIS WINDOW AFTER THE RESTART.
+ *
+ * Changing to the jack means a restart, and the first thing the operator
+ * needs afterwards is the level meter - which lives in this window. Making
+ * them find it again, on a board that has just rebooted and lost its radio,
+ * is the kind of small friction that makes a feature feel broken.
+ *
+ * RTC_NOINIT rather than NVS, the same pattern as factory_reset.c and
+ * mic_probe.c: RTC RAM survives esp_restart() but NOT a power cycle, which
+ * is exactly the lifetime wanted. An NVS flag would reopen this window days
+ * later after an unrelated power-on, and would cost a flash write.
+ *
+ * ⛔ The magic word is what makes a request real - a cold boot leaves
+ * garbage here - and it is CONSUMED BEFORE the window opens, so a crash in
+ * the open path cannot turn this into a reboot loop. */
+RTC_NOINIT_ATTR static uint32_t s_reopen_magic;
+#define REOPEN_MAGIC 0x7210A5D1u
+
+bool resource_mgmt_modal_reopen_pending(void)
+{
+    if (s_reopen_magic != REOPEN_MAGIC) return false;
+    s_reopen_magic = 0;            /* consume FIRST - see above */
+    return true;
+}
+
+/* Restart, having already stored everything. Mirrors ota_modal.c: go dark
+ * first, or the panel stays lit from this run and shows an empty screen for
+ * the 2-3 s before display_init() turns it off. */
+static void save_restart_task(void *arg)
+{
+    (void)arg;
+    /* Just long enough for LVGL to paint the window closing, so the
+     * last frame is not a half-dismissed dialog. Was 1200 ms when a
+     * toast had to be read; there is no toast now. */
+    vTaskDelay(pdMS_TO_TICKS(250));
+    display_set_brightness(0);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    esp_restart();
+}
+
+static void cancel_btn_cb(lv_event_t *e)
 {
     (void)e;
+    /* Put the dropdown back to what the board is actually set to. Nothing
+     * else is reverted, because nothing else was pending - see source_cb. */
+    s_src_pending = settings_get_rx_source();
+    if (s_dd_source) lv_dropdown_set_selected(s_dd_source, s_src_pending);
+    src_note_set("Chosen once at boot. The jack and the radio cannot both be "
+                 "live - the USB host and the audio input need the same "
+                 "memory.", UI_COLOR_TEXT_SECONDARY);
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void save_btn_cb(lv_event_t *e)
+{
+    (void)e;
+
+    /* No source change: Save is just Close. Rebooting on every Save would
+     * make the window unusable for the volume and AGC controls that share
+     * it. */
+    if (s_src_pending == settings_get_rx_source()) {
+        if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    const bool to_real = rx_source_is_real(s_src_pending);
+    settings_set_rx_source(s_src_pending);
+    /* ⛔ FLUSH BEFORE RESTARTING. The dirty-bit writer is debounced, so a
+     * restart a few hundred ms later would come back on the OLD source and
+     * read as "Save did nothing". */
+    settings_flush();
+
+    /* Only when moving TO a source whose level has to be set - his call,
+     * 2026-10-10: going back to the QMX just restarts. There is nothing to
+     * set up on the radio, so reopening this window there would be one more
+     * thing to dismiss. */
+    if (to_real) s_reopen_magic = REOPEN_MAGIC;
+
+    ESP_LOGW(TAG, "SAVE: rx_source -> %s, restarting now (reopen=%d)",
+             rx_source_str(s_src_pending), (int)to_real);
+
+    /* ⛔ NO TOAST HERE, DELIBERATELY (his call, 2026-10-10 - the first
+     * version had one). The operator pressed Save on a dialog that says it
+     * restarts, so the reboot is already announced by the button they just
+     * used; a toast that appears for one second and then vanishes into a
+     * reboot is unreadable and says nothing new. The usual "announce a
+     * reboot so it is not mistaken for a crash" rule is satisfied by the
+     * press itself. The log line above is the durable record. */
+
+    if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+
+    /* Off the LVGL task: this sleeps, and sleeping on the LVGL task freezes
+     * the toast it was posted to show. */
+    psram_task_create(save_restart_task, "src_restart", 3072, NULL, 3,
+                      tskNO_AFFINITY);
 }
 
 static void modal_build(void)
@@ -589,7 +993,9 @@ static void modal_build(void)
     // 2*2 border) plus a 16 px gap above it. Everything in between scrolls.
     s_scroll = lv_obj_create(s_panel);
     lv_obj_set_pos(s_scroll, 0, 100);
-    lv_obj_set_size(s_scroll, LV_PCT(100), 648 - 100 - 64 - 16);
+    /* 64 button + 16 gap, plus 28 for the Save/Cancel note line above
+     * them - without it the note draws over the last scrolled row. */
+    lv_obj_set_size(s_scroll, LV_PCT(100), 648 - 100 - 64 - 16 - 28);
     lv_obj_set_style_bg_opa(s_scroll, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_scroll, 0, 0);
     lv_obj_set_style_pad_all(s_scroll, 0, 0);
@@ -601,6 +1007,9 @@ static void modal_build(void)
 
     int y = 16;   // relative to s_scroll now, not s_panel
     const int ROW_H = 46;
+
+    /* First, because it decides whether anything below it applies. */
+    build_source_block(&y);
     for (int i = 0; i < ROW_COUNT; i++) {
         const row_def_t *d = &ROW_DEFS[i];
 
@@ -831,14 +1240,38 @@ static void modal_build(void)
         }
     }
 
+    /* Save and Cancel in place of the old single Close (his call,
+     * 2026-10-10). Green left, red right. They govern the AUDIO SOURCE; the
+     * line under them says so, because every other control here is live and
+     * pressing Cancel will not put the volume back. */
+    lv_obj_t *btn_note = lv_label_create(s_panel);
+    lv_obj_set_style_text_font(btn_note, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(btn_note, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(btn_note,
+        "Save / Cancel apply to the audio source. Everything else here takes "
+        "effect as you change it.");
+    lv_obj_align(btn_note, LV_ALIGN_BOTTOM_MID, 0, -72);
+
+    lv_obj_t *save_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(save_btn, 200, 64);
+    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_MID, -110, 0);
+    lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x2E8B40), 0);
+    lv_obj_set_style_radius(save_btn, 8, 0);
+    lv_obj_add_event_cb(save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(save_btn);
+    lv_label_set_text(save_lbl, "Save");
+    lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(save_lbl);
+
     lv_obj_t *close_btn = lv_btn_create(s_panel);
     lv_obj_set_size(close_btn, 200, 64);
-    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 110, 0);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0xA03030), 0);
     lv_obj_set_style_radius(close_btn, 8, 0);
-    lv_obj_add_event_cb(close_btn, close_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(close_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *close_lbl = lv_label_create(close_btn);
-    lv_label_set_text(close_lbl, "Close");
+    lv_label_set_text(close_lbl, "Cancel");
     lv_obj_set_style_text_color(close_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(close_lbl);

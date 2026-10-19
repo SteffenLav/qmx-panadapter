@@ -13,7 +13,13 @@ and a same-day clean-room rewrite that fixed it. Recording both, not just
 the fixed end state, because the mistake and how it was caught are worth
 keeping.
 
-**What happened.** This repo is MIT-licensed. The initial WSPR protocol/FEC
+> ⚠ **2026-10-09: the project relicensed to GPL-3**, so the constraint this
+> page is about no longer exists. Kept unchanged below as the record of what
+> happened and why, and because the clean-room rewrites it describes are
+> still the code that ships. Read "is MIT-licensed" below as "was MIT-licensed
+> at the time".
+
+**What happened.** This repo was MIT-licensed. The initial WSPR protocol/FEC
 implementation was built by reading (and in places directly porting)
 several WSJT-X-family GitHub projects: WSJT-X's own `lib/wsprd/fano.c` and
 `wsprd_utils.c`, plus `robertostling/wspr-tools` and `mike-hb/wsprcan` for

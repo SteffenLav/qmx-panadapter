@@ -9,7 +9,11 @@
  * Fano's 1963 sequential decoding algorithm - public academic material,
  * independent of any particular codebase. An earlier version of this file
  * ported WSJT-X's own lib/wsprd/fano.c (GPL v3) "near-verbatim", which was
- * a licensing mistake in this MIT-licensed project - caught and corrected;
+ * a licensing mistake while this project was MIT - caught and corrected;
+ * ⚠ the project relicensed to GPL-3 on 2026-10-09, so that constraint no
+ * longer applies. This rewrite STAYS: it is clean, it is tested, and
+ * re-importing upstream to undo it would buy nothing. The history is kept
+ * because the reasoning, not the licence, is what is worth reading;
  * see docs/wspr-phase1-status.md for the full account. The "Layland-
  * Lushbaugh" K=32 generator polynomials are WSPR's actual FEC (a protocol
  * fact, not anyone's expression) - Plain Viterbi is infeasible at K=32

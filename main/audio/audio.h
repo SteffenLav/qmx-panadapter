@@ -29,6 +29,12 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms);
 /** @brief Stereo pairs currently buffered in the ring (latency indicator). */
 size_t audio_ring_backlog_pairs(void);
 
+/* Push interleaved int16 I/Q pairs into the sample ring from a NON-USB source.
+ * line_in.c uses this; the UAC path writes the ring directly. The two can
+ * never run together - see rx_source_t - so there is one producer either way,
+ * and everything downstream is unchanged. */
+void audio_push_pairs(const int16_t *iq, size_t pairs);
+
 /* #298: tell the audio layer the dial moved, so each sample can be attributed
  * to the frequency it was actually captured at. Called from ui_update_frequency
  * - every tune path already goes through there. */

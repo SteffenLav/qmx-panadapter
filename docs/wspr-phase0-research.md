@@ -8,7 +8,7 @@ constants instead of guessing them.
 ⚠ **Licensing note added after the fact:** several sources cited below
 (WSJT-X's `wsprd.c`/`fano.c`/`wsprd_utils.c`, wsprcan, robertostling/
 wspr-tools) are GPL v3-licensed; WsprryPi's license is unclear
-("NOASSERTION"). This project is MIT-licensed. Quoting/reading these
+("NOASSERTION"). This project is GPL-3 licensed. Quoting/reading these
 sources for the PROTOCOL FACTS they confirm (the sync vector, generator
 polynomials, bit widths — data, not copyrightable expression) is fine and
 is what this doc does. What's NOT fine, and what an early version of the
@@ -170,7 +170,7 @@ int fano(unsigned int *metric, unsigned int *cycles, unsigned int *maxnp,
 ⚠ **CORRECTION, added after Phase 1 was underway:** the two bullets below,
 as originally written, said to "port" the linked GPL v3 source files
 directly — that's exactly what happened, and it was a licensing mistake in
-this MIT-licensed project (this repo's WSPR code initially DID a
+this project while it was MIT-licensed (its WSPR code initially DID a
 near-verbatim port of `fano.c` and a byte-identical port of
 `wsprd_utils.c`, caught and rewritten clean-room afterward — see
 `docs/wspr-phase1-status.md`). Left here, struck through in spirit rather

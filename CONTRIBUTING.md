@@ -32,6 +32,6 @@ version, steps to reproduce, and a diagnostic log
 
 ## Building and modifying for yourself
 
-This project is [MIT-licensed](LICENSE) — you are free to build, flash, fork, and
+This project is [GPL-3 licensed](LICENSE) — you are free to build, flash, fork, and
 modify your own copy however you like. The policy above only concerns merging
 changes back into *this* repository; what you do with your own fork is up to you.

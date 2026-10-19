@@ -4,7 +4,7 @@
 
 It is not a contact mode. Nobody replies, there is no exchange, and nothing goes in your log. That is the point: it measures propagation instead of working people.
 
-Swipe → from the left edge to cycle **Panadapter -> FT8/FT4 -> WSPR** and back.
+Swipe → from the left edge to cycle **Panadapter -> FT8/FT4/JS8 -> WSPR** and back.
 
 ---
 
@@ -127,9 +127,15 @@ There is no separate "allow transmitting" setting. The **TX** button on the page
 
 Before Declared power can offer anything real, the current band needs calibrating. **Calibrate Power** sweeps the QMX's *Max. PA voltage* on a **dummy load** — not the antenna — and records the real RF output at each step with the radio's own `PC;` readback. The result is saved for that band and used from then on.
 
-*(v1.14.4)* The sweep **stops at your own Max. PA voltage**, and the window shows that figure before you start — so a 9 V QMX, or one you have deliberately limited, is never driven past the setting you chose. It also **stops early once the measured power stops rising**, which is what happens above your supply voltage: on an 8 V supply every step above ~8 V would otherwise re-measure the same watts for minutes of pointless key-down. Bruce N9JCV found both.
+**The sweep runs the full 1.0–12.0 V range** unless you tell it not to, and it puts your Max. PA voltage back when it finishes.
 
-Because the sweep can end early, a shorter results table is normal rather than a failure — the window says which of the two limits ended it.
+It does not stop at your Max. PA voltage, and it is worth knowing why. Declared power, the Output power slider and WSPR all write that same setting, so the figure in it is usually one this app put there rather than a limit you chose — one station swept a 600 mW ceiling because a WSPR session had left his radio at 6.0 V, and every reconnect re-applied it. Capping the sweep at it measured a fraction of the radio.
+
+**If your radio must never see a certain voltage, set "Never exceed PA voltage"** in the Output power section. That is a setting of your own that nothing else writes, so the sweep obeys it, and the window tells you the range it will actually cover before you start. Use it for a 9 V build, a radio with a known weakness in the finals, or any PA you do not want driven to 12 V. It is off by default.
+
+The sweep also **stops early once the measured power stops rising**, which is what happens above your supply voltage: on an 8 V supply every step above ~8 V would otherwise re-measure the same watts for minutes of pointless key-down. That is measured rather than assumed, so it works without the app knowing your radio. Bruce N9JCV found it. Note what it does and does not protect: it stops a radio that *cannot* reach a voltage, not one that can reach it but should not — that is what the limit above is for.
+
+Because the sweep can end early, a shorter results table is normal rather than a failure — the window says what ended it.
 
 You reach it two ways: the **"Calibrate this band"** button that appears in place of Declared power (or Output power, on other modes) whenever the current band has no data yet, or **"Recalibrate this band"** in the same place once it does — for redoing a band after a change to your antenna or feedline.
 
@@ -201,7 +207,7 @@ With a callsign and grid set and a transmit count other than **Receive only**, t
 A few things worth knowing before you leave it running:
 
 - **Your radio is keyed for real,** for about 110 seconds at a time. Make sure it is connected to an antenna or a dummy load, and that the power it is producing matches what you declared.
-- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops.
+- **SWR protection still applies.** If the SWR limit in **Radio -> SWR protection** is exceeded, transmitting stops. From v1.19.0 that means the burst in flight is cut where it stands rather than running to its end, and arming the next one is refused until you clear the latch. Before v1.19.0 this page said so and the firmware did not do it - WSPR measured the SWR, wrote it in the log and carried on.
 - **The Tab5 wakes up on the page you left it on, but not transmitting.** It returns to the WSPR page after a power cycle and starts receiving; the **TX** button is off, so it will not resume beaconing on its own. Switch it on again when you are ready.
 - **Split stops it, and says so.** WSPR is transmitted on the dial frequency, and
   the spot you publish names that frequency. If your radio is in split it keys VFO

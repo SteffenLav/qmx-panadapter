@@ -40,13 +40,39 @@ static bool              s_mounted = false;
 // Worked-call cache: unique (callsign, band) pairs from every logged QSO.
 // Band-aware so the same station on a new band counts as NOT worked before
 // (a fresh band-slot). ADIF_BAND_MAX fits "160M" + NUL.
-#define ADIF_WORKED_CACHE 1024
+//
+// ⚠ 2026-10-17, Gyula HA3HZ: this was a FIXED 1024 entries and cache_add()
+// dropped everything past it in silence. With ~1000 QSOs logged (a 200 KB
+// ADIF) the table was full at boot, so every NEW QSO was written to the file
+// but never entered the cache - the decode row stayed green for a station
+// just worked, and "Never auto-call worked-before" stopped filtering it.
+// Deleting the log made it work again, which is how he found it. The table
+// now grows, and the ceiling is loud instead of silent.
+//
+// ADIF_WORKED_MAX is sized from the partition, not from taste: `storage` is
+// 1 MB of SPIFFS and a record is ~180 bytes, so a completely full log is
+// ~5800 records and cannot reach 8192 unique pairs.
+#define ADIF_WORKED_CHUNK 1024
+#define ADIF_WORKED_MAX   8192
 #define ADIF_CALL_MAX     16
 #define ADIF_BAND_MAX     6
 typedef struct {
+    uint32_t hash;                  // of call only; a prefilter, never a match
     char call[ADIF_CALL_MAX];
     char band[ADIF_BAND_MAX];
 } worked_entry_t;
+
+// FNV-1a over the callsign. The scan runs per decode row and per spot row
+// (see the note at spots_lane.c), so growing the table 8x would have cost 8x
+// in strcmp. Comparing one uint32 first rejects almost every entry before a
+// string is touched, which keeps the longer scan cheaper than the short one
+// used to be. A collision only costs the strcmp that was there before.
+static uint32_t call_hash(const char *s)
+{
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h;
+}
 // PSRAM, allocated in adif_log_init(). As a static array this was 22.5 KB of
 // internal .bss - the single largest consumer in the whole firmware - and every
 // byte of it was pointless: the cache is scanned linearly, on demand, from the
@@ -58,6 +84,8 @@ typedef struct {
 // reboots.
 static worked_entry_t *s_worked;
 static int            s_worked_count = 0;
+static int            s_worked_cap   = 0;
+static bool           s_worked_full  = false;  // ceiling hit; say so once
 
 // ---------------------------------------------------------------------------
 
@@ -87,24 +115,56 @@ static void write_field(FILE *f, const char *name, const char *value)
     fprintf(f, "<%s:%zu>%s", name, strlen(value), value);
 }
 
+// Grow the cache by one chunk. Returns false at the ceiling or on allocation
+// failure, and says which - a full cache is a correctness fault (stations
+// silently read as not worked), so it must never be inferred from behaviour
+// again.
+static bool cache_grow(void)
+{
+    if (s_worked_cap >= ADIF_WORKED_MAX) {
+        if (!s_worked_full) {
+            s_worked_full = true;
+            ESP_LOGE(TAG, "worked-call cache full at %d pairs - stations beyond "
+                          "this read as NOT worked before", s_worked_cap);
+        }
+        return false;
+    }
+    int want = s_worked_cap + ADIF_WORKED_CHUNK;
+    if (want > ADIF_WORKED_MAX) want = ADIF_WORKED_MAX;
+    worked_entry_t *p = heap_caps_realloc(s_worked, (size_t)want * sizeof(worked_entry_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) {
+        if (!s_worked_full) {
+            s_worked_full = true;
+            ESP_LOGE(TAG, "no PSRAM to grow the worked-call cache past %d pairs - "
+                          "stations beyond this read as NOT worked before", s_worked_cap);
+        }
+        return false;
+    }
+    s_worked     = p;
+    s_worked_cap = want;
+    return true;
+}
+
 // Add a (callsign, band) pair to the worked cache (deduplicates on the pair,
-// ignores overflow). band may be NULL/"" (e.g. an out-of-band log entry).
+// grows on demand). band may be NULL/"" (e.g. an out-of-band log entry).
 static void cache_add(const char *call, const char *band)
 {
-    if (!s_worked) return;          // allocation failed at init; cache disabled
     if (!call || !call[0]) return;
     if (!band) band = "";
+    uint32_t h = call_hash(call);
     for (int i = 0; i < s_worked_count; i++) {
+        if (s_worked[i].hash != h) continue;
         if (strcmp(s_worked[i].call, call) == 0 &&
             strcmp(s_worked[i].band, band) == 0) return;  // already present
     }
-    if (s_worked_count < ADIF_WORKED_CACHE) {
-        strncpy(s_worked[s_worked_count].call, call, ADIF_CALL_MAX - 1);
-        s_worked[s_worked_count].call[ADIF_CALL_MAX - 1] = '\0';
-        strncpy(s_worked[s_worked_count].band, band, ADIF_BAND_MAX - 1);
-        s_worked[s_worked_count].band[ADIF_BAND_MAX - 1] = '\0';
-        s_worked_count++;
-    }
+    if (s_worked_count == s_worked_cap && !cache_grow()) return;
+    s_worked[s_worked_count].hash = h;
+    strncpy(s_worked[s_worked_count].call, call, ADIF_CALL_MAX - 1);
+    s_worked[s_worked_count].call[ADIF_CALL_MAX - 1] = '\0';
+    strncpy(s_worked[s_worked_count].band, band, ADIF_BAND_MAX - 1);
+    s_worked[s_worked_count].band[ADIF_BAND_MAX - 1] = '\0';
+    s_worked_count++;
 }
 
 // Extract an ADIF field value (<FIELD:len>value) from a single record line.
@@ -236,12 +296,10 @@ void adif_log_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
 
-    s_worked = heap_caps_calloc(ADIF_WORKED_CACHE, sizeof(worked_entry_t),
-                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_worked) {
-        // Not fatal: worked-before lookups just answer "no". Logging still works.
-        ESP_LOGE(TAG, "no PSRAM for the worked-call cache - worked-before disabled");
-    }
+    // First chunk up front so a boot-time PSRAM shortage is reported here and
+    // not on the first QSO. It then grows from load_from_file() as needed.
+    // Not fatal: worked-before lookups just answer "no". Logging still works.
+    (void)cache_grow();
 
     esp_vfs_spiffs_conf_t conf = {
         .base_path              = "/spiffs",
@@ -268,19 +326,40 @@ void adif_log_init(void)
     // (runs once, at boot, before any file is opened) and self-healing, so
     // it costs nothing on an already-healthy card and fixes this class of
     // fault on one that isn't.
-    esp_err_t chk = esp_spiffs_check("storage");
-    if (chk != ESP_OK) {
-        ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
-    }
-    // check() fixes CONSISTENCY (an orphaned/corrupt index entry); it does
-    // not promise to reclaim space. gc() is the one that actively walks
-    // pages looking to free some - request enough for the delete-record
-    // temp file (a full copy of the log) plus real headroom. Field-tested
-    // 2026-08-25: check() alone reported success but a subsequent delete
-    // still hit ENOSPC, so both are needed, not either alone.
+    // ⛔ GC FIRST, THEN CHECK - THE OTHER ORDER WAS A MEASURED NO-OP.
+    // This ran check() then gc() until 2026-10-12. A repair is a WRITE, so on
+    // a partition with no free block check() cannot apply what it finds: over
+    // 979 boots in one capture it printed the same unrepaired object every
+    // single time and fixed it never -
+    //   E SPIFFS: CHECK: type:PAGE, report:DELETE BAD FILE, 8003:0
+    // 86 times at mount, 245 more at runtime, 0 successes. gc() reclaims the
+    // blocks first, so check() then has somewhere to write.
+    //
+    // Both calls are still needed, which is the part 2026-08-25 got right:
+    // check() fixes CONSISTENCY (an orphaned or corrupt index entry) and does
+    // not promise to reclaim space; gc() actively walks pages to free some and
+    // does not fix an index. check() alone reported success and a subsequent
+    // delete still hit ENOSPC. Only the ORDER was wrong.
+    //
+    // 65536 is enough for the delete-record temp file (a full copy of the log)
+    // plus headroom.
+    //
+    // ⚠ ESP_ERR_NOT_FINISHED HERE IS "65536 BYTES ARE NOT AVAILABLE", NOT
+    // "gc could not collect". IDF 5.4's spiffs_gc_check() returns SPIFFS_ERR_FULL
+    // from the request size alone, before the collection loop, when
+    // needed_pages > free_pages + stats_p_deleted - and it also returns OK
+    // without collecting when there is already room. So this call is a
+    // THRESHOLD: it does work only when free space has fallen below what is
+    // asked for and the deleted pages can still cover it. A too-large request
+    // reports a scary error and does nothing, which is what the diag log's own
+    // 128 KB request was doing until 2026-10-12 (see DIAG_GC_REQUEST).
     esp_err_t gc = esp_spiffs_gc("storage", 65536);
     if (gc != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS gc: %s (continuing anyway)", esp_err_to_name(gc));
+    }
+    esp_err_t chk = esp_spiffs_check("storage");
+    if (chk != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
     }
 
     // Check free space and warn if low (< 64 KB).
@@ -527,10 +606,11 @@ const char *adif_log_file_path(void)
 bool adif_log_contains_call(const char *call)
 {
     if (!call || !call[0]) return false;
+    uint32_t h = call_hash(call);
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
-        if (strcmp(s_worked[i].call, call) == 0) found = true;
+        if (s_worked[i].hash == h && strcmp(s_worked[i].call, call) == 0) found = true;
     }
     if (s_lock) xSemaphoreGive(s_lock);
     return found;
@@ -542,15 +622,17 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
     const char *band = freq_to_band(freq_hz);
     // Unknown band (freq 0: no QMX / CAT not up - e.g. FT8 simulation mode):
     // fall back to a call-only match instead of returning false. Returning
-    // false made "Exclude worked before" silently pass EVERYONE whenever the
+    // false made "Never auto-call worked-before" silently pass EVERYONE whenever the
     // frequency was unreadable - observed in sim mode as the same phantom
     // being worked and logged back-to-back with the filter checked. Matching
     // any band is the conservative direction for a filter whose job is
     // avoiding duplicates.
     bool any_band = (band[0] == '\0');
+    uint32_t h = call_hash(call);
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
+        if (s_worked[i].hash != h) continue;
         if (strcmp(s_worked[i].call, call) == 0 &&
             (any_band || strcmp(s_worked[i].band, band) == 0)) found = true;
     }
@@ -878,8 +960,11 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     FILE *out = fopen(TMP_PATH, "w");
     if (!out && errno == ENOSPC) {
         // Same live self-heal as the single-record path above.
-        esp_spiffs_check("storage");
+        // gc before check - see adif_log_init(): a full partition cannot
+        // write a repair, so check() first is a no-op on exactly the
+        // condition that brought us here.
         esp_spiffs_gc("storage", 65536);
+        esp_spiffs_check("storage");
         out = fopen(TMP_PATH, "w");
     }
     if (!out) {
@@ -983,8 +1068,10 @@ bool adif_log_delete_record(int idx)
         // then retry once.
         size_t t0 = 0, u0 = 0, t1 = 0, u1 = 0;
         esp_spiffs_info("storage", &t0, &u0);
-        esp_err_t chk = esp_spiffs_check("storage");
+        // gc BEFORE check - see adif_log_init(). A repair is a write, and
+        // ENOSPC is precisely the state in which it cannot land.
         esp_err_t gc  = esp_spiffs_gc("storage", 65536);
+        esp_err_t chk = esp_spiffs_check("storage");
         esp_spiffs_info("storage", &t1, &u1);
         ESP_LOGW(TAG, "delete record #%d: %s ENOSPC on open - check=%s gc=%s, "
                       "used %zuKB/%zuKB -> %zuKB/%zuKB, retrying once",

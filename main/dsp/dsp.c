@@ -32,12 +32,18 @@
 #include "ui_mode.h"
 #include "iq_balance.h"
 #include "spur_map.h"
+#include "storage/settings.h"   // rx_source_is_real: latched in dsp_init()
 
 
 /* The dial the CURRENT spectrum's samples were captured under (#298). Set in
  * the FFT loop from audio_dial_for_last_read(), which indexes by sample number
  * rather than wall time - the pipeline latency was measured varying better than
  * 2:1, so no time-based constant can stand in for this. */
+/* Is the sample source REAL (one channel) rather than complex IQ? Latched
+ * once in dsp_init() because the source itself is latched at boot - see
+ * rx_source_t. Read on the hot path, so it is a plain bool, not a call. */
+static bool s_src_is_real = false;
+bool dsp_source_is_real(void) { return s_src_is_real; }
 static volatile uint32_t s_spec_dial_hz = 0;
 uint32_t dsp_get_spectrum_dial_hz(void) { return s_spec_dial_hz; }
 
@@ -564,6 +570,13 @@ esp_err_t dsp_init(void)
              (int)(DSP_FFT_SIZE * sizeof(float)),
              (int)(DSP_FFT_SIZE * 2 * sizeof(float)),
              (int)(DSP_FFT_SIZE * sizeof(float)));
+
+    /* Latched once: the input source cannot change without a restart
+     * (rx_source_t), so reading it here keeps settings off the hot path. */
+    s_src_is_real = rx_source_is_real(settings_get_rx_source());
+    if (s_src_is_real)
+        ESP_LOGW(TAG, "source is REAL (one channel): FT8/JS8/WSPR capture takes I "
+                      "directly, the fs/4 IF mixer is bypassed");
 
     dsp_build_window(s_window_type);
     ESP_LOGI(TAG, "Analysis window computed (type %u)", (unsigned)s_window_type);
@@ -1183,11 +1196,33 @@ static void fft_task(void *arg)
                     continue;
                 }
             }
-            for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
-                s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
-                s_ft8_mix_buf[i + 1] =  (float)samples[2*(i+1) + 1];  // +Q
-                s_ft8_mix_buf[i + 2] = -(float)samples[2*(i+2)];      // -I
-                s_ft8_mix_buf[i + 3] = -(float)samples[2*(i+3) + 1];  // -Q
+            /* ⛔ A REAL SOURCE HAS NO IF TO MIX DOWN.
+             *
+             * The QMX puts the signal of interest at +12 kHz in its IQ
+             * stream, so the loop below multiplies by e^-j*2pi*fs/4 and
+             * takes the real part - the {+I,+Q,-I,-Q} pattern - landing it
+             * at DC before the /4 decimation to a real 12 kHz baseband.
+             *
+             * The 3.5 mm jack delivers audio that is ALREADY at baseband.
+             * Mixing it would move 300-3000 Hz FT8 tones down to around
+             * -11.7 kHz and every decode would simply stop, with nothing
+             * anywhere reporting an error.
+             *
+             * Take I, which line_in.c fills with the original audio delayed
+             * by the Hilbert group delay - NOT the Hilbert output, whose
+             * response is weakest exactly where the FT8 tones are. A
+             * constant delay is invisible to a decoder that re-syncs every
+             * slot. The same /4 decimating LPF then runs unchanged. */
+            if (s_src_is_real) {
+                for (int i = 0; i < DSP_FFT_SIZE; i++)
+                    s_ft8_mix_buf[i] = (float)samples[2*i];
+            } else {
+                for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
+                    s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
+                    s_ft8_mix_buf[i + 1] =  (float)samples[2*(i+1) + 1];  // +Q
+                    s_ft8_mix_buf[i + 2] = -(float)samples[2*(i+2)];      // -I
+                    s_ft8_mix_buf[i + 3] = -(float)samples[2*(i+3) + 1];  // -Q
+                }
             }
             // NB: dsps_fird_f32's `len` is OUTPUT length: 256 out from 1024 in.
             int n_out = dsps_fird_f32(&s_ft8_fir, s_ft8_mix_buf,

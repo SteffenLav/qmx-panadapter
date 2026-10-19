@@ -522,6 +522,39 @@ void qmx_term_close(void)
     xSemaphoreGive(s_lock);
 }
 
+bool qmx_term_select(const char *label)
+{
+    if (!s_lock || !label || !label[0]) return false;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(5000)) != pdTRUE) return false;
+
+    bool ok = false;
+    if (s_open) {
+        s_last_activity_us = esp_timer_get_time();
+        for (int attempt = 0; attempt < 24; attempt++) {
+            int target = find_row(label);
+            int sel    = find_selected_row();
+            if (target < 0) {
+                ESP_LOGW(TAG, "select: '%s' not on screen (attempt %d)", label, attempt);
+                break;
+            }
+            if (sel == target) {
+                tx("\r", 1);
+                vTaskDelay(pdMS_TO_TICKS(400));   /* the radio repaints */
+                ESP_LOGI(TAG, "select: '%s' entered", label);
+                ok = true;
+                break;
+            }
+            /* One key at a time, re-reading between, so a wrapping menu cannot
+             * run away - and so we never press Enter on a row we did not aim
+             * at. Several of this menu's items key the transmitter. */
+            tx((sel < 0 || sel < target) ? "\x1b[B" : "\x1b[A", 3);
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return ok;
+}
+
 bool qmx_term_key(const char *name)
 {
     if (!s_lock || !name || !name[0]) return false;

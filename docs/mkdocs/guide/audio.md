@@ -2,6 +2,70 @@
 
 **Audio decoding is a BETA feature.** These implementations are first-generation and subject to further development. Real-world feedback shapes the roadmap.
 
+## Getting audio — start here if you hear nothing
+
+Silence is usually one of five things, and they are listed here in the order they
+actually catch people out. Work down the list; each step says where the control is.
+
+### 1. Check the mode
+
+Only **CW, CW-R, USB, LSB and AM** produce audio. **DiGi and FM produce none, by
+design** — see [Which modes produce audio](#which-modes-produce-audio).
+
+This catches more people than anything else, because **FT8, FT4, JS8 and WSPR all run
+in DiGi**. If you are on a digital mode and expecting to hear the band, you will not.
+Switch to USB to listen.
+
+### 2. RX audio is off by default, and enabling it needs a restart
+
+Open the **settings drawer** → **Audio Settings** and tick **RX Audio
+(speaker/headphone)**. Then **restart the Tab5**.
+
+The restart is not optional and it is not a bug: the audio codec is opened at boot,
+before the USB host claims the DMA memory, so it cannot be opened safely part-way
+through a session. From **v1.20.1** the Tab5 tells you this with a toast when you tick
+the box. Before that it said so only in the serial log, which is how three operators
+arrived at silent audio in one week.
+
+The same switch and volume are on the web API from v1.20.1, in the `rxaudio` group of
+`/api/settings`.
+
+### 3. In the browser, press the play button
+
+The browser does **not** start playing on its own. Click the **▶** button at the top
+right of the page, just to the right of **F**. It turns into **■** while it plays.
+
+This is the single most-missed step — two users reported "no web audio" in one week
+and in both cases the stream was working and the button had never been pressed. See
+[Listen in the browser](#listen-in-the-browser).
+
+### 4. Know which volume control does what
+
+There are three, and they act in different places:
+
+| Control | Where | What it changes |
+|---|---|---|
+| **QMX volume** | Drawer → Radio | The **radio's own AF gain**, over CAT — the same number the QMX shows when you click its volume knob. Affects everything downstream, including the browser stream |
+| **RX Volume** | Drawer → Audio Settings | The **Tab5's** speaker and headphone level only. Does not affect the browser stream |
+| Your browser's own volume | The browser or the operating system | The browser stream only |
+
+A fourth control sets the level before any of these: **QMX RF gain** (Drawer → Radio),
+per band, 0–99 dB, QMX default 54. If signals look weak on the waterfall as well as
+sounding weak, this is the one to look at — not the volume.
+
+!!! note "Full volume and still quiet?"
+
+    The level is governed by an **automatic gain control**, not by the volume slider.
+    If a signal is quieter than you expect at full volume, the AGC ceiling is holding
+    it back — see [The AGC controls](#the-agc-controls).
+
+### 5. The speaker and the browser are exclusive
+
+While a browser is listening, the Tab5 **mutes its own speaker**, and hands the audio
+back when you stop listening or close the page. One listener at a time is deliberate.
+So if the Tab5 went quiet, check whether a browser somewhere on your network is holding
+the stream.
+
 ## Panoramic CW Split
 
 Listen to two CW stations on different frequencies, panned left and right across the stereo stage. The CW receiver demodulates each sideband independently, allowing separation by frequency.
@@ -23,6 +87,52 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 1. Open the settings drawer and tap **Audio Settings** (just below SelfSpotter)
 2. Tick **RX Audio (speaker/headphone)**, then **Binaural CW (stereo separation)**
+
+!!! warning "Switching RX audio on needs a restart of the Tab5"
+
+    The audio hardware claims its memory during start-up, before the USB host
+    takes that pool, so it is started at boot or not at all. If you boot with
+    **RX Audio** off and tick it later, the setting is saved but you will hear
+    nothing until the Tab5 is restarted — it tells you so on screen when you
+    tick it. Your QMX will need a power cycle after that restart, as it does
+    after any Tab5 restart.
+
+!!! note "Which modes produce audio"
+
+    **CW, CW-R, USB, LSB and AM.** **FM is still silent** — there is no FM
+    demodulator, so an FM signal has to be listened to in USB or not at all.
+
+    AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
+    bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
+    in the top bar to choose it: **2.0, 3.0, 4.0 or 6.0 kHz**,
+    quoted as the width of the whole signal, the way amateur AM
+    figures always are. 6.0 kHz is the default and the standard — 3 kHz per
+    sideband, what most commercial rigs hard-code. The same list is on the
+    web page's **BW** button.
+
+    Go **narrower** when someone is sitting on top of you: 2.0 and 3.0 kHz
+    sound like a telephone line and that is the point, they keep a signal
+    copyable in heavy QRM. 6.0 kHz is the widest on offer and the one to use
+    on a clear channel. Broadcast channels are spaced 5 kHz, so 6.0 already
+    reaches into the neighbour's carrier on a crowded shortwave evening.
+
+    **6.0 kHz is the widest the Tab5 offers, from v1.20.1.** Four wider
+    settings were available earlier and have been withdrawn, for two
+    different reasons.
+
+    **10.0 and 20.0 kHz** ran the receive chain at half the decimation the
+    others use. Measured on the bench, that leaves the second CPU core with
+    no idle time at all and the audio stutters.
+
+    **8.0 and 9.6 kHz cost nothing extra** — matched 60-second windows
+    measured AM at 4.0 and at 6.0 kHz at the same processor load, so width is
+    free up to that point and those two would have been free as well. They
+    are withdrawn because they were never run end to end: they entered the
+    list on a filter measurement and a listening report, and nothing since
+    has confirmed them. The list now holds only widths that have actually
+    been measured playing.
+
+    CW and SSB are untouched at any setting.
 
 The three pan controls sit directly under the Binaural CW row in the same window. They stay greyed out until both boxes above are ticked, because they shape a split that is not being produced otherwise.
 
@@ -111,10 +221,11 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 |------|-------|----------------------------|
 | CW, CW-R | Yes | **Yes** |
 | USB, LSB | **Yes** | No — single channel, both ears the same |
+| AM | **Yes**, to about 3 kHz | No — AM has no stereo content to split |
 | DiGi | No | No |
-| AM, FM | No | No |
+| FM | No | No |
 
-So you **do** get audio on SSB; what you do not get there is the left/right split, because that is a CW feature. In DiGi, AM and FM there is no audio at all yet — nothing is broken if you hear silence in those.
+So you **do** get audio on SSB and AM; what you do not get there is the left/right split, because that is a CW feature. In DiGi and FM there is no audio at all — nothing is broken if you hear silence in those.
 
 ## Known Limitations
 
@@ -182,16 +293,72 @@ A peak limiter sits after the automatic gain, so a loud station cannot arrive at
 
 This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more ceiling fixed it.
 
-## Future Work — Web Audio (IQ Streaming)
+## Where the receive signal comes from
 
-The next phase will stream **I/Q channels only** from the Tab5 to a PC browser, allowing the browser's own CPU to do the audio processing locally. This approach:
+Until now the panadapter always listened to the **radio's USB audio**. There is now a
+**receive source** selector, on the Tab5 and in the browser, with a level meter and a
+clip indicator beside it.
 
-- **Reduces Tab5 load** — the device sends raw I/Q data (~768 kbps at 48 kHz stereo), no processing
-- **Offloads processing to the PC** — your computer does the heavy lifting
-- **Allows richer audio features** — filtering, EQ, advanced separation, and recording
-- **Works with any audio software** — your browser runs the decoder
+| Source | State |
+|---|---|
+| **QMX USB** | The default, and what every earlier release did. |
+| **Line in (3.5 mm jack)** | **Declared beta** - see the warning below. |
+| Generic I/Q | Declared, not implemented. Selecting it is refused. |
+| Internal mics | Declared, not implemented. Selecting it is refused. |
 
-Timeline: pending real-world feedback on the current implementation.
+**Line in** *(asked for by Tony, @tony1tf, in issue #17)* feeds the panadapter from the
+Tab5's own 3.5 mm headphone jack instead of the radio's USB. Tony ran a test build on his
+own Tab5 to find where the jack lands — the mic ring arrives on the audio chip's third
+channel — which is the measurement the whole feature rests on. The jack is a single real audio channel, not I/Q, so the second
+channel is synthesised: a 255-tap filter builds the quadrature pair the decoders need.
+The jack wiring is drawn on screen so you can see which contact carries what.
+
+⚠ **No signal has been decoded through line in yet.** The path runs, samples flow and
+the levels read correctly with nothing plugged in - that is the whole of what has been
+verified. Treat it as unfinished. Changing the source needs a restart, and the Tab5
+does the restart itself when you press **Save**.
+
+⛔ **In line-in mode the USB radio connection is off by design.** One or the other, not
+both - so CAT and the S-meter go quiet while line in is selected. The Tab5 stops
+pretending to have a dial with it: the frequency readout reads **Line-in mode**, the
+band shows `---` and the band-plan strip is hidden, because an audio spectrum has no
+band plan and no RF frequency. The frequency axis under the display reads audio Hz.
+
+The left half of the spectrum is empty and there is a step in the middle. That is
+correct and it is the honest picture: the jack carries one real channel, the second is
+synthesised, and a synthesised channel cannot recover what the missing one would have
+told you. The step sits at audio 0 Hz, which is the centre of the span.
+
+## Listen in the browser
+
+From **v1.20.0** the panadapter streams its own demodulated audio to any browser on
+your network. Open the web page and click the **▶** button at the top right, just to
+the right of **F**. It becomes a **■** while it is playing; click it again to stop.
+
+What you hear is exactly what the Tab5's own speaker gets — the same demodulated
+audio, tapped after the filter and the AGC — so the two can never disagree about what
+the radio is doing. It works even if the Tab5 booted with its speaker turned off.
+
+**The speaker and the browser are exclusive.** While a browser is listening the Tab5
+mutes its own speaker, and it hands the audio back when you stop listening or close the
+page. There is no setting for this: one listener at a time was the point.
+
+Only the modes the Tab5 demodulates produce audio: **CW, CW-R, USB, LSB and AM**. In any
+other mode the button lights up but nothing arrives, and hovering it says so.
+
+**Hover the ■ button for the health of the stream** — it reports frame gaps, re-primes
+and chunks dropped to clock drift. On a quiet network all three stay at zero.
+
+Notes on what this costs and what it does not:
+
+- It runs over the web page's existing connection, so it needs no extra port and no
+  extra setup.
+- It costs about **9 percentage points of one CPU core** — measured — and nothing
+  measurable on the core that serves the web page.
+- Audio is 12 kHz µ-law, which is a telephone-grade codec chosen because it survives a
+  lossy Wi-Fi link without a jitter buffer deep enough to be annoying.
+- **Only one browser gets the page at a time.** Opening the panadapter page in a second
+  browser takes the connection from the first, which takes the audio with it.
 
 ## Feedback
 

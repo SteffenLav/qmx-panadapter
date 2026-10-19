@@ -1,7 +1,9 @@
 #include "settings.h"
 #include "util/format_freq.h"   // #302: g_freq_style, applied on set
 #include "util/gpio_relay.h"    // relay polarity, applied on set (same reason)
+#include "unit_gps/unit_gps.h"  // PORT.A's other backend - the mode sequencer below
 #include "ui.h"                 // CW_CENTER_* - the grid the radio accepts (#359)
+#include "cw_decode.h"         // row count, applied on set (wrap modulus, not a draw count)
 #include "sd_archive.h"
 
 #include <string.h>
@@ -33,6 +35,15 @@ static const char *TAG = "settings";
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
+/* Provenance, NOT a user setting: the grid the GPS last wrote into
+ * my_grid. gps_autogrid.c needs it to tell "the operator typed over my
+ * value" from "we have not written this square yet", and that answer must
+ * survive a reboot or the operator's correction is undone a minute after
+ * every boot. Deliberately absent from config_io_export() and from the web
+ * settings: it is device state, and carrying it to another radio would
+ * suppress that radio's first fill. A settings factory reset erases the
+ * whole user_nvs partition, so it is forgotten there, which is right. */
+#define KEY_GPS_GRID_A  "gps_grid_a"
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_WIFI_IP     "wifi_ip"
 #define KEY_WIFI_MASK   "wifi_mask"
@@ -47,6 +58,8 @@ static const char *TAG = "settings";
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
 #define KEY_LAST_TIME  "last_time"
+#define KEY_DATE_SRC   "date_src"   /* who last set the DATE - date_src_t */
+#define KEY_GNSS_MBUS  "gnss_mbus"  /* Module GPS v2.1 on the M-Bus (GPIO38) */
 #define KEY_CQ_MSG0    "cq_msg0"
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"
@@ -86,12 +99,14 @@ static const char *TAG = "settings";
 #define KEY_WF_CONTRAST  "wf_contr"
 #define KEY_WF_BLEND     "wf_blend"
 #define KEY_WF_WINDOW    "wf_window"
-#define KEY_WF_SPEED     "wf_speed"
+#define KEY_WF_SPEED     "wf_speed"   /* LEGACY 1..4x multiplier - read once, then never written again */
+#define KEY_WF_ROWS      "wf_rows"    /* waterfall rows per second, 1..40 */
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_CQ_LISTEN    "cq_listen"
 #define KEY_SWR_LIMIT    "swr_lim"
+#define KEY_JS8_SUBMODE  "js8_sub"
 #define KEY_RXA_GAIN     "rxa_gain"
 #define KEY_RXA_PWIDTH   "rxa_pw"
 #define KEY_RXA_PBLEND   "rxa_pb"
@@ -99,6 +114,7 @@ static const char *TAG = "settings";
 #define KEY_RXA_ATTACK   "rxa_atk"
 #define KEY_RXA_RELEASE  "rxa_rel"
 #define KEY_RXA_AGCOFF   "rxa_agcoff"
+#define KEY_RXA_AMBW     "rxa_ambw"
 #define KEY_HP_MUTE      "hp_mute"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
@@ -106,6 +122,7 @@ static const char *TAG = "settings";
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_FREQ_SEP       "freq_sep"
 #define KEY_CW_DECODE       "cw_dec_en"
+#define KEY_CW_ROWS         "cw_dec_rows" /* rows of decoded CW drawn, 2 or 4 */
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
 #define KEY_STILL_NOTICE   "still_note"
@@ -144,6 +161,7 @@ static const char *TAG = "settings";
 #define KEY_PWR_CAL        "pwrcal"
 #define KEY_RADIO_UID      "radiouid"   /* UI; of the radio the table above belongs to */
 #define KEY_PWR_TARGET     "pwrtarget"
+#define KEY_PA_CEILING     "pacap"
 #define KEY_WSPR_TONE      "wsprtone"
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
@@ -156,6 +174,9 @@ static const char *TAG = "settings";
 #define KEY_RELAY_PIN      "relay_pin"
 #define KEY_RELAY_LEVEL    "relay_lvl"
 #define KEY_RELAY_MS       "relay_ms"
+#define KEY_PORT_A_MODE    "port_a_mode"
+#define KEY_RX_SOURCE      "rx_source"
+#define KEY_LINEIN_GAIN    "linein_gain"
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
@@ -192,7 +213,8 @@ static const char *TAG = "settings";
 #define DEF_WF_CONTRAST   (45.0f)
 #define DEF_WF_BLEND      (100)
 #define DEF_WF_WINDOW     (0)
-#define DEF_WF_SPEED      (1)
+#define DEF_CW_ROWS       (4)    /* four since 2026-10-15 (Sam W7STF); Bryan N0LUF may pick 2 */
+#define DEF_WF_ROWS       (10)   /* rows/s - the rate the waterfall has always run at */
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
 #define DEF_RELAY_PIN      (53)
@@ -226,7 +248,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 127, 32 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 141, 18 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -376,6 +398,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_TX_OFFSET   78
 #define DIRTY_CQ_LISTEN      79
 #define DIRTY_SWR_LIMIT      80
+#define DIRTY_JS8_SUBMODE   140   /* JS8 Fast/Turbo/Slow selector */
+#define DIRTY_RXA_AMBW      141   /* AM demodulator bandwidth (Tab5's own, not the radio's) */
 // One bit for both activation fields: they are only ever written together by
 // settings_set_activation(), so a second bit would buy nothing.
 #define DIRTY_ACTIVATION     81
@@ -406,6 +430,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SPOTMAP_EN    118   /* spot map + its three self-spot feeds */
 #define DIRTY_PWR_CAL        119  /* power calibration table (Calibrate Power) - NOT in config export, see the type's comment */
 #define DIRTY_PWR_TARGET     120  /* operator's own per-band Output power target - a preference, unlike DIRTY_PWR_CAL */
+#define DIRTY_PA_CEILING     139  /* operator's own PA-voltage ceiling - see pa_ceiling_x10 in settings.h */
 #define DIRTY_WF_SPEED       121
 #define DIRTY_WSPR_BURST     122  /* consecutive cycles per scheduled WSPR transmission */
 #define DIRTY_WSPR_TONE      123  /* pinned WSPR TX tone, 0 = random per burst */
@@ -423,11 +448,26 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_RXA_RELEASE     130  /* AGC release time, ms */
 #define DIRTY_RXA_AGCOFF      131  /* AGC bypass */
 #define DIRTY_HP_MUTE         132  /* speaker auto-mute on headphones */
-#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for; 26 spare */
+#define DIRTY_WIFI_STATIC_SSID 133 /* which SSID the static IP is for */
+#define DIRTY_DATE_SRC        134  /* date provenance byte (royord #18) */
+/* 135, not 134: ericmoritz' PORT.A branch and the date-provenance byte were
+ * written against the same tree and both took the next free bit. These are
+ * runtime bitmap indices only - nothing on flash carries them, the NVS KEY
+ * strings do - so renumbering here costs nothing. 24 spare. */
+#define DIRTY_PORT_A_MODE     135  /* PORT.A owner: relay | unit_gps (#15) */
+#define DIRTY_GNSS_MBUS       136  /* M-Bus GNSS receiver enable */
+#define DIRTY_RX_SOURCE       137  /* RX input source: qmx_usb | line_in */
+#define DIRTY_LINEIN_GAIN     138  /* line-in analogue gain, dB */
+/* 142, not 139: tools/check_dirty_bits.py refused the build because 139 is
+   DIRTY_PA_CEILING, defined elsewhere in this file. The "spare" counts in
+   the comments above had gone stale - the checker is the authority. */
+#define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
-// Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
-// continuous time-sync correction, ~every 15s) and DIRTY_LAST_MODE are NOT in
+// Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
+// correction, throttled to ~5 min in write_to_rtc_and_nvs() - this comment
+// claimed ~15 s while the Unit-GPS path was in fact writing it EVERY SECOND,
+// measured on the bench 2026-10-09) and DIRTY_LAST_MODE are NOT in
 // here on purpose: re-mirroring qmx-config.txt to the SD card produces an
 // identical file (those fields aren't part of the export), so doing it on
 // their account is pure waste — and worse, SD card I/O competes with the
@@ -449,7 +489,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_RX_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT, DIRTY_GPIO_RELAY, DIRTY_FREQ_SEP,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
-    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
+    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS, DIRTY_JS8_SUBMODE,
     DIRTY_CW_MSG0, DIRTY_CW_MSG0 + 1, DIRTY_CW_MSG0 + 2, DIRTY_CW_MSG0 + 3,
     DIRTY_CW_MSG0 + 4, DIRTY_CW_MSG5, DIRTY_CW_PARK,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_SPOTMAP_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
@@ -461,8 +501,15 @@ static const uint8_t s_config_export_bits[] = {
      * the same reason the power calibration does - nobody can recreate it from
      * memory. config_io_export() prints all four. */
     DIRTY_RXA_GAIN, DIRTY_RXA_PWIDTH, DIRTY_RXA_PBLEND, DIRTY_RXA_POVLP,
-    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_HP_MUTE,
+    DIRTY_RXA_ATTACK, DIRTY_RXA_RELEASE, DIRTY_RXA_AGCOFF, DIRTY_RXA_AMBW,
+    DIRTY_HP_MUTE,
     DIRTY_WIFI_STATIC_SSID,
+    DIRTY_PORT_A_MODE,   /* config_io_export() prints port_a_mode; the import
+                          * must land in the same mode the file left behind */
+    /* The restored unit must come up on the SAME input it was backed up on.
+     * A config file that silently moved a board back to the QMX would look
+     * like the jack had stopped working. */
+    DIRTY_RX_SOURCE, DIRTY_LINEIN_GAIN,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -598,6 +645,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap->brightness_pct);
         if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap->last_ui_mode);
         if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap->last_unix_time);
+        if (dirty_test(&dirty_local, DIRTY_DATE_SRC))   nvs_set_u8(s_nvs,  KEY_DATE_SRC,  snap->date_src);
+        if (dirty_test(&dirty_local, DIRTY_GNSS_MBUS))  nvs_set_u8(s_nvs,  KEY_GNSS_MBUS, snap->gnss_mbus_en);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap->cq_msg[0]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap->cq_msg[1]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap->cq_msg[2]);
@@ -621,6 +670,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap->kbd_bindings, sizeof(snap->kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_PWR_CAL))      nvs_set_blob(s_nvs, KEY_PWR_CAL, &snap->pwr_cal, sizeof(snap->pwr_cal));
         if (dirty_test(&dirty_local, DIRTY_PWR_TARGET))   nvs_set_blob(s_nvs, KEY_PWR_TARGET, &snap->pwr_target, sizeof(snap->pwr_target));
+        if (dirty_test(&dirty_local, DIRTY_PA_CEILING))   nvs_set_u16(s_nvs, KEY_PA_CEILING, snap->pa_ceiling_x10);
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap->wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap->qmx_gps      ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap->qmx_time_pushed ? 1 : 0);
@@ -648,11 +698,12 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap->wf_contrast_db);
         if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap->wf_floor_blend);
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap->wf_window);
-        if (dirty_test(&dirty_local, DIRTY_WF_SPEED))    nvs_set_u8(s_nvs, KEY_WF_SPEED,  snap->wf_speed_mult);
+        if (dirty_test(&dirty_local, DIRTY_WF_SPEED))    nvs_set_u8(s_nvs, KEY_WF_ROWS,   snap->wf_rows_per_s);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap->display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap->qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap->cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap->swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_JS8_SUBMODE)) nvs_set_u8(s_nvs, KEY_JS8_SUBMODE, snap->js8_submode);
         if (dirty_test(&dirty_local, DIRTY_RXA_GAIN))     nvs_set_u8(s_nvs, KEY_RXA_GAIN,   snap->rxaud_gain_d10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PWIDTH))   nvs_set_u8(s_nvs, KEY_RXA_PWIDTH, snap->rxaud_pan_width_x10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PBLEND))   nvs_set_u8(s_nvs, KEY_RXA_PBLEND, snap->rxaud_pan_blend_x100);
@@ -660,6 +711,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_RXA_ATTACK))   nvs_set_u8(s_nvs, KEY_RXA_ATTACK, snap->rxaud_agc_attack_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_RELEASE))  nvs_set_u16(s_nvs, KEY_RXA_RELEASE, snap->rxaud_agc_release_ms);
         if (dirty_test(&dirty_local, DIRTY_RXA_AGCOFF))   nvs_set_u8(s_nvs, KEY_RXA_AGCOFF, snap->rxaud_agc_off ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RXA_AMBW))     nvs_set_u8(s_nvs, KEY_RXA_AMBW,   snap->rxaud_am_half_bw_h100);
         if (dirty_test(&dirty_local, DIRTY_HP_MUTE))      nvs_set_u8(s_nvs, KEY_HP_MUTE, snap->hp_mute_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap->act_type);
@@ -669,6 +721,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap->distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap->freq_sep_style);
         if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap->cw_decode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_ROWS))   nvs_set_u8(s_nvs, KEY_CW_ROWS,   snap->cw_decode_rows);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap->rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap->still_view ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_NOTICE)) nvs_set_u8(s_nvs, KEY_STILL_NOTICE, snap->still_notice_done ? 1 : 0);
@@ -747,6 +800,12 @@ static void flush_task(void *arg)
             nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap->gpio_relay_level ? 1 : 0);
             nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap->gpio_relay_ms);
         }
+        if (dirty_test(&dirty_local, DIRTY_PORT_A_MODE))
+            nvs_set_u8(s_nvs, KEY_PORT_A_MODE, snap->port_a_mode);
+        if (dirty_test(&dirty_local, DIRTY_RX_SOURCE))
+            nvs_set_u8(s_nvs, KEY_RX_SOURCE, snap->rx_source);
+        if (dirty_test(&dirty_local, DIRTY_LINEIN_GAIN))
+            nvs_set_u8(s_nvs, KEY_LINEIN_GAIN, snap->line_in_gain_db);
         if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap->resmon_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap->resmon_dx);
@@ -867,6 +926,7 @@ static void load_from_nvs(qmx_settings_t *out)
     /* Decoded CW is ON by default - it is the point of the feature - so like
        rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
     out->cw_decode_en = true;
+    out->cw_decode_rows = DEF_CW_ROWS;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
      * can - see the notice in ui.c. still_notice_done stays false so an
@@ -881,6 +941,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->brightness_pct = DEF_BRIGHTNESS;
     out->last_ui_mode = DEF_LAST_MODE;
     out->last_unix_time = 0;
+    out->date_src       = 0;   /* nobody we trust - the date gets questioned */
+    out->gnss_mbus_en   = 0;   /* no M-Bus receiver unless the operator says so */
     out->cq_msg[0][0] = '\0';
     out->cq_msg[1][0] = '\0';
     out->cq_msg[2][0] = '\0';
@@ -925,7 +987,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_contrast_db = DEF_WF_CONTRAST;
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
-    out->wf_speed_mult  = DEF_WF_SPEED;
+    out->wf_rows_per_s  = DEF_WF_ROWS;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
@@ -970,6 +1032,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // normal way this goes wrong in the field. 3.0 is high enough not to trip
     // on a merely mediocre match; the drawer can raise it or turn it off.
     out->swr_limit_x10 = 30;
+    out->js8_submode   = 0;    /* Normal - what every station runs */
     /* Defaults mirror rx_audio.h's documented ones (200 / 1.8 / 0.15 / 0.30),
      * which are the values tuned on the air 2026-09-20. */
     out->rxaud_gain_d10       = 20;
@@ -977,6 +1040,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->rxaud_pan_blend_x100 = 15;
     out->rxaud_pan_ovlp_x100  = 30;
     out->rxaud_agc_attack_ms  = 3;
+    out->rxaud_am_half_bw_h100 = 30;   /* 3000 Hz half-bw = a 6 kHz wide AM signal */
     out->rxaud_agc_release_ms = 150;
     out->rxaud_agc_off        = false;   /* tracking AGC, as before */
     out->hp_mute_en           = true;    /* what everyone expects */
@@ -1012,6 +1076,12 @@ static void load_from_nvs(qmx_settings_t *out)
     out->gpio_relay_pin   = DEF_RELAY_PIN;
     out->gpio_relay_level = DEF_RELAY_LEVEL;
     out->gpio_relay_ms    = DEF_RELAY_MS;
+    /* Absent key == relay. This is the upgrade guarantee: a board that has
+     * never heard of the Unit GPS boots with both pins driven exactly as they
+     * were before the setting existed (task 2.4's READ BACK check). */
+    out->port_a_mode      = PORT_A_MODE_RELAY;
+    out->rx_source        = RX_SOURCE_QMX_USB;
+    out->line_in_gain_db  = 0;   /* see LINE_IN_GAIN_DB_MAX in settings.h */
     out->freq_sep_style   = 0;   /* #302: the punctuation the Tab5 has always
                                     shown - a stored preference is the only
                                     thing that changes it, so nobody sees a
@@ -1049,6 +1119,10 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
     nvs_get_u8(s_nvs, KEY_LAST_MODE, &out->last_ui_mode);
     nvs_get_u32(s_nvs, KEY_LAST_TIME, &out->last_unix_time);
+    /* Absent on an upgrade from a build before this existed, which leaves it
+     * 0 and makes the first boot ask once. That is the safe direction. */
+    nvs_get_u8(s_nvs, KEY_DATE_SRC, &out->date_src);
+    nvs_get_u8(s_nvs, KEY_GNSS_MBUS, &out->gnss_mbus_en);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -1084,11 +1158,13 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
+    nvs_get_u8(s_nvs, KEY_JS8_SUBMODE, &out->js8_submode);
     nvs_get_u8(s_nvs, KEY_RXA_GAIN,   &out->rxaud_gain_d10);
     nvs_get_u8(s_nvs, KEY_RXA_PWIDTH, &out->rxaud_pan_width_x10);
     nvs_get_u8(s_nvs, KEY_RXA_PBLEND, &out->rxaud_pan_blend_x100);
     nvs_get_u8(s_nvs, KEY_RXA_POVLP,  &out->rxaud_pan_ovlp_x100);
     nvs_get_u8(s_nvs, KEY_RXA_ATTACK,  &out->rxaud_agc_attack_ms);
+    nvs_get_u8(s_nvs, KEY_RXA_AMBW,    &out->rxaud_am_half_bw_h100);
     nvs_get_u16(s_nvs, KEY_RXA_RELEASE, &out->rxaud_agc_release_ms);
     { uint8_t b; if (nvs_get_u8(s_nvs, KEY_RXA_AGCOFF, &b) == ESP_OK) out->rxaud_agc_off = (b != 0); }
     { uint8_t b; if (nvs_get_u8(s_nvs, KEY_HP_MUTE,    &b) == ESP_OK) out->hp_mute_en     = (b != 0); }
@@ -1148,10 +1224,21 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_float(KEY_WF_CONTRAST, &fv)) out->wf_contrast_db = fv;
     nvs_get_u8(s_nvs, KEY_WF_BLEND,  &out->wf_floor_blend);
     nvs_get_u8(s_nvs, KEY_WF_WINDOW, &out->wf_window);
-    nvs_get_u8(s_nvs, KEY_WF_SPEED,  &out->wf_speed_mult);
+    /* Waterfall rate: rows/s now, a 1..4x multiplier before. Read the new key
+     * first; only if it has never been written does the legacy key decide,
+     * x10 to turn a multiplier into rows/s. One-way and unambiguous - once
+     * KEY_WF_ROWS exists the legacy value is ignored for good, so a stored 4
+     * can never be read as "4 rows/s" on one boot and "40" on the next. */
+    if (nvs_get_u8(s_nvs, KEY_WF_ROWS, &out->wf_rows_per_s) != ESP_OK) {
+        uint8_t legacy = 0;
+        if (nvs_get_u8(s_nvs, KEY_WF_SPEED, &legacy) == ESP_OK &&
+            legacy >= 1 && legacy <= 4) {
+            out->wf_rows_per_s = (uint8_t)(legacy * 10);
+        }
+    }
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
-    if (out->wf_speed_mult < 1 || out->wf_speed_mult > 4) out->wf_speed_mult = DEF_WF_SPEED;
+    if (out->wf_rows_per_s < 1 || out->wf_rows_per_s > 40) out->wf_rows_per_s = DEF_WF_ROWS;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     {
@@ -1168,6 +1255,11 @@ static void load_from_nvs(qmx_settings_t *out)
        one rather than printing something nobody has seen. */
     if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
+    /* Only 2 or 4 are offered; anything else on flash is a value this build
+       does not know, so it falls back to the default rather than being
+       clamped into a shape the UI cannot show. */
+    if (nvs_get_u8(s_nvs, KEY_CW_ROWS, &u8v) == ESP_OK && (u8v == 2 || u8v == 4))
+        out->cw_decode_rows = u8v;
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_VIEW,   &u8v) == ESP_OK) out->still_view = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_STILL_NOTICE, &u8v) == ESP_OK) out->still_notice_done = (u8v != 0);
@@ -1221,6 +1313,11 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     sz = sizeof(out->pwr_target);
     nvs_get_blob(s_nvs, KEY_PWR_TARGET, &out->pwr_target, &sz);
+
+    /* Absent means no ceiling, which is the default and the behaviour every
+     * build since v1.16.0 has had - so an upgrade changes nothing until the
+     * operator sets one. */
+    nvs_get_u16(s_nvs, KEY_PA_CEILING, &out->pa_ceiling_x10);
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
@@ -1337,6 +1434,26 @@ static void load_from_nvs(qmx_settings_t *out)
         out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
         out->gpio_relay_level = (rl != 0);
         if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+    }
+    {
+        // 0 when the key was never written, so "no key" and "relay" are the
+        // same value on purpose - see port_a_mode_normalize().
+        uint8_t pm = 0;
+        nvs_get_u8(s_nvs, KEY_PORT_A_MODE, &pm);
+        out->port_a_mode = port_a_mode_normalize(pm);
+    }
+    {
+        /* 0 when the key was never written, which is the QMX - so an upgrade,
+         * a wiped NVS and a deliberate "use the radio" are one value. The
+         * normalize also catches a source a NEWER build offered before the
+         * operator downgraded: it resolves to the radio rather than leaving a
+         * board with no receiver at all. */
+        uint8_t rs = 0;
+        nvs_get_u8(s_nvs, KEY_RX_SOURCE, &rs);
+        out->rx_source = rx_source_normalize(rs);
+        uint8_t lg = 0;
+        nvs_get_u8(s_nvs, KEY_LINEIN_GAIN, &lg);
+        out->line_in_gain_db = line_in_gain_db_normalize(lg);
     }
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
@@ -1600,6 +1717,19 @@ void settings_set_last_unix_time(uint32_t unix_sec)
     s_pending.last_unix_time = unix_sec;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_LAST_TIME);
+}
+
+void settings_set_date_src(uint8_t src)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.date_src == src) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.date_src = src;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DATE_SRC);
 }
 
 void settings_set_my_callsign(const char *call)
@@ -2263,13 +2393,22 @@ void settings_set_wf_window(uint8_t idx)
     mark_dirty(DIRTY_WF_WINDOW);
 }
 
-void settings_set_wf_speed_mult(uint8_t mult)
+uint8_t settings_get_wf_rows_per_s(void)
+{
+    if (!s_ready) return DEF_WF_ROWS;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.wf_rows_per_s;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_wf_rows_per_s(uint8_t rows)
 {
     if (!s_ready) return;
-    if (mult < 1 || mult > 4) mult = DEF_WF_SPEED;
+    if (rows < 1 || rows > 40) rows = DEF_WF_ROWS;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.wf_speed_mult == mult) { xSemaphoreGive(s_mutex); return; }
-    s_pending.wf_speed_mult = mult;
+    if (s_pending.wf_rows_per_s == rows) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wf_rows_per_s = rows;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WF_SPEED);
 }
@@ -2459,6 +2598,32 @@ uint8_t settings_get_swr_limit_x10(void)
     return v;
 }
 
+/* ⛔ CLAMPED HERE, NOT AT THE UI. NVS and an imported config file are both
+ * writers this module cannot see, and a stored 3 or 7 is not a submode - it
+ * would reach ft8_op_mode_protocol() and select whatever the switch's trailing
+ * return happens to be. Unknown falls back to Normal, which is the one every
+ * station can hear. */
+void settings_set_js8_submode(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v != 0 && v != 1 && v != 2 && v != 4) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.js8_submode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.js8_submode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_JS8_SUBMODE);
+}
+
+uint8_t settings_get_js8_submode(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.js8_submode;
+    xSemaphoreGive(s_mutex);
+    if (v != 0 && v != 1 && v != 2 && v != 4) v = 0;
+    return v;
+}
+
 /* ---- RX audio -------------------------------------------------------------
  *
  * Clamps are the ranges rx_audio.h documents, applied HERE rather than trusting
@@ -2515,6 +2680,65 @@ void settings_set_rxaud_pan_ovlp_x100(uint8_t v) { RXA_SET_U8(rxaud_pan_ovlp_x10
 uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x100,  30); }
 /* Attack/release exposed in ms (the units an operator can reason about);
  * rx_audio.c converts to its per-sample coefficient - see rx_audio_set_agc_attack_ms(). */
+/* Stored as the HALF-bandwidth in hundreds of Hz, so the number an operator
+ * sees - the whole signal - is twice this: 10 = a 2.0 kHz signal, 50 = a
+ * 10.0 kHz one. That is the span amateur AM actually uses, 2.0 kHz
+ * brick-walled for heavy QRM up to the 10.0 kHz legal maximum below 29 MHz.
+ *
+ * ⚠ IT WAS 20..48 (4.0 to 9.6 kHz) and BOTH ENDS WERE WRONG, for the same
+ * reason: they were argued from the broadcast band and from the QMX's own
+ * filter rather than from the signals this is pointed at. The old comment
+ * read "below 2000 Hz an AM filter is narrower than the radio's own fixed
+ * 3.2 kHz and there is no reason to go there" - which also compared a
+ * half-bandwidth against an audio width, two different quantities.
+ *
+ * ⛔ THE CEILING STAYS AT 48 (a 9.6 kHz signal). I raised it to 50 for the
+ * 10.0 kHz legal maximum and the AM harness falsified it the same hour: the
+ * D=4 decimator is already -1.33 dB at 4800 Hz and -2.40 dB at 5000. Nyquist
+ * is not the limit, the filter skirt is. 10.0 kHz needs D=2. */
+/* ⛔ 100, NOT 48. This clamp is the THIRD place the AM ceiling is written -
+ * rx_audio.h has RX_AUDIO_AM_HALF_BW_MAX_HZ and ui.c has the width list - and
+ * it is the one that fails SILENTLY: a 10000 Hz half-bandwidth arrives here
+ * as 100, was clamped to 48, and the operator's 20.0 kHz pick would have come
+ * back as 4.8 kHz after the next boot with nothing said. Raised with D=2 on
+ * 2026-10-15; found by checking every writer of the ceiling, not by hearing
+ * it.
+ *
+ * ⛔ 2026-10-17: 48 -> 30 (6.0 kHz). 8.0 and 9.6 kHz are withdrawn - NOT
+ * because they cost too much (AM 4.0 and 6.0 measured the same CPU duty,
+ * so width is free within D=4) but because they were never measured end to
+ * end, and T21’s pitch drift is still unexplained. The invariant this
+ * comment exists for is unchanged: keep this equal to
+ * RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 30); }
+
+/* ⛔ CLAMPED ON READ AS WELL AS ON WRITE, and that is the whole point of
+ * this not being a bare RXA_GET_U8.
+ *
+ * The ceiling came DOWN on 2026-10-17, from 100 (20.0 kHz) to 48 (9.6 kHz),
+ * when the two widths that needed D=2 were withdrawn. The setter's clamp only
+ * ever sees a NEW value - it cannot touch the 50 or 100 already sitting in an
+ * upgrader's NVS from v1.19/v1.20. Without this, that operator comes back on
+ * a width no list contains: the picker matches nothing, and the stored value
+ * survives every boot because nothing rewrites it.
+ *
+ * This is the same hazard as the bug recorded above, pointing the other way.
+ * That one would have stored 20.0 kHz as 4.8 silently; this one would have
+ * kept 20.0 kHz alive silently after it was removed. A ceiling that moves has
+ * to be enforced wherever the value is READ, not only where it is written. */
+uint8_t settings_get_rxaud_am_half_bw_h100(void)
+{
+    if (!s_ready) return 30;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.rxaud_am_half_bw_h100;
+    xSemaphoreGive(s_mutex);
+    if (v > 30) {
+        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 6.0 kHz ceiling "
+                      "(8.0 and above were withdrawn) - using 6.0 kHz", v);
+        v = 30;
+    }
+    return v;
+}
 void settings_set_rxaud_agc_attack_ms(uint8_t v)   { RXA_SET_U8(rxaud_agc_attack_ms,   DIRTY_RXA_ATTACK,  1, 50); }
 uint8_t settings_get_rxaud_agc_attack_ms(void)     { RXA_GET_U8(rxaud_agc_attack_ms,   3); }
 void settings_set_rxaud_agc_release_ms(uint16_t v) { RXA_SET_U16(rxaud_agc_release_ms, DIRTY_RXA_RELEASE, 10, 500); }
@@ -2829,6 +3053,35 @@ uint32_t settings_get_last_unix_time(void)
     return v;
 }
 
+uint8_t settings_get_date_src(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.date_src;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_gnss_mbus_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = (s_pending.gnss_mbus_en != 0);
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_gnss_mbus_en(bool en)
+{
+    if (!s_ready) return;
+    uint8_t v = en ? 1 : 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gnss_mbus_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gnss_mbus_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GNSS_MBUS);
+}
+
 void settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out)
 {
     if (ssid) ssid[0] = 0;
@@ -2908,6 +3161,32 @@ void settings_set_cw_decode_en(bool v)
     s_pending.cw_decode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_DECODE);
+}
+
+uint8_t settings_get_cw_decode_rows(void)
+{
+    if (!s_ready || !s_mutex) return DEF_CW_ROWS;   // default until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.cw_decode_rows;
+    xSemaphoreGive(s_mutex);
+    return (v == 2 || v == 4) ? v : DEF_CW_ROWS;
+}
+
+/* ⛔ APPLIES IT TO cw_decode.c TOO, and that is not a convenience. The row
+ * count is the WRAP MODULUS, so a stored value that never reached the decoder
+ * would leave the two disagreeing: the text would keep wrapping over four rows
+ * while two were drawn, and half of every pass would land where nobody can see
+ * it. One place sets both, so they cannot drift. The call wipes the line. */
+void settings_set_cw_decode_rows(uint8_t rows)
+{
+    if (rows != 2 && rows != 4) return;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = (s_pending.cw_decode_rows == rows);
+    if (!same) s_pending.cw_decode_rows = rows;
+    xSemaphoreGive(s_mutex);
+    cw_decode_set_rows(rows);        // idempotent; returns at once if unchanged
+    if (!same) mark_dirty(DIRTY_CW_ROWS);
 }
 
 void settings_set_freq_sep_style(uint8_t v)
@@ -3353,6 +3632,25 @@ void settings_set_wspr_net_en(bool v)
     mark_dirty(DIRTY_WSPR_NET);
 }
 
+void settings_set_pa_ceiling_x10(uint16_t v_x10)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.pa_ceiling_x10 == v_x10) { xSemaphoreGive(s_mutex); return; }
+    s_pending.pa_ceiling_x10 = v_x10;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PA_CEILING);
+}
+
+uint16_t settings_get_pa_ceiling_x10(void)
+{
+    if (!s_ready) return 0;   /* no ceiling - the documented default */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.pa_ceiling_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_wspr_tx_dbm(int8_t v)
 {
     if (!s_ready) return;
@@ -3593,6 +3891,151 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
     xSemaphoreGive(s_mutex);
 }
 
+/* ---- RX input source ---------------------------------------------------
+ *
+ * ⛔ NEITHER SETTER TOUCHES HARDWARE FOR THE SOURCE ITSELF. app_main() reads
+ * it once, before USB host start, and the choice is latched for the session.
+ * settings_set_rx_source() returns true when a restart is needed to make the
+ * stored choice real, and every caller must say so on the surface it owns -
+ * see the comment on rx_source_t.
+ *
+ * The GAIN is different: it is one I2C register write on a running codec, so
+ * line_in.c applies it live and there is nothing to restart. */
+uint8_t settings_get_rx_source(void)
+{
+    /* The QMX before settings_init(), for the same reason port_a_mode answers
+     * relay: the boot branch reads this, and the radio is the only source
+     * that matches a board nobody has configured. */
+    if (!s_ready) return RX_SOURCE_QMX_USB;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t src = s_pending.rx_source;
+    xSemaphoreGive(s_mutex);
+    return rx_source_normalize(src);
+}
+
+bool settings_set_rx_source(uint8_t src)
+{
+    if (!s_ready) return false;
+    uint8_t want = rx_source_normalize(src);
+    if (want != src) {
+        /* Asked for a source this build does not implement. Say which, rather
+         * than silently storing the radio and leaving the operator to wonder
+         * why the selector sprang back. */
+        ESP_LOGW(TAG, "rx_source %s is declared but not implemented - staying on %s",
+                 rx_source_str(src), rx_source_str(want));
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = (s_pending.rx_source != want);
+    s_pending.rx_source = want;
+    xSemaphoreGive(s_mutex);
+    if (!changed) return false;        // already there: no restart needed
+    mark_dirty(DIRTY_RX_SOURCE);
+    ESP_LOGW(TAG, "rx_source -> %s (stored; RESTART REQUIRED to apply)",
+             rx_source_str(want));
+    return true;
+}
+
+uint8_t settings_get_line_in_gain_db(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t db = s_pending.line_in_gain_db;
+    xSemaphoreGive(s_mutex);
+    return line_in_gain_db_normalize(db);
+}
+
+void settings_set_line_in_gain_db(uint8_t db)
+{
+    if (!s_ready) return;
+    db = line_in_gain_db_normalize(db);
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.line_in_gain_db == db) { xSemaphoreGive(s_mutex); return; }
+    s_pending.line_in_gain_db = db;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LINEIN_GAIN);
+}
+
+uint8_t settings_get_port_a_mode(void)
+{
+    // RELAY is the answer before settings_init(): the boot branch and the
+    // gpio_relay refusals both read this, and "relay" is the only mode that
+    // matches hardware nobody has configured yet.
+    if (!s_ready) return PORT_A_MODE_RELAY;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t mode = s_pending.port_a_mode;
+    xSemaphoreGive(s_mutex);
+    return port_a_mode_normalize(mode);
+}
+
+/* Move the RAM copy of the mode on its own, so the sequencer can order that
+ * step precisely against the backend switch while NVS stays last. */
+static void set_mode_ram(uint8_t mode)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.port_a_mode = mode;
+    xSemaphoreGive(s_mutex);
+}
+
+bool settings_set_port_a_mode(uint8_t mode)
+{
+    if (!s_ready) return false;
+    mode = port_a_mode_normalize(mode);
+
+    uint8_t cur = settings_get_port_a_mode();
+    if (mode == cur) return true;   // already there - nothing to hand over
+
+    /* 3.1: refuse rather than hand the port over mid-pulse. The pulse's
+     * release callback would fire after the switch and drive a pin the other
+     * backend now owns, and a power cycle is a multi-second sequence that
+     * cannot be interrupted safely. The refusal is logged because the operator
+     * sees only "it did not change". */
+    if (gpio_relay_busy() || gpio_relay_power_cycle_status() == GPIO_PC_RUNNING) {
+        ESP_LOGW(TAG, "port mode refused: a relay pulse or power cycle is running "
+                      "(stays %s)", port_a_mode_str(cur));
+        return false;
+    }
+
+    if (mode == PORT_A_MODE_UNIT_GPS) {
+        /* 3.2: release FIRST, then bring the UART up. Configuring UART1 onto
+         * pins an output driver is still holding would put the GPS's TX into a
+         * driven pad for the duration. */
+        if (!gpio_relay_release()) {
+            ESP_LOGE(TAG, "port mode: could not release GPIO53/54 - staying %s",
+                     port_a_mode_str(cur));
+            return false;
+        }
+        if (!unit_gps_start()) {
+            /* Roll back: no UART means no mode change at all, and the pins go
+             * back to exactly what they were - the relay's stored polarity.
+             * RAM still says relay here, so gpio_relay_init() is allowed to
+             * drive. */
+            gpio_relay_init();
+            ESP_LOGE(TAG, "port mode: Unit GPS UART failed to start - rolled back to %s",
+                     port_a_mode_str(cur));
+            return false;
+        }
+        set_mode_ram(mode);
+        ESP_LOGI(TAG, "port mode: relay -> unit_gps (pins released, UART1 up)");
+    } else {
+        /* 3.3: stop the UART, then re-drive. gpio_relay_init() refuses while
+         * the RAM mode says unit_gps - which is the guard that stops an
+         * accidental call driving pins the UART owns - so the mode is moved
+         * first and only then the pins. The init's own READ BACK log is the
+         * evidence that both pads are driven again. */
+        unit_gps_stop();
+        set_mode_ram(PORT_A_MODE_RELAY);
+        gpio_relay_init();
+        ESP_LOGI(TAG, "port mode: unit_gps -> relay (UART stopped, pins driven)");
+    }
+
+    /* NVS LAST, after the metal already matches: a reset in between leaves a
+     * board that boots into the mode the pins are actually in, which is the
+     * only consistent answer. */
+    mark_dirty(DIRTY_PORT_A_MODE);
+    settings_flush();
+    return true;
+}
+
 void settings_set_resmon_en(bool v)
 {
     if (!s_ready) return;
@@ -3681,4 +4124,30 @@ void settings_set_lotw_uploaded_n(uint32_t n)
     s_pending.lotw_uploaded_n = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_LOTW_UPLOADED);
+}
+
+/* ── The grid the GPS last wrote (provenance for gps_autogrid.c) ────────────
+ * Written straight through rather than staged: it changes at most once per
+ * Maidenhead square the station moves into, so the debounce machinery and a
+ * dirty bit would buy nothing. It is also not part of qmx_settings_t on
+ * purpose - no caller but status.c has any business reading it. */
+void settings_get_gps_grid_auto(char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    out[0] = ' ';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    size_t sz = cap;
+    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = ' ';
+    xSemaphoreGive(s_mutex);
+}
+
+void settings_set_gps_grid_auto(const char *grid)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (grid && grid[0]) nvs_set_str(s_nvs, KEY_GPS_GRID_A, grid);
+    else                 nvs_erase_key(s_nvs, KEY_GPS_GRID_A);
+    nvs_commit(s_nvs);
+    xSemaphoreGive(s_mutex);
 }

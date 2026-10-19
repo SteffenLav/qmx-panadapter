@@ -37,6 +37,7 @@
 // only way to hear the station we're working (they transmit opposite us).
 
 #include "ft8_test.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "ft8_slot_gate.h"
 
 #include <stdio.h>
@@ -59,9 +60,13 @@
 #include "ft8/decode.h"
 #include "ft8/constants.h"
 #include "ft8/encode.h"
+#include "ft8/js8_text.h"
+#include "ft8/js8_reasm.h"
+#include "js8_chat.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
+#include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
 #include "dsp/iq_balance.h"
 #include "cat/cat.h"
@@ -79,13 +84,49 @@
 #include "time_sync.h"
 #include "ft8_status.h"
 #include "ui/ui.h"
+/* adif_log_band_for_freq() - the ONE band table, so the JS8 chat store files
+ * a conversation under the same band string the log and the spot map use. */
+#include "adif/adif_log.h"
 
 static const char *TAG = "ft8_test";
 
+/* Defined further down, beside the slot engine it belongs to; declared here
+ * because ft8_op_mode_set() and ft8_op_mode_name() both ask it, and they sit
+ * above it. */
+static ftx_protocol_t proto_for_mode(void);
+
 #define SR_HZ                 12000
-#define SLOT_SAMPLES          180000      // 15 s × 12 kHz (FT8 slot; also the
-                                          // scratch-buffer / max size - FT4's
-                                          // 7.5 s = 90000 samples fits inside)
+#define SLOT_SAMPLES          180000      // 15 s × 12 kHz - the FT8 slot, and ONLY
+                                          // that. Used where FT8's own length is
+                                          // meant (the self-test waveform).
+
+/* ⛔ THE BUFFER SIZE IS NOT THE FT8 SLOT. THEY WERE THE SAME CONSTANT UNTIL
+ * 2026-10-14 AND IT CORRUPTED THE HEAP.
+ *
+ * SLOT_SAMPLES was documented as "the FT8 slot; also the scratch-buffer / max
+ * size", which held while every protocol was SHORTER than 15 s - FT4's 7.5 s
+ * fits inside. JS8 Slow is 30 s. The slot loop handed
+ * dsp_ft8_capture_begin() a capacity of period_ms x 12 = 360000 samples for a
+ * buffer of 180000 floats, so the decimator wrote 1.44 MB into a 720 KB
+ * allocation. ft8_dec then died jumping to address 0 with every register and
+ * its whole stack zeroed - the signature of something else's memory being
+ * overwritten, not of a fault in the decoder.
+ *
+ * This is the SECOND defect of the same shape in one change (the first was two
+ * nfft-sized arrays on ft8_task's stack, monitor.h). The shape is: a buffer
+ * sized from FT8's numbers, then handed another protocol's. So the maximum is
+ * now its own constant, derived from the longest slot any protocol can select
+ * rather than from whichever happened to be longest when it was written.
+ *
+ * Cost: 1.44 MB instead of 720 KB of PSRAM for the capture scratch, 720 KB
+ * instead of 360 KB for the slot capture. Both PSRAM, which had 26 MB free at
+ * boot. */
+#define SLOT_SAMPLES_MAX      360000      // 30 s × 12 kHz - JS8 Slow, the longest
+                                          // slot any selectable protocol has.
+                                          // ⛔ RAISE THIS BEFORE ADDING A LONGER
+                                          // ONE; nothing checks it at compile time
+                                          // because the slot length is a runtime
+                                          // protocol fact.
 #define SLOT_TIMEOUT_MS       20000
 
 // Per-protocol slot length. FT8 = 15 s, FT4 = 7.5 s. The slot loop derives the
@@ -109,11 +150,31 @@ static const char *TAG = "ft8_test";
 static volatile ft8_op_mode_t s_op_mode = FT8_OP_MODE_FT8;
 static volatile bool          s_op_mode_loaded = false;   // lazy NVS load, once
 
+/* JS8 free-text reassembly state (J7). Touched ONLY from decode_slot's merge
+ * point, which is single-threaded, and read by the status handler - see the
+ * note at the merge for why it is not fed from the candidate loop. */
+/* PSRAM: 2168 bytes of internal .bss, touched once per slot at the merge
+ * and by the status handler. Nothing on a DMA or ISR path, and internal
+ * RAM is this board's scarce resource - see the audio.c note. */
+static EXT_RAM_BSS_ATTR js8_reasm_t s_js8_reasm;
+
 void ft8_op_mode_set(ft8_op_mode_t m)
 {
 #if FT4_MODE_DISABLED
     m = FT8_OP_MODE_FT8;   // see FT4_MODE_DISABLED's comment in ft8_test.h
 #endif
+    /* ⛔ A sub-mode whose protocol this build cannot decode or transmit is
+     * refused HERE, at the one door into the slot engine, rather than being
+     * allowed in and checked at each use. JS8 is that case today.
+     *
+     * Refused loudly: a mode that silently behaves as FT8 would look like it
+     * works, and the operator would be transmitting FT8 frames while the
+     * screen said JS8. */
+    if (m == FT8_OP_MODE_JS8 && !ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+        ESP_LOGW(TAG, "JS8 selected but not implemented in this build - staying on %s",
+                 ftx_protocol_name(proto_for_mode()));
+        return;
+    }
     // Changing sub-mode invalidates everything already on screen: the two
     // protocols have different slot lengths, so rows decoded under the old
     // timing describe a band that no longer exists as far as the new engine is
@@ -129,11 +190,18 @@ void ft8_op_mode_set(ft8_op_mode_t m)
     s_op_mode = m;
     s_op_mode_loaded = true;   // a deliberate set always wins over the lazy load
     settings_set_ft8_op_mode((uint8_t)m);   // sticky across reboot (debounced flush)
-    ESP_LOGI(TAG, "operating sub-mode -> %s", m == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    ESP_LOGI(TAG, "operating sub-mode -> %s",
+             m == FT8_OP_MODE_FT4 ? "FT4" : m == FT8_OP_MODE_JS8 ? "JS8" : "FT8");
     if (changed) {
         ft8_screen_clear();
         ft8_pileup_clear();
-        ESP_LOGI(TAG, "sub-mode changed - decode list and pileup cleared");
+        /* The free-text runs go with them. A run is keyed by audio offset, and
+         * an offset means something different under a different sub-mode - so
+         * leaving them would show FT4 traffic as a JS8 station still sending,
+         * the same class of mistake as leaving the decode list up. */
+        js8_reasm_init(&s_js8_reasm);
+        ESP_LOGI(TAG, "sub-mode changed - decode list, pileup and JS8 "
+                      "free-text runs cleared");
     }
 }
 
@@ -147,7 +215,17 @@ ft8_op_mode_t ft8_op_mode_get(void)
         s_op_mode_loaded = true;
         qmx_settings_t cfg;
         settings_load_all(&cfg);
-        s_op_mode = (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8;
+        /* Three-way now, and an unknown or unimplemented stored value falls
+         * back to FT8 rather than to whatever the enum's first member is. A
+         * device that stored JS8 before it worked must not come up in it. */
+        if (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) {
+            s_op_mode = FT8_OP_MODE_FT4;
+        } else if (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_JS8 &&
+                   ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+            s_op_mode = FT8_OP_MODE_JS8;
+        } else {
+            s_op_mode = FT8_OP_MODE_FT8;
+        }
 #if FT4_MODE_DISABLED
         // A device that had FT4 selected before this change must not come
         // back up in FT4 - see FT4_MODE_DISABLED's comment in ft8_test.h.
@@ -157,9 +235,17 @@ ft8_op_mode_t ft8_op_mode_get(void)
     return s_op_mode;
 }
 
+const char *ft8_op_mode_name(void)
+{
+    return ftx_protocol_name(proto_for_mode());
+}
+
 int ft8_op_mode_slot_ms(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
+    /* Asked of the protocol rather than written as a two-way ternary here -
+     * see the note at ftx_protocol_slot_ms(). JS8 Normal is 15 s like FT8, and
+     * saying so explicitly is what stops the next sub-mode inheriting it. */
+    return ftx_protocol_slot_ms(proto_for_mode());
 }
 
 // Max FT8 candidates considered per slot (matches the cands[] buffer in
@@ -360,6 +446,18 @@ static volatile uint32_t s_decode_jobs_done   = 0;
  * WSPR cycle is 120 s so a pathological case wants room. */
 #define FT8_ALLOC_TRIES    16
 #define FT8_ALLOC_WAIT_MS 1000
+/* ⛔ SWEPT FROM THE OTHER SIDE OF THE SAME BUG. wspr_rx.c's identical loop gave
+ * up 1868 ms before THIS task released the memory it was waiting for (John
+ * W5JSS, 2026-10-18 - the capture is quoted at WSPR_ALLOC_MAX_WAIT_TRIES). The
+ * counting mistake is the same here and the direction is just reversed: 16
+ * seconds is a guess at how long wspr_rx takes to let go, and wspr_rx_running()
+ * is the fact. A second spent waiting for a receiver that is demonstrably still
+ * up does not spend the budget; it spends this ceiling.
+ *
+ * Not measured against a real FT8-starved-by-WSPR case - unlike the WSPR side,
+ * no log has shown this one firing. It is the sibling, fixed because it is the
+ * same defect, not because it has bitten anyone yet. */
+#define FT8_ALLOC_MAX_WAIT_TRIES 45   /* hard ceiling, held or not */
 
 static volatile bool  s_ft8_task_alive = false;
 
@@ -373,6 +471,11 @@ static volatile bool     s_last_timing_valid = false;
 // not the raw measurement above - is what the time modal shows as the "nudge",
 // so a +/-2 s single-station raw reading never looks like a 2 s clock jump.
 static volatile int      s_last_applied_ms   = 0;
+// How many DISTINCT STATIONS contributed timing samples to s_last_timing_ms.
+// 1 means the consensus is one station's own offset, so "dt - consensus" is
+// identically zero for that station and carries no information - the DT column
+// must say so rather than print a confident +0.0 (Randy N4OPI, 2026-10-08).
+static volatile int      s_last_timing_stations = 0;
 // Bumped every time s_last_timing_ms is updated from a genuine decode, so
 // the UI can detect "a new sync just happened" even though it polls at 1 Hz
 // while decodes land roughly every 15 s.
@@ -396,6 +499,11 @@ bool ft8_get_last_applied_ms(int *out_ms)
 uint32_t ft8_get_timing_seq(void)
 {
     return s_timing_seq;
+}
+
+int ft8_get_last_timing_stations(void)
+{
+    return s_last_timing_valid ? s_last_timing_stations : 0;
 }
 
 // Monitor pool. Allocated + monitor_init'd in ft8_task. A monitor is owned by
@@ -454,6 +562,143 @@ static void note_tx_slot(int64_t slot_sec, int slot_index)
 // one buffer serves every slot (capture is strictly sequential).
 static float        *s_cap_scratch = NULL;
 
+
+int ft8_js8_freetext_count(void) { return js8_reasm_active(&s_js8_reasm); }
+
+bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out)
+{
+    const js8_reasm_run_t *run = js8_reasm_at(&s_js8_reasm, i);
+    if (!run || !out) return false;
+    snprintf(out->sender, sizeof(out->sender), "%s", run->sender);
+    out->freq_hz    = run->freq_hz;
+    out->frames     = run->n_seen;
+    out->secs       = (int)(run->last_slot - run->first_slot) + 15;
+    out->compressed = run->compressed;
+    out->truncated  = run->overflowed || run->text_full;
+    snprintf(out->text, sizeof(out->text), "%s", run->text);
+    return true;
+}
+
+/* ---- Slot-audio capture (M1: the JS8 reference corpus) ------------------
+ *
+ * See the long note in ft8_test.h for WHY this and not rxcap. Short version:
+ * s_cap_scratch is the decoder's own input - 12 kHz, slot-aligned, the same
+ * 180000 samples the FT8 reference WAVs in test/wav_reference hold - and
+ * rxcap is the 48 kHz codec output after the AGC.
+ *
+ * Snapshot point: after the last monitor_process() of the slot, where the
+ * buffer is complete INCLUDING the zero-padded dead-air tail. Taken before
+ * the decode is queued, because the decode task is what reuses nothing here
+ * but the next capture does, and the next capture arms ~1.7 s later. */
+static int16_t      *s_slotcap      = NULL;   /* PSRAM, SLOT_SAMPLES_MAX int16 */
+static uint32_t      s_slotcap_n    = 0;      /* samples actually held      */
+static int64_t       s_slotcap_sec  = 0;      /* the slot's UTC boundary    */
+static int           s_slotcap_peak = 0;   /* after normalising  */
+static float         s_slotcap_fpeak = 0;  /* BEFORE normalising */
+static const char   *s_slotcap_prot = "";
+static uint32_t      s_slotcap_seq  = 0;
+static volatile bool s_slotcap_en   = false;
+static volatile bool s_slotcap_hold = false;
+
+void ft8_slotcap_hold(bool on) { s_slotcap_hold = on; }
+bool ft8_slotcap_enabled(void) { return s_slotcap_en; }
+
+void ft8_slotcap_set_enabled(bool on)
+{
+    if (on == s_slotcap_en) return;
+    s_slotcap_en = on;
+    if (!on) {
+        /* Keep the buffer: the operator almost always wants the LAST slot
+         * after switching recording off, and 360 KB of PSRAM out of 13 MB is
+         * not worth losing it over. Freed only on ft8_test teardown. */
+        ESP_LOGW(TAG, "slotcap: OFF (last slot kept, seq=%u)",
+                 (unsigned)s_slotcap_seq);
+        return;
+    }
+    ESP_LOGW(TAG, "slotcap: ON - every complete slot is kept as 12 kHz PCM");
+}
+
+const int16_t *ft8_slotcap_data(uint32_t *n, int64_t *slot_sec, int *peak,
+                                const char **proto, uint32_t *seq, float *fpeak)
+{
+    if (n)        *n        = s_slotcap_n;
+    if (slot_sec) *slot_sec = s_slotcap_sec;
+    if (peak)     *peak     = s_slotcap_peak;
+    if (proto)    *proto    = s_slotcap_prot;
+    if (seq)      *seq      = s_slotcap_seq;
+    if (fpeak)    *fpeak    = s_slotcap_fpeak;
+    return (s_slotcap && s_slotcap_n) ? s_slotcap : NULL;
+}
+
+/* THE SCALE IS THE WHOLE PROBLEM HERE, so it is written down.
+ *
+ * s_cap_scratch holds RAW int16 MAGNITUDES, not a +/-1.0 signal: dsp.c builds
+ * it from audio_read_samples' int16 with a sign-flip mixer and a decimating
+ * FIR, neither of which normalises (dsp.c:1187).
+ *
+ * monitor_process() is not scale-free. It converts each bin to dB and then
+ * packs it as `2*db + 240`, CLAMPED to 0..255 - a window of -120..0 dB
+ * (monitor.c:189). Anything above about +7.5 dB saturates to 255, and a
+ * waterfall of 255s has no contrast for the Costas sync to find.
+ *
+ * So the corpus is written NORMALISED: the slot's own peak is scaled to
+ * int16 full scale, and the WAV is divided by 32768 again on load, which puts
+ * the harness in the +/-1.0 convention the 35 FT8 references already use.
+ *
+ * ⚠ WHAT THIS DOES NOT SETTLE. If the live float peak is large enough that
+ * the board's own waterfall is clamping, then the corpus is KINDER than the
+ * board and a harness pass would not mean the board can do it. That is why
+ * `peak_float` is reported in /api/slot.json rather than thrown away - it is
+ * the measurement that decides whether the live path has a saturation defect,
+ * and it has NOT been measured yet. Do not assume either answer. */
+static void slotcap_take(const float *src, uint32_t n, int64_t slot_sec,
+                         const char *proto)
+{
+    if (!s_slotcap_en || s_slotcap_hold) return;
+    if (n == 0 || n > SLOT_SAMPLES_MAX) return;
+    if (!s_slotcap) {
+        s_slotcap = heap_caps_malloc(SLOT_SAMPLES_MAX * sizeof(int16_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_slotcap) {
+            s_slotcap_en = false;
+            ESP_LOGE(TAG, "slotcap: no PSRAM for %d samples - disabled",
+                     SLOT_SAMPLES_MAX);
+            return;
+        }
+    }
+
+    float fpeak = 0.0f;
+    for (uint32_t i = 0; i < n; i++) {
+        float a = src[i] < 0.0f ? -src[i] : src[i];
+        if (a > fpeak) fpeak = a;
+    }
+    /* A silent slot must stay silent rather than be amplified into noise, so
+     * the gain is only applied when there is something to scale. */
+    float gain = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
+
+    int peak = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        float   x = src[i] * gain;
+        int32_t v = (int32_t)(x < 0.0f ? x - 0.5f : x + 0.5f);
+        if (v >  32767) v =  32767;
+        if (v < -32768) v = -32768;
+        s_slotcap[i] = (int16_t)v;
+        int a = v < 0 ? -v : v;
+        if (a > peak) peak = a;
+    }
+    s_slotcap_n     = n;
+    s_slotcap_sec   = slot_sec;
+    s_slotcap_peak  = peak;
+    s_slotcap_fpeak = fpeak;
+    s_slotcap_prot  = proto;
+    s_slotcap_seq++;
+    ESP_LOGI(TAG, "slotcap: slot UTC %lld kept (%lu smp, float peak %.1f = "
+                  "%.1f dB, gain x%.3f, %s, seq=%u)",
+             (long long)slot_sec, (unsigned long)n, fpeak,
+             20.0f * log10f(fpeak > 1e-6f ? fpeak : 1e-6f), gain, proto,
+             (unsigned)s_slotcap_seq);
+}
+
 // Shared kiss-FFT scratch, reused by EVERY monitor's STFT (monitor_process).
 // monitor_process is called only from the capture task, one monitor at a time,
 // strictly sequentially (captures never overlap; decode works on the pre-built
@@ -467,6 +712,16 @@ static float        *s_cap_scratch = NULL;
 static void         *s_shared_fft_work = NULL;
 static kiss_fftr_cfg s_shared_fft_cfg  = NULL;
 static bool          s_shared_fft_internal = false;  // diag: did it land internal?
+
+/* The STFT scratch pair, shared on exactly the same terms and for the same
+ * reason. It was two VLAs on ft8_task's stack until 2026-10-14, when JS8 Slow's
+ * nfft of 7680 made the pair ~61 KB and overflowed a 64 KB stack on the first
+ * Slow capture - see the note in monitor.h. Shared rather than per-monitor
+ * because monitor_process is capture-task-only and strictly sequential (the
+ * paragraph above), and because four private copies of a 61 KB pair is 246 KB
+ * of PSRAM for buffers only one monitor can be using. */
+static kiss_fft_scalar *s_shared_stft_time = NULL;
+static kiss_fft_cpx    *s_shared_stft_freq = NULL;
 
 // Return the index of a free pool monitor, or -1 if all are in flight.
 static int find_free_buffer(void)
@@ -484,6 +739,8 @@ static void free_shared_fft(void)
     if (s_shared_fft_work) { free(s_shared_fft_work); s_shared_fft_work = NULL; }
     s_shared_fft_cfg = NULL;
     s_shared_fft_internal = false;
+    if (s_shared_stft_time) { free(s_shared_stft_time); s_shared_stft_time = NULL; }
+    if (s_shared_stft_freq) { free(s_shared_stft_freq); s_shared_stft_freq = NULL; }
 }
 
 /* ⛔ DROP OUR REFERENCES TO THE CAPTURE POOL WITHOUT FREEING ANY OF IT.
@@ -514,6 +771,8 @@ static void forget_capture_pool(void)
     s_shared_fft_work     = NULL;
     s_shared_fft_cfg      = NULL;
     s_shared_fft_internal = false;
+    s_shared_stft_time    = NULL;   /* abandoned with the rest, never freed here */
+    s_shared_stft_freq    = NULL;
     s_cap_scratch         = NULL;
     s_pool_proto          = -1;
 }
@@ -528,6 +787,11 @@ static void free_capture_pool(void)
             // set up yet), leave it so monitor_free() frees it - no leak.
             if (s_mon_pool[i]->fft_work == s_shared_fft_work)
                 s_mon_pool[i]->fft_work = NULL;
+            /* Same for the STFT pair - shared, freed once by free_shared_fft(). */
+            if (s_mon_pool[i]->timedata == s_shared_stft_time)
+                s_mon_pool[i]->timedata = NULL;
+            if (s_mon_pool[i]->freqdata == s_shared_stft_freq)
+                s_mon_pool[i]->freqdata = NULL;
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
@@ -535,14 +799,46 @@ static void free_capture_pool(void)
     }
     free_shared_fft();
     if (s_cap_scratch) { heap_caps_free(s_cap_scratch); s_cap_scratch = NULL; }
+    if (s_slotcap) { heap_caps_free(s_slotcap); s_slotcap = NULL;
+                     s_slotcap_n = 0; }
     s_pool_proto = -1;
 }
 
-// Map the FT8/FT4 sub-mode flag to a decoder protocol.
+// Map the sub-mode flag to a decoder protocol. ONE copy: the QSO ladder and
+// the TX builders ask through ft8_op_mode_protocol() rather than repeating the
+// switch - see the note in ft8_test.h.
+ftx_protocol_t ft8_op_mode_protocol_for(ft8_op_mode_t m)
+{
+    switch (m)
+    {
+    case FT8_OP_MODE_FT4: return FTX_PROTOCOL_FT4;
+    /* ⭐ THE SUBMODE IS PART OF THE PROTOCOL, NOT A SETTING THE PHYSICAL LAYER
+     * READS LATER. Each JS8 submode has its own NSPS, slot period, tone
+     * spacing and sync arrays, so resolving it HERE means every caller that
+     * already asks this function - the decoder pool, the TX builders, the QSO
+     * ladder, the waterfall - gets the right physical layer without knowing a
+     * submode exists. settings_get_js8_submode() clamps anything unknown back
+     * to Normal, so the default below is unreachable rather than lenient. */
+    case FT8_OP_MODE_JS8:
+        switch (settings_get_js8_submode())
+        {
+        case 1:  return FTX_PROTOCOL_JS8_FAST;
+        case 2:  return FTX_PROTOCOL_JS8_TURBO;
+        case 4:  return FTX_PROTOCOL_JS8_SLOW;
+        default: return FTX_PROTOCOL_JS8;
+        }
+    default:              return FTX_PROTOCOL_FT8;
+    }
+}
+
+ftx_protocol_t ft8_op_mode_protocol(void)
+{
+    return ft8_op_mode_protocol_for(ft8_op_mode_get());
+}
+
 static inline ftx_protocol_t proto_for_mode(void)
 {
-    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FTX_PROTOCOL_FT4
-                                                  : FTX_PROTOCOL_FT8;
+    return ft8_op_mode_protocol();
 }
 
 // Free just the monitor objects (keep s_cap_scratch, which is protocol-agnostic
@@ -553,6 +849,10 @@ static void free_monitor_objects(void)
         if (s_mon_pool[i]) {
             if (s_mon_pool[i]->fft_work == s_shared_fft_work)
                 s_mon_pool[i]->fft_work = NULL;  // shared - freed once below
+            if (s_mon_pool[i]->timedata == s_shared_stft_time)
+                s_mon_pool[i]->timedata = NULL;  // shared - freed once below
+            if (s_mon_pool[i]->freqdata == s_shared_stft_freq)
+                s_mon_pool[i]->freqdata = NULL;  // shared - freed once below
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
@@ -639,10 +939,65 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     // shared buffer once (see free_monitor_pool / reinit_pool_if_mode_changed);
     // only the build path was missing it.
     void *prev_shared = s_shared_fft_work;
+    kiss_fft_scalar *prev_stft_time = s_shared_stft_time;
+    kiss_fft_cpx    *prev_stft_freq = s_shared_stft_freq;
+
+    /* ⛔ PSRAM, NOT INTERNAL, AND THAT IS A MEASUREMENT NOT A PREFERENCE.
+     *
+     * These two were tried INTERNAL-first, as the FFT work area below is. It
+     * works and it costs 30.7 KB of internal RAM at FT8/JS8 Normal's nfft -
+     * because moving them off ft8_task's stack does NOT give the stack's
+     * memory back. A task stack is reserved whole at creation, so the 30 KB
+     * these used to occupy there is still committed; allocating them again
+     * from the internal heap spends it twice. Measured on the dev bench
+     * 2026-10-14: the per-slot internal-heap MINIMUM went from 7-22 KB free to
+     * 0 KB on the identical workload.
+     *
+     * The decision is the same one the FFT work area's own comment already
+     * argues at length: do not reserve scarce internal RAM to speed up an STFT
+     * that meets its deadline with room to spare. Measured with the scratch
+     * internal, stft was 0.3-1.9 s for Normal/Fast/Turbo and 3.3-3.8 s for
+     * Slow, against slots of 6-30 s. See project_internal_ram_bss_audit. */
+    {
+        size_t t_sz = (size_t)s_mon_pool[0]->nfft * sizeof(kiss_fft_scalar);
+        size_t f_sz = ((size_t)s_mon_pool[0]->nfft / 2 + 1) * sizeof(kiss_fft_cpx);
+        s_shared_stft_time = heap_caps_malloc(t_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_shared_stft_freq = heap_caps_malloc(f_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_shared_stft_time || !s_shared_stft_freq) {
+            ESP_LOGE(TAG, "shared STFT scratch alloc (%u + %u B) failed",
+                     (unsigned)t_sz, (unsigned)f_sz);
+            return false;
+        }
+        ESP_LOGI(TAG, "shared STFT scratch: %u + %u B PSRAM (nfft %d)",
+                 (unsigned)t_sz, (unsigned)f_sz, s_mon_pool[0]->nfft);
+    }
 
     size_t fft_work_size = 0;
     kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
-    s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    /* ⛔ ASK BEFORE TRYING. This wants ~38 kB of INTERNAL RAM and the largest
+     * internal block after boot settles is about 27 kB, so the attempt fails
+     * essentially every time - measured on ~110 boots in the bench capture,
+     * including two where 59.8 kB and 69.8 kB were free. FREE MEMORY WAS NEVER
+     * THE CONSTRAINT; fragmentation is, and no amount of free bytes fixes a
+     * request larger than the largest block.
+     *
+     * The fallback below is correct and the decoder is comfortable on PSRAM
+     * (3.1 s of an 11 s budget, bench 2026-10-09). The problem was only that a
+     * DESIGNED fallback announced itself as a failure: heapwatch logs every
+     * failed allocation at ERROR, so this printed a red line on every boot for
+     * months and trained the eye to skip it. A diagnostic that cries wolf on a
+     * healthy path is worse than none - the same reasoning as the flash-persist
+     * streak reporting in util/diag_log.c.
+     *
+     * ⚠ DO NOT "FIX" THIS BY RESERVING THE 38 kB INTERNAL. That trades away
+     * most of what the 2026-10-09 .bss audit recovered, to speed up an FFT that
+     * already meets its deadline with 72% of the budget unused. Measure the
+     * decode time before ever reconsidering - see project_internal_ram_bss_audit. */
+    size_t int_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (int_lblk >= fft_work_size) {
+        s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     s_shared_fft_internal = (s_shared_fft_work != NULL);
     if (!s_shared_fft_work) {
         s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -664,6 +1019,15 @@ static bool build_monitor_pool(ftx_protocol_t proto)
         if (w && w != prev_shared && w != s_shared_fft_work) free(w);
         s_mon_pool[i]->fft_work = s_shared_fft_work;
         s_mon_pool[i]->fft_cfg  = s_shared_fft_cfg;
+
+        /* Same ownership rule for the STFT pair. */
+        kiss_fft_scalar *td = s_mon_pool[i]->timedata;
+        if (td && td != prev_stft_time && td != s_shared_stft_time) free(td);
+        s_mon_pool[i]->timedata = s_shared_stft_time;
+
+        kiss_fft_cpx *fd = s_mon_pool[i]->freqdata;
+        if (fd && fd != prev_stft_freq && fd != s_shared_stft_freq) free(fd);
+        s_mon_pool[i]->freqdata = s_shared_stft_freq;
     }
 
     if (prev_shared) {
@@ -683,13 +1047,17 @@ static bool build_monitor_pool(ftx_protocol_t proto)
 
     s_pool_proto = (int)proto;
     ESP_LOGI(TAG, "monitor pool built for %s: block=%d samples, %d blocks/slot, %u KB waterfall each",
-             proto == FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+             ftx_protocol_name(proto),
              s_mon_pool[0]->block_size, s_mon_pool[0]->wf.max_blocks,
              (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
                         * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024));
-    ESP_LOGI(TAG, "shared FFT scratch: %u B in %s (nfft=%d) - all %d monitors share it",
+    /* Name the REASON, not just the destination: "PSRAM" alone invites the
+     * question this line now answers, and the answer is the largest internal
+     * block, never the free total. */
+    ESP_LOGI(TAG, "shared FFT scratch: %u B in %s (nfft=%d, internal largest block %u B)"
+                  " - all %d monitors share it",
              (unsigned)fft_work_size, s_shared_fft_internal ? "INTERNAL" : "PSRAM",
-             s_mon_pool[0]->nfft, FT8_NUM_BUFFERS);
+             s_mon_pool[0]->nfft, (unsigned)int_lblk, FT8_NUM_BUFFERS);
     return true;
 }
 
@@ -715,7 +1083,7 @@ static void reinit_pool_if_mode_changed(void)
     }
 
     ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
-             want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+             ftx_protocol_label(want));
 
     /* ⛔ THIS FREED MEMORY THE DECODER WAS STILL READING, AND IT CRASHED THE
      * BOARD. Measured on bench dev 2026-09-25, switching FT8 -> FT4:
@@ -774,9 +1142,41 @@ static void reinit_pool_if_mode_changed(void)
     free_monitor_objects();
     if (!build_monitor_pool(want)) {
         ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
-                 want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+                 ftx_protocol_name(want));
         free_monitor_objects();
     }
+
+    /* Clear the list AGAIN, here, where the new protocol actually begins.
+     *
+     * ft8_op_mode_set() already cleared it the moment the operator tapped, and
+     * that clear is still right - it is what makes the screen respond at once.
+     * But it happens on the LVGL thread while a slot is in flight on the decode
+     * task, so a row published in the gap between the two survives it. The
+     * decode task's own mid-slot check (see decode_candidate_range) stops the
+     * bulk - it was ~30 rows on the bench - and this closes the last
+     * candidate-wide window rather than leaving one stale station behind.
+     *
+     * Idempotent and cheap, and it runs exactly once per sub-mode change: this
+     * point is only reached when s_pool_proto actually moved. */
+    ft8_screen_clear();
+    ft8_pileup_clear();
+
+    /* The timing consensus belongs to the protocol that measured it, so it dies
+     * with the list. Observed 2026-10-09 switching FT8 -> JS8 on the dev bench:
+     * rows went to 0 as intended while /api/decodes still served
+     * dt_consensus=800ms dt_stations=12, both left over from FT8.
+     *
+     * Harmless only while the list is empty. The timing merge runs AFTER the
+     * rows are published (see decode_slot), so the first JS8 slot that decodes
+     * anything would publish its rows against an FT8 consensus and an FT8
+     * station count - a corrected DT computed from the wrong protocol's
+     * measurement, which is exactly the confident-but-meaningless number this
+     * whole change exists to stop. One render, but the wrong one.
+     *
+     * Clearing _valid is enough: every reader goes through
+     * ft8_get_last_timing_ms / _stations, and both gate on it. */
+    s_last_timing_valid    = false;
+    s_last_timing_stations = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -786,15 +1186,128 @@ static void reinit_pool_if_mode_changed(void)
 // ft8_screen_record_decode is mutex-protected, so the two run safely against
 // one shared monitor. See decode_slot for the fan-out/join.
 // ---------------------------------------------------------------------------
+/* Per-range JS8 frame events kept for the reassembler. A slot holds at most a
+ * handful of JS8 signals; this is sized well above that so the cap is a
+ * backstop rather than a limit in normal traffic, and an overrun is counted
+ * (js8ev_dropped) rather than dropped silently. */
+#define FT8_JS8_MAX_EVENTS 24
+
+/* ⭐ ONE TRANSMISSION MUST PUBLISH ONE DECODE.
+ *
+ * Several candidates lock onto the same signal - adjacent time bins, and
+ * sidelobe offsets of a strong carrier - and each one passes CRC-12 carrying
+ * the IDENTICAL payload. Without a check, every copy is published.
+ *
+ * MEASURED on the field Tab5, 2026-10-10, one CQ from the shack at 20 m:
+ *
+ *   slot 10  cand=140  dec=23     slot 12  cand=140  dec=23
+ *   slot 14  cand=140  dec=22     slot 16  cand=140  dec=20
+ *
+ * All 'CQ OZ1LAV JO65'. The real signal sat at 1494 Hz (+8 dB); the other
+ * ~21 copies were the same frame at -22 to -34 dB, mostly on a 100 Hz grid
+ * (16 bins x 6.25 Hz), each also appearing at two adjacent dt values. A real
+ * JS8Call on the same radio, same signal, decoded it ONCE.
+ *
+ * ft8_lib's own reference decoder has this check (demo/decode_ft8.c, the
+ * decoded_hashtable / found_duplicate block). We never carried it over.
+ *
+ * ⚠ FT8 hid it: ft8_screen_record_decode() keys by callsign, so 23 decodes
+ * collapsed into one row with heard_count 23. It surfaced only in JS8, where
+ * data frames bypass that and reach js8_reasm.c as 23 fragments on 23
+ * different frequencies. The tcall[] comment below records the same bug from
+ * the other side - Randy N4OPI's "one station five times in a slot".
+ *
+ * ⛔ The harness cannot catch this class: js8_wav_harness.c's decode_slot()
+ * drops repeats by text before anything counts them.
+ *
+ * Compared on the raw payload, not the rendered text, so JS8 data frames -
+ * which never render - dedup too. The hash is only a fast pre-filter; a hash
+ * hit is confirmed with memcmp, because dropping a REAL decode on a collision
+ * would be worse than the duplicates this exists to remove.
+ *
+ * Shared by both halves of the dual-core fan-out, so it carries its own
+ * spinlock. Search and insert happen inside one critical section - two cores
+ * decoding the same payload simultaneously would otherwise both find it
+ * absent and both publish. */
+typedef struct {
+    portMUX_TYPE lock;
+    int          n;
+    uint32_t     hash[FT8_MAX_CANDIDATES];
+    uint8_t      payload[FT8_MAX_CANDIDATES][FTX_PAYLOAD_LENGTH_BYTES];
+} slot_dedup_t;
+
+/* True if this payload was already published in this slot; records it if not.
+ * Returns with the payload recorded either way the caller needs it: a `true`
+ * return means DROP. */
+static bool slot_dedup_seen(slot_dedup_t *d, const uint8_t *payload)
+{
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < FTX_PAYLOAD_LENGTH_BYTES; i++) {
+        h ^= (uint32_t)payload[i];
+        h *= 16777619u;
+    }
+    bool seen = false;
+    portENTER_CRITICAL(&d->lock);
+    for (int i = 0; i < d->n; i++) {
+        if (d->hash[i] == h &&
+            memcmp(d->payload[i], payload, FTX_PAYLOAD_LENGTH_BYTES) == 0) {
+            seen = true;
+            break;
+        }
+    }
+    /* Full is not an error: FT8_MAX_CANDIDATES distinct payloads in one slot
+     * cannot happen on air. Stop recording and let the rest through rather
+     * than silently suppressing real decodes. */
+    if (!seen && d->n < FT8_MAX_CANDIDATES) {
+        d->hash[d->n] = h;
+        memcpy(d->payload[d->n], payload, FTX_PAYLOAD_LENGTH_BYTES);
+        d->n++;
+    }
+    portEXIT_CRITICAL(&d->lock);
+    return seen;
+}
+
 typedef struct {
     int   n_decoded;
     int   n_attempted;
+    int   n_dup;                       // identical payloads suppressed (see slot_dedup_t)
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
     int   n_timing;
+    /* Sender-callsign hash for each timing sample, parallel to timing[].
+     *
+     * Exists because the SAMPLE count does not measure what the consensus
+     * needs. Randy N4OPI's 2026-10-08 capture decoded one station five times in
+     * a slot (five candidates, five timing samples, one callsign) - so a
+     * sample-count test reads "plenty of evidence" while the consensus is in
+     * fact a single station's own offset. The DT shown for that station is then
+     * (its dt - its own dt) = exactly 0.0, every slot, which tells the operator
+     * nothing. Counting DISTINCT SENDERS is the test that catches it. */
+    uint32_t tcall[FT8_MAX_CANDIDATES];
     /* Set when this range advanced the QSO early - see the early-advance note
        in the decode loop. decode_slot() skips its own end-of-slot advance when
        it is set, so advance() runs exactly ONCE per slot either way. */
     bool  early_advanced;
+
+    /* ---- JS8 frames for the free-text reassembler (J7) -------------------
+     *
+     * ⛔ RECORDED HERE RATHER THAN FED STRAIGHT IN, because the candidate loop
+     * runs on TWO threads: the decode task and its core-0 worker, each with
+     * its own decode_result_t (r_main / r_worker). js8_reasm_t is a single
+     * shared state machine with no lock, so touching it from the loop would
+     * be a data race on a structure the screen reads. Events are collected
+     * per range and drained at the merge, which is single-threaded.
+     *
+     * Both data and non-data JS8 frames go in. The non-data ones carry the
+     * callsign that names a later data run - a data frame has none - so
+     * filtering them out here would make every free-text message anonymous. */
+    struct {
+        int              freq_hz;
+        js8_frame_type_t type;
+        char             call[FT8_CALL_MAX_LEN];   /* "" for a data frame */
+        uint8_t          frame[JS8_FRAME_BYTES];
+    } js8ev[FT8_JS8_MAX_EVENTS];
+    int   n_js8ev;
+    int   js8ev_dropped;
 } decode_result_t;
 
 typedef struct {
@@ -809,6 +1322,8 @@ typedef struct {
      * decode_candidate_range(). */
     volatile int            next_cand;
     portMUX_TYPE            cand_lock;
+    /* Shared duplicate table - both halves check it before publishing. */
+    slot_dedup_t           *dedup;
     int                     start_off_ms;
     int                     start;        // first candidate index
     int                     step;         // index stride (2 for the dual-core split)
@@ -875,6 +1390,11 @@ static bool wait_for_sntp(uint32_t timeout_ms)
 static bool set_time_from_qmx_rtc(bool *out_applied)
 {
     int h, m, s;
+    /* A QMX+ with a GPS answers GP; with the DATE, which removes the "stale
+     * date" caveat above - and offline is exactly where that matters. It does
+     * NOT give the time: GP's second boundary measures ~1 s late, so the clock
+     * still comes from TM; below. See apply_qmx_gp() in time_sync.c. */
+    time_sync_try_qmx_gp();
     if (cat_query_qmx_time(&h, &m, &s) != ESP_OK) return false;
     bool applied = time_sync_notify_qmx(h, m, s);
     if (out_applied) *out_applied = applied;
@@ -886,6 +1406,10 @@ static bool set_time_from_qmx_rtc(bool *out_applied)
 // mode restored at boot before the radio is switched on), so we just
 // keep waiting and periodically update the status line so the user
 // knows we're still looking.
+//
+// TWO EXCEPTIONS, and they are the same exception twice: FT8 Simulation Mode
+// and a real audio source (the 3.5 mm jack) both run with NO RADIO AT ALL.
+// Sim mode is below; line-in is inside the loop, with its own note.
 //
 // EXCEPTION: FT8 Simulation Mode needs no radio at all (phantom stations,
 // ft8_tx.c's interlock never keys anything), yet this wait sat ahead of the
@@ -903,6 +1427,35 @@ static void wait_for_cat_ready(void)
         settings_load_all(&s);
         if (s.sim_mode_en) {
             ESP_LOGI(TAG, "sim mode ON - not waiting for QMX (no radio needed)");
+            return;
+        }
+        /* ⛔ AND THE SECOND CASE OF THE SAME THING: A REAL AUDIO SOURCE.
+         *
+         * line_in.h starts the jack INSTEAD of bsp_usb_host_start() and is
+         * "mutually exclusive with the QMX, decided at boot". So on line-in
+         * there is no USB host, no QMX, and cat_is_ready() can NEVER become
+         * true - this loop was not waiting for something slow, it was waiting
+         * for something that cannot happen, for ever, before the first slot.
+         *
+         * Tony tony1tf, GitHub #19, v1.17.1: audio in, spectrum on the glass,
+         * WSPR decoding well off the same input, and FT8 never decoding a
+         * thing at any LO placement. wspr_rx.c has no cat_is_ready() anywhere,
+         * which is the whole of why WSPR worked and FT8 did not. He spent his
+         * time moving the local oscillator; nothing had got as far as looking
+         * at audio.
+         *
+         * The sim-mode escape above already made this argument - "needs no
+         * radio at all, yet this wait sat ahead of the entire slot loop" -
+         * and a real source is the same sentence with a different subject.
+         *
+         * ⚠ WHAT STILL NEEDS THE RADIO is handled below, not here: the QMX
+         * RTC query fails without CAT and falls through to SNTP, and if there
+         * is no time source at all the task parks and says so. Decoding is
+         * what this gate was wrongly blocking. */
+        if (rx_source_is_real(settings_get_rx_source())) {
+            ESP_LOGI(TAG, "RX source is the audio jack - not waiting for a QMX "
+                          "(there is none by design); FT8 runs off line-in");
+            ft8_status_set("Line-in: decoding audio");
             return;
         }
         int64_t now = esp_timer_get_time();
@@ -934,6 +1487,25 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
         if (boundary > after_ms) {
             return boundary;
         }
+
+        /* ⭐ CLOSE A FINISHED QSO HERE, not a slot later.
+         *
+         * This wait is the one place the decode task is genuinely idle, and
+         * it is where our own closing 73 lands: the burst ends about 12.6 s
+         * into a 15 s slot, leaving ~2.4 s of nothing. Before this, the only
+         * thing that ever noticed the exchange was over was ft8_qso_advance()
+         * on the NEXT slot, so the machine stayed "busy" for a full extra
+         * cycle and the operator could not start anybody else (Bruce N9JCV,
+         * POTA, 2026-10-13).
+         *
+         * ⚠ ONLY WITH MARGIN. The wrap-up writes the ADIF record
+         * synchronously - measured at 31-342 ms on the bench - and this loop's
+         * whole job is to be punctual for the boundary. Polling it inside the
+         * last second could make the slot itself late, which would cost a
+         * key-down. 1200 ms is comfortably more than the worst measurement and
+         * still fires the moment the burst finishes. */
+        if ((boundary + period_ms) - now_ms > 1200) ft8_qso_poll_finish();
+
         vTaskDelay(1);  // ~10 ms at default tick rate
     }
 }
@@ -944,9 +1516,66 @@ static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
 
 // WSJT-X reports SNR referenced to a 2500 Hz noise bandwidth.
 #define FT8_SNR_REF_BW_HZ      2500.0f
-// Empirical fudge factor - nudge this if a real WSJT-X comparison ever
-// becomes available; everything else here is derived from first principles.
-#define FT8_SNR_CAL_OFFSET_DB  15.0f
+/* Empirical fudge factor - everything else here is derived from first
+ * principles. The old comment invited a nudge "if a real WSJT-X comparison
+ * ever becomes available". Read the dead end below before accepting one.
+ *
+ * ⛔ TRIED AND REVERTED 2026-10-10: +15 -> -7, on ONE comparison.
+ *
+ * A JS8Call 2.3.1 station and a Tab5 heard the same transmission from the
+ * same QMX on the same dummy load, with only the USB cable moved between
+ * them: JS8Call said -14 dB, we said +8. That looked like a clean 22 dB
+ * error. It was not usable, for two reasons found afterwards:
+ *
+ * 1. ⛔ DIFFERENT AUDIO PATHS. JS8Call took the QMX's SOUND CARD; we take
+ *    its USB IQ stream. Two interfaces, two gains. The radio and the path
+ *    were identical; the levels were not, and 22 dB is well inside what that
+ *    difference can account for. "Only the cable moved" is true of the
+ *    antenna and false of the gain.
+ *
+ * 2. ⛔ IT BREAKS THE ORDINARY CASE. Off-air stations decoded in the same
+ *    session read -5, -8, -10, -11, -13 dB with +15 - entirely plausible
+ *    WSJT-X numbers. Subtracting 22 puts them at -27 to -35, where nothing
+ *    decodes at all. One constant cannot be right at both ends, so the
+ *    discrepancy is not an offset and must not be fixed with one.
+ *
+ * ⭐ THE TEST THAT WOULD SETTLE IT, and it needs no hardware: capture one
+ * slot to a WAV and run the SAME samples through our harness and through a
+ * reference decoder. Identical input removes the interface gain, which is
+ * the variable that invalidated the comparison above.
+ *
+ * ⚠ A structural term worth folding in when someone does that: the signal
+ * loop takes the MAX of 8 tone bins per block while the noise floor is the
+ * MEAN over all bins. For noise alone the expected max of 8 iid bins is
+ * H_8 = 2.718, i.e. +4.34 dB, so sig_db - noise_db does not tend to zero as
+ * the signal vanishes - it tends to about +4.3. That bias is currently
+ * inside this constant.
+ */
+#define FT8_SNR_CAL_OFFSET_DB  23.0f
+/* ⭐ 23.0f, and this time it is a CURVE, not one reading.
+ *
+ * METHOD, because the number is only as good as it: 12 real 20 m FT8 slots
+ * were recorded off the board with /api/slot.wav (the decoder's OWN 12 kHz
+ * input), then the SAME samples were decoded by WSJT-X's jt9 and by this
+ * estimator ported into a host harness (scratchpad/wfsweep). Same input, same
+ * gain - which is exactly what the earlier sound-card-vs-USB comparison
+ * failed to control, and why it gave the wrong sign.
+ *
+ *   packing      n    mean(ours-jt9)   trend
+ *   2/240      145       -4.2 dB      -0.285 dB/dB
+ *   2/200      154       -7.7 dB      -0.105 dB/dB
+ *
+ * With the waterfall window moved (WF_DB_BIAS 200) the error is very nearly a
+ * CONSTANT -7.7 dB, so a constant is now the right instrument: 15 + 7.7 = 23.
+ * At the stock packing it was not - the -0.285 dB/dB trend was the uint8
+ * waterfall CLIPPING the strongest signals, and no offset can fix a slope.
+ *
+ * ⚠ What is left: a residual -0.105 dB/dB and sd 3.0 dB, so a very strong
+ * signal still reads a few dB low. One band, one afternoon, 154 points.
+ * Re-run scratchpad/snr_compare.py on a fresh corpus to check it.
+ *
+ * ⛔ THIS NUMBER IS TIED TO WF_DB_BIAS. Change the packing and this is wrong
+ * again. */
 
 // Mean noise power across the whole slot's waterfall, in dB. Signals occupy a
 // small fraction of bins, so the mean tracks the noise floor closely.
@@ -1094,6 +1723,62 @@ static float ft8_estimate_snr_db(const monitor_t *mon, const ftx_candidate_t *ca
 // Decode pipeline - called only from ft8_decode_task (+ its core-0 helper)
 // ---------------------------------------------------------------------------
 
+/* Render a decoded message as the one line of text everything above here
+ * speaks: the decode list, the filters, the pileup, worked-before, the ADIF
+ * log and the whole QSO ladder.
+ *
+ * ⭐ THIS IS WHERE JS8 JOINS, and it joins here rather than inside the ladder
+ * on purpose. ft8_qso.c decides an exchange from split_msg3()'s third field,
+ * and none of its ~3900 lines are about a wire format. A JS8 frame rendered
+ * into the same "<to> <from> <rest>" shape therefore drives all of it
+ * unchanged. The mapping itself lives in js8_text.c, with a host harness.
+ *
+ * The offsets are FT8's field map for highlighting. Nothing reads them today
+ * (both call sites write and discard), so the JS8 branch leaves them cleared
+ * rather than inventing field positions - if a caller ever starts reading
+ * them, an empty map is a visible gap, not a wrong one. */
+/* Record one JS8 frame for the free-text reassembler. See the js8ev note in
+ * decode_result_t for why this stores instead of feeding js8_reasm directly. */
+static void js8ev_record(decode_result_t *out, int freq_hz,
+                         js8_frame_type_t type, const char *call,
+                         const uint8_t *payload)
+{
+    if (out->n_js8ev >= FT8_JS8_MAX_EVENTS) { out->js8ev_dropped++; return; }
+    int k = out->n_js8ev++;
+    out->js8ev[k].freq_hz = freq_hz;
+    out->js8ev[k].type    = type;
+    snprintf(out->js8ev[k].call, sizeof(out->js8ev[k].call), "%s", call ? call : "");
+    memcpy(out->js8ev[k].frame, payload, JS8_FRAME_BYTES);
+}
+
+static bool decode_msg_to_text(const ftx_message_t *msg, ftx_protocol_t proto,
+                               char *text, size_t text_len,
+                               ftx_message_offsets_t *off)
+{
+    if (ftx_protocol_is_js8(proto)) {
+        memset(off, 0, sizeof(*off));
+        off->offsets[0] = -1;        // the terminator this struct documents
+        /* js8_decode_candidate() leaves the 9-byte varicode frame in
+         * msg->payload (10 bytes), so the frame is read straight out of it.
+         *
+         * Rendered into a full-width buffer first and then length-checked,
+         * because FTX_MAX_MESSAGE_LENGTH (35) is FT8's limit and a JS8 line can
+         * be longer: two 11-character calls plus a spelled-out command reaches
+         * 37. Truncating it would put a DIFFERENT message on the screen and in
+         * the log, so one that does not fit is dropped instead. */
+        char full[JS8_TEXT_MAX];
+        if (!js8_frame_to_text(msg->payload, full, sizeof(full))) return false;
+        if (strlen(full) >= text_len) {
+            ESP_LOGW(TAG, "JS8 decode too long for the row (%u): '%s'",
+                     (unsigned)strlen(full), full);
+            return false;
+        }
+        snprintf(text, text_len, "%s", full);
+        return true;
+    }
+    return ftx_message_decode(msg, ft8_hash_if(), text, off) == FTX_MESSAGE_RC_OK;
+}
+
 // Decode candidates [start, n_cand) with the given stride, recording each
 // successful decode and collecting its timing sample into *out. Reentrant: it
 // reads only the (const) waterfall and writes to its own result struct plus the
@@ -1107,12 +1792,23 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                                    int64_t t_start_us, int start_off_ms,
                                    bool may_early_advance,
                                    volatile int *cursor, portMUX_TYPE *cursor_lock,
+                                   slot_dedup_t *dedup,
                                    decode_result_t *out)
 {
+    /* ⛔ EVERY COUNTER IN decode_result_t IS RESET HERE, and the list is not
+     * optional. r_main is a STACK local in decode_slot and is never memset,
+     * so a counter left out of this block starts as whatever was on the
+     * stack. Adding js8ev[] without adding n_js8ev here crashed ft8_dec on
+     * the first JS8 slot after boot (load access fault at 0x4c000000,
+     * 2026-10-09): the merge loop read a garbage count and walked off the
+     * array. Anything added to that struct is added here in the same edit. */
     out->early_advanced = false;
     out->n_decoded   = 0;
     out->n_attempted = 0;
+    out->n_dup       = 0;
     out->n_timing    = 0;
+    out->n_js8ev     = 0;
+    out->js8ev_dropped = 0;
     (void)start_off_ms;   // no longer added to the timing (backfill anchors the
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
@@ -1200,6 +1896,41 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
          * Costs the final slot's decodes on the way out, which is precisely
          * what the operator asked for by leaving. */
         if (!s_ft8_running) break;
+
+        /* ⛔ THE OPERATOR CHANGED SUB-MODE WHILE THIS SLOT WAS IN FLIGHT.
+         *
+         * Abandon it. The audio in this monitor was captured under the old
+         * protocol and is being decoded under it, so every row it would
+         * publish describes a band the new engine cannot hear - and
+         * ft8_op_mode_set() has ALREADY cleared the list by now, so these rows
+         * land in a list the operator just watched empty.
+         *
+         * Measured on the bench 2026-10-08: tapping the JS8 preset at t=973.6 s
+         * cleared the list, and the slot already running then published ~30 FT8
+         * stations into it between 975.8 s and 978.3 s - the new pool was not
+         * built until 979.3 s. On the glass that reads as JS8 decoding FT8
+         * traffic. Worse than cosmetic: those rows are tappable, which is a
+         * pounce at a station we cannot hear on this timing, exactly the hazard
+         * ft8_op_mode_set()'s own clear comment says it exists to prevent.
+         *
+         * Breaking rather than skipping the publish, for two reasons: there is
+         * no point spending core time on a result that is going to be dropped,
+         * and reinit_pool_if_mode_changed() waits up to POOL_REBUILD_WAIT_MS
+         * for this decode to drain before it may free the pool - so giving up
+         * early makes the rebuild land sooner, not later.
+         *
+         * The timing samples go with it, deliberately: they describe a slot
+         * measured on the old protocol's block size, and the auto-sync leash
+         * has no business integrating those. */
+        if (mon->wf.protocol != proto_for_mode()) {
+            ESP_LOGW(TAG, "sub-mode changed mid-slot - dropping this %s slot's decodes "
+                          "(%d attempted, %d decoded so far)",
+                     ftx_protocol_name(mon->wf.protocol), out->n_attempted, out->n_decoded);
+            out->n_decoded = 0;
+            out->n_timing  = 0;
+            break;
+        }
+
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
         }
@@ -1207,9 +1938,45 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         ftx_message_t msg;
         ftx_decode_status_t st;
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
-        char text[FTX_MAX_MESSAGE_LENGTH];
+        /* ⭐ ONE TRANSMISSION, ONE DECODE - see slot_dedup_t for the
+         * measurement. Checked HERE, before decode_msg_to_text(), so a
+         * duplicate costs nothing beyond the LDPC that already ran, and so
+         * BOTH branches below are covered: the rendered one and the JS8
+         * data-frame one that feeds the reassembler. */
+        if (dedup && slot_dedup_seen(dedup, msg.payload)) {
+            out->n_dup++;
+            continue;
+        }
+        /* ⛔ FT8_TEXT_MAX_LEN (40), NOT FTX_MAX_MESSAGE_LENGTH (35).
+         * 35 is FT8's own ceiling and it SILENTLY DROPPED long JS8 lines:
+         * decode_msg_to_text() refuses rather than truncate (truncating puts a
+         * different message on the screen), so a Directed frame between two
+         * 11-character compound calls, and J9's longest Compound line
+         * "<....> PJ4/K1ABC/P HEARTBEAT SNR +31" at 36, never reached the
+         * list at all. 40 is what ft8_screen.c's row already stores, so this
+         * widens nothing downstream - it stops throwing away what fits. */
+        char text[FT8_TEXT_MAX_LEN];
         ftx_message_offsets_t off;
-        if (ftx_message_decode(&msg, ft8_hash_if(), text, &off) == FTX_MESSAGE_RC_OK) {
+        /* ONE call, deliberately: decode_msg_to_text() runs the message
+         * unpackers, and calling it twice to get at both branches would pay
+         * that twice per candidate inside a loop that already has a
+         * FT8_DECODE_BUDGET_MS ceiling. */
+        bool rendered = decode_msg_to_text(&msg, mon->wf.protocol, text,
+                                           sizeof(text), &off);
+        if (!rendered && ftx_protocol_is_js8(mon->wf.protocol) &&
+            js8_frame_is_data(js8_frame_type(msg.payload))) {
+            /* ⭐ A JS8 DATA FRAME LANDS HERE, and until now that was the end
+             * of it: the frame passed CRC-12, carried somebody's free text,
+             * and was discarded without trace. js8_text.c returns false for
+             * it deliberately - one frame is a fragment, not a message - so
+             * it goes to js8_reasm.c, which joins the fragments and decodes
+             * them (js8_jsc.c). */
+            int dfreq = (int)lroundf((mon->min_bin + cands[i].freq_offset) /
+                                     mon->symbol_period);
+            js8ev_record(out, dfreq, js8_frame_type(msg.payload), NULL,
+                         msg.payload);
+        }
+        if (rendered) {
             out->n_decoded++;
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
@@ -1240,6 +2007,21 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             float cand_dt_ms = (cands[i].time_offset * mon->block_size +
                                 cands[i].time_sub * mon->subblock_size) / 12.0f;
             if (out->n_timing < FT8_MAX_CANDIDATES) {
+                /* FNV-1a over the sender callsign, stored beside the sample so
+                 * the merge can count distinct stations. A hash, not the string:
+                 * this array is per-decode-result and lives on the decode
+                 * stack's budget - 140 x 4 bytes, not 140 x 14. Collisions cost
+                 * an under-count of stations, which only blanks a DT column
+                 * that was about to be shown; nothing acts on it. */
+                char tcall[FT8_CALL_MAX_LEN];
+                uint32_t h = 2166136261u;
+                if (ft8_screen_extract_call(text, tcall, sizeof(tcall))) {
+                    for (const char *c = tcall; *c; c++) {
+                        h ^= (uint32_t)(unsigned char)*c;
+                        h *= 16777619u;
+                    }
+                }
+                out->tcall[out->n_timing]  = h;
                 out->timing[out->n_timing++] = cand_dt_ms;
             }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
@@ -1253,6 +2035,16 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             // symbol_period). Omitting this put every recorded/replied tone off by
             // mon->min_bin*6.25 (200 Hz) plus a ~6.25x scale error.
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
+            /* A JS8 frame that DID render carries the callsign that will name
+             * a later data run on this offset. ft8_screen_extract_call gives
+             * the sender for both shapes the renderer emits ("HB <call> ..."
+             * and "<to> <from> <rest>"). */
+            if (ftx_protocol_is_js8(mon->wf.protocol)) {
+                char jcall[FT8_CALL_MAX_LEN];
+                if (!ft8_screen_extract_call(text, jcall, sizeof(jcall))) jcall[0] = 0;
+                js8ev_record(out, freq_hz, js8_frame_type(msg.payload),
+                             jcall, msg.payload);
+            }
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
             if (!sim_suppresses_real) {
@@ -1286,13 +2078,25 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                  * skip. Running advance() twice would re-scan the same message
                  * and could step the state machine twice.
                  *
-                 * ⚠ The cost, stated: advance() also captures the pileup and
-                 * scans for CQ callers, and running early shows it a PARTIAL
-                 * decode table. That is why the gate is ft8_qso_msg_is_for_us()
-                 * - it is only taken when a QSO is already running, which is
-                 * exactly when the pileup matters least and a prompt reply
-                 * matters most. An idle receiver still advances at the end of
-                 * the slot with the full picture, as before. */
+                 * ⛔ THE COST WAS STATED HERE AND THE REASONING WAS WRONG.
+                 * advance() also captures the pile-up and scans for CQ callers,
+                 * and running early shows it a PARTIAL decode table. This said
+                 * that was acceptable because the gate ft8_qso_msg_is_for_us()
+                 * means "only when a QSO is already running, which is exactly
+                 * when the pileup matters least".
+                 *
+                 * That predicate returns true for every state except IDLE,
+                 * DONE and TIMEOUT - and FT8_QSO_CQ is none of those. A CQ run
+                 * is "busy". So it fired precisely while a pile-up was
+                 * forming, which is when the pile-up matters MOST. Randy
+                 * N4OPI's 2026-10-16 log: 4 of 4 slots with more than one
+                 * station calling him lost every caller decoded after the
+                 * first, one of them 10 dB stronger than the one that won.
+                 *
+                 * Fixed by looking AGAIN at the end of the slot rather than by
+                 * weakening this gate - ft8_qso_slot_late_look() below. The
+                 * early advance keeps its reply latency; it no longer also
+                 * spends the slot's only look at the band. */
                 if (may_early_advance && !out->early_advanced &&
                     ft8_qso_msg_is_for_us(text)) {
                     out->early_advanced = true;
@@ -1310,7 +2114,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                     ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
                     pskreporter_spot(sp_call, sp_grid,
                                      cat_get_frequency() + (uint32_t)freq_hz, snr_db,
-                                     s_pool_proto == (int)FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+                                     ftx_protocol_name((ftx_protocol_t)s_pool_proto),
                                      slot_sec);
                 }
             }
@@ -1422,7 +2226,8 @@ static void ft8_decode_worker_task(void *arg)
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
                                job->start_off_ms, true,
-                               &job->next_cand, &job->cand_lock, job->result);
+                               &job->next_cand, &job->cand_lock,
+                               job->dedup, job->result);
         xSemaphoreGive(ctx->done);
     }
     /* MEASURE IT, so the 65536 above stops being a judgement call. This task
@@ -1452,7 +2257,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
     int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
 
-    // "Let the others wait": if we're mid pounce-exchange, the message we
+    // "Let the others wait": if we're mid-exchange (pounce OR CQ-run - the
+    // CQ-run exclusion was removed 2026-10-04, see ft8_qso_get_priority_freq),
+    // the message we
     // actually need is the partner's, at a known tone — move any candidate
     // near it to the FRONT of cands[] (still strongest-first within each
     // partition) so it's one of the very first picks on whichever core
@@ -1477,6 +2284,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             }
         }
         memcpy(cands, reordered, (size_t)n_cand * sizeof(cands[0]));
+        /* ⭐ SAY SO. Without this the reorder is invisible: it mutates a local
+         * array and nothing downstream names it, so the only evidence was the
+         * ARRIVAL TIME of "early advance", which is indirect and cannot
+         * distinguish "the hint fired and found nothing" from "the hint never
+         * fired at all". That is exactly the gap that let the CQ-run exclusion
+         * in ft8_qso_get_priority_freq() sit unnoticed from September to
+         * 2026-10-04: auto-answer IS CQ-run, so the front-loading never ran for
+         * the operators using it, and no log said so.
+         * np == 0 is a real and useful reading - it means we had a hint and the
+         * partner was not in this slot's candidate list. Once per slot, and only
+         * while a QSO is actually running. */
+        ESP_LOGI(TAG, "decode reorder: partner hint %d Hz +/-25 - promoted %d of "
+                      "%d candidate(s) to the front",
+                 priority_freq_hz, np, n_cand);
     }
 
     // Slot noise floor for SNR: one powf sweep over the whole waterfall, shared
@@ -1522,8 +2343,17 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // mutex-protected decode list. r_worker is static (one helper, one slot at a
     // time); r_main is a stack local. We block on the done semaphore before reading
     // r_worker, so neither result struct is ever touched concurrently.
-    static decode_result_t r_worker;
+    /* PSRAM, 2008 bytes: written by the core-0 worker a few times per slot
+     * (once per decoded candidate), never per sample, and read only after
+     * the join. r_main stays on the stack, which is already 64 KB. */
+    static EXT_RAM_BSS_ATTR decode_result_t r_worker;
     decode_result_t r_main;
+
+    /* One duplicate table per SLOT, shared by both halves. A stack local
+     * rather than a static: decode_slot is the only writer, the decode task's
+     * stack is already 64 KB, and a static would have to be cleared anyway -
+     * with the cross-instance hazard worker_ctx_t exists to avoid. ~2 KB. */
+    slot_dedup_t dedup = { .lock = portMUX_INITIALIZER_UNLOCKED, .n = 0 };
 
     worker_job_t job = {
         .mon = mon, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
@@ -1531,6 +2361,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         .start = 1, .step = 2, .result = &r_worker,
         /* Both halves walk this one cursor - see decode_candidate_range(). */
         .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
+        .dedup = &dedup,
     };
     /* ⭐⭐ DO NOT HAND WORK TO A CORE THAT CANNOT DO IT.
      *
@@ -1591,7 +2422,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
                            t_start, start_off_ms, true,
                            dispatched ? &job.next_cand : NULL,
-                           dispatched ? &job.cand_lock : NULL, &r_main);
+                           dispatched ? &job.cand_lock : NULL, &dedup, &r_main);
     int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
@@ -1600,23 +2431,215 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         // No helper (or <=1 candidate): decode the odd half inline too.
         /* Inline fallback: this is still the DECODE TASK, so it may early-advance
            on the same terms as the even half above. */
+        /* Same dedup table as the even half above: a duplicate must be caught
+           across the two ranges, not only within one. */
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
-                               t_start, start_off_ms, true, NULL, NULL, &r_worker);
+                               t_start, start_off_ms, true, NULL, NULL,
+                               &dedup, &r_worker);
     }
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
     int n_attempted = r_main.n_attempted + r_worker.n_attempted;
+    /* Reported in the slot line: without it the fix is invisible, and a
+     * decoder that suddenly publishes one row instead of twenty-three looks
+     * exactly like a decoder that stopped working. */
+    int n_dup       = r_main.n_dup       + r_worker.n_dup;
+    /* JS8 frames recorded for the reassembler. A free-text DATA frame never
+     * renders, so it does NOT reach n_decoded (see the js8_frame_is_data
+     * branch in decode_range). Two consumers need to know it arrived:
+     *   - the slot line, where dec=0 on a slot that decoded a perfectly good
+     *     3-frame message reads as a failure. Measured 2026-10-10: JS8Call's
+     *     free text arrived as dec=0 dup=28, and the message reassembled.
+     *   - the stuck-RX heuristic below, which soft-resets audio+IQ on
+     *     consecutive zero-decode slots. A station receiving nothing but free
+     *     text scores zero in every slot and had its receiver reset under it.
+     * Zero in FT8/FT4, so neither consumer needs a protocol guard. */
+    int n_js8ev     = r_main.n_js8ev     + r_worker.n_js8ev;
     int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
+
+    /* ---- JS8 free-text reassembly (J7) ---------------------------------
+     *
+     * HERE and not in the candidate loop: both halves of the decode run
+     * concurrently and js8_reasm_t has no lock. This point is after the join,
+     * so it is the first place the two ranges' events can be merged safely.
+     *
+     * ⚠ ORDER MATTERS WITHIN A SLOT. Every non-data frame must be fed before
+     * the data frames of the same slot, or a station that identifies itself
+     * and then sends text in the SAME slot starts an anonymous run. The two
+     * ranges' events are therefore swept twice - identifications first - and
+     * not merged in arrival order. */
+    if (ftx_protocol_is_js8(proto_for_mode())) {
+        const decode_result_t *ranges[2] = { &r_main, &r_worker };
+        for (int pass = 0; pass < 2; pass++) {
+            for (int rr = 0; rr < 2; rr++) {
+                /* Clamped, as well as initialised at the source. The reset
+                 * above is the fix; this is so the same slip can never again
+                 * turn into a crash on the decode task overnight - it would
+                 * cost a wrong count instead. */
+                int nev = ranges[rr]->n_js8ev;
+                if (nev < 0) nev = 0;
+                if (nev > FT8_JS8_MAX_EVENTS) nev = FT8_JS8_MAX_EVENTS;
+                for (int k = 0; k < nev; k++) {
+                    bool is_data = js8_frame_is_data(ranges[rr]->js8ev[k].type);
+                    if ((pass == 0) == is_data) continue;   /* pass 0 = idents */
+                    js8_reasm_add(&s_js8_reasm, slot_sec,
+                                  ranges[rr]->js8ev[k].freq_hz,
+                                  ranges[rr]->js8ev[k].frame,
+                                  ranges[rr]->js8ev[k].type,
+                                  ranges[rr]->js8ev[k].call[0]
+                                      ? ranges[rr]->js8ev[k].call : NULL);
+                }
+            }
+        }
+        js8_reasm_tick(&s_js8_reasm, slot_sec);
+
+        /* ---- feed the conversation store (the JS8 page) -------------------
+         *
+         * Here, after the join, for the same reason js8_reasm is fed here: the
+         * candidate loop runs on two threads and this store has no lock.
+         *
+         * ⭐ THE STRUCTURED MESSAGES ARE RE-RENDERED FROM THE STORED PAYLOAD
+         * rather than carried as text in js8ev[]. A text field there would
+         * have cost 24 x 40 bytes in r_worker, which is a static in INTERNAL
+         * .bss - the memory #65 was about, and the board runs near 30 KB free.
+         * The payload is already kept for the reassembler, so unpacking it a
+         * second time costs a few microseconds per structured frame per slot
+         * and no memory at all. It is outside the candidate loop and outside
+         * FT8_DECODE_BUDGET_MS, which is what the "ONE call, deliberately"
+         * note in that loop is protecting. */
+        if (js8_chat_init()) {
+            /* ⛔ STAMP THE BAND AT CREATION, not at render time. The pane and
+             * the API both draw from this store minutes later, by which point
+             * the dial may have moved - so the band has to be captured in the
+             * slot the frame arrived in. Read once per slot rather than per
+             * message: both loops below file entries from the same slot, so
+             * they belong to the same dial by construction. */
+            const uint32_t js8_dial_hz = cat_get_frequency();
+            const char *js8_band = js8_dial_hz ? adif_log_band_for_freq(js8_dial_hz) : "";
+
+            const decode_result_t *src[2] = { &r_main, &r_worker };
+            for (int rr = 0; rr < 2; rr++) {
+                int nev = src[rr]->n_js8ev;
+                if (nev > FT8_JS8_MAX_EVENTS) nev = FT8_JS8_MAX_EVENTS;
+                for (int k = 0; k < nev; k++) {
+                    if (js8_frame_is_data(src[rr]->js8ev[k].type)) continue;
+                    ftx_message_t jm;
+                    memset(&jm, 0, sizeof(jm));
+                    memcpy(jm.payload, src[rr]->js8ev[k].frame, JS8_FRAME_BYTES);
+                    char jtext[FTX_MAX_MESSAGE_LENGTH];
+                    ftx_message_offsets_t joff;
+                    /* Any submode renders the same: the varicode frame,
+                     * the frame type and the text codec are shared, and
+                     * only the physical layer differs. */
+                    if (!decode_msg_to_text(&jm, FTX_PROTOCOL_JS8, jtext,
+                                            sizeof(jtext), &joff))
+                        continue;
+                    js8_chat_msg_t cm;
+                    memset(&cm, 0, sizeof(cm));
+                    cm.kind      = JS8_CHAT_DIRECTED;
+                    cm.first_utc = slot_sec;
+                    cm.last_utc  = slot_sec;
+                    cm.freq_hz   = src[rr]->js8ev[k].freq_hz;
+                    cm.frames    = 1;
+                    cm.snr_db    = JS8_CHAT_NO_SNR;
+                    cm.dial_hz   = js8_dial_hz;
+                    snprintf(cm.band, sizeof(cm.band), "%s", js8_band ? js8_band : "");
+                    snprintf(cm.sender, sizeof(cm.sender), "%s",
+                             src[rr]->js8ev[k].call);
+                    snprintf(cm.text, sizeof(cm.text), "%s", jtext);
+                    js8_chat_add(&cm);
+                }
+            }
+            for (int k = 0; k < js8_reasm_active(&s_js8_reasm); k++) {
+                const js8_reasm_run_t *run = js8_reasm_at(&s_js8_reasm, k);
+                if (!run) continue;
+                js8_chat_msg_t cm;
+                memset(&cm, 0, sizeof(cm));
+                cm.kind       = JS8_CHAT_FREETEXT;
+                cm.first_utc  = run->first_slot;
+                cm.last_utc   = run->last_slot;
+                cm.freq_hz    = run->freq_hz;
+                cm.frames     = run->n_seen;
+                cm.snr_db     = JS8_CHAT_NO_SNR;
+                cm.dial_hz    = js8_dial_hz;
+                snprintf(cm.band, sizeof(cm.band), "%s", js8_band ? js8_band : "");
+                cm.active     = (run->last_slot == slot_sec);
+                /* Both ways a message can be cut, as js8_reasm_describe spells
+                 * them: the text buffer filled, or frames arrived past the cap.
+                 * The page has one flag; it must mean either. */
+                cm.truncated  = run->text_full || run->overflowed;
+                cm.compressed = run->compressed;
+                snprintf(cm.sender, sizeof(cm.sender), "%s", run->sender);
+                snprintf(cm.text, sizeof(cm.text), "%s", run->text);
+                js8_chat_add(&cm);
+            }
+            /* The same quiet window js8_reasm uses, so a run stops being
+             * marked live on the page in the slot it is forgotten there. */
+            js8_chat_tick(slot_sec, JS8_REASM_TIMEOUT_SLOTS * 15);
+        }
+
+        int n_runs = js8_reasm_active(&s_js8_reasm);
+        int dropped = r_main.js8ev_dropped + r_worker.js8ev_dropped;
+        if (n_runs || dropped) {
+            /* One line, not one per run: this is per-slot log volume on a
+             * board whose capture file is the only record of an overnight
+             * fault. The detail is in /api/status. */
+            char line[160];
+            int off_l = snprintf(line, sizeof(line), "js8 free text:");
+            int n_new = 0;
+            for (int k = 0; k < n_runs && off_l < (int)sizeof(line) - 1; k++) {
+                const js8_reasm_run_t* run = js8_reasm_at(&s_js8_reasm, k);
+                /* ⛔ Only runs that took a frame IN THIS SLOT. A run lives for
+                 * JS8_REASM_TIMEOUT_SLOTS (4 = 60 s) after its last frame, so
+                 * printing every active run re-prints a finished message once
+                 * a slot for a minute. Measured on air 2026-10-09: ONE data
+                 * frame ("1188 Hz: QSL", slot 40) appeared as four identical
+                 * lines in the capture, which reads as four messages. The
+                 * capture is the only record of an overnight fault, so a line
+                 * that repeats without a new frame is worse than no line. */
+                if (!run || run->last_slot != slot_sec) continue;
+                char one[48];
+                if (js8_reasm_describe(run, one, sizeof(one))) {
+                    off_l += snprintf(line + off_l, sizeof(line) - off_l,
+                                      " %s", one);
+                    /* snprintf returns what it WOULD have written, so a
+                     * truncated append leaves off_l past the buffer and the
+                     * next call gets a negative size. Clamp it. */
+                    if (off_l > (int)sizeof(line) - 1) off_l = sizeof(line) - 1;
+                    n_new++;
+                }
+            }
+            if (dropped)
+                snprintf(line + off_l, sizeof(line) - off_l,
+                         " (+%d frames dropped, event cap)", dropped);
+            if (n_new || dropped) ESP_LOGI(TAG, "%s", line);
+        }
+    }
 
     // Merge both halves' timing samples, then robust (outlier-rejecting) average
     // into the system-clock error estimate. Positive = clock fast; negative = slow.
     float timing_ms_arr[FT8_MAX_CANDIDATES];
+    uint32_t tcall_arr[FT8_MAX_CANDIDATES];
     int   n_timing = 0;
-    for (int i = 0; i < r_main.n_timing   && n_timing < FT8_MAX_CANDIDATES; i++)
+    for (int i = 0; i < r_main.n_timing   && n_timing < FT8_MAX_CANDIDATES; i++) {
+        tcall_arr[n_timing]      = r_main.tcall[i];
         timing_ms_arr[n_timing++] = r_main.timing[i];
-    for (int i = 0; i < r_worker.n_timing && n_timing < FT8_MAX_CANDIDATES; i++)
+    }
+    for (int i = 0; i < r_worker.n_timing && n_timing < FT8_MAX_CANDIDATES; i++) {
+        tcall_arr[n_timing]      = r_worker.tcall[i];
         timing_ms_arr[n_timing++] = r_worker.timing[i];
+    }
+    /* Distinct senders among the samples. Counted BEFORE robust_mean_timing_ms,
+     * which sorts timing_ms_arr in place and would break the pairing. O(n^2) on
+     * at most 140 entries, once per slot - not worth a set. */
+    int n_stations = 0;
+    for (int i = 0; i < n_timing; i++) {
+        bool seen = false;
+        for (int j = 0; j < i && !seen; j++) seen = (tcall_arr[j] == tcall_arr[i]);
+        if (!seen) n_stations++;
+    }
     if (n_timing > 0) {
+        s_last_timing_stations = n_stations;
         s_last_timing_ms    = (int)roundf(robust_mean_timing_ms(timing_ms_arr, n_timing));
         s_last_timing_valid = true;
         int applied_ms      = 0;   // real correction pushed to the clock this slot
@@ -1708,14 +2731,28 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     if (heap_i < FT8_SLOT_LBLK_EMERGENCY_KB)
         heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
-    ft8_status_set("RX: %d decoded", n_decoded);
+    /* ⛔ THE THIRD CONSUMER of n_decoded, and the only one the OPERATOR sees.
+     * It read "RX: 0 decoded" through a whole JS8 free-text conversation while
+     * the messages were arriving and rendering in the pane, because a data
+     * frame never increments n_decoded. The slot line and the stuck-RX reset
+     * had the same root cause; this one was missed in that pass and is the
+     * one that reaches the glass.
+     *
+     * n_js8ev covers BOTH JS8 shapes - js8ev_record() runs on the rendered
+     * branch as well as the data-frame branch - so in JS8 it is always >=
+     * n_decoded and is the right total. It is 0 in FT8/FT4, so the max()
+     * keeps those protocols reporting exactly what they did before and no
+     * protocol guard is needed. */
+    int n_shown = (n_js8ev > n_decoded) ? n_js8ev : n_decoded;
+    ft8_status_set("RX: %d decoded", n_shown);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
-        "backlog=%dpr drop=%dpr timing=%+dms applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
+        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
+        "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
-        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
+        cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_js8ev, n_dup, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
+        s_last_timing_valid ? s_last_timing_stations : 0,
         s_last_timing_valid ? s_last_applied_ms : 0,
         (unsigned)heap_i, (unsigned)heap_i_min, (unsigned)heap_i_lblk, (unsigned)heap_p);
 
@@ -1754,7 +2791,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // instance, no concurrency concern).
     {
         static int s_stuck_slots = 0;
-        const char *proto = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+        const char *proto = ft8_op_mode_name();
         int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
                          (ft8_qso_get_state() != FT8_QSO_IDLE);
@@ -1763,7 +2800,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             // the operator has paused CAT to use the radio's own menu - the
             // radio stops streaming, so every slot decodes zero by design.
             s_stuck_slots = 0;   // never reset mid-exchange or mid-pause
-        } else if (n_cand > 20 && n_decoded == 0) {
+        } else if (n_cand > 20 && n_decoded == 0 && n_js8ev == 0) {
             s_stuck_slots++;
             if (s_stuck_slots >= stuck_thresh) {
                 ESP_LOGW(TAG, "%s: %d consecutive zero-decode idle RX slots "
@@ -1785,7 +2822,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
        advanced), so this test is belt-and-braces rather than the only guard -
        which it has to be, now that the core-0 worker can early-advance too and
        these two flags are set from two different tasks. */
-    if (!r_main.early_advanced && !r_worker.early_advanced) ft8_qso_advance(slot_sec);
+    if (!r_main.early_advanced && !r_worker.early_advanced) {
+        ft8_qso_advance(slot_sec);
+    } else {
+        /* An early advance ran, so the state machine has already had its one
+         * step this slot - but it took that step on a PARTIAL decode table,
+         * and everything decoded afterwards was invisible to the pile-up and
+         * to the CQ answer picker. Randy N4OPI's 2026-10-16 log: 4 of 4 slots
+         * with more than one station calling him lost the later caller, one of
+         * them 10 dB stronger than the station that won.
+         *
+         * So look again now that the list is finished. This does NOT advance
+         * the machine - see ft8_qso_slot_late_look(). */
+        ft8_qso_slot_late_look(slot_sec);
+    }
     // Robot auto-answer: runs after advance() (so the existing machine reacts
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-
@@ -1974,7 +3024,7 @@ static void ft8_task(void *arg)
     }
 
     // Capture scratch (decimated 12 kHz audio, reused every slot) + monitor
-    // pool. The scratch is sized for the larger FT8 slot (180000) and shared by
+    // pool. The scratch is sized for the LONGEST slot (SLOT_SAMPLES_MAX) and shared by
     // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
     // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
     // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
@@ -2004,12 +3054,17 @@ static void ft8_task(void *arg)
      * build_monitor_pool). So the WHOLE set is retried: a partial pool is freed
      * and the attempt repeated once the previous page has let go. */
     bool pool_ok = false;
-    for (int attempt = 0; attempt < FT8_ALLOC_TRIES; attempt++) {
+    int  charged = 0;        /* iterations with nothing visibly holding it */
+    for (int waited = 0;
+         charged < FT8_ALLOC_TRIES && waited < FT8_ALLOC_MAX_WAIT_TRIES;
+         waited++) {
         if (!s_cap_scratch)
-            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+            s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES_MAX * sizeof(float), MALLOC_CAP_SPIRAM);
         if (s_cap_scratch && build_monitor_pool(proto_for_mode())) { pool_ok = true; break; }
         free_monitor_objects();                    /* partial pool; scratch kept */
-        if (attempt == 0)
+        /* The holder we can name - see FT8_ALLOC_MAX_WAIT_TRIES. */
+        if (!wspr_rx_running()) charged++;
+        if (waited == 0)
             ESP_LOGW(TAG, "capture buffers not available yet (%u KB PSRAM free) - "
                           "waiting for the previous page to release",
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
@@ -2087,7 +3142,7 @@ static void ft8_task(void *arg)
     struct timeval tv_init;
     gettimeofday(&tv_init, NULL);
     int64_t now_ms_init   = (int64_t)tv_init.tv_sec * 1000 + tv_init.tv_usec / 1000;
-    int     period_ms_init = (proto_for_mode() == FTX_PROTOCOL_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
+    int     period_ms_init = ftx_protocol_slot_ms(proto_for_mode());
     int64_t last_boundary_ms = (now_ms_init / period_ms_init) * period_ms_init;
 
     while (ui_mode_get() == UI_MODE_FT8) {
@@ -2095,9 +3150,32 @@ static void ft8_task(void *arg)
         // last slot. Done at the top, before claiming a buffer, so the pool is
         // settled for this whole slot.
         reinit_pool_if_mode_changed();
-        bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
-        int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
-        int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
+        /* ⛔ ASKED PER PROTOCOL, NOT PER BOOL. This was
+         *     is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS
+         * which gave every JS8 submode FT8's 15 s. Turbo's slot is 6 s, so the
+         * capture loop would have waited for the wrong boundary, captured 15 s
+         * of a 6 s cycle and transmitted into somebody else's slot. */
+        ftx_protocol_t sproto = (ftx_protocol_t)s_pool_proto;
+        int    period_ms = ftx_protocol_slot_ms(sproto);
+        int    slot_samples = period_ms * (SR_HZ / 1000);   // 72000 (Turbo) .. 360000 (Slow)
+        /* ⛔ THE ONE PLACE THE BUFFER AND THE CAPACITY MEET, so it is the one
+         * place that can check they agree. s_cap_scratch holds
+         * SLOT_SAMPLES_MAX floats and dsp_ft8_capture_begin() is trusted with
+         * whatever count it is given - it has no idea how big dst is. When
+         * those two disagreed (JS8 Slow's 360000 against a buffer of 180000)
+         * the decimator wrote 720 KB past the end and the crash landed in a
+         * different task entirely, with no connection to this line visible
+         * anywhere. Refuse loudly instead: a protocol that does not fit must
+         * not capture at all. */
+        if (slot_samples > SLOT_SAMPLES_MAX) {
+            ESP_LOGE(TAG, "%s needs %d samples/slot but the capture scratch holds "
+                          "%d - REFUSING to capture. Raise SLOT_SAMPLES_MAX.",
+                     ftx_protocol_label(sproto), slot_samples, SLOT_SAMPLES_MAX);
+            ft8_status_set("%s unsupported - capture buffer too small",
+                           ftx_protocol_label(sproto));
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
         // FT4 TX is implemented in ft8_tx.c and DOES key a connected radio.
         // ⚠ This comment used to say FT4 was "force-routed through the
         // simulation interlock ... never let an FT4 burst reach a connected
@@ -2107,10 +3185,32 @@ static void ft8_task(void *arg)
         // enabled. Corrected 2026-08-09 - do not rely on a protocol-based TX
         // safety boundary here or in ft8_tx.c, because there isn't one.
 
-        ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
+        ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx,
+                 ftx_protocol_label((ftx_protocol_t)s_pool_proto));
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
         last_boundary_ms = boundary_ms;
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
+
+        /* ⭐ TWO MARKS, ONE CLOCK - so a late key-down can be ATTRIBUTED.
+         *
+         * JS8 on 2026-10-09 went ACTIVE at +169 ms and +495 ms into the slot,
+         * against FT8's measured +14 ms, and neither DT-follow nor the
+         * late-fire rescue had fired. "going ACTIVE (+N ms)" in ft8_tx.c was
+         * the FIRST timestamp anyone took, and by then the time was already
+         * spent - one anchor cannot say where it went.
+         *
+         * These two say it. `woke` is how late this task got the boundary at
+         * all (scheduling, or the previous slot's work overrunning); the delta
+         * to the TX check is what this loop then does before it can key. Both
+         * are gettimeofday against the same clock that defines boundary_ms,
+         * which is the whole point - subtracting marks from different phases
+         * is how a 60x-wrong "884 ms baseline" was once derived here. */
+        int64_t woke_ms;
+        {
+            struct timeval tv_w;
+            gettimeofday(&tv_w, NULL);
+            woke_ms = (int64_t)tv_w.tv_sec * 1000 + tv_w.tv_usec / 1000;
+        }
 
         ft8_tx_request_t txreq;
         // Hold-for-decode gate (see FT8_TX_HOLD_DEADLINE_MS): a TX is due this
@@ -2166,7 +3266,7 @@ static void ft8_task(void *arg)
          * before: the two accessors are side-effect-free peeks, but reading
          * them only when needed keeps this off the hot path. */
         ft8_gate_boundary_t bgate = {
-            .is_ft4           = is_ft4,
+            .protocol         = sproto,
             .decode_in_flight = (s_decode_jobs_done != s_decode_jobs_queued),
             .qso_busy         = false,
             .tx_would_run     = false,
@@ -2186,7 +3286,21 @@ static void ft8_task(void *arg)
         // rest of its slot back, and we fall through to the normal RX capture
         // below rather than sitting idle until the next boundary (#136).
         bool slot_used_by_tx = false;
+        /* The second mark. Only printed when a burst is actually about to go
+         * out, so it costs nothing on an RX slot and cannot swamp the link. */
         if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
+            {
+                struct timeval tv_c;
+                gettimeofday(&tv_c, NULL);
+                int64_t check_ms = (int64_t)tv_c.tv_sec * 1000 + tv_c.tv_usec / 1000;
+                ESP_LOGI(TAG, "slot %d TX path: woke +%lld ms, TX check +%lld ms "
+                              "(loop spent %lld ms), hold=%d decode_in_flight=%d",
+                         slot_idx,
+                         (long long)(woke_ms - boundary_ms),
+                         (long long)(check_ms - boundary_ms),
+                         (long long)(check_ms - woke_ms),
+                         (int)hold_for_fresh, (int)bgate.decode_in_flight);
+            }
             ft8_status_set("TX: %s", txreq.display_text);
             note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
@@ -2331,7 +3445,7 @@ static void ft8_task(void *arg)
                  * half-removing a gate. This removes the gate WHOLE: there is
                  * now one code path, one guard constant and one operator
                  * toggle for both protocols. */
-                int cut = (ft8_gate_burst_ms(is_ft4) + FT8_RX_LATENCY_GUARD_MS)
+                int cut = (ft8_gate_burst_ms(sproto) + FT8_RX_LATENCY_GUARD_MS)
                           * (SR_HZ / 1000);
                 if (cut > slot_samples) cut = slot_samples;   // guard exceeds the tail
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut
@@ -2402,7 +3516,7 @@ static void ft8_task(void *arg)
                      * late_txreq and is the commit path, so it must stay behind
                      * the short circuit and must not be called speculatively. */
                     ft8_gate_late_t lgate = {
-                        .is_ft4        = is_ft4,
+                        .protocol      = sproto,
                         .held          = hold_for_fresh,
                         .decode_landed = decode_landed,
                         .tx_should_run = true,
@@ -2418,6 +3532,32 @@ static void ft8_task(void *arg)
                 // Disarm capture (stop the dsp FT8 branch writing) before we
                 // either queue the decode or switch to TX on this slot.
                 e = dsp_ft8_capture_finish(60);
+            }
+
+            /* ⭐ THE INSTRUMENT THAT WOULD HAVE SEEN THE JS8 SLOW CRASH COMING.
+             *
+             * monitor_process() held two nfft-sized arrays on THIS task's stack
+             * until 2026-10-14. At FT8's nfft of 3840 that was ~30 KB of 64 KB -
+             * comfortable-looking, and completely silent. JS8 Slow doubles nfft,
+             * the pair became ~61 KB, and the first Slow capture took a Stack
+             * protection fault with the SP 4112 bytes past the end. The arrays
+             * are off the stack now, but the lesson is that a per-protocol stack
+             * cost had no reading anywhere - the decode worker logs its
+             * high-water on exit and ft8_task logged nothing at all.
+             *
+             * So: report it once per protocol, right after the capture that
+             * drives the peak. One line per sub-mode change, not per slot. */
+            {
+                static int s_hw_logged_proto = -1;
+                if (s_hw_logged_proto != (int)sproto) {
+                    s_hw_logged_proto = (int)sproto;
+                    ESP_LOGI(TAG, "ft8_task stack high-water on %s (nfft %d): "
+                                  "%u bytes still free",
+                             ftx_protocol_label(sproto),
+                             s_mon_pool[bi] ? s_mon_pool[bi]->nfft : -1,
+                             (unsigned)(uxTaskGetStackHighWaterMark(NULL) *
+                                        sizeof(StackType_t)));
+                }
             }
 
             if (late_tx) {
@@ -2451,6 +3591,11 @@ static void ft8_task(void *arg)
                     stft_us += esp_timer_get_time() - ts;
                     processed++;
                 }
+                /* The corpus snapshot. Here and not earlier: the loop above
+                 * has just zero-padded the dead-air tail, so the buffer is
+                 * now exactly the 15 s the decoder will work on. */
+                slotcap_take(s_cap_scratch, (uint32_t)slot_samples, slot_sec,
+                             ft8_op_mode_name());
                 int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
                 int stft_ms = (int)(stft_us / 1000);
                 int drop_delta = (int)(audio_get_dropped_total() - drop_before);

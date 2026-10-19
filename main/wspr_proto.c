@@ -7,7 +7,8 @@
  * pack side's grid/power formulas were sourced from two GitHub projects
  * that turned out to also be GPL-3.0 (robertostling/wspr-tools) or
  * unclear-license (JamesP6000/WsprryPi, GitHub shows "NOASSERTION", which
- * grants no rights). This is an MIT-licensed project, so none of that was
+ * grants no rights). This project was MIT-licensed then (GPL-3 since
+ * 2026-10-09), so none of that was
  * safe to keep - see docs/wspr-phase1-status.md for the full account.
  *
  * What follows is written from the WSPR message SPECIFICATION (bit widths,

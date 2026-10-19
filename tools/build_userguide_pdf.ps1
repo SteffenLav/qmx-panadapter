@@ -18,6 +18,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $readme   = Join-Path $repoRoot "README.md"
 $docsDir  = Join-Path $repoRoot "docs"
 $guideDir = Join-Path (Join-Path $docsDir "mkdocs") "guide"
+$refDir   = Join-Path (Join-Path $docsDir "mkdocs") "reference"
 $mdSlice  = Join-Path $docsDir "_userguide_full.md"
 $htmlOut  = Join-Path $docsDir "_userguide_full.html"
 $cssFile  = Join-Path $docsDir "_userguide_full.css"
@@ -160,16 +161,20 @@ function Convert-Admonitions([string]$md) {
 $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
     @{ Id = "panadapter";    Title = "Panadapter";     Num = 2; GuideFile = (Join-Path $guideDir "panadapter.md");    Desc = "spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels" },
-    @{ Id = "spots";         Title = "Live spots";     Num = 3; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
-    @{ Id = "spot-map";      Title = "Spot map";       Num = 4; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
-    @{ Id = "web-ui";        Title = "Web UI";         Num = 5; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
-    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 6; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
-    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 7; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 8; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "settings";      Title = "Settings";       Num = 9; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
-    @{ Id = "wspr";          Title = "WSPR";           Num = 10; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
-    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 11; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
-    @{ Id = "reference";     Title = "Reference";      Num = 12; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
+    @{ Id = "audio";         Title = "Audio";          Num = 3; GuideFile = (Join-Path $guideDir "audio.md");        Desc = "binaural CW and panoramic split - the part that is not a picture (beta)" },
+    @{ Id = "spots";         Title = "Live spots";     Num = 4; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
+    @{ Id = "spot-map";      Title = "Spot map";       Num = 5; GuideFile = (Join-Path $guideDir "spot-map.md");     Desc = "who is hearing YOU - RBN, PSK Reporter and WSPR reports of your own signal, on a world map" },
+    @{ Id = "web-ui";        Title = "Web UI";         Num = 6; GuideFile = (Join-Path $guideDir "web-ui.md");      Desc = "browser panadapter, file browser, config backup, remote power-cycle" },
+    @{ Id = "web-api";       Title = "Web API";        Num = 7; GuideFile = (Join-Path $refDir "web-api.md");       Desc = "drive the radio from a script - every endpoint the browser page uses" },
+    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 8; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
+    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 9; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
+    @{ Id = "js8";           Title = "JS8";            Num = 10; GuideFile = (Join-Path $guideDir "js8.md");         Desc = "keyboard mode on the device - decode, free text, CQ (beta)" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 11; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 12; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "wspr";          Title = "WSPR";           Num = 13; GuideFile = (Join-Path $guideDir "wspr.md");         Desc = "two-minute propagation beacon - where your signal actually goes" },
+    @{ Id = "radio-menus";   Title = "Radio menus";    Num = 14; GuideFile = (Join-Path $guideDir "radio-menus.md");  Desc = "the QMX's own menu system on the Tab5 - the only way into a headless QMX+" },
+    @{ Id = "troubleshooting"; Title = "Troubleshooting"; Num = 15; GuideFile = (Join-Path $refDir "troubleshooting.md"); Desc = "symptoms, causes and what to do" },
+    @{ Id = "reference";     Title = "Reference";      Num = 16; GuideFile = $null;                                   Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(
@@ -248,9 +253,24 @@ foreach ($c in $chapters) {
 
         $allSubsections[$c.Id] = $subsections
 
-        # Append guide content after the chapter header
-        # Use string replacement instead of regex to avoid escaping issues
-        $userGuidePart = $userGuidePart -replace "(?m)^## $([regex]::Escape($numbered))$", "## $numbered`n`n$guideContent"
+        # Replace the WHOLE README section with the guide chapter.
+        #
+        # This used to insert the guide content after the heading and leave
+        # README's own prose below it, so every topic was printed twice from
+        # two sources that had drifted apart - the Live spots chapter said
+        # "POTA, RBN and DX cluster" and then "Two sources feed the same
+        # display" a few paragraphs later. README now carries only a short
+        # lede per chapter, for people reading it on GitHub; the guide file is
+        # the single source and it is what gets printed.
+        $escaped = [regex]::Escape($numbered)
+        $sectionRe = New-Object System.Text.RegularExpressions.Regex(
+            "(?ms)^## $escaped\r?\n.*?(?=^## |\z)")
+        if ($sectionRe.IsMatch($userGuidePart)) {
+            $userGuidePart = $sectionRe.Replace($userGuidePart,
+                "## $numbered`n`n$guideContent`n`n", 1)
+        } else {
+            Write-Error "PDF builder: no '## $numbered' section in README to attach $($c.Id) to."
+        }
     }
 }
 
@@ -515,5 +535,32 @@ $newReadmeText = [regex]::Replace(
     "docs/$pdfName"
 )
 [System.IO.File]::WriteAllText($readme, $newReadmeText, $utf8NoBom)
+
+# --- keep the published site's copy and its links current ----
+# Why this exists: this script used to rewrite README.md ONLY, and deleted every
+# old versioned PDF from docs/. The site's own copy under docs/mkdocs/ and the
+# links pointing at it were left to be updated by hand at release time. The copy
+# got done; the links did not. Found 2026-10-05: docs/mkdocs/releases.md still
+# linked QMX-Panadapter-UserGuide-v1.16.9.pdf, four releases after that file was
+# deleted - a 404 on the published "User Guide PDF" button. Every release that
+# leaves a versioned link behind creates another one, so fix the generator, not
+# the link.
+$mkdocsDir = Join-Path $docsDir "mkdocs"
+if (Test-Path $mkdocsDir) {
+    Get-ChildItem -Path $mkdocsDir -Filter "QMX-Panadapter-UserGuide-v*.pdf" -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+    Copy-Item $pdfOut (Join-Path $mkdocsDir $pdfName) -Force
+
+    # Links inside docs/mkdocs/ are relative to that folder, so they carry no
+    # "docs/" prefix - a different pattern from the README rewrite above.
+    Get-ChildItem -Path $mkdocsDir -Filter *.md -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        $orig = Get-Content -Raw -Encoding UTF8 $_.FullName
+        $updated = [regex]::Replace($orig, 'QMX-Panadapter-UserGuide-v[\d.]+\.pdf', $pdfName)
+        if ($updated -ne $orig) {
+            [System.IO.File]::WriteAllText($_.FullName, $updated, $utf8NoBom)
+            Write-Host "  relinked PDF in $($_.FullName.Substring($repoRoot.Length + 1))"
+        }
+    }
+}
 
 Write-Host "✅ Wrote $pdfOut with nested chapter.subsection numbering and clickable TOC"

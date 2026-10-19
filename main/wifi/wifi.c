@@ -1,4 +1,7 @@
 #include "wifi.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
+#include "util/hosted_watchdog.h"   // when the link is declared dead
+#include "ui.h"                       // ui_toast_ms - the operator has to be told
 #include "settings.h"
 #include "net/mdns_svc.h"   // qmx.local, announced once we have an IP
 #include <stdbool.h>
@@ -85,12 +88,77 @@ static volatile bool    s_scan_auto_retried = false;
 static volatile bool    s_roam_scan    = false;
 static volatile int64_t s_roam_last_us = 0;
 #define ROAM_RESCAN_INTERVAL_US (30LL * 1000000)
+
+/* ⛔ AND A SEPARATE SCAN FOR THE CASE WHERE WE ARE ALREADY CONNECTED - because
+ * the one above is reached ONLY from the disconnect handler, so a unit that has
+ * settled on the wrong network never looks again.
+ *
+ * Randy N4OPI, 2026-10-18: "on first boot after upgrading the firmware it
+ * ignores the Preferred Network setting... A restart of the Tab5 with nothing
+ * else touched, restarts, honoring the Preferred Network setting." The
+ * preference was NOT ignored - see ROAM_AFTER_RETRIES_PREF above for what his
+ * log actually shows - but once the roam had moved him to the other network and
+ * that network answered, nothing in this file ever reconsidered it. Only a
+ * reboot did, which is exactly the shape of his report.
+ *
+ * ⛔ roam_to_known_if_present() MUST NOT be reused here. Its fall-through picks
+ * the LOUDEST remembered network, which is harmless while disconnected and
+ * wrong while connected: it would drag a working link onto whichever remembered
+ * SSID happens to be strongest. This path looks for one SSID - the preferred
+ * one - and does nothing at all otherwise.
+ *
+ * The interval is long on purpose. A scan takes the radio off the air for a
+ * moment, and the web UI is a server on this link. */
+static volatile bool    s_pref_scan    = false;
+static volatile int64_t s_pref_last_us = 0;
+static int              s_pref_misses  = 0;   /* consecutive checks with it absent */
+#define PREF_RECHECK_INTERVAL_US (120LL * 1000000)
+
+/* ⛔ AND IT MUST BACK OFF WHEN TAKING IT DOES NOT STICK.
+ *
+ * The bad case is an AP that is on the air and still refuses - which is the
+ * very fault this exists for (reason 208 was exactly that). Retrying it every
+ * two minutes forever would mean a ~25 s outage every two minutes, and the
+ * operator this is for upgrades REMOTELY over that link. So a take that does
+ * not end up on the preferred network doubles the interval, up to ~32 min, and
+ * one that works clears it.
+ *
+ * s_pref_take_armed is the honest test, not "did the scan find it": the only
+ * evidence that a switch worked is the next GOT_IP naming the network we
+ * asked for. */
+static bool s_pref_take_armed = false;   /* a switch was issued, no IP since */
+static int  s_pref_take_fails = 0;       /* consecutive switches that did not stick */
+#define PREF_TAKE_BACKOFF_MAX 4          /* 2 min << 4 = ~32 min */
 // How many failed connects before looking elsewhere. Deliberately small: waiting
 // for the fast-retry budget AND the 10 s backoff took the best part of a minute
 // to notice a hotspot had gone (operator, 2026-08-05). Two failures is already a
 // clear signal, and a scan cannot pick a different network unless the configured
 // one is genuinely absent from the air - so being eager here is safe.
 #define ROAM_AFTER_RETRIES 2
+/* ⛔ BUT NOT WHEN THE NETWORK BEING ABANDONED IS THE OPERATOR'S PREFERRED ONE.
+ *
+ * Randy N4OPI, 2026-10-18, first boot after the v1.20.1 OTA. His log is the
+ * whole mechanism in five lines:
+ *
+ *   W (10458) preferred network 'uBitX24' is set - connecting to it instead
+ *   W (17721) Disconnected (reason=208) retry 1/5
+ *   I (20145) 'uBitX24' not answering - scanning for a remembered network
+ *   W (22563) roam: 'uBitX24' not reachable - switching to remembered
+ *             'HomePlace' (-56 dBm)
+ *   I (25691) static IP applied: 192.168.1.199
+ *
+ * reason 208 is WIFI_REASON_ASSOC_COMEBACK_TIME_TOO_LONG - the AP telling the
+ * station to come back later, which is what an AP that still holds the
+ * association from before the reboot does. It is transient by definition, and
+ * two attempts over five seconds is not enough rope for it. He ended up on the
+ * other network, on its static address, unreachable from outside - the one
+ * outcome that matters, because he upgrades remotely.
+ *
+ * The preference is the operator's stated intent, so it gets the whole
+ * fast-retry budget before anything else is considered. A preference that is
+ * genuinely out of range costs ~25 s longer to give up on than it used to;
+ * being dragged off it for 24 hours costs a site visit. */
+#define ROAM_AFTER_RETRIES_PREF MAX_FAST_RETRIES
 
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
@@ -393,11 +461,23 @@ static void roam_to_known_if_present(const wifi_ap_record_t *recs, uint16_t num)
      * when the preferred network is actually present in THIS scan - if it is
      * not on the air right now, this falls straight through to the existing
      * strongest-signal logic below, so a temporarily-unreachable preference
-     * degrades gracefully instead of stalling. Roam scans repeat on their own
-     * interval (try_start_roam_scan/ROAM_RESCAN_INTERVAL_US), so the
-     * preferred network is re-tried and re-promoted automatically the next
-     * time it is in range - no separate "give up after N attempts" state, and
-     * none of the failure modes a give-up timer would have (never returning
+     * degrades gracefully instead of stalling.
+     *
+     * ⛔ THIS COMMENT USED TO CLAIM THE RE-TRY WAS ALREADY HANDLED, and it was
+     * wrong for as long as it stood: "Roam scans repeat on their own interval
+     * (try_start_roam_scan/ROAM_RESCAN_INTERVAL_US), so the preferred network
+     * is re-tried and re-promoted automatically the next time it is in range."
+     * try_start_roam_scan() has exactly two call sites, both inside the
+     * STA_DISCONNECTED handler - so the repeat only happens while the unit is
+     * failing to connect to something. Once the fall-through below lands on a
+     * network that WORKS, no scan is ever started again and the preference is
+     * gone until a reboot. Randy N4OPI hit precisely that on 2026-10-18 and
+     * reported it as the preference being ignored. The re-try now genuinely
+     * exists, as pref_scan_if_adrift() + pref_take_if_present() below, driven
+     * from wifi_task's 30 s supervisor loop; this block is unchanged and still
+     * handles the disconnected case. The property the old text described - no
+     * give-up state, and never failing to return to a preference that comes
+     * back mid-session - is real now rather than asserted (never returning
      * to a preference that comes back mid-session).
      *
      * Empty string (the default - nobody has set one) skips this block
@@ -470,6 +550,107 @@ static bool try_start_roam_scan(void)
     }
     ESP_LOGI(TAG, "'%s' not answering - scanning for a remembered network", s_ssid);
     return true;
+}
+
+static void reconnect_deferred(void);   /* defined with the public API below */
+
+/* The preferred network was found in a scan taken while we were CONNECTED to
+ * something else - take it. Called from SCAN_DONE for s_pref_scan only.
+ *
+ * Absence is logged, not silent. A check that says nothing when it finds
+ * nothing reads exactly like a check that never ran, and this one runs every
+ * two minutes for the life of the session - so it reports the miss on the
+ * first one and then every tenth (~20 min), which is enough to prove the
+ * instrument is alive without filling the diagnostic log. */
+static void pref_take_if_present(const wifi_ap_record_t *recs, uint16_t num)
+{
+    char pref[33];
+    settings_get_wifi_preferred_ssid(pref);
+    if (!pref[0] || strcmp(pref, s_ssid) == 0) return;
+
+    for (uint16_t i = 0; i < num; i++) {
+        if (strcmp((const char *)recs[i].ssid, pref) != 0) continue;
+
+        /* Scan records carry no password; NVS is the only place a usable one
+         * exists - same reason the roam path takes it from known[]. */
+        static wifi_known_t known[WIFI_KNOWN_MAX];
+        int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+        for (int k = 0; k < kn; k++) {
+            if (strcmp(known[k].ssid, pref) != 0) continue;
+            ESP_LOGW(TAG, "preferred network '%s' is back on the air (%d dBm) "
+                          "after %d check(s) - leaving '%s' for it",
+                     pref, recs[i].rssi, s_pref_misses + 1, s_ssid);
+            s_pref_misses = 0;
+            s_pref_take_armed = true;
+            apply_creds_live(known[k].ssid, known[k].pass);
+            reconnect_deferred();
+            return;
+        }
+        /* On the air but no longer remembered - nothing to connect with. Say
+         * so once per miss cycle rather than retrying a credential-less SSID
+         * every two minutes in silence. */
+        if (s_pref_misses == 0)
+            ESP_LOGW(TAG, "preferred network '%s' is on the air but is no longer "
+                          "one of the %d remembered networks - no password to "
+                          "use, staying on '%s'", pref, kn, s_ssid);
+        s_pref_misses++;
+        return;
+    }
+
+    if (s_pref_misses == 0 || (s_pref_misses % 10) == 0)
+        ESP_LOGI(TAG, "preferred network '%s' still not on the air (%d check(s)) "
+                       "- staying on '%s'", pref, s_pref_misses + 1, s_ssid);
+    s_pref_misses++;
+}
+
+/* While CONNECTED to something other than the preferred network, scan for it
+ * on a slow interval. Called from wifi_task's 30 s supervisor loop.
+ *
+ * Every early return is a case where scanning would be wrong rather than
+ * merely useless: no preference set, already on it, it is not remembered (so
+ * there is no password and finding it would change nothing), the operator
+ * turned WiFi off, or another scan already owns the radio. */
+static void pref_scan_if_adrift(void)
+{
+    if (s_wifi_user_disabled || !s_wifi_started) return;
+    if (s_scan_hold || s_roam_scan || s_pref_scan) return;
+
+    char pref[33];
+    settings_get_wifi_preferred_ssid(pref);
+    if (!pref[0] || strcmp(pref, s_ssid) == 0) { s_pref_misses = 0; return; }
+
+    static wifi_known_t known[WIFI_KNOWN_MAX];
+    int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+    bool remembered = false;
+    for (int k = 0; k < kn; k++)
+        if (strcmp(known[k].ssid, pref) == 0) { remembered = true; break; }
+    if (!remembered) return;
+
+    /* ⛔ BACK OFF ON CONSECUTIVE MISSES TOO, not only on failed takes.
+     *
+     * The take counter can only grow when something armed the verdict, and a
+     * preference that is simply never on the air produces no takes at all - so
+     * the interval stayed at two minutes and the unit scanned every two
+     * minutes for the rest of the session. Measured on the bench 2026-10-19
+     * with the preference set to a network that does not exist here.
+     *
+     * Misses are the cheaper signal and they need nothing armed: five of them
+     * (ten minutes of looking) is enough to say "this network is not around
+     * today" and start looking less often. Either counter can drive the
+     * backoff; the larger one wins, and finding the network resets both. */
+    int shift = s_pref_take_fails;
+    const int miss_shift = s_pref_misses / 5;
+    if (miss_shift > shift) shift = miss_shift;
+    if (shift > PREF_TAKE_BACKOFF_MAX) shift = PREF_TAKE_BACKOFF_MAX;
+    const int64_t interval = PREF_RECHECK_INTERVAL_US << shift;
+
+    int64_t now = esp_timer_get_time();
+    if (s_pref_last_us && (now - s_pref_last_us) < interval) return;
+    s_pref_last_us = now;
+
+    wifi_scan_config_t cfg = { 0 };
+    s_pref_scan = true;
+    if (esp_wifi_scan_start(&cfg, false) != ESP_OK) s_pref_scan = false;
 }
 
 // Event handlers -------------------------------------------------------
@@ -577,6 +758,14 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             s_roam_scan = false;
             roam_to_known_if_present(recs, num);
         }
+        /* The connected-and-adrift check's own scan. Separate flag and separate
+         * handler: this one may ONLY take the preferred network, never the
+         * loudest - see s_pref_scan's own note. Cleared even on a read error,
+         * or one failed harvest would stop the check for the whole session. */
+        if (s_pref_scan) {
+            s_pref_scan = false;
+            if (get_err == ESP_OK) pref_take_if_present(recs, num);
+        }
 
         // Scan finished: if the retry chain was held for it, resume connecting
         // (the chain is event-driven, so skipping a retry ends it - it must be
@@ -636,8 +825,16 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         s_retry_count++;
 
         // Look for a remembered network as soon as two connects have failed,
-        // rather than after the whole fast-retry budget plus a 10 s sleep.
-        if (s_retry_count >= ROAM_AFTER_RETRIES && try_start_roam_scan()) return;
+        // rather than after the whole fast-retry budget plus a 10 s sleep -
+        // unless the network we are failing on is the operator's preferred one,
+        // which gets the whole budget first (ROAM_AFTER_RETRIES_PREF).
+        int roam_after = ROAM_AFTER_RETRIES;
+        {
+            char pref[33];
+            settings_get_wifi_preferred_ssid(pref);
+            if (pref[0] && strcmp(pref, s_ssid) == 0) roam_after = ROAM_AFTER_RETRIES_PREF;
+        }
+        if (s_retry_count >= roam_after && try_start_roam_scan()) return;
 
         if (s_retry_count <= MAX_FAST_RETRIES) {
             ESP_LOGW(TAG, "Disconnected (reason=%d) retry %d/%d",
@@ -679,9 +876,32 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         }
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
+        /* DMA-pool bracket (2026-10-04). The pool is 36.6 KB at 17.4 s and
+         * 8.4 KB at 23.4 s - 28 KB goes inside this six-second window and
+         * nothing said to what. Association/DHCP is the first suspect. */
+        MEM_LEDGER("wifi got IP");
         s_retry_count = 0;
         s_roam_last_us = 0;         // this network works; allow an immediate roam next time
         xEventGroupSetBits(s_events, BIT_CONNECTED);
+
+        /* Did the last preference switch actually land? See s_pref_take_armed.
+         * Only an IP on the preferred SSID counts - an IP on anything else
+         * means the switch was issued and the unit ended up elsewhere. */
+        if (s_pref_take_armed) {
+            s_pref_take_armed = false;
+            char pref[33];
+            settings_get_wifi_preferred_ssid(pref);
+            if (pref[0] && strcmp(pref, s_ssid) == 0) {
+                if (s_pref_take_fails)
+                    ESP_LOGI(TAG, "back on the preferred network '%s'", pref);
+                s_pref_take_fails = 0;
+            } else {
+                if (s_pref_take_fails < PREF_TAKE_BACKOFF_MAX) s_pref_take_fails++;
+                ESP_LOGW(TAG, "switching to the preferred network did not stick "
+                              "- on '%s' instead; next look in %d min",
+                         s_ssid, 2 << s_pref_take_fails);
+            }
+        }
 
         // Remember the network that actually worked, most-recently-used first.
         // Building the list from successes rather than from a management screen
@@ -779,6 +999,97 @@ static void ensure_sta_netif(void)
 }
 
 // Init runs in its own task so app_main is not blocked --------------
+/* Hosted-link watchdog state. The thresholds and the counting live in
+ * util/hosted_watchdog.c, because a bench unit never trips this: the probe
+ * succeeds every 30 s here, so a clean soak proves nothing about the bounds,
+ * and the fault itself has only ever been seen in Bryan N0LUF's capture.
+ * test/hosted_watchdog_harness.c exercises the decision on the host. The
+ * recovery below still has not run against a real wedge. */
+static hosted_wd_t s_hosted_wd;
+
+/* Power-cycle the C6 and bring the hosted transport back up.
+ *
+ * ⛔ THE ORDER MATTERS AND IS THE SAME ONE BOOT USES: stop WiFi, drop the
+ * co-processor's power rail, pause, raise it, re-init hosted, then start WiFi
+ * and reconnect. bsp_set_wifi_power_enable() is the same call wifi_task() makes
+ * at start-up, so this is not a new way of bringing the C6 up - it is the
+ * existing one, run again.
+ *
+ * ⚠ esp_wifi_stop()/start() are deliberately NOT ESP_ERROR_CHECK'd here. Every
+ * one of them talks to a co-processor we already believe is dead, so a failure
+ * is the expected case and must not abort the device - that is the same mistake
+ * the esp_hosted init-fail patch exists to undo. Each step logs and the next is
+ * tried regardless; if the whole sequence fails, the streak simply builds again
+ * and the attempt counter stops it for good. */
+/* ⛔ THIS NO LONGER POWER-CYCLES THE C6, AND THAT IS THE FIX.
+ *
+ * It used to: esp_wifi_stop(), drop the rail, raise it, esp_hosted_init(),
+ * esp_wifi_start(). The first time it ever ran against a real dead link -
+ * Bryan N0LUF, v1.16.10 - it failed, and the log says why:
+ *
+ *   relink: esp_wifi_stop: ESP_FAIL
+ *   M5STACK_TAB5: set_wifi_power_enable: 0
+ *   sdmmc_io_rw_extended: sdmmc_send_cmd returned 0x107      x many
+ *   H_SDIO_DRV: sdio_get_tx_buffer_num: err: 263             x many
+ *   relink: esp_wifi_start failed: ESP_FAIL
+ *
+ * The rail is dropped while the SDIO transport is still up and still polling
+ * the slave, so the driver spins on errors against hardware that is no longer
+ * powered. The ordered teardown that would avoid it is esp_hosted_deinit(),
+ * and that is ESP_ERROR_CHECK throughout - on a slave already believed dead
+ * those abort the device, turning "WiFi is down" into "the device reboots",
+ * which is strictly worse than the fault.
+ *
+ * ⭐ AND THE REASON IT EXISTED IS GONE. The link was dying because our own
+ * SDIO drain advanced its byte counter past data it had never read - see
+ * sdio_drv.c, fixed and measured 2026-10-03. The recovery was treating a
+ * symptom of our own bug.
+ *
+ * So this now reports and stands down rather than acting. A restart genuinely
+ * does fix it - Bryan's own restart brought WiFi straight back - and that is
+ * the operator's call to make, not something to do under their hands while
+ * they are working a QSO. */
+static void hosted_relink(void)
+{
+    ESP_LOGE(TAG, "the hosted WiFi link is not answering and cannot be revived "
+                  "in place - restart the Tab5 to bring WiFi back. (Your QMX "
+                  "will need a power cycle after the restart, as always.)");
+    ui_toast_ms("WiFi has stopped answering and cannot be restarted on its own. "
+                "Restart the Tab5 to bring it back - your QMX will need a power "
+                "cycle afterwards.", 15000);
+}
+
+/* ⛔ DELIBERATE TEST ENTRY POINT - kills the WiFi co-processor for real.
+ *
+ * Bryan N0LUF's hosted link dies on its own and the recovery has never been
+ * reproducible here, which is why 3567847 shipped with its recovery unproven -
+ * and when it finally ran on his unit in v1.16.10 it failed (esp_wifi_stop
+ * ESP_FAIL, an SDIO error storm after the rail dropped, esp_wifi_start
+ * ESP_FAIL). I said the condition could not be reproduced on the bench. That
+ * was wrong.
+ *
+ * Dropping the C6's power rail with the SDIO transport still up and still
+ * polling it puts the host in exactly the state his unit reaches: the slave is
+ * silent, every SDIO command fails, every RPC times out. The host cannot tell
+ * "lost power" from "stopped answering".
+ *
+ * ⚠ It is a NECESSARY condition, not an identical one: his C6 dies with a
+ * backlog of oversize frames behind it, this one dies clean. A recovery that
+ * cannot handle the clean case certainly cannot handle his.
+ *
+ * POST /api/cmd {"action":"wifi_kill_c6"}
+ *
+ * Nothing calls this in normal operation. The watchdog below then sees six
+ * probe failures over ~3 minutes and runs the REAL recovery. */
+void wifi_debug_kill_c6(void)
+{
+    ESP_LOGE(TAG, "TEST: dropping the C6 power rail - the hosted link will now "
+                  "die exactly as it does in the field. The watchdog should see "
+                  "%d probe failures over ~%d s and then re-link.",
+             HOSTED_WD_FAILS_BEFORE_RELINK, HOSTED_WD_FAILS_BEFORE_RELINK * 30);
+    bsp_set_wifi_power_enable(false);
+}
+
 static void wifi_task(void *arg)
 {
     ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
@@ -854,6 +1165,14 @@ static void wifi_task(void *arg)
                  * element of known[] is NUL-terminated, only that the array is
                  * 588 bytes, so -Werror=format-truncation rejects the plain
                  * form. The widths are the field sizes less the terminator. */
+                /* Third and last place that switches to the preference, so it
+                 * arms the verdict like the other two - and this is the one
+                 * Randy N4OPI's report is actually about ("on first boot after
+                 * upgrading the firmware"). Measured on the bench 2026-10-19:
+                 * the boot override fell back to the working network and
+                 * printed no verdict at all, because only the periodic take
+                 * armed it. */
+                s_pref_take_armed = true;
                 snprintf(s_ssid, sizeof(s_ssid), "%.32s", known[k].ssid);
                 snprintf(s_pass, sizeof(s_pass), "%.64s", known[k].pass);
                 break;
@@ -900,6 +1219,72 @@ static void wifi_task(void *arg)
             ESP_LOGI(TAG, "online; UTC %04d-%02d-%02d %02d:%02d:%02d",
                      tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
                      tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+        }
+
+        /* Still on the wrong network? Look for the preferred one again. Only
+         * while the link is up: while it is down the disconnect handler's own
+         * roam path is already scanning, and two scans would fight. */
+        if (b & BIT_CONNECTED) pref_scan_if_adrift();
+
+        /* ⭐ HOSTED-LINK WATCHDOG - the C6 can stop answering and never come
+         * back, and until now only a full reboot fixed it.
+         *
+         * Bryan N0LUF, 2026-10-01, captured on the SD card WHILE the WiFi was
+         * dead (the web download cannot work once it is - Michael KZ4LY made
+         * that point and he was right):
+         *
+         *   W H_SDIO_DRV: SDIO RX oversize: len=19838 host_cnt=.. slave_reg=..
+         *      - draining to recover            x183 in NINE SECONDS
+         *   W rpc_core: Timeout waiting for Resp for Req[0x126]   x61, forever
+         *
+         * The oversize drain (tools/patches/apply_esp_hosted_sdio_recovery.ps1)
+         * does advance the host counter correctly - host_cnt tracks the previous
+         * slave_reg every time - but the slave ran 10-20 KB further ahead on
+         * each pass, 20 times a second, and then went silent altogether. So the
+         * link does not merely desynchronise, it dies, and draining cannot fix
+         * a dead link however long it runs. ⛔ Its "recovered" line has never
+         * appeared in ANY capture, here or on the bench.
+         *
+         * 0x126 is WifiStaGetApInfo, which is exactly what
+         * esp_wifi_sta_get_ap_info() issues - so the same call that was timing
+         * out in his log is the cheapest possible probe for the condition.
+         *
+         * ⛔ BOUNDED, AND DELIBERATELY SLOW. CLAUDE.md records the FT8 respawn
+         * watchdog firing ~390 times and degrading the device it was rescuing.
+         * This needs SIX consecutive failures (~3 minutes, since the loop is
+         * 30 s) before it acts, and it acts at most WIFI_RELINK_MAX times in a
+         * session. A momentary RPC hiccup must not power-cycle the radio.
+         *
+         * ⚠ NOT YET SEEN TO RESCUE A REAL WEDGE. The condition has only been
+         * observed in Bryan's log, never reproduced on the bench, so this path
+         * has never run against the fault it is written for. */
+        {
+            const bool watching = (b & BIT_CONNECTED) && !s_wifi_user_disabled;
+            wifi_ap_record_t probe;
+            const bool probe_ok = watching &&
+                                  esp_wifi_sta_get_ap_info(&probe) == ESP_OK;
+
+            switch (hosted_wd_tick(&s_hosted_wd, watching, probe_ok)) {
+            case HOSTED_WD_RECOVERED:
+                ESP_LOGI(TAG, "hosted link answered again after %d missed probe(s)",
+                         s_hosted_wd.last_missed);
+                break;
+            case HOSTED_WD_RELINK:
+                ESP_LOGW(TAG, "hosted link dead: %d consecutive probe failures "
+                              "(~%d s) - reporting it (attempt %d/%d)",
+                         HOSTED_WD_FAILS_BEFORE_RELINK,
+                         HOSTED_WD_FAILS_BEFORE_RELINK * 30,
+                         s_hosted_wd.relink_count, HOSTED_WD_MAX_RELINKS);
+                hosted_relink();
+                break;
+            case HOSTED_WD_EXHAUSTED:
+                ESP_LOGE(TAG, "hosted link is dead and %d re-link attempt(s) did "
+                              "not bring it back - stopping, a reboot is needed",
+                         HOSTED_WD_MAX_RELINKS);
+                break;
+            case HOSTED_WD_NOTHING:
+                break;
+            }
         }
     }
 }
@@ -1129,6 +1514,21 @@ void panadapter_wifi_apply_preferred(void)
         if (strcmp(known[k].ssid, pref) != 0) continue;
         ESP_LOGW(TAG, "preferred network set to '%s' - leaving '%s' for it now",
                  pref, s_ssid);
+        /* ⛔ ARM THE VERDICT HERE TOO, or the backoff never engages for a
+         * preference saved by hand.
+         *
+         * Found by testing the bench, 2026-10-19: setting the preference to a
+         * remembered network that is not on the air ('Cityinn Hotel') switched
+         * blind, failed four times, fell back to 'BV50' - and then re-checked
+         * every two minutes for the rest of the session, because
+         * s_pref_take_armed was only set by pref_take_if_present(). The GOT_IP
+         * verdict therefore never ran, so a switch that plainly did not stick
+         * was never counted as a failure.
+         *
+         * This path switches WITHOUT a scan - it is the operator saying "go
+         * there now" - which makes a miss MORE likely here than on the
+         * periodic path, not less. */
+        s_pref_take_armed = true;
         apply_creds_live(known[k].ssid, known[k].pass);
         reconnect_deferred();
         return;

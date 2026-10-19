@@ -1,50 +1,346 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-10-17
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
-**Repo state:** **v1.5.0 released 2026-08-06** (context-sensitive help + guidance panel, manual read from the embedded blob, web Call CQ, decode-list pinning). Prior: v1.4.0 (2026-08-05, live spots + the TLS/`.bss`/UAC-spin root causes), v1.3.6 (2026-08-03).
+**Repo state:** **v1.20.0 released 2026-10-16.** ⛔ Do not read the number off this line — `git tag --sort=-creatordate` and `git log --oneline origin/main..HEAD` are the authority, for the reason stated two lines below. On 2026-10-17 there were 16 commits unpushed on top of it. Earlier: v1.19.0 (2026-10-15), v1.18.0 (2026-10-12, PA-voltage ceiling, Bryan N0LUF's Output power write fix, JS8 compound callsigns proven on air, the SPIFFS diag-log budget). Prior: v1.17.1 (2026-10-11), v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
+
+⛔ **THE HEADLINE IN THIS FILE WAS TEN DAYS AND FOUR RELEASES STALE** (it read "v1.5.0 released 2026-08-06", then "v1.16.10 is out"). A version banner in prose cannot keep up with a release cadence of days, which is the same rot `CLAUDE.md` records for its patch count. **Read `git tag --sort=-creatordate` for what shipped; read this file only for what is OPEN.**
 
 ---
 
-## ⛔ 2026-09-13 — the section below is CURRENT, everything under "Master Table" is NOT
+## ▶▶ THE WORK QUEUE, 2026-10-17 — READ THIS FIRST
 
-The master table's own header still says "Last updated 2026-09-02" and describes
-repo state as **v1.5.0** — the project is nine releases past that (currently
-**v1.12.4**, released) with dozens of commits since. It was never reconciled row
-by row against that gap, and doing so properly is a real, separate pass, not
-something to fold into a release-day check. **Do not read a row below this
-line as still true without checking it against the code first** — several are
-almost certainly already shipped and verified in a release the table predates.
+Everything picked up between 2026-10-14 and 2026-10-17 that is neither built
+nor settled. The queue below it is dated 2026-10-13, so **nothing from 10-14
+onward had ever been copied in** - which is exactly how these fall between
+chairs. Items here are not re-ordered against Sam's promised list in A below;
+that order still stands.
 
-This section is the honest, current answer to "what is hanging, right now,
-2026-09-13" — built from `git log v1.12.4..HEAD`, not from the stale table.
+⚠ Status words mean what CLAUDE.md says they mean: **implemented or not**,
+then **proven or not**. "Not yet" is not a status.
 
-### ⚠ 2026-09-17 — built on top of v1.14.3.1, NOT FLASHED, NOT RELEASED
+### ▶ ID INDEX — quote these, they never change
 
-The dev bench has been soaking since 07:49 on the DIRAM-reclamation build and
-must not be flashed until that soak is called. Everything here is built and
-compiles clean; none of it has run on hardware.
+IDs are **permanent and never reused**. They do not encode effort or section, so
+an item can move between groups without being renumbered. Add the next free
+number when something new arrives; never close a gap.
+
+| ID | Item | Who |
+|---|---|---|
+| ~~T01~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - DTR described in ft8-rx.md, web-ui.md and the v1.17.0 entry | Randy N4OPI |
+| **T02** | Ask: glyph *as well as* the cyan/green boundary? | Sam W7STF |
+| **T03** | The five replies | Gyula, Randy, Sam, Don, Ryan |
+| **T04** | Audit the **diagrams** | — |
+| **T05** | De-duplicate the two gesture tables | — |
+| **T06** | Transmitted morse in its own colour | Sam W7STF |
+| **T07** | Print the JS8 message as it sends | Ryan KK6DZB |
+| **T08** | Handle the directed `SNR?` command (cmd 0) | Gyula HA3HZ |
+| **T09** | Web/Tab5 option parity | Gyula HA3HZ |
+| ~~T10~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - "Getting audio" opens audio.md, 5 steps | Bryan N0LUF, Sam W7STF |
+| **T11** | Make the web Listen button findable | Bryan N0LUF + Randy N4OPI |
+| **T12** | Ticking "worked-before" should HIDE the rows | Randy N4OPI |
+| **T13** | Hold the Mid-QSO row until 73 or abort | Don WB0LQW |
+| **T14** | JS8 three-pane layout | Ryan KK6DZB |
+| **T15** | JS8 canned messages / macros | Gyula HA3HZ |
+| **T16** | Decode several JS8 submodes at once | Ryan KK6DZB |
+| **T17** | PSD peak hold → CW-Tune → CW peak filter | Sam W7STF (A4) |
+| **T18** | DNR for AM and SSB | Sam W7STF (A5) |
+| **T19** | Server mode, screen off | Sam W7STF (A1) |
+| **T20** | I/Q server — a direction, or is A1 the end of it? | — |
+| **T21** | ⏸ **WAITING ON SAM — one question.** Which AM bandwidth was he on when the tone drifted? If 10 or 20 kHz, the cap already closed it. If 6 kHz or below it is STILL LIVE, because the cap does not touch it. Do not close on the assumption | Sam W7STF |
+| **T22** | Saved diag log destroys 4 bytes per 32-byte block | John W5JSS |
+| **T23** | QMX+ decodes only "T T T T" | Gyula HA3HZ |
+| **T24** | GPIO53 meter check | Eric Moritz |
+| **T25** | Per-tone FT8 spacing over USB | Jim (jpwatters) |
+| **T26** | Can esp_hosted sustain ~1.5 Mbit/s? | — |
+| **T29** | ⏸ **PARKED 2026-10-17, operator’s call.** AM costs 1.68x USB by duty, but identically at 4 and 6 kHz, so the 6 kHz cap changes nothing and NO symptom is measured at or below it (read-timeouts zero in every window). Reopen only if something actually fails | — |
+| **T27** | Audit which operator switches are Tab5-only and expose them | — |
+| **T30** | ⛔ **CW sidetone stops on a QMX+, and the level will not store while the Tab5 is connected.** Factory reset recovers it for a while. Hypothesis, NOT measured: our 150 ms FA; polling disturbs a menu edit on the radio's own front panel — same shape as Bryan N0LUF's TCXO corruption (`2dd477d8`), different setting. ✅ **ANSWERED 10-18: abs/rel = ABSOLUTE, RX audio stays normal** — so the main-volume explanation is ELIMINATED (Absolute ignores main volume, and audio is fine). ⛔ Two symptoms, not one: (a) sidetone stops during normal keying, (b) level will not store while connected. Menu interference explains (b) only. Asked: was he in a menu at all when it stopped, and does a PLAIN POWER CYCLE restore it or only a factory reset | eaunoiq (#20) |
+| **T28** | ⚠ Does any OTHER setting need a restart with no notice? | — |
+
+⚠ **T03 is the only one with a date**: the drafts are written 2026-10-18,
+when he is back on groups.io.
+
+### A17. Announcements and promises
+
+1. ⛔ **The DTR column shipped with NO changelog entry**, while Randy N4OPI was
+   asked to report on it. **Verified still absent 2026-10-17**: no `DTR` in
+   `docs/version-history.md`, the release notes or `README.md`. He was asked to
+   look at a column nothing described. Owed since 10-14.
+2. ✅ **"Never exceed PA voltage" to Bryan N0LUF - CLOSED, it shipped.**
+   Present in `docs/mkdocs/releases.md`, `docs/version-history.md` and
+   `docs/mkdocs/guide/wspr.md`. Three separate 10-12 handoffs carried it as
+   "PROMISE OWED" after it had already gone out. Recorded here so it stops
+   being re-raised.
+3. **Five replies undrafted on purpose**: Gyula, Randy, Sam, Don, Ryan.
+   Sending is batched - Sunday 2026-10-18 at the earliest. Bryan and Gyula now
+   also need the 10-17 answers (see E17).
+
+### B17. Measurements owed — nothing can be concluded without them
+
+1. ⭐ **Sam W7STF: the WWV 1-second tone changes pitch over time, on the Tab5
+   itself.** A clock or resampler symptom, not a web one. Logged 10-16 as
+   "Unexplained and NOT investigated" and still untouched. This is the only
+   item in this queue that is a possible defect in something already shipped.
+2. ⛔ **Does the board stay off with 5 V still present on USB-C?** Randy
+   N4OPI's exact setup (QMX+ pack → 12→5 V converter → USB-C). `power_off` is
+   built and now surfaced on both screens; whether it *stays* off is UNTESTED,
+   and that measurement gates any release note that claims it.
+3. **Eric Moritz' GPIO53 meter check** - a multimeter on the pin. Owed since
+   2026-10-06, the oldest thing in this file.
+4. **The web listen soak** - never quantified. Open since 10-16.
+5. **Gyula HA3HZ's QMX+ decodes only "T T T T"** - the decisive
+   antenna-disconnect test was never run. He asked for help; nothing in our
+   code is implicated until it is.
+6. **Jim (jpwatters): our own per-tone FT8 spacing over USB has NEVER been
+   measured.** +14 ms is key-down, a different quantity. `tx_compare.py --usb`.
+7. **Randy's slot 147** - `ffc6e33b` is on the bench and will now say what the
+   pile-up held and why a candidate was refused. Needs a capture to catch it
+   again.
+
+### C17. Built, flashed, never seen or heard
+
+1. ⛔ **`b4abf434` was flashed and NEVER LISTENED TO** - it raises the
+   browser's gain.
+2. **The CW strip at 2 rows, and the Clear button** (`21e628c9`, flashed
+   2026-10-17). The slot mapping keeps the strip's bottom edge and moves the
+   prefix; proven on the host, never on the glass. The web Clear button has
+   not been clicked in a browser.
+3. **`ad313b83`** (JS8 free text under the wrong callsign) - published in
+   v1.17.1 and still unverified.
+4. **The JS8 composer has never been typed into** with the snap-on or a BLE
+   keyboard.
+
+### D17. Decisions owed by the operator
+
+1. **Randy N4OPI: should ticking "never auto-call worked-before" HIDE the
+   rows?** Today the grey is unconditional (`ft8_screen_view.c:1097` never
+   reads the setting) and the checkbox only gates who the machine calls.
+   `5deb388d` relabelled it so it stops promising otherwise; his actual
+   request was never decided.
+2. **Don WB0LQW: hold the Mid-QSO row until 73 arrives or he aborts.** Today
+   it clears the moment the final is sent (`s_state = FT8_QSO_DONE`). A
+   feature, not a fix.
+3. **Ryan KK6DZB: decode several JS8 submodes at once.** JS8Call does;
+   `ft8_op_mode_protocol_for()` runs only the selected one, so switching to
+   Fast makes every Normal station invisible. Real work, not a tweak.
+4. **Samuel W7STF's write-position glyph** - does he want a marker *as well
+   as* the cyan/green pass boundary, which exists because he asked for it? One
+   question settles it before a second indicator for the same thing gets
+   built.
+5. **Server mode (screen off)** - not built, proposed as a task card only.
+6. **The QMX timeout experiment** - deferred by the operator on 10-15.
+
+### E17. Small, cost already known
+
+▶ **Added 2026-10-17, found while failing to measure T21.**
+
+- **T27 — which operator switches are Tab5-only?** `rx_audio_en` and
+  `rx_audio_vol` were: every knob around them was on the API, the switch that
+  decides whether any of them run was not. Fixed for those two (`b1caf7aa`).
+  A sweep says 70 of 159 `qmx_settings_t` fields are never named in
+  `webserver.c`, but most are internal state, upload cursors or nested groups
+  whose struct name differs from the JSON key - so that is a LEAD, not a
+  finding. The audit is the work.
+- **T28 — which other settings take effect only after a restart, silently?**
+  RX audio does, for a correct reason (the codec opens at boot, before the USB
+  host takes the DMA RAM), and said so only on the serial console. One grep
+  for the pattern is the whole job.
+
+
+1. ⭐ **The web Listen button is not discoverable.** TWO users never found it
+   (Bryan N0LUF, Randy N4OPI), one of them after reading the manual; Sam had
+   to tell them it exists. ⚠ This, and not Firefox, was Bryan's silent audio -
+   `f81a8d50` fixed two real gesture defects that he never hit. Needs a design
+   decision: label it, move it, or surface it on first use.
+2. **Transmitted morse in its own colour** (Sam W7STF). Cheap: the radio
+   already sends the flag and we discard it - `cw_decode_parse_tb()` parses the
+   `t` field and `cw_decode.c:326` passes `NULL`. Capture it, mark the cells
+   written while t>0, give them a third colour in both renderers.
+3. **Web/Tab5 option parity**: `ft8_early_decode` is in the web FT8 filters
+   group but in the Tab5 *drawer*; "Allow grey-listing" is a Tab5 Options
+   checkbox with no web entry. Measured 10-16, nothing done.
+4. **A manual section on getting audio** - RF gain, the Listen button, where
+   the volume controls actually act. Two users asked this week and another
+   user answered both times.
+5. **The docs audit covered prose and structure, NOT diagrams.**
+6. **The two gesture tables are still duplicated** - parked deliberately.
+
+---
+
+## ▶ THE WORK QUEUE, 2026-10-13 — superseded above, still the agreed ORDER
+
+Agreed order, written after replying to five operators. **The order in A is
+what Sam W7STF has been TOLD**, in a reply that was sent, so it is not free to
+re-shuffle without telling him again.
+
+⛔ **Before assessing any of these, read the document that already exists.**
+`docs/web-audio-feasibility.md` (271 lines, written for A1 on the day it was
+asked) and `docs/remote-iq-assessment.md` (the I/Q-server idea, with its own
+suggested order) answer most of the "how big is it" questions. On 2026-10-13 I
+re-derived both from git archaeology and got a WORSE answer - see
+`feedback_read_docs_before_assessing` in memory.
+
+### A. Sam W7STF's list, oldest first — the order he has been promised
+
+| # | What | Size | Where the thinking already is |
+|---|---|---|---|
+| **A1** | **Web-UI audio + server mode.** ▶ **PHASE 1 BUILT `1e825c1c`, PROVEN IN A BROWSER, NEVER THROUGH THE DEMODULATOR.** A Listen button streams mu-law 12 kHz on the existing `/ws`, tapped from `rx_audio.c`'s output so the browser hears what the speaker does. ⛔ NOT FLASHED; CPU cost unmeasured; the overnight WiFi soak has not run. ⚠ `docs/web-audio-feasibility.md` was stale in its central claim and now says so at the top | Server mode (#34 display sleep + render gate on backlight-off) is still untouched and is independent | `docs/web-audio-feasibility.md` |
+| **A2** | **AM audio.** ✅ **SHIPPED in v1.19.0 and PROVEN ON AIR.** `RXAUD_MODE_AM` demodulates on the Tab5; `compute_passband_edges_hz()` has its AM case. 2026-10-15 added the full width list: 4.0–9.6 kHz at D=4, 10.0 and 20.0 kHz at D=2 (`472f66ca`, `a0cd3171`) — the decimation follows the WIDTH, not the mode | — | [[project-am-demod-on-the-tab5]], [[project-am-d2-path-for-10-and-20-khz]] |
+| **A3** | **CW decode, two rows to four.** ✅ **DONE `5810c034`, FLASHED — ⛔ NOT YET SEEN ON A SCREEN.** `CW_LINE_ROWS` is now the one number; both surfaces derive from it (the browser reads `cw.rows`/`cw.cols` from `/api/status`, no hardcoded row elements). ⚠ The strip grows UPWARD over the waterfall, ~66 px more than two rows — whether that is too much is his call and he has not made it | — | |
+| **A4** | PSD amplitude peak hold, adjustable persistence; then CW-Tune; then the CW peak filter | Moderate, render/DSP | |
+| **A5** | Digital noise reduction for AM and SSB | Largest, and it wants A2 done first. ⭐ The feasibility note says DNR can run **client-side** (RNNoise-class WASM) on demodulated audio and never needs to fit on the P4 | `docs/web-audio-feasibility.md` |
+
+⭐ **Already done, he did not know:** his biggest architectural ask - make
+disabled digital modes computationally inert. `ft8_test.c:2939` is literally
+`while (ui_mode_get() == UI_MODE_FT8)` and exits when the operator leaves the
+page; WSPR gates on `s_run`/`wspr_en`. The remaining cost is the RENDER, so the
+honest form is "make the waterfall cheaper" = #285's open taskLVGL/DMA work.
+
+⛔ **Declined:** "do not even LOAD a feature unless enabled" - that means
+compile-time config and different binaries for different operators. One image
+for everyone.
+
+### B. This week's reports
 
 | # | What | State |
 |---|---|---|
-| a | Drawer open cut TX power to WSPR's declared level (`16565a7`) | Committed, unpushed. Hardware-verified before the soak started |
-| b | 17,172 B of internal DIRAM reclaimed (`85ff840`, `53ccadd`) | Committed, unpushed. **This is what is soaking** |
-| c | **Antenna Tune: live PWR/SWR without the Radio menu** (Randy N4OPI) | ⚠ **BUILT, NEVER RUN.** His words: *"it would be nice if the PWR and SWR would be displayed instead of having to re-open the menu to see the results and stop the tune sequence."* The readout lived in the menu ITEM'S LABEL, and the bar closes every menu on the first click elsewhere - so watching SWR while turning an ATU meant reopening the menu, and so did stopping. Now a centred panel with SWR, watts, seconds-left and a STOP button, driven by `/api/status` `tune` so it can never disagree with the radio. `/api/status` gained `tune.secs`. Layout checked by rendering the panel standalone in a browser; **the live path has not been exercised against a radio** - that needs a dummy load and a QMX on 1.04+ |
+| **B1** | **The saved diagnostic log destroys 4 bytes in every 32-byte block** (John W5JSS) | ⛔ **OPEN, NOT REPRODUCED.** 9,740 events, ~11% of a 343 KB file. The RAM copy from the same download is CLEAN, so it is the SPIFFS path, not HTTP or the browser. Not reproducible on the bench (199 KB, 2 runs, no stride). **Next lead: his answer on whether he was band hopping.** This is the evidence channel for every field report, so it costs every future diagnosis |
+| **B2** | **Ryan KK6DZB's JS8 UI draft** (full list received 2026-10-13 evening) | ✅ **BEHAVIOUR HALF DONE, FLASHED AND PROVEN ON AIR 2026-10-14** `9f440da9`. Tap selects (no TX), SNR + GRID buttons, conversation filters to the selection, free text opens "THEM US ", JS8 CQ calls once. ⛔ **The old claim in this row was WRONG**: the frame counter was never composer-only - `display_text` carried it to both surfaces all along. The real defects were the wording, no "finished" message, and `ftx_result` discarded by the browser. ▶ **STILL OPEN: the three-pane layout** (stations / this station's messages / type box, losing the Free text button) and **printing the message as it sends** - cheap, see the commit message |
+| **B3** | **JS8 CQ repeats because FT8 does** (Ryan KK6DZB) | ✅ **ANSWERED BY HIM AND DONE** `9f440da9`, flashed 2026-10-14. His words: "Calling CQ only once. You must hit CQ again to send again." FT8 untouched |
+| **B4** | **JS8 canned messages / macros, one-button recall** (Gyula HA3HZ) | ⏸ **WAITING ON HIM** for which substitutions he actually uses. ⭐ Half built: `cq_msg[3][28]` in `settings.h:361` is persisted and in the `[cq]` config backup - same mechanism. Sizing: free text takes **160** chars so presets want to be longer than 28, and three is too few. ⚠ `js8_presets` in the API is FREQUENCY presets, not messages |
+| **B5** | ⚠ **JS8 AUTO-QSO IS LIVE AND UNAUDITED** (Gyula HA3HZ) | ▶ **PARTLY ADDRESSED** `9f440da9`: a JS8 tap/click can no longer start an exchange, so the hand-operated path is now press-per-message. ⛔ **THE ROBOT IS UNTOUCHED** - `ft8_robot` -> `ft8_qso_start()` is what answered Gyula's four callers, it is opt-in (`robot_en`), and nobody has yet tested what it looks like from the far end. The unattended count is STILL 6. The narrow real gap remains: the directed command `SNR?` (cmd 0) is unhandled |
+| **B6** | ~~The browser bypassed the WSPR page's top-bar guard~~ | ✅ **FIXED AND VERIFIED** `057a98b1`. Four of John's six reports were this one bug |
+| **B7** | **A finished QSO stayed busy for a whole extra cycle** (Bruce N9JCV, POTA) | ✅ **FIXED `6198189b`, FLASHED AND PROVEN ON AIR.** The WAIT_DONE check lived in `ft8_qso_advance()`, which runs once per SLOT - the closing 73 stops ~12.6 s into a 15 s slot and nothing re-evaluated it until the next cycle, so he could not start another station. Now also polled from the decode task's idle wait, gated on 1200 ms of margin. ⭐ The measurement the code demanded was already in the capture: wrap-up 31-342 ms, dominated by the ADIF write. ✅ **PROVEN ON AIR 2026-10-14**: QSO with EX7CQ (Kyrgyzstan), final RR73 off the air at `I (530705)`, QSO closed at `I (530724)` - **19 ms**, where it used to be a whole slot. Wrap-up 49 ms, logged as QSO #34 |
 
-### Ready for today's release (v1.12.4 → next), built and flashed, awaiting your look
+| **B8** | **M2 — how fast can JS8 go? The CAT write was never the limit** | ✅ **MEASURED 2026-10-14, and it overturns the feasibility doc.** 1800 `TA<freq>;` writes to a live QMX at 160/80/40 ms, 0 failures: write p50 **250 µs**, p99 1.9 ms; worst *slip* against the ideal symbol instant **3.7 ms**, at a 40 ms cadence. ⛔ The old "Turbo is unreachable, a CDC write is bounded at 50 ms" rested on a **timeout mistaken for a cost**. Host side: Fast and Turbo both fit. ⛔ **The RADIO side is unmeasured** - whether the QMX parses and retunes at 12.5 or 25 commands/s needs an on-air decode by a real JS8Call station, not a bench number. ⭐ Side finding: the `ESP_LOGI` in `cat_send_raw_cmd()` costs up to **19.8 ms**, 20× the wire. Instrument: `cat_ta_latency_probe()`, `/api/cmd {"action":"ta_probe"}` - never sends `TX;` |
+
+### C. Decisions owed by the operator
+
+1. **Push?** 18 commits unpushed on top of v1.19.0. ⚠ A count in prose rots -
+   `git log --oneline origin/main..HEAD` is the authority.
+2. **Randy N4OPI: an ESP32-P4 stamp running the web UI only**, tucked inside the
+   QMX+ (M5Stamp ESP32P4 + Stamp C6, ~$20). His own words say it is not a
+   demand. ⚠ It needs a USB HOST connector the module does not fit, and
+   GPIO53/54 do not exist on it. NOT ASSESSED - no port has been looked at.
+3. **Bruce N9JCV: let an operator turn the web UI OFF** - ✅ **ANSWERED, no work needed.** Measured: with no browser attached the server wakes on its
+   timer, finds no session and sleeps; the cost is a CONNECTED browser (closing
+   one moved idle0 0.1% -> 2.9%). So "do not open the page" already is the
+   feature. A switch would only free the server's memory and keep others off a
+   shared hotspot. ⛔ "WiFi off" is NOT the same thing - it also takes the clock
+   (FT8 waits for SNTP without a GPS module), OTA and spotting.
+4. **The I/Q server** - is it a direction, or is A1 the end of it? They are
+   different things and should not be conflated: A1 is **96 kbps** and needs
+   none of the I/Q measurement.
+
+### D. The one measurement that gates the big idea
+
+⛔ **Can `esp_hosted` → C6 → lwIP → httpd websocket sustain ~1.5 Mbit/s
+with low enough jitter? NOBODY HAS MEASURED IT**, and
+`docs/remote-iq-assessment.md` says everything else waits on the answer. Full
+I/Q is 48 kHz x 2 x 16-bit = 1.54 Mbit/s and the PC needs all of it.
+
+The experiment is small: a streaming-mode boot path that starts nothing but USB
+host, CAT, WiFi and a websocket sink, then measure throughput and jitter. It is
+a branch in `app_main` and a socket.
+
+⭐ **A fallback is already identified** if the number comes back bad: stream
+only a downconverted passband (NCO shift, reuse the existing decimate-by-8,
+**~192 kbit/s**), which keeps the full panadapter view. Rejected as the
+*destination* because it leaves the decoders on the Tab5, but sound as a
+fallback.
+
+⚠ **Boot mode, not a runtime switch** - nothing in this codebase has a
+teardown path, and the early allocations are deliberately early. Persist the
+mode to NVS and reboot into it.
+
+---
+
+## ▶ RECONCILED 2026-10-12 — what is OPEN right now
+
+The 2026-10-01 pass below is still the authority for the Master Table. This
+section is what changed since, and it is the one to read first.
+
+### ⛔ UNRELEASED WORK SITTING ON `main`
+
+`main` is ahead of `origin/main`. **Two of those commits have never been
+exercised on hardware**, which is why the push has not happened:
+
+| Commit | What | Hardware status |
+|---|---|---|
+| `cd4de513` | PA-voltage ceiling the operator sets | ⭐ **PROVEN** — a 43-of-45-step sweep into a dummy load, which is exactly what the table predicts |
+| `877079ac` | Output power no longer commands the radio with a figure it invented | ⭐ **PROVEN ON HARDWARE 2026-10-12.** ⚠ **It was already on the bench** — `877079ac` is an ancestor of `394d29bd`, the build running there, so no flash and no QMX power cycle were needed. ⚠ And the plan for proving it was based on a wrong belief: 12 m, 10 m and 6 m are calibrated with **no** stored target already, so nothing had to be cleared. **12 m, drawer open:** `output_power_area_refresh()` ran (six `power_cal: voltage_for_dbm(band=12M...)` lines prove it) and wrote **nothing**. **20 m, stored target 3.50 W, drawer open:** one `cat: PA voltage -> 11.5 V (ok)` — 11.5 V being exactly the ceiling he set. The control is what makes the zero a real zero rather than a dead instrument |
+| `52ba2453` | The dummy-load warning promised 45 steps while the sweep ran 43 | Built, **not flashed** |
+| `13865925` | SPIFFS: the boot repair could never write, and the diag log never fit | Builds; **not flashed** — see the new rows below |
+| `e9671472` | JS8 J9, compound callsigns | Host-tested, 11 mutants / 0 survivors; **no compound station decoded off air yet** |
+| 7 docs commits + `394d29bd` | The README/guide drift mechanism, closed | Docs only |
+
+⛔ **PROMISE OWED IN THE RELEASE NOTES:** "never exceed PA voltage" was
+promised to Bryan N0LUF in a reply that was SENT. It has to appear.
+
+### ▶ New, found 2026-10-12
+
+| # | What | Status |
+|---|---|---|
+| new | **The 411 SPIFFS errors per capture were two defects, one mechanism** | ✅ **FIXED IN CODE, UNVERIFIED ON HARDWARE** (`13865925`). Measured over 979 boots: the diag log's 512 KB budget (256 KB x 2 generations) does not fit a 934 KB partition, because SPIFFS cannot garbage-collect without a whole free block to relocate into — so it rotated on ENOSPC **251 times**, discarding a generation early, and `esp_spiffs_gc()` returned `SPIFFS_ERR_FULL` on 82 boots. And a repair is a WRITE, so `esp_spiffs_check()` on a full partition could not apply what it found: the same object was reported bad **331 times and fixed never**. `DIAG_FLASH_MAX` is now 128 KB and gc runs before check at all four call sites. ⚠ `CONFIG_SPIFFS_GC_MAX_RUNS` 10->32 on 2026-08-18 was the first attempt at this same fault and treated the symptom |
+| new | **JS8 J9 built: compound callsigns were silently invisible** | ▶ **BUILT, NOT SEEN ON AIR** (`e9671472`). Needs a portable, special-event or compound-prefix station decoded off air. ⚠ It also found and fixed a latent fault on the SHIPPED TX path: `js8_pack_alnum50()` accepted `"PJ4/K1ABC/P"` and would have transmitted it as `"PJ4/K1ABC/"` — a different station |
+| new | **The JS8 composer has never been typed into with a real keyboard** | Open. Not tried with the snap-on or a BLE keyboard |
+| new | `ad313b83` free text under the wrong callsign ships unverified | Open — needs a third station on a nearby offset |
+
+---
+
+## ⛔ RECONCILED 2026-10-01 against the code — read this, not the Master Table
+
+The project is at **v1.16.9, released**. Everything under "Master Table" still
+describes repo state as **v1.5.0** (its own header says "Last updated
+2026-09-02") and has never been reconciled row by row. **Do not read a row below
+the Master Table heading as still true without checking it against the code.**
+
+What the previous version of this section claimed, and what is actually true:
+
+| Was listed as | Actually |
+|---|---|
+| ⚠ "built on v1.14.3.1, NOT FLASHED, NOT RELEASED" — drawer/TX-power `16565a7`, DIRAM reclamation `85ff840`+`53ccadd`, Antenna Tune live PWR/SWR `c74cc31` | **All four shipped in v1.14.4**, five releases ago. The "this is what is soaking" note was eleven days stale |
+| "Ready for today's release (v1.12.4 → next)" — SelfSpotter map, log audit, relay power-cycle | **Shipped v1.13.0** |
+| WSPR duty "1 in N"; WSPR TX-state orange UI | **Shipped v1.15.0** |
+| WSPR PA guard engages at TX-enable | **Shipped v1.16.0** |
+| microSD web freeze / `/ss.bmp` streaming | **Shipped v1.16.8** (rewritten again there to fix tearing) |
+| RPC orphan-deadlock patch #18 | **Standing patch, present** — `check_patches.py` confirms 24/24 as of this release |
+
+Verified by `git describe --contains` on the named SHAs and by `git log -S` on
+the identifying symbols, not by reading the rows.
+
+### ▶ Shipped in v1.16.10 (2026-10-02)
+
+All of the rows below went out in v1.16.10. What is verified and what is not is stated per row and did not change at the release.
+
+
 | # | What | State |
 |---|---|---|
-| 1 | SELFSPOTTER map + LIST + CONDITIONS (Uwe DL8UG's feature) | ✅ **Seen and approved on the actual screen tonight** ("looks awesome"). Land is now FILLED (own scanline fill, not LVGL's - it has none), not just outlined, with the coastline stroked back on top in its own colour after two rounds of "too bright" / "eating the historic traces". Trace lines doubled to 4px and landing dimples enlarged to match, after the brighter MAP_SRC_COLOR_* hues alone still read as dim. `help_topics.c`/`help_triage.c` had ZERO entries for this feature - added, then found and fixed TWICE more: WSPR was inheriting panadapter's triage rows (a pre-existing bug, unrelated to spot map, found while wiring it), and SelfSpotter itself - an OVERLAY, not a `ui_mode_t` - was inheriting whichever screen it was opened FROM, both ways (map showed the base page's rows, base page showed the map's). `spot_map_view_is_active()` now overrides the screen selection when true. "The spot map is empty" also went from a NULL condition to a real one (`spot_map_view_spot_count()==0`). Full doc audit against CURRENT code found the whole "swipe down from the top edge, opt-in setting" story was stale in FOUR files - both the gesture (now a drawer button) and the opt-in model (now always-on from boot) had changed earlier the same day and no doc had caught up. Rewritten in `spot-map.md`, `settings.md`, `README.md`, `gestures.md`. Seven OTHER real features (Radio Menus, Still Spectrum, Sim Mode, SWR protection, Antenna Tune, RIT, Release radio) also had complete guide content and zero "Need guidance?" path in - wired in, each individually verified against current code. `mkdocs build`: 33/33 deep links verified by the real anchor checker. **Not yet re-confirmed on the actual screen after the overlay fix** - the operator found the two bugs live but hadn't looked again as of this session ending. |
-| new | Log audit ("we need to be in control of what is happening here") | ✅ Steady-state ESP_LOG volume 78 → 46 lines/min on the dev bench: audio rate line widened to a real ~2-transfer band + 10s mean (was firing on ordinary jitter), heap line 10s → 60s when healthy, NimBLE/esp-x509-crt-bundle library INFO chatter dropped to WARN, BLE scan re-lists an address once per boot not once per ~75s window, RF gain re-query throttled to 30s, WSPR TX label reads from `/api/wspr` instead of polling all of `/api/settings`. No phantom keyboard, no crash from this pass. |
-| new | Remote relay: deterministic "Power-cycle QMX" (Randy N4OPI) | ✅ A plain Pulse on PWR_ON only toggles the QMX with no way to tell which state it left it in. New button runs off-pulse → wait 1s → on-pulse 500ms → wait → CAT-confirm, reporting "QMX responded" / "no response". Verified on the bench (no relay wired here, so this proved the software path - both the success and the refusal-path branches). Deliberately did NOT build the general "any pin, toggle, schedule it" submenu also asked for - the two pins stay whitelisted to this one job. |
-| 2 | WSPR duty cycle: "1 in N" instead of a percentage | Deterministic period, no more back-to-back bursts, legacy NVS values migrated. **Flashed; not yet watched over a real multi-cycle run.** |
-| 3 | WSPR TX-state UI: bar/counter go TX-orange, W/SWR hidden between bursts, carpet dims during TX | Flashed, not yet seen live. |
-| 4 | WSPR PA guard engages at TX-enable, not at the boundary | **Verified on air tonight** — burst fired at the very next boundary, no held cycle, 1.1 W measured at PA=6.0 V. Only gap: a cold-cache retry when CAT link-up races the guard (see below) — offered, no decision taken. |
-| 5 | RPC orphan-deadlock patch (#18) | **Hardware-confirmed tonight** — 17 seedings caught and refused in one run, zero wedges. Ready to call closed. |
-| 6 | microSD-write web freeze (screenshot streaming) | `/ss.bmp` now streams from the panel framebuffer instead of a 1-chunk-per-row send that was itself killing the WiFi link — fixed and flashed, not yet re-measured under a real CW+card session. |
-| 7 | SDIO 10 s death-window patch | Flashed. **The one thing it exists to prove — a `slave answered again ... NOT restarting` line — has not been seen yet.** Needs a longer soak. |
+| A | WSPR page now says when the radio has left the page's band (`36ff011` + `16c6924`) | ✅ **VERIFIED ON HARDWARE 2026-10-01.** It fired correctly on a real mismatch, and the no-mismatch path restores the PA line. The first render DID cli
+| B | CAT band scan restores frequency and mode (`819fbd9`) | ✅ **VERIFIED ON HARDWARE 2026-10-02.** The SAVE was already proven; the RESTORE had never written to a radio, because the bench QMX's band menus leave the dial where it was. Reached through the test hook added in `d5a1b2f` and run against the radio on `a07e30c`: **(1)** told it the scan found 14097000/'3' while the radio read 14095600/'6' - both writes went out and the radio moved to 14.097 MHz CW; **(2)** told it 14095600/'6' while the radio read 14097000/'3' - moved back to 14.0956 DiGi; **(3)** told it exactly where the radio already was - logged the entry and wrote NOTHING, which is the case that protects a dial the operator just set. John W5JSS's fault is fixed and the fix has been exercised |
+| E | Dead hosted-WiFi link now power-cycles the C6 instead of needing a reboot (`3567847`) | 🟡 **BOUNDS PROVEN, RECOVERY UNVERIFIED (`90b7e54`).** The thresholds moved to `main/util/hosted_watchdog.c` and `test/hosted_watchdog_harness.c` holds them: nothing across 1000 healthy probes, five consecutive failures still nothing, the sixth acts once, a success mid-streak resets it, three attempts per session then "a reboot is needed" and never again, and WiFi switched off can never accumulate towards a power-cycle. Four mutants of the real file fail 13/5/3/86 checks. ⛔ **The RELINK itself has still never run against a real wedge** - the condition exists only in Bryan N0LUF's SD-card log and has not been reproduced here. A healthy unit cannot exercise it |
+| F | WSPR transmits in its own cycle, never one the schedule forbids | ✅ **VERIFIED ON AIR 2026-10-02** on `d9f9a07`, 2 tx + 2 rx, 1 W into the antenna. Both cycles of the group keyed, each in its own cycle: `TX armed for THIS cycle at +43 ms` then `+30 ms`, against a 1000 ms budget - the same bench measured **+1437 ms** on `a07e30c` an hour earlier, where the cycle was skipped. Both bursts ran the full 110.6 s, 1.1 W measured, SWR 1.22 / 1.19. The two receive cycles that followed captured normally with TX still enabled and produced no arm and no burst. ⛔ `ecff9b9`'s prep hoist was DEAD CODE and its diagnosis was wrong - see `d9f9a07`: the slot loop arrives 1.3-1.8 s into every cycle because a capture ends on the boundary and the decoder hand-off costs that long, so the grace path is the normal path and the wait loop never runs. The arm now lives in `wspr_tx_sched_task`, on the UTC grid, priority 5 |
+| G | The QMX prompt appears even when WiFi never associates (`c158428`) | ⚠ **UNVERIFIED ON HARDWARE. Found while measuring, not reported.** `0b9412f` gated the prompt on `!wifi_enabled || wifi_connected`, which is false FOREVER on a unit whose WiFi never associates - first boot with no credentials, wrong password, out of range, portable. It replaced "appears too early" with "never appears", for the operators least able to guess what to do. The bench cannot show it: five boots on dev 2026-10-02 all associated 5.1-6.2 s after "Init complete". The gate is now in `main/util/qmx_prompt_gate.c` with a 30 s bound and a latch (so a mid-session WiFi drop does not re-hide a prompt being read); `test/qmx_prompt_gate_harness.c` fails 7 checks against the shipped version. **Needs a cold boot with the QMX off and WiFi unable to associate** |
+| H | A CAT-link owner could free another owner's hold (`725cdf0`, `97a961e`) | ✅ **VERIFIED ON AIR 2026-10-02.** Caught the collision deliberately rather than waiting for luck - the 300 s time-sync timer beats against the 480 s group period, so the landing was predicted and then observed at 927257, 59 s into a burst that ran 868241-978844: `GPS tick skipped - a TX burst holds the link` / `QMX RTC read skipped - a TX burst holds the link`, no `HELD by the time sync`, and the only release was the burst's own at its end. On `d9f9a07` the same situation had the RTC read take the flag and free it 80 s before the burst ended. ⚠ The refusals were made AUDIBLE first (`97a961e`) - silent ones would have been indistinguishable from a pass that never landed |
+| I | Randy N4OPI x2 + Samuel W7STF x3, 2026-10-02 (`f12cbdc`, `61dd688`) | 🟡 **TWO VERIFIED ON HARDWARE, ONE NOT.** **(1)** ✅ "Show CQs in my run" - other stations' CQ rows were hidden for the whole of a CQ run with no way to turn it off (`ft8_qso_cq_filter_active()`, both lists). New filter, off by default. Operator confirmed on a live CQ run, **both the Tab5 list and the browser** - the two apply the filter separately. Setting round-trips through `/api/settings` and the `/api/config` export. The Tab5 label needed measuring, not guessing: 22 chars clipped to "Show CQs during my r", now 18. **(2)** ✅ Tab5 TX-tone panel had NO `lv_timer` - drew once on open and never again. Now 1 Hz with a 4 s hold so a one-off hint is not wiped. Operator confirmed it tracks the slots live. **(3)** ⚠ **UNVERIFIED** - RX audio switched on mid-session is inert by design (the codec claims DMA at boot or never) and only the LOG said so; it now toasts. **Needs a boot with audio OFF, then switching it on** - the toast should name the Tab5 restart AND the QMX power cycle after it. **(4)** AM audio does not exist (`mode_from_cat_str` handles CW/CW-R/USB/LSB only) - assessed as small: the chain already yields filtered complex baseband, AM is its magnitude plus a DC block; the work is levels, plus an AM branch in `ui.c`'s `compute_passband_edges_hz()`. NOT started. **(5)** Backup = `GET /api/config` / `POST /api/config`, includes the LoTW key; warn about the ~19 KB truncation history. Replies drafted in `scratchpad/`, **not sent**. ⚠ Bench `dev` has `cq_show_others` left ON |
+| C | Reply to John W5JSS about B | Drafted in `scratchpad/`, **not sent** |
+| D | Screenshot tab (John W5JSS) | ✅ **DONE AND VERIFIED IN THE BROWSER (`ab5ca85`).** The tab link is a plain `<a target="_blank">` with no JavaScript; the PNG conversion lives only on "(save PNG)". Measured first: the conversion is 62 ms and the DOWNLOAD is 7.7 s, so filling a blank tab with a converted PNG showed nothing for seven seconds - worse than the progressive render it replaced. ⚠ Bench `dev` is still on `0b9412f` and does NOT have this |
+
+⚠ A and B both change behaviour at CAT link-up. Flash them together and watch
+one cold start with the QMX attached; the new lines to look for are
+`band scan: radio is on ... - will restore after` and
+`the band scan left the radio on ... - restoring ...`.
+
+### ✅ The Master Table is reconciled
+
+Done 2026-10-01 — see **📒 RECONCILIATION LEDGER** below. All 377 rows read and
+given a verdict: 273 already ticked (archive), 4 reverted, 100 itemised. The net
+result is **14 genuinely open**, 10 waiting on a user, 39 shipped but never
+confirmed by the person who reported them, 31 decisions/ideas/parked, and 5 that
+were finished and never got their tick.
 
 ### Decisions you haven't made yet (I asked, no answer came)
 | # | What | Question |
@@ -58,8 +354,9 @@ compiles clean; none of it has run on hardware.
 | #383 | Spot lane hides in-view spots with no indication | Real gap, first fix was wrong and reverted, still unsolved |
 | #376/#367 | WSPR decoder steals USB audio at the wire; the "deep" candidate pass is measurably better but starves capture | Deliberately shipped OFF, root cause understood, not a quick fix |
 | #378 | Web page freezes up to 30 s during a microSD write | Mitigated (deferred while a browser watches), not cured |
-| #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | Instrument built, not yet flashed |
-| #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | Understood, not blocking anything currently planned |
+| #313 | A slow socket leak wedged httpd once, mechanism established, culprit not named | ✏ **Corrected 2026-10-01: the instrument IS flashed** - `sock_probe_free_cached()` is in the shipped 60 s HEAP line in `audio/audio.c`, so every field capture carries `sock=N`. The row said "not yet flashed" for weeks after it was. Culprit still not named |
+| SDIO | 10 s death-window patch - the line it exists to prove has never appeared | Standing patch present (24/24). ⚠ **Checked 2026-10-01: zero occurrences of `NOT restarting` in the whole dev-bench capture.** Either the window never opened on this bench, or the patch's own evidence line does not fire. Needs a long soak, or an admission that it is unproven |
+| #285/#284 | Core-0 / DMA-pool headroom — gates any new heavy feature | ✏ **Sharper than "understood" as of 2026-10-01.** With RX audio ON the DMA floor is **3,207 B, measured and stable**; v1.16.9 bought ~24 KB back by moving the RX-audio ring to PSRAM, after the same shortage killed SD cards for two users. The remaining lever is `dma_desc_num` 12→6 in `rx_audio.c` (~23 KB) and it **needs a soak** - it was raised to 12 deliberately and reverting made the chirp audibly worse |
 | new | Every WSPR decode (~33 s, core 1 at 0 % idle) causes CAT `TX transfer timeout`s about once a second; each recovers within ~100 ms | Seen 2026-09-13 at 191–220 s and 310–318 s of a boot. Same family as #376. No lost audio in those windows, no user-visible effect found yet |
 | new | Opening "Need guidance?" for the first time stalls LVGL long enough for one CAT timeout and a 1 s audio delay (caught up, nothing dropped) | Lazy first build of the panel. Seen once, 2026-09-13 125 s |
 | new | `cpu_owners` showed taskLVGL at priority **22** (base 4) | One sample, 2026-09-13 251 s. Raised priority on taskLVGL was the signature of the 2026-09-11 display_lock inversion — find who at 22 waits on the lock before assuming it is harmless |
@@ -67,10 +364,169 @@ compiles clean; none of it has run on hardware.
 | new | QMX dropped off USB, then the Tab5 itself rebooted ~50s later (`reset_reason=unknown`, no crash record) | 2026-09-13 ~23:27. Neither of us touched the hardware or issued a flash in that window (same firmware SHA before/after). ROM-level reset line was missed by the capture's reconnect. Not recurred since. Watch for a repeat rather than chase it cold |
 | new | "Need guidance?" - no row anywhere showed the amber flagged highlight, after the SelfSpotter overlay fix | Checked the render code (correct: amber bg/border, warning icon, all conditional on `flagged`) and the bench state at the time (CAT genuinely connected, WiFi genuinely up) - nothing SHOULD have been highlighted on the screens checked. "The spot map is empty" only appears in the list while actually inside the overlay, and only highlights if the map has zero spots at that instant - not confirmed whether that specific case was what was tested. Worth a deliberate check with fresh eyes (e.g. WiFi off, confirm "I cannot reach the web page" lights up) before assuming a real bug |
 
+| new | "Now turn on or reboot your QMX/+" breathing overlay shows before the Tab5 itself is ready to take CAT | *(Dennis WN4FLA + Gyula HA3HZ, 2026-09-30/10-01)* Dennis: the overlay appears immediately at boot, ahead of the Tab5's own init finishing, so it reads as "the QMX is off" when the QMX may already be on and answering fine — the Tab5 just hasn't started polling CAT yet. Gyula agrees and adds a scope question: is this worth solving given who actually runs this (QRP, slow-CPU audience who can see the frequency match themselves)? Gates on `cat_is_ready()` in `qmx_wait_poll_cb()` (`main/ui/ui.c:4508`), shown immediately on creation (`main/ui/ui.c:7117`) — no check yet for whether the Tab5's own CAT subsystem has finished initializing. Not designed, not started |
+
 ### Deliberately parked (not today, by design)
 CW page work (#351/#352), QDX/QDX-M support (#303 — no hardware to test against),
 binaural CW (#245/#102), static IP still unverified on hardware (#307 — shipped,
-just never flash-tested live), README/docs-tree unification (#111).
+just never flash-tested live). ~~README/docs-tree unification (#111)~~ — **done
+2026-10-12**, see the row in STILL OPEN.
+
+**Live WSPR waterfall between cycles — PARKED BY THE REQUESTER (Samuel W7STF, 2026-10-01).**
+The pane shows nothing during the ~80 s wait between cycles, where WSJT-X shows a live
+band view. It would need its own continuous audio path independent of the decode capture,
+which is why it was never a quick one. After v1.16.9 said so plainly he withdrew the
+pressure himself: *"consider it a super-low enhancement, inquiry moreso than feature
+request. I'm currently pretty good with what you've provided us thus far. It's probably
+just not worth trying to cram it in."* ⛔ **Do not spend a release on this unless someone
+asks again.** It stays listed as a known difference from WSJT-X in the release notes,
+which remains accurate — parked is not fixed.
+
+---
+
+## 📒 RECONCILIATION LEDGER — all 377 Master Table rows, 2026-10-01
+
+Every row below the Master Table heading was read and given a verdict. **273**
+already carried ✅/shipped/closed and are archive; **4** were reverted or
+rejected; the **100** that did not are itemised here. The Master Table itself is
+left untouched as the historical record — this ledger is the authority.
+
+⭐ **The single most valuable find: #261.** Randy N4OPI, *"after using the radio's
+menus remotely, the QMX comes back on 160 m"*, fixed in `qmx_term.c` at v1.9.6 —
+but `cat.c`'s band scan drives the SAME menus and was never swept. That cost John
+W5JSS a wrong diagnosis this week and was only fixed today (`819fbd9`). An
+unfixed sibling sat in this table for seven weeks looking done.
+
+⚠ **"Pending" in this table meant pending RELEASE**, written when the repo was at
+v1.5.0. The tree is clean and eleven releases on, so every one of those shipped.
+What did NOT happen for most of them is confirmation by the person who reported
+it — which is the real open item, and is why they are not simply ticked.
+
+### 🔴 STILL OPEN — work remains (12 of the original 14)
+
+⛔ **The count in this heading is the number of OPEN rows, not the number of rows below.** Two were closed on 2026-10-12 and are struck through rather than deleted, because the reason each was open is worth more than the row: #111 (the docs trees) and #96b (the stale manual diagrams).
+
+| # | What | Verdict |
+|---|---|---|
+| ~~111~~ | ~~README and docs/mkdocs are two trees saying the same things~~ | ✅ **CLOSED 2026-10-12** by the docs restructure (`394d29bd`). The drift had a MECHANISM, not just a duplication: the PDF was built from README **and** the guide files and printed BOTH into the same chapter, so 11% of the printed guide was a stale copy of itself, and `guide/audio.md` and `reference/web-api.md` had no chapter at all. `check_docs.py` had four blind spots and was reporting clean. ⚠ The two gesture tables are still duplicated — deliberately, because injecting `gestures.md` into README's `## Reference` would delete four README-original subsections from the printed guide. That split needs its own pass |
+| 131 | SDIO recoveries — the reboot path is fixed, the degradation is not | OPEN-PARTIAL — reboot path fixed v1.8.4; the TX fix is UNEXERCISED |
+| 215 | QMX Diagnostics screen: colour and button animation not reproduced (Samuel | OPEN — made measurable (b78d54c); the fix needs one run |
+| 285 | 🔴 taskLVGL is 73.9 % of core 0 and only ~7 points of it is the rotation —  | OPEN_CONFIRMED — DMA floor measured 3,207 B with RX audio on |
+| 291 | 🟠 A setting changed from the web is not reflected in the Tab5 drawer's dro | OPEN-CLASS — declared power fixed; the web-vs-drawer CLASS is still open |
+| 313 | 🟠 The web server wedged while the device stayed perfectly healthy (observe | OPEN_CONFIRMED — instrument IS flashed (row was wrong); culprit unnamed |
+| 315 | 🟠 150 stack copies of a ~1 KB settings struct — the crash class that has n | OPEN-PARTIAL — <=4 KB-stack sites converted (69ed469, v1.10.7); the pattern is untouched elsewhere |
+| 367 | 🟠 WSPR decodes 19 of wsprd's 32. Root cause FOUND (an ordering bug) and th | OPEN_CONFIRMED — deep pass still OFF |
+| 376 | 🟠 THE WSPR DECODER STEALS THE RADIO'S AUDIO, AND A WSPR WINDOW WITH 1 % OF | OPEN_CONFIRMED — deep pass still OFF (WSPR_DEEP_MAX_PER_CYCLE 0) |
+| 378 | 🟠 The web page freezes for up to 30 s while the microSD is written (Gyula  | OPEN_CONFIRMED — mitigated not cured |
+| 383 | 🟡 The spot lane hides in-view spots with nothing saying so (operator, 2026 | OPEN_CONFIRMED — open |
+| 60 | Fast pounce (early decode) on-air A/B — still unverified | OPEN — on-air A/B still unverified - the no-antenna excuse has expired |
+| 65 | The real constraint is the MALLOC_CAP_DMA pool, not the internal heap | OPEN-PARTIAL — ⭐ this IS the DMA-pool constraint. PARTIALLY FIXED in v1.16.9 (RX-audio ring to PSRAM, ~24 KB back); floor now 3,207 B with RX audio on |
+| ~~96b~~ | ~~Three manual diagrams state behaviour that is no longer true~~ | ✅ **CLOSED 2026-10-12** (`ed3ea770`). Re-checked against the code, not against the changelog. All three diagrams were already correct: the slot timeline reads 0-13.2 s capture / 0-2.8 s reply / signal ends 12.64 s, the CQ-preset drawing with radio buttons is gone, and no diagram claims an FPS readout. ⚠ **The PROSE was not**, and that is what the diagram audit could not see: README listed `util/fps.c`, a file that has never existed, `build/architecture.md` said `util/` holds an FPS counter, BOTH trees called `render/render.c` a "30 Hz render task" against `RENDER_PERIOD_MS 100`, and `contributing.md` listed a rewrite README calls permanently unplanned. `check_docs.py` now has a rule for names that exist nowhere (mutation-tested 5/5); it cannot catch a wrong NUMBER beside a true filename |
+
+### ⏳ WAITING ON A USER — cannot progress here (10)
+
+| # | What | Verdict |
+|---|---|---|
+| 133 | Flashing failed repeatedly until the Tab5 was rebooted (Samuel W7STF) | WAITING_ON_USER |
+| 197 | First entry into Radio Menus after a flash draws blank or corrupt; later e | WAITING_ON_USER |
+| 235 | 🔴 After an OTA update the FILTER menu is dead until a power-button reboot  | WAITING_ON_USER |
+| 266 | 🔴 An automatic update downloaded, rebooted the Tab5 by itself, and came ba | WAITING_ON_USER |
+| 269 | 🔴 After a band change something retunes the radio BACK to the old band ~11 | WAITING_ON_USER |
+| 274 | 🔴 Web UI froze 30-45 s after three uses of the out-of-band slider, and sho | WAITING_ON_USER |
+| 276 | In CW, tuning is followed by one or two automatic corrections (Samuel W7ST | WAITING_ON_USER |
+| 282 | 🟢 The SD archive wrote to a card it never mounted, and un-parked a flag no | WAITING_ON_USER |
+| 339 | 🟠 The SDIO link to the C6 died and the device restarted itself - standing  | WAITING_ON_USER |
+| 384 | 🟡 FT8 "arms for an answer and then waits another round" (Dirk DK7CVD, v1.1 | WAITING_ON_USER |
+
+### 🟢 SHIPPED, NEVER CONFIRMED BY THE REPORTER (39)
+
+| # | What | Verdict |
+|---|---|---|
+| 102 | Binaural sound-stage width should be a SETTING | VERIFIED_SHIPPED — v1.16.0 (pan width/blend/overlap are settings) |
+| 112 | FT8 Fox/Hound (DXpedition) mode - HOUND side | SHIPPED-UNCONFIRMED — built + sim-verified; never on-air verified |
+| 113 | RIT (and the RIT/XIT split of roles) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 135 | The occupancy strip for our OWN TX window goes all-green (reads as "all fr | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 136 | After aborting a TX, listen to the rest of that slot and rebuild the occup | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 137 | Long-press a CQ row to pounce immediately, without the modal (Roy KI0ER) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 138 | RIT cannot be cleared to off/zero; band change does not clear it; RIT stay | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 152 | USB mouse: pointer flies horizontally and crawls vertically (Kevin KW6E, M | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 199 | 🔴 The FT8 monitor pool can be built TWICE with no teardown, and the second | SHIPPED-UNCONFIRMED — root-caused + fixed (3f348fc); not reproduced-and-cleared |
+| 201 | 🔴 Auto-answer picks an OCCUPIED offset even with fresh EVEN+ODD maps showi | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 217 | Web UI: residual PSD stalls, 3-6 s, after a point-and-shoot (Samuel W7STF) | SHIPPED-UNCONFIRMED — cause found + fixed (56ff56b); never confirmed as HIS symptom |
+| 239 | The whole OTA flow moves off the bottom bar into a window (Don N2VGU, + op | VERIFIED_SHIPPED — shipped (OTA window) |
+| 244 | ⚠ The arrow in the update line is still not right (operator) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 245 | Binaural CW - second independent request (Dave KX3DX) | VERIFIED_SHIPPED — v1.16.0 (binaural CW) |
+| 250 | MY_CALL should be STATION_CALLSIGN (Don WB0LQW) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 251 | Park-to-Park: let the web log editor set SIG/SIG_INFO after the fact (Don  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 252 | FT4 must be MODE=MFSK + SUBMODE=FT4, not MODE=FT4 (Don WB0LQW) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 258 | "Check for updates" says "Up to date" about a release that already exists  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 259 | The mouse wheel scrolls panels past their last row into blank space (Roy K | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 261 | After using the radio's menus remotely, the QMX comes back on 160 m (Randy | VERIFIED_SHIPPED — v1.9.6 for qmx_term - ⛔ CLASS NOT SWEPT, cat.c fixed only today (819fbd9) |
+| 267 | A switch for the background download - it had none (Michael KZ4LY, Samuel  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 268 | Basic/Expert drawer choice is forgotten at every boot (Samuel W7STF) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 270 | The Bluetooth switch greys the icon out immediately, but the radio stays o | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 271 | "Later" is the wrong word on the update window's dismiss button (Don N2VGU | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 275 | Radio menus in the BROWSER cut off the right-hand side (Samuel W7STF) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 277 | The P2P ref column is filled in for ordinary hunting, when no activation i | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 278 | A digital-mode activator who never registered with POTA has no reference t | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 281 | 🔴 The FT8 per-slot log walked the heap with interrupts off - the documente | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 299 | 🔴 The bench CANNOT exercise the FT8/FT4 slot-loop gating without a live ra | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 300 | 🔴 FT4 reports a FABRICATED 5.0 W - the live path fell into the simulation  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 301 | 🔴 Auto-work-pileup called a station who was mid-QSO with someone else (Gyu | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 35 | Fast-charge enable/disable toggle (Samuel W7STF, groups.io #173236, Jul 4) | VERIFIED_SHIPPED — shipped (charge limit in settings) |
+| 36 | System status: add CPU% (+ mem%) to the resource-monitor overlay (Samuel W | VERIFIED_SHIPPED — shipped (per-core idle% in resmon) |
+| 381 | 🟢 WSPR band hopping retuned the radio during FT8 (Dirk DK7CVD) | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 382 | 🟢 WSPR PA voltage stayed at 6 V after switching to FT8 (Dirk DK7CVD - his  | SHIPPED_BY_CONSTRUCTION — "pending" meant pending release; tree clean, 11 releases on. Never confirmed by the reporter. |
+| 49 | Broken-QSO resume (manual re-pounce + auto comeback) | SHIPPED-UNCONFIRMED — ship-on-faith (56c9141); never field-confirmed |
+| 6 | CW Audio (speaker/headphone output only) | VERIFIED_SHIPPED — v1.16.0 (RX audio out) |
+| 94c | Binaural CW: decide what sets stereo position | VERIFIED_SHIPPED — v1.16.0 |
+| 94d | CW audio: gate the task by MODE, never merely mute it | VERIFIED_SHIPPED — v1.16.0 (gated by mode_from_cat_str) |
+
+### ⚪ DECISIONS, IDEAS, PARKED, NOT STARTED (31)
+
+| # | What | Verdict |
+|---|---|---|
+| 10 | JS8 mode | DECISION_OR_NOT_STARTED |
+| 10b | RTTY mode | DECISION_OR_NOT_STARTED |
+| 11 | DSP polish (noise reduction, auto-notch) | DECISION_OR_NOT_STARTED |
+| 114 | The per-bin adaptive noise floor has never run - audio.c re-seeds it 17 ti | DECISION_OR_NOT_STARTED |
+| 128 | Show the QMX CW decode buffer - layout (Samuel W7STF) | PARKED — deferred to feat/cw-page |
+| 160 | Soak runs happen OVERNIGHT ONLY — the bench is for development in daylight | NOT-A-TASK — standing practice, not work |
+| 169 | Out-of-band handling below 1.838 MHz, and a user-defined 200 m band (Samue | ON-HOLD — band definition on hold at his request |
+| 192 | Give the diag log its own flash partition | DECIDED — DECIDED AGAINST - partitions.csv records the operator's call: the free tail is firmware headroom |
+| 222 | Spur suppression PARKED — it only ever worked at zoom ×1 (operator, 2026-0 | DECISION_OR_NOT_STARTED |
+| 238b | 💡 JS8Call on the Tab5 + snap-on keyboard for offgrid portable (Mark N5OBC) | IDEA — idea only, not promised |
+| 24 | Configurable FFT size / PSD refresh rate / waterfall speed / draggable spe | DECISION_OR_NOT_STARTED |
+| 241 | A small waterfall on the FT8 screen (Tab5 + browser) | DECISION_OR_NOT_STARTED |
+| 243 | 💡 PSK-31 — the licence blocker is GONE (Michael KZ4LY) | DECISION_OR_NOT_STARTED |
+| 243b | 💡 PSK-31 (superseded row) | DECISION_OR_NOT_STARTED |
+| 247 | The shipped v1.9.3 binary embeds the PRE-CLEANUP manual text | DECISION_OR_NOT_STARTED |
+| 248 | .bss has crept back: libmain.a owns 153,906 of 170,704 bytes | DECISION_OR_NOT_STARTED |
+| 249 | Bench build-out and the move to the shack machine | DECISION_OR_NOT_STARTED |
+| 253 | Remove FREQ / RST_SENT / RST_RCVD / MY_GRIDSQUARE / GRIDSQUARE from the AD | DECISION_OR_NOT_STARTED |
+| 262 | Install the panadapter from the M5Stack launcher (bmorcelli) instead of a  | DECISION_OR_NOT_STARTED |
+| 298 | 🔵 A STILL spectrum/waterfall with the VFO moving over it (FlexRadio model) | DECISION_OR_NOT_STARTED |
+| 303 | 💡 Support the QDX / QDX-M — a fully digital box with no display at all (re | DECISION_OR_NOT_STARTED |
+| 31 | FT8 weak-signal rescue — Stage 2 residual subtraction (offline research, N | PARKED — research done, next level not started |
+| 318 | 🟡 A/B the WebSocket send buffer: CONFIG_LWIP_TCP_SND_BUF_DEFAULT 2880 vs 5 | DECISION_OR_NOT_STARTED |
+| 351 | 💡 CW transmit: TWO independent paths at TWO independent speeds (Michael KZ | DECISION_OR_NOT_STARTED |
+| 37 | Navigation/gesture model — carousel vs base+overlay consistency (Samuel W7 | IDEA — UX thought, revisit later |
+| 4 | CW page — Phase 1: TX/memory (thread, Jun 24-25) | DECISION_OR_NOT_STARTED |
+| 43 | Web-UI audio streaming + server mode (Sam W7STF, email 2026-07-15) | DECISION_OR_NOT_STARTED |
+| 4b | CW page — Phase 2: RX decode | DECISION_OR_NOT_STARTED |
+| 7 | Speaker/headphone audio (Tab5 jack) | DECISION_OR_NOT_STARTED |
+| 8 | Extended waterfall history | DECISION_OR_NOT_STARTED |
+| 9 | QMX (small) support | DECISION_OR_NOT_STARTED |
+
+### ✔ CLOSED — row never got its tick (5)
+
+| # | What | Verdict |
+|---|---|---|
+| 229 | 🔴 The web UI took ~95 SECONDS to load — it read as "unreachable" (operator | CLOSED — FIXED + hardware-verified, 95 s -> 4.0 s cold. Row never got its tick |
+| 27b | Tab5 crashed mid-session, 4× reset_reason=panic/exception in one log captu | STALE — crash with no backtrace, 2026-08 era, not recurred - watch not chase |
+| 319 | 🟠 Two crashes, back to back, the first time RX audio was switched on and t | CLOSED — both crashes decoded; neither address exists in the current code |
+| 74 | QMX never re-enumerates after a Tab5 warm reboot | CLOSED-NOT-OURS — root-caused QMX-side, detector shipped, no fix possible from here |
+| 94b | RIT / "CLAR RX" over CAT — DROPPED | CLOSED — "Closed - not wanted" |
 
 ---
 
@@ -86,7 +542,15 @@ just never flash-tested live), README/docs-tree unification (#111).
 
 ---
 
-## 📋 Master Table
+## 📋 Master Table — HISTORICAL ARCHIVE
+
+⛔ **Reconciled 2026-10-01; the ledger above is the authority.** Rows here were
+written between 2026-06 and 2026-09-02 and describe repo state at v1.5.0. Do not
+read a status in this table as current - several said "pending" for eleven
+releases after the work shipped, and #261 said "built" while half its class was
+still broken. Kept intact because the DETAIL columns hold the reasoning, the
+measurements and the dead ends, which are still worth reading.
+
 
 | # | Item | Status | Effort | Next Step / Notes |
 |----|------|--------|--------|-----------|
@@ -269,7 +733,7 @@ just never flash-tested live), README/docs-tree unification (#111).
 | 101 | **Tab5 drawer: grouped + Basic/Expert** | ✅ Done (hw-verified) | — | Operator picked proposal **B then A**. Groups: Station / Radio / Network / Display / FT8 / Spectrum / Device, gold headings, Basic/Expert switch at the top (Expert reveals Spectrum + Device). Sections are POSITIONED by the layout pass, never rebuilt; heights come from `s_drawer_section_h[]` recorded by `drawer_section()`, retiring the parallel `keep_h[]` that had fallen out of step twice. Deliberately NOT persisted: it is a way of looking at the drawer, not a preference |
 | 102 | **Binaural sound-stage width should be a SETTING** | 🟡 Open - design, blocked on CW audio | Medium | Don N2VGU and Michael KZ4LY arrived at this independently from opposite ends (phones-vs-speaker; picking a caller out of a pile-up). Plan: stage width in **Hz** - how much band maps across the full left-right sweep - defaulting to the filter width, with narrower options to pull close signals apart. **Do NOT expose the phase angle**: wrong unit for an operator. Michael also confirmed position must follow WHERE A SIGNAL SITS, not audio pitch, so a station holds its place while you tune. Still blocked behind the CW-audio task rework (#94d) |
 | 96 | **Redraw all 12 manual diagrams (spec + renderer)** | ✅ DONE - device hw-verified (all 4 types) AND site verified via a real `mkdocs build` | — | ⚠ `site/` is gitignored - **still needs the FTP upload** before tab5.lav.dk shows the diagrams. | Operator 2026-08-08. **Root cause of the "broken lines" was NOT the font**: the drawings use UTF-8 box chars/arrows/emoji, and the Reader folds UTF-8 to ASCII with some folds CHANGING LENGTH (`→` -> `(right)`, 1 char -> 7), so the line overruns and wraps. `unscii_16` monospace was tried and REVERTED same day ("super ugly", and it fixed nothing). **Settled:** developer pages STAY on the device (operator wants the diagrams in those sections), so all 12 convert; the look, the realism pass and the timeline shape are approved. **Design:** fenced block carries a compact spec; Reader draws it with LVGL widgets in the app's own colours; `pack_manual.py` emits SVG for the website from the same spec, so the surfaces cannot drift. NOT images - the Reader has no decoder and a bitmap is fixed-size, theme-blind, 20-45 KB each. **Hard rule:** ONE coordinate scale across all twelve (a 900-unit viewBox next to 450-unit ones rendered at half size and the type became unreadable). Proposal + mock-ups: artifact `1962a08a-eee7-4fab-85fd-b50c692c1722`, source `scratchpad/manual-diagrams.html` |
-| 96b | ⚠ **Three manual diagrams state behaviour that is no longer true** | 🔴 Content bug, found 2026-08-08 | Small (do it with #96) | Drawing the FT8 slot timeline exposed it. `build/architecture.md` claims the receive window runs 0.000-14.999 s AND closes at 4.5 s, and puts the TX opportunity at 4.0-4.5 s. **The code says:** `FT8_DECODE_RESERVE_MS 1800` cuts capture at period-1.8 s = **13.2 s** (so decode finishes before the boundary), `FT8_REPLY_TX_WINDOW_MS 2800` puts the reply window in the **first 2.8 s**, and the signal itself ends at 12.64 s (79 x 0.16 s). The CQ-preset drawing in `guide/ft8-tx.md` is also stale (radio buttons + "CQ Preset:" title; the real modal has checkboxes, a different title, and the CQ-stop/Listen cycle buttons). **And the panadapter layout drawing claims an "FPS: 30" readout in the bottom bar that the Tab5 has never had** - operator spotted it 2026-08-08; `ui.c` contains no FPS whatsoever, the only frame rate in the tree is the WS stream rate in `webserver_ws.c` (which is why it shows on the WEB page, top right). The real bottom bar is three zones: battery+voltage / UTC clock+source / WiFi fan+SSID+IP, with the SD dot and firmware version between the first two. CLAUDE.md's own layout box said "status / span / fps" and has been corrected. Converting is a correctness pass, not a paint job |
+| 96b | ⚠ **Three manual diagrams state behaviour that is no longer true** | ✅ **CLOSED 2026-10-12** (`ed3ea770`) | — | Drawing the FT8 slot timeline exposed it. `build/architecture.md` claims the receive window runs 0.000-14.999 s AND closes at 4.5 s, and puts the TX opportunity at 4.0-4.5 s. **The code says:** `FT8_DECODE_RESERVE_MS 1800` cuts capture at period-1.8 s = **13.2 s** (so decode finishes before the boundary), `FT8_REPLY_TX_WINDOW_MS 2800` puts the reply window in the **first 2.8 s**, and the signal itself ends at 12.64 s (79 x 0.16 s). The CQ-preset drawing in `guide/ft8-tx.md` is also stale (radio buttons + "CQ Preset:" title; the real modal has checkboxes, a different title, and the CQ-stop/Listen cycle buttons). **And the panadapter layout drawing claims an "FPS: 30" readout in the bottom bar that the Tab5 has never had** - operator spotted it 2026-08-08; `ui.c` contains no FPS whatsoever, the only frame rate in the tree is the WS stream rate in `webserver_ws.c` (which is why it shows on the WEB page, top right). The real bottom bar is three zones: battery+voltage / UTC clock+source / WiFi fan+SSID+IP, with the SD dot and firmware version between the first two. CLAUDE.md's own layout box said "status / span / fps" and has been corrected. Converting is a correctness pass, not a paint job. **Outcome 2026-10-12:** all three DIAGRAMS had already been corrected by the 2026-10-12 redraw and were re-verified against the code here. What the diagram audit could not see was the PROSE around them: README named `util/fps.c`, a file that has never existed; `build/architecture.md` said `util/` holds an FPS counter; both trees called `render/render.c` a "30 Hz render task" against `RENDER_PERIOD_MS 100`. `check_docs.py` reported clean on all of it, so it now has a rule for a named source file that exists nowhere. |
 | 94b | **RIT / "CLAR RX" over CAT — DROPPED** | ⚪ Closed - not wanted | — | Offered to Michael KZ4LY 2026-08-08; he declined: "I don't personally use RIT - too much faff as a poor man's XIT. I was just clarifying the nomenclature." He is a CW op and wants the split-based TX offset (#89), which he calls XIT. `RT`/`RU`/`RD` remain available if anyone else asks |
 | 94c | **Binaural CW: decide what sets stereo position** | 🟡 Open - design, blocked on CW audio | Medium | Michael KZ4LY corrected a claim of mine: exactly co-channel stations **cannot** be separated by any stereo mapping (one audio component, no linear processing splits it). Real gains are (a) sideband separation in the classic I-to-left/Q-to-right scheme and (b) **decorrelated inter-ear noise**, worth several dB even with one signal. Open choice put to him: position follows audio PITCH (station slides across the stage as you tune) vs position follows frequency IN THE WINDOW (station holds its place). Blocked behind the CW-audio pipeline rework |
 | 94d | **CW audio: gate the task by MODE, never merely mute it** | 🟡 Open - the cheap rework | Small-Medium | Michael KZ4LY's suggestion, and it is right: enable the output path only in phone/CW, never in FT8/FT4. **The detail that decides whether it works**: the v0.18.6 damage came from `cw_audio_task` merely EXISTING - priority 6 on core 1, above `fft_task` (4) on the same core, waking every 120 ms - ~125 preemptions per 15 s slot with audio silent. So "off in FT8" must mean not spawned/not running, not muted. See the CW Audio shelved section in CLAUDE.md |
@@ -285,7 +749,7 @@ just never flash-tested live), README/docs-tree unification (#111).
 | 105 | **Activation logging (POTA/SOTA)** | ✅ Shipped in v1.7.0 - not yet used in a real activation | — | `MY_SIG`/`MY_SIG_INFO` written inside `adif_log_record()` from settings so no caller can forget it; chase `SIG`/`SIG_INFO` resolved at QSO completion from the spot store. `ui/activation_modal.c` start/stop with the contact count read from the log against the threshold (POTA 10, SOTA 4). Session persists across a reboot but is deliberately NOT in the config export - a backup restored weeks later would stamp QSOs with a park you left |
 | 106 | **Propagation feedback - who is hearing me** | ✅ Shipped in v1.7.0 (web view; Tab5 view still to do) | — | `net/psk_rx.c` queries PSK Reporter for reception reports OF our callsign (the reverse of what `pskreporter.c` sends). Verified against the live collector before writing the parser. Opt-in, 5-minute floor enforced for BOTH the periodic cycle and refresh requests. Boot self-test pins the collector's attribute names so a schema change fails loudly instead of reporting 'nobody hears you' forever. `GET /api/psk_rx`. **Still to do: the Tab5 view and the reciprocal cross-check against the decode list** |
 | 107 | **SOTA spots - route found, permission granted** | ✅ **BUILT + hw-verified on the bench** (`ff92683`..`80a6b6b`) - fetch, store, lane and the `sota` source all confirmed live (18 spots fetched, 7 drawn in the 20 m window incl. the 10-char ref `EA1/AT-125`). **NOT yet verified:** a 12-char call in a lane label (needs CAT, the bench QMX was in the zombie-USB state), the drawer row's layout (needs a touch), the backoff path (spothole stayed up), and `SIG_INFO` on a real chase (needs an on-air QSO) | Medium | SOTA's own API forbids AI-assisted clients without prior approval and a registered point of contact (`api-db2.sota.org.uk/docs`), and its widely-used endpoint is deprecated with removal before 31 Aug 2026. I then proposed the DX cluster as a legitimate alternative and **that was wrong too**: 75 spots captured live from `dxfun.com:8000` contained zero SOTA references. The cluster DOES carry phone/SSB and POTA references (neither of which RBN can produce), so it is worth building on its own merits - but it is not a SOTA route. Either pursue SOTA approval (draft request written) or find a node carrying the SOTAwatch gateway | **UNBLOCKED 2026-08-10: Ian Renton M0TRT granted use of the spothole API** (spothole.app, public domain, aggregates 20+ sources INCLUDING SOTA). Asked directly and he replied: "You're absolutely welcome to use the API", once a minute is "perfectly fine", and a proper User-Agent is appreciated - so SEND ONE. **His caveat is a design requirement, not a disclaimer:** it is a hobby server sharing a box with his blog and his kids' Minecraft server, he "occasionally breaks stuff", and he suggests self-hosting if you need high reliability. So spothole being DOWN must be an ordinary state on our side - keep the spots already held, back off quietly, no error banner, never stall the UI. **v2 endpoints go live this week**; for our use it is a literal `v1`->`v2` URL swap and v1 keeps working, so keep the base URL in ONE constant. Verified live before asking: `?band=20m&mode=CW&dedupe=true&max_age=1800&limit=20` returns in **1,984 bytes**, and `?source=SOTA` returns real SOTA spots. **Recommended scope for v1.8.0: spothole for SOTA ONLY**, leaving POTA/RBN/cluster as they are - moving all three onto one goodwill server would mean losing every spot when it blinks. Consolidating (which would drop TWO persistent TCP connections, and link load is measured to matter - see #109) is worth revisiting once it has proven itself. S50CLX was checked first as the cheap option and is DEAD: `s50clx.infrax.si` no longer resolves on Google or Cloudflare DNS.
-| 111 | **README and docs/mkdocs are two trees saying the same things** | 🟡 Open - structural | Medium | Found during the v1.7.0 docs audit. Three outputs, two sources: the **PDF** is built from `README.md` (between the USERGUIDE markers) plus four guide files; the **website** and the **on-device manual** are both built from `docs/mkdocs/**` and never touch README. Only `guide/panadapter.md`, `ft8-rx.md`, `ft8-tx.md` and `time-sync.md` are genuinely shared. `README.md` and `quick-start.md` cover the same ground in separate files and drift independently - which is exactly how one wrong sentence ("put a `qmx_panadapter_merged_*.bin` next to the flasher") survived in BOTH and had to be fixed twice. Options: make `quick-start.md` the single source and have README link to it, or extend the PDF builder to inject more guide files. Do not fix by copying text a third time |
+| 111 | **README and docs/mkdocs are two trees saying the same things** | ✅ **CLOSED 2026-10-12** (`394d29bd`) | — | Found during the v1.7.0 docs audit. Three outputs, two sources: the **PDF** is built from `README.md` (between the USERGUIDE markers) plus four guide files; the **website** and the **on-device manual** are both built from `docs/mkdocs/**` and never touch README. Only `guide/panadapter.md`, `ft8-rx.md`, `ft8-tx.md` and `time-sync.md` are genuinely shared. `README.md` and `quick-start.md` cover the same ground in separate files and drift independently - which is exactly how one wrong sentence ("put a `qmx_panadapter_merged_*.bin` next to the flasher") survived in BOTH and had to be fixed twice. Options were: make `quick-start.md` the single source and have README link to it, or extend the PDF builder to inject more guide files. Do not fix by copying text a third time. **Outcome 2026-10-12:** the second route, and the drift turned out to have a MECHANISM rather than being mere duplication - the PDF was built from README AND the guide files and printed both into the same chapter, so 11% of the printed guide was a stale copy of itself, while `guide/audio.md` and `reference/web-api.md` had no chapter at all. `check_docs.py` had four blind spots and reported clean throughout. |
 | 113 | **RIT (and the RIT/XIT split of roles)** | 🟢 **Built — tap-to-RIT, bench-measured; the display SIGN still needs a carrier.** Operator picked option 1 (tap-to-RIT) with clear-on-retune. Shipped: `cat_request_rit_hz()`/`cat_get_rit_hz()` (`RC;` ALWAYS first, then one `RU`/`RD` — RU/RD are absolute *or* relative depending on the QMX menu setting "CAT RU and RD", which we cannot read, so never send them bare); clear-on-retune inside `cat_set_frequency()` so every path is covered; the compensation in `ui_get_if_offset_hz()`; a RIT pill at the spectrum's top-right (the top bar has no gap wider than ~45 px — measured, not guessed) that arms the mode and shows the live offset; the tap intercept in `touch_event_cb`'s RELEASED branch, which sets the offset and leaves the dial alone; a dashed magenta marker in the spectrum plus a matching overlay line down the waterfall; and the passband window shifted onto where you are listening. Tap-to-RIT forces a 10 Hz snap regardless of mode — the mode grid is there to land the DIAL tidily, and SSB's 250 Hz / DiGi's 500 Hz would have left five and three usable offsets inside ±500. **Measured on hardware at zoom x8 (4.6875 Hz/px), RIT +300 via a throwaway hook since a tap needs a finger:** gold dial line unmoved at x=262 before AND after (transmit stays put — Bill Carver's hard requirement), marker at x=326 = +64 px = +300.0 Hz on the high side, both passband edges moved the same +64 px, pill reads `RIT +300` in magenta, `cat: RIT -> +300 Hz (ok)` in the log, a retune logged `retune -> clearing RIT (was +300 Hz)` and the marker vanished, and the pill stands down for the open drawer. **⚠ NOT verified, both need a human:** the display sign (the falsifying test is one steady carrier — trace stands still and the marker sits 300 Hz up = right; trace jumps 600 Hz = flip the one operator in `ui_get_if_offset_hz()`; two FT8-window snapshots cannot answer it, the signals change between frames), and the tap gesture itself including the out-of-range clamp toast | Medium | groups.io thread 2026-08-10/11, three operators converging on the same shape. **Roy KI0ER**: while ACTIVATING (running) he engages RIT to pull in a caller sitting just outside his passband - "a Sasquatch tone below my centre frequency or a mosquito above me" - and it must be **at his fingertips during operation, not in a settings drawer**, because it changes per caller and gets turned off again immediately. **Michael KZ4LY** frames the division cleanly: **XIT while hunting, RIT while running** (XIT is #89, shipped as split since the QMX has no XIT). His UI idea: a "tap to RIT" mode while running, where a tap on a zoomed waterfall engages RIT onto that caller and a second tap clears it and returns to the run frequency. **Bill Carver** adds the display requirement, and it is the interesting part: with RIT on, the spectrum must **keep signals where they are** and show a separate RIT marker at the offset, rather than sliding the whole display - the QMX streams IQ centred on the RX frequency, so the fix is to offset where the spectrum is PLOTTED and mark the RIT position, not to recompute anything. He also warns against the obvious mistake: RIT must never move TX ("I do NOT want my TX moving around as other people transmit"). Note the QMX DOES have RIT over CAT (`RT`/`RU`/`RD`, and `RC` clear in 1_04) unlike XIT - check `docs/qmx-1_04-cat-comparison.md` before designing |
 | 114 | **The per-bin adaptive noise floor has never run - `audio.c` re-seeds it 17 times a second** | 🟡 Found + measured, deliberately NOT fixed | Low | Measured on hardware 2026-08-11: `FLATRESET: 90 resets in 5.1 s`. `process_rx()` sets `s_flat_reset_pending` on ANY poll returning zero pairs and the drain loop normally ENDS on an empty read, so `ui_flat_mode_reset()` - written for the QMX-power-cycle case in v0.15.5 - fires continuously and re-seeds BOTH the flat-spectrum floor and the waterfall floor. The Tab5 therefore draws `bin - mean(bins)` and `sample - median(bins)`, never a per-bin floor, and **the "Adaptive floor (%)" setting does nothing on either screen**. Found because the browser implemented the DESIGNED tracker faithfully and its signals faded into grass over ~60 s - which is what the design actually does (50 s rise time constant). ⚠ **Fixing this changes the Tab5's picture to that fading behaviour**, which the operator explicitly does not want, so it needs the floor constants re-tuned in the same pass and his eyes on the result. The browser mirrors the real behaviour behind one `FLOOR_TRACKING` switch in `index.html` - flip it the same day this is fixed so both screens change together. Full detail in CLAUDE.md, "The per-bin adaptive noise floor HAS NEVER RUN" |
 | 115 | **Web spot labels steal clicks over a ~3.8 kHz box and retune silently** | ✅ FIXED (hit area tightened + hover preview), not yet field-confirmed | High | Samuel W7STF's "tuning oddity", root-caused 2026-08-11 from his second report. `spotHitTest()` claims any click inside a label's text box (+3 px h, +6 px v) and `tuneToSpot()` then tunes to THAT SPOT's frequency, ignoring the click position. Labels are centred on their frequency at MID-HEIGHT of the spectrum - the same place the trace is drawn - and a long callsign is wide: `OK/DL4ROB/P` measured 93 px = **3.8 kHz at zoom x1**, with the spot's real frequency only in the middle of it. Reproduced on the mock: a click aimed at 14.031.750 landed on **14.033.000** silently. With a 300 Hz CW filter that is dead air, and the VFO shows a plausible nearby number - which is why he saw "centred as expected but nothing there". Explains his "I have to click outside the passband first" (moving the dial re-flows the label layout) and why Roy KI0ER could not reproduce it (depends on a label happening to sit over the target). **Web-only in effect**: the Tab5 disambiguates by GESTURE - 250 ms hold to tune a point vs a quick tap on a callsign - while a browser has one click for both. Fix options, his opinion asked in the draft reply: (a) show callsign+frequency on hover so it cannot be silent, (b) shrink the hit area, (c) require a double-click for a spot jump. Recommended (a)+(b) |

@@ -43,6 +43,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 void ui_toast(const char *msg);
 /* Same toast, with a readable dwell for anything the operator must act on. */
 void ui_toast_ms(const char *msg, uint32_t ms);
+
+/* A notice the operator must dismiss with OK. Use this - not a toast - for
+ * anything they have to ACT on: a toast leaves on its own whether or not it
+ * was read. Wraps, so the text may be as long as it needs to be. */
+void ui_notice(const char *title, const char *msg);
 /* #298: arm the one-time "you can switch back" notice. Called from main.c with
  * the stored flag; a unit that has already been told never arms it. */
 void ui_still_notice_arm(bool armed);
@@ -209,6 +214,17 @@ bool ui_update_line_tappable(void);
 
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
+/* Re-point the waterfall-rate controls (the left-edge slider and the drawer
+ * dropdown) at the stored value. Call after changing it from anywhere that
+ * is not one of those two - /api/settings does. */
+void ui_sync_wf_rate_controls(void);
+
+/* Band-plan repaint counts since the previous call, then reset. `calls` counts
+ * every path into update_bandplan_strip(); `from_poll` counts only the
+ * unconditional refresh reached from cat's poll_task. Diagnostic for the strip's
+ * 20% share of invalidated pixels - see the comment above update_bandplan_strip. */
+void ui_bandplan_call_counts(unsigned *calls, unsigned *from_poll, unsigned *skipped);
+
 void ui_set_resource_monitor_text(const char *text);
 
 // Dev-only: toggle the resource-monitor overlay's visibility. Not a user
@@ -230,6 +246,20 @@ void ui_set_sd_state(ui_sd_state_t st);
 
 // Back-compat shim: true -> UI_SD_MIRRORING, false -> UI_SD_NONE.
 void ui_set_sd_active(bool active);
+
+// Bottom-bar Unit GPS status: ONE symbol - LV_SYMBOL_GPS - coloured by state,
+// with no text beside it (the Bluetooth glyph's construction: the colour is the
+// whole message).
+//   -1 = hidden (Port mode is relay, or the module is OFF)
+//    0 = amber   LISTENING / DEVICE - running, no fresh fix
+//    1 = green   LOCKED
+//    2 = red     LOST - was locked, went stale
+// It reports the RECEIVER, never the clock authority: the suffix next to the
+// clock already says UTC(GPS) only when this module is the live source, so two
+// widgets answering the same question two ways is exactly what this separation
+// avoids. Called from status_task (1 Hz, off the LVGL thread) - it records the
+// intent and sim_border_keepalive_cb() applies it.
+void ui_set_unit_gps_chip(int state);
 
 // Persistent top-of-screen red banner shown whenever the QMX never confirmed
 // IQ mode (see cat_get_iq_mode_confirmed()) - without it the spectrum will
@@ -261,6 +291,10 @@ void ui_dev_canvas_hide(unsigned mask);
 void ui_set_drawer_expert(bool expert);
 /* Scroll the open drawer so a section below the fold can be screenshotted. */
 void ui_set_drawer_scroll_y(int y);
+/* Re-lay the drawer for the current mode AND FT8 sub-mode. Called when the
+ * sub-mode changes, because FT8/FT4/JS8 share one ui_mode_t and the JS8
+ * submode picker is shown for only one of them. */
+void ui_drawer_relayout(void);
 
 /* Power the Tab5 off after putting the radio back into receive.
  *
@@ -321,11 +355,13 @@ void ui_raise_edge_strips(void);
 // drawer-build time to restore the saved NVS state.
 void ui_set_sim_mode_indicator(bool active);
 
-// Re-evaluate the breathing red border from both its sources (the drawer's
-// general sim-mode toggle AND the FT8/FT4 sub-mode, since FT4 TX is always
-// forced through the same interlock regardless of the toggle - see ft8_tx.c's
-// FT4 SAFETY note). Call this after either source changes, instead of
-// ui_set_sim_mode_indicator() directly.
+// Re-evaluate the breathing red border from the drawer's general sim-mode
+// toggle, which is its only source. Call this after that setting changes,
+// instead of ui_set_sim_mode_indicator() directly.
+//
+// ⚠ This used to say the border also followed the FT8/FT4 sub-mode "since FT4
+// TX is always forced through the same interlock". No such interlock exists -
+// see the corrected note at the implementation in ui.c.
 void ui_refresh_sim_mode_indicator(void);
 
 // Bottom-bar right zone: strength fan, SSID (or "off"), then the IP pinned to
@@ -440,3 +476,8 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 void ui_drawer_map_defaults(void);
 // Current masks, so a partial update can leave untouched sections alone.
 void ui_drawer_map_masks(uint64_t *basic, uint64_t *adv);
+
+/* Called by app_main when start-up is finished. Until then the "Now turn on
+ * or reboot your QMX/+" prompt stays hidden: obeying it mid-boot starves
+ * internal RAM for the whole session. */
+void ui_notify_boot_complete(void);

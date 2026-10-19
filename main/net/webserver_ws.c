@@ -1,6 +1,9 @@
 #include "webserver_ws.h"
+#include "webserver.h"   // WEB_WS_PUSH_STACK_SIZE - sized and justified there
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 
 #include <string.h>
+#include <math.h>        // lroundf - the S-meter trailer
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -10,12 +13,57 @@
 #include "cat.h"
 #include "dsp.h"
 #include "ui.h"          // ui_pan_view_current - the viewport carried in the frame
+#include "rx_audio.h"    // the demodulated audio this stream carries to the browser
+#include "util/webaudio_codec.h"   // mu-law, shared with test/webaudio_codec_harness.c
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
 // Sent to a client that is about to be displaced by a newer one, so it can stop
 // reconnecting and say what happened instead of flapping. There is only ever ONE
 // live spectrum client - see the takeover note in ws_uri_handler().
 #define WS_FRAME_TYPE_TAKEOVER  0x02
+/* Demodulated receiver audio, mu-law, mono, RX_AUDIO_WEB_RATE_HZ.
+ * ⛔ 0x03 AND NOT THE 0x02 docs/web-audio-feasibility.md SPECIFIES - that doc
+ * predates the takeover notice, which took 0x02 first. A browser that predates
+ * this type ignores any first byte that is not WS_FRAME_TYPE_SPECTRUM, so old
+ * pages keep working; one that knows 0x02 as "you were displaced" would have
+ * disconnected itself on the first audio frame. */
+#define WS_FRAME_TYPE_AUDIO     0x03
+/* ⛔ THE CEILING IS TCP_SND_BUF, AND IT IS 2880 BYTES ON THIS DEVICE.
+ *
+ * Everything that has ever worked on this socket fits under it: the spectrum
+ * frame is 1054 bytes on the wire and has been reliable for months. A frame
+ * LARGER than the socket's send buffer cannot leave in one write, and this
+ * stream's contract is all-or-nothing per frame - once any byte is out, the
+ * frame must be finished or the session killed - so an oversized frame turns
+ * ordinary back-pressure into an ABANDONED frame, and everything after it is
+ * parsed as garbage.
+ *
+ * Measured on the bench, three sizes, one evening:
+ *   1800 samples = 1810 B on the wire : 1279 frames, zero gaps. Fine.
+ *   3600 samples = 3610 B             : "Invalid frame header", ~200 frames.
+ *   12000 samples = 12010 B           : "Invalid frame header" immediately.
+ * RSSI was -41 dBm and the partial-write counter read 1, so this was never
+ * link quality - it is arithmetic against a constant that is written down in
+ * sdkconfig and that I changed a frame size without reading.
+ *
+ * TCP_SND_BUF was deliberately shrunk 11520 -> 2880 in v0.20.0 for internal
+ * DMA-heap headroom. Raising it again re-opens that trade and needs its own
+ * soak; until then this is the ceiling, and the assert below is what stops
+ * the next person (me) from walking into it a third time.
+ *
+ * The cost of 1800 is that a 500 ms SD hold takes three or four ticks to
+ * clear instead of one, which the browser's 0.9 s buffer covers in silence. */
+#define WS_AUDIO_MAX_SAMPLES    1800
+/* ⛔ 1800 IS THE ONLY SIZE WITH EVIDENCE BEHIND IT. 2800 samples is 2814 B on
+   the wire, comfortably under the 2880 B TCP_SND_BUF, and it STILL produced
+   "Invalid frame header" within a minute. So the usable ceiling is lower than
+   the configured buffer - lwip's accounting is not simply payload bytes - and
+   the honest conclusion is that the number cannot be derived from the config,
+   only measured. 1800 (1810 B) ran 1279 frames with zero gaps; 2800, 3600 and
+   12000 all broke. Do not raise this without a listening test; the assert
+   below is a floor, not a licence. */
+#define WS_AUDIO_HDR_LEN        6
+
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
 // WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
@@ -78,7 +126,29 @@
  * 22 extra bytes on a 1026-byte frame, 10 times a second: 1.8 kbit/s. */
 #define WS_HEADER_LEN           24
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
-#define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
+
+/* S-meter TRAILER - two bytes AFTER the spectrum bins, not in the header.
+ *
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN .. +1]  signal dBm x10, int16 little-endian
+ *                                           (0x8000 = no reading)
+ *
+ * ⛔ It goes at the END on purpose. Growing the HEADER would move the payload,
+ * and a browser still running a cached index.html with the old HEADER_LEN
+ * passes its own length check, then reads the bins two bytes off and draws a
+ * shifted spectrum. Appending instead leaves every existing offset alone: the
+ * old page's `buf.length < HEADER_LEN + SPEC_W` still passes, its
+ * subarray(HEADER_LEN, HEADER_LEN + SPEC_W) is unchanged, and the two extra
+ * bytes are simply never looked at.
+ *
+ * Why it is here at all: the browser's S-meter was drawn from the 1 Hz
+ * /api/status tick, which undersamples a fluctuating signal and reads low -
+ * signal_handler's own comment says so. A faster /api/signal poller was tried
+ * and jammed httpd with extra connections, so it was reverted. This frame is
+ * already going out 10 times a second; two more bytes on 1026 is 1.6 kbit/s
+ * and costs no new connection. */
+#define WS_TRAILER_LEN          2
+#define WS_SIGNAL_NONE          ((int16_t)0x8000)
+#define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN + WS_TRAILER_LEN)
 
 static inline void ws_put_u32(uint8_t *p, uint32_t v)
 {
@@ -125,7 +195,10 @@ static httpd_handle_t volatile s_server   = NULL;
 static int            volatile s_ws_fd    = -1;
 static volatile bool           s_session_active = false;
 
-static float          s_spec[DSP_FFT_SIZE];
+/* PSRAM: 4 KB of internal .bss for the spectrum the WebSocket pushes at a
+ * handful of frames a second. Written and read only by the push path -
+ * no DMA, no ISR. */
+static EXT_RAM_BSS_ATTR float s_spec[DSP_FFT_SIZE];
 
 // WS wire buffer: the RFC 6455 header is built directly IN FRONT of the payload
 // so header and body leave as ONE contiguous send. A split between them is one of
@@ -134,6 +207,28 @@ static float          s_spec[DSP_FFT_SIZE];
 #define WS_WIRE_HDR_LEN 4
 static uint8_t        s_txbuf[WS_WIRE_HDR_LEN + WS_FRAME_LEN];
 static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
+
+/* Audio goes out as its OWN frame, not appended to the spectrum frame: a
+ * browser that does not understand it must be able to drop it whole, and the
+ * spectrum frame's length is parsed by every page already in the field. PSRAM
+ * like s_spec - written once per 100 ms, handed to lwip which copies it. */
+static EXT_RAM_BSS_ATTR uint8_t s_audio_txbuf[WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN +
+                                              WS_AUDIO_MAX_SAMPLES];
+static EXT_RAM_BSS_ATTR int16_t s_audio_pcm[WS_AUDIO_MAX_SAMPLES];
+/* The whole frame, RFC 6455 header included, must fit in one TCP send buffer -
+   see the note by WS_AUDIO_MAX_SAMPLES for what happens when it does not. This
+   assert is the only thing that will catch it next time; the symptom at the
+   far end is "Invalid frame header" and a page that reconnects for ever. */
+_Static_assert(WS_WIRE_HDR_LEN + WS_AUDIO_HDR_LEN + WS_AUDIO_MAX_SAMPLES
+                   <= CONFIG_LWIP_TCP_SND_BUF_DEFAULT,
+               "audio frame is larger than TCP_SND_BUF");
+static uint16_t s_audio_seq = 0;
+static uint32_t s_audio_frames = 0;   /* audio frames sent, for the fps line */
+/* Samples drained from the ring and then NOT sent - a congested link. Reported
+   next to the device-side drop count so the two causes stay distinguishable:
+   this one is the WiFi link, rx_audio_web_dropped() is the device. */
+static uint32_t s_audio_tx_lost = 0;
+
 
 // Frames that needed more than one send() to go out, i.e. instances of the
 // partial write that used to silently corrupt the stream. Reported on the fps
@@ -161,8 +256,40 @@ static TaskHandle_t   s_push_task = NULL;
 // out, the WS sends back up with EAGAIN). Paused = behave like idle.
 static volatile bool s_ws_paused = false;
 
+/* ⭐ HOW LONG IS THE SPECTRUM ACTUALLY OFF? Sam W7STF and Bryan N0LUF,
+ * 2026-10-04/05: a web waterfall that stalls, and "short pauses every 2-3
+ * rows".
+ *
+ * Measured from Bryan's logs first: the background feeds pause this stream at
+ * a MEDIAN OF 34 s apart (466 intervals), and POTA alone pulls ~48 KB about
+ * every 61 s with SOTA ~26 KB a few seconds behind. What his log cannot say is
+ * how LONG each pause lasts, and that is the number that decides whether this
+ * is invisible, his jitter, or his multi-minute stall.
+ *
+ * ⛔ The absence of evidence that found this: "ws: tx N fps" appears 7067
+ * times in a bench capture and ZERO times in ~5 hours of his. That line prints
+ * after a successful send once a 60 s window closes, and the window is reset by
+ * every pause - so pauses more often than 60 s make it unprintable. A silent
+ * instrument read exactly like a healthy quiet system.
+ *
+ * Logged only when a browser was actually watching, because a pause nobody saw
+ * cost nobody anything. */
 void webserver_ws_set_paused(bool paused)
 {
+    static TickType_t paused_at;
+    static bool       watched;
+
+    if (paused && !s_ws_paused) {
+        paused_at = xTaskGetTickCount();
+        watched   = (s_session_active && s_ws_fd >= 0);
+    } else if (!paused && s_ws_paused && watched) {
+        unsigned ms = (unsigned)((xTaskGetTickCount() - paused_at) *
+                                 portTICK_PERIOD_MS);
+        /* ~3 frames at the 100 ms push period - below that nobody can see it. */
+        if (ms >= 300)
+            ESP_LOGI(TAG, "spectrum stream was paused %u ms (%u frames lost)",
+                     ms, ms / WS_PUSH_PERIOD_MS);
+    }
     s_ws_paused = paused;
 }
 
@@ -363,6 +490,11 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
         }
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
+    /* A new socket is a new listener, and it has not asked for audio yet.
+       Without this a takeover inherits the displaced tab's audio stream and
+       the new page shows a muted button over a running demodulator. */
+    if (rx_audio_web_is_enabled()) rx_audio_web_set_enabled(false);
+
     s_ws_fd = fd;
     s_sessions++;
     s_session_active = true;
@@ -431,6 +563,38 @@ static void ws_push_task(void *arg)
         // reappearing during the one operation that already stresses the link.
         if (s_session_active && s_server && s_ws_fd >= 0 && s_ws_paused)
             httpd_sess_update_lru_counter(s_server, s_ws_fd);
+
+        /* ⛔ THE LISTENER'S SOCKET IS THE ONLY THING KEEPING THE DEMODULATOR
+         * RUNNING. Web audio is not persisted and has no timeout of its own: a
+         * closed tab, a reload or a takeover must stop the chain, or a Tab5
+         * whose speaker is off keeps demodulating for ever for nobody. A pause
+         * is NOT a reason to stop - the transfer ends and the same listener is
+         * still there - so this is gated on the session, not on s_ws_paused. */
+        if ((!s_session_active || s_ws_fd < 0) && rx_audio_web_is_enabled())
+            rx_audio_web_set_enabled(false);
+
+        /* ⛔ DO NOT DRAIN THE RING WHILE PAUSED - AND THIS IS A REVERSAL.
+         *
+         * An earlier version of this threw the audio away during a pause, on
+         * the reasoning that the link belongs to the transfer so the audio is
+         * lost anyway. That reasoning was wrong about WHOSE loss it is. The
+         * audio is not lost, it is DELAYED: the ring holds it, and a pause
+         * shorter than the ring can be sent as a catch-up burst the moment the
+         * link is free, which the browser's own 0.9 s buffer absorbs without a
+         * break. Discarding it turned a recoverable hold into a guaranteed
+         * dropout.
+         *
+         * MEASURED, and the measurement also corrected what I had blamed:
+         * the pauses are sd_archive.c's 30 s diag mirror, not the POTA/SOTA
+         * feeds - "sd_arch: diag mirror: held the web stream 4110 ms writing
+         * 27844 B", then 509 and 447 ms on the same cadence. They are mostly
+         * well under a second, which is exactly the range the ring can cover.
+         *
+         * The pause itself must stay: the SD card and the C6 WiFi link share
+         * one SDMMC host on the P4, and overlapping traffic on both slots has
+         * permanently corrupted the WiFi RPC link in the field (see the note
+         * by the upload path in webserver.c). Sending audio through a pause is
+         * not an option; carrying it across one is. */
 
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not
@@ -532,6 +696,32 @@ static void ws_push_task(void *arg)
             s_payload[WS_HEADER_LEN + i] = (uint8_t)q;
         }
 
+        /* S-meter trailer. The SAME dsp call, bin and width the Tab5's own
+         * meter uses (render.c) and that status_handler reports, so the browser
+         * and the glass cannot be reading different numbers - which is exactly
+         * what they were doing, and what the operator reported on 2026-10-09.
+         *
+         * Sent raw, in 0.1 dB. The dBm -> S-unit conversion stays in ONE place
+         * per screen and the wire carries the measurement, not a rendering. */
+        {
+            float    sig_dbm = 0.0f;
+            int16_t  sig_q   = WS_SIGNAL_NONE;
+            int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE)
+                           + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+            if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &sig_dbm) == ESP_OK) {
+                long v = lroundf(sig_dbm * 10.0f);
+                /* Clamp clear of the no-reading sentinel: -3276.8 dBm is not a
+                   signal level anything can produce, but a sentinel that can
+                   collide with a real value is a bug waiting for the one input
+                   that produces it. */
+                if (v < -32767) v = -32767;
+                if (v >  32767) v =  32767;
+                sig_q = (int16_t)v;
+            }
+            s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN]     = (uint8_t)((uint16_t)sig_q);
+            s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 1] = (uint8_t)(((uint16_t)sig_q) >> 8);
+        }
+
         // Budget for finishing a frame we are already committed to. Deliberately
         // longer than one push period: dropping the session costs the browser a
         // ~2 s reconnect, so riding out a congestion burst is much cheaper than
@@ -592,6 +782,47 @@ static void ws_push_task(void *arg)
         fail_streak = 0;
         fail_streak_at = 0;
 
+        /* ---- Demodulated audio (Sam W7STF, 2026-07-15) ---------------------
+         *
+         * A SEPARATE frame, sent only after the spectrum frame went out
+         * cleanly. The ordering is deliberate: the spectrum is what every
+         * browser came for and audio is what one of them asked for, so when
+         * the link can only carry one of the two it must be the picture that
+         * survives. ws_send_all() is all-or-nothing per frame, so a skipped
+         * audio frame leaves the stream in sync - the browser inserts its own
+         * silence from the sequence gap.
+         *
+         * ⚠ A FAILED AUDIO SEND IS NOT COUNTED AGAINST THE SESSION. The
+         * fail-streak teardown exists for a dead socket, and this frame is
+         * four times the size of the spectrum frame: letting it decide would
+         * close sessions that are carrying the spectrum perfectly well. */
+        if (rx_audio_web_is_enabled()) {
+            int n = rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES);
+            if (n > 0) {
+                uint8_t *p = s_audio_txbuf + WS_WIRE_HDR_LEN;
+                p[0] = WS_FRAME_TYPE_AUDIO;
+                p[1] = 0;                                  /* reserved */
+                p[2] = (uint8_t)s_audio_seq;
+                p[3] = (uint8_t)(s_audio_seq >> 8);
+                p[4] = (uint8_t)RX_AUDIO_WEB_RATE_HZ;      /* the frame says its */
+                p[5] = (uint8_t)(RX_AUDIO_WEB_RATE_HZ >> 8); /* own rate */
+                s_audio_seq++;
+                for (int i = 0; i < n; i++)
+                    p[WS_AUDIO_HDR_LEN + i] = webaud_mulaw_encode(s_audio_pcm[i]);
+
+                ws_tx_result_t atx = ws_send_binary(s_server, s_ws_fd, s_audio_txbuf,
+                                                    (size_t)(WS_AUDIO_HDR_LEN + n), 1500);
+                if (atx == WS_TX_OK) s_audio_frames++;
+                /* ⛔ A SKIPPED SEND IS A SILENT LOSS WITHOUT THIS. These
+                 * samples are already OUT of the ring - the read drained them
+                 * before the send was attempted - so a congested link threw
+                 * away audio that no counter anywhere could see, which is the
+                 * same trap #189 documents for the silent USB patches. Charge
+                 * them to the drop count, where they belong. */
+                else s_audio_tx_lost += (uint32_t)n;
+            }
+        }
+
         sent++;
         TickType_t now = xTaskGetTickCount();
         /* 60 s window, was 5 s (log audit 2026-09-13): 12 lines a minute for as
@@ -602,12 +833,25 @@ static void ws_push_task(void *arg)
             // Every one of those was, before this fix, a silently corrupted stream
             // and therefore a browser-side disconnect a moment later. A non-zero
             // count here is the fix working, NOT a fault.
-            ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
-                     fps, (unsigned)s_partial_writes);
+            if (s_audio_frames || rx_audio_web_is_enabled())
+                ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u), audio %u frames, "
+                              "%u samples dropped at the device, %u lost on the link",
+                         fps, (unsigned)s_partial_writes, (unsigned)s_audio_frames,
+                         (unsigned)rx_audio_web_dropped(), (unsigned)s_audio_tx_lost);
+            else
+                ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
+                         fps, (unsigned)s_partial_writes);
+            s_audio_frames = 0;
             sent = 0;
             fps_at = now;
         }
     }
+}
+
+unsigned webserver_ws_push_stack_headroom(void)
+{
+    if (!s_push_task) return 0;
+    return (unsigned)(uxTaskGetStackHighWaterMark(s_push_task) * sizeof(StackType_t));
 }
 
 esp_err_t webserver_ws_start(httpd_handle_t server)
@@ -640,15 +884,22 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
         // capture. At priority 5 this task could preempt it every 100 ms
         // whenever a browser tab is open, the same hazard class that
         // regressed FT8 decode yield via cw_audio_task (see CLAUDE.md).
-        // 3072, not 4096: measured peak use 848 B (hwm 3,504 free of a 4,352 B
-        // block, 2026-08-28, #284). Internal RAM on purpose - psram_task.h
-        // names ws_push_task as latency-critical.
-        /* 3072 -> 4096: measured 2026-09-06 with 364 B of headroom left. This
-           stack stays INTERNAL deliberately - CLAUDE.md lists ws_push_task
-           among the latency-critical tasks that must not take a PSRAM stack -
-           so the extra 1 KB is paid out of the scarce pool on purpose, because
-           an overflow here corrupts a neighbour and, with canary-only checking,
-           says nothing when it does. */
+        /* Size is WEB_WS_PUSH_STACK_SIZE in webserver.h, with the full
+           measurement history. The short version, because the sequence is the
+           lesson:
+             2026-08-28 (#284): "peak use 848 B" -> cut 4352 to 3072.
+             2026-09-06: raised back to 4096, with only 364 B of headroom left
+               - so the real peak was ~3.7 KB, four times the 848 B the cut had
+               been based on. The 848 B was a watermark taken before the deep
+               path ran.
+             2026-10-10: 3,164 B free again, which is NOT reassurance - it is
+               the same roomy-looking watermark as in August. Raised to 6144.
+           This stack stays INTERNAL deliberately - CLAUDE.md lists
+           ws_push_task among the latency-critical tasks that must not take a
+           PSRAM stack - so it is paid out of the scarce pool on purpose,
+           because an overflow here corrupts a NEIGHBOUR and, with canary-only
+           checking, says nothing when it does. That silence is why the margin
+           is generous instead of fitted. */
         /* ⛔ TRIED core-1-vs-core-0 pinning here, 2026-09-23 - REVERTED, it made
          * LATE writes WORSE, not better. Theory was that this task, unpinned,
          * lands on core 1 and round-robins at equal priority (3) with
@@ -661,7 +912,7 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
          * contention with THIS task is not the mechanism - do not re-try this
          * exact change without new evidence. The actual cause of the browser-
          * attached breakup is still open. */
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", WEB_WS_PUSH_STACK_SIZE, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;

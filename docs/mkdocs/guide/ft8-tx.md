@@ -86,7 +86,7 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 - **Hold the button to open the ADIF log** — the log stays reachable even while the button reads "Pileup" (a one-time hint appears the first time it flips).
 - Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. The reply is the correct **next** message for that station, built from whatever they actually last transmitted — usually a signal report for someone who has just called you, but an `R`+report if they came back later with a report of their own (v1.3.2; the same laddering as tapping a decode-list row).
 - A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
-- Stations you've worked before still appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer.
+- Stations you've worked before still appear in the pileup unless **Never auto-call worked-before** is checked — the pileup follows the same rule as the auto-answer.
 
 The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Options modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
 
@@ -120,6 +120,25 @@ note: dim | CQ stop and Listen sit top-right and apply on the tap - no Save need
 Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts calling CQ and listening for replies.
 
 **CQ tone selection** — the panadapter automatically picks a quiet frequency (6.25 Hz tone spacing, 200–2800 Hz audio range, no other stations nearby). If your chosen tone gets busy during a QSO, the panadapter **auto-relocates to the nearest clear frequency** to avoid stepping on other stations.
+
+## What the TX status line is telling you
+
+The left pane carries a persistent status line under the slot countdown. The
+colour is the quickest read; the text says which station and which tone.
+
+| Colour | Line | Meaning |
+|--------|------|---------|
+| **Red** | `TRANSMITTING: <message>` | A burst is going out, with your audio tone on its own line. Tap to abort. |
+| **Amber** | `TX armed: <message>` then `nnnn Hz -> EVEN/ODD, ~Ns` | Waiting for the slot. Tap to cancel. |
+| **Red-orange** | `FREQ BUSY` | Your tone is occupied (+/-50 Hz guard), and the warning names the frequency. During a CQ run this self-heals - the next cycle hops to the nearest clear tone. Mid-exchange, move it yourself with the TX tone control. |
+| **Amber** | `working <call> - waiting` + `TAP TO CANCEL` | The station you are calling is mid-exchange with somebody else. Nothing transmits until they sign off or call CQ again. |
+| **Green** | QSO complete | |
+| **Orange** | QSO timed out | Tap to clear. |
+| **Dim white** | capturing / decoding / symbol count | The engine's own status, passed through. Nothing is armed. |
+
+!!! note "Amber means armed, not transmitting"
+    An armed burst has not keyed the radio yet. Cancelling an amber line costs
+    nothing; cancelling a red one aborts a transmission in progress.
 
 **CQ auto-stop** — by default the panadapter keeps calling until someone answers. If you'd rather call a few times and then pause (a common courtesy on a quiet band), long-press **Call CQ** and tap the **CQ stop** button at the top-right of the preset editor: it cycles through never / 1 / 2 / 3 / 4 / 5 / 10 calls and applies immediately, no Save needed. While calling, the TX status shows the progress ("call 2 of 4"); after the last unanswered call the panadapter listens through one more receive slot (an answer to your final call still starts the QSO normally), then stops and goes idle. Applies to every CQ run, including the automatic resume after a completed or timed-out QSO — each fresh CQ sequence starts the count over.
 
@@ -369,6 +388,11 @@ Your transmit tone is chosen for you by default — the nearest clear 50 Hz slot
 **The mini occupancy strip** sits directly under the slot countdown in the same pane: the same 50 Hz grid and the same colours as the picker's full-size strip, so where the band is busy — and where you are in it — is answerable at a glance without opening anything.
 
 **Both time windows, always** (asked for by Roy KI0ER). The strip is **two rows — EVEN above, ODD below**, marked `E` and `O` in the same blue/orange the slot countdown uses. Two stations only collide if they transmit in the *same* window, and only you know which window you are about to pounce into — so both pictures are on screen **before** you choose, not after a transmission has fixed your window. Your white marker sits on your own window's row once one is locked (both rows until then), and your partner's pink sits in *their* window. The picker's full-size strip is split the same way, and its verdict says where your pick stands: *"Clear in EVEN — busy in ODD"*.
+
+The picker **repaints every second while it is open**, so the occupancy you are choosing
+against is the live picture rather than a snapshot taken when you tapped the button.
+If it has just told you something in words, that message stays on screen for a few
+seconds rather than being overwritten by the next repaint.
 
 In the picker:
 

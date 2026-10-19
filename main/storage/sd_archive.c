@@ -1,4 +1,5 @@
 #include "sd_archive.h"
+#include "sd_io_buf.h"   // SD_IO_ALIGNED / sd_io_buf_alloc - DMA-clean transfer buffers
 
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_app_desc.h"   // esp_app_get_description() for the README version stamp
 
+#include "esp_system.h"       // esp_register_shutdown_handler
 #include "bsp/m5stack_tab5.h"   // bsp_sdcard_init / bsp_sdcard_deinit
 
 #include "diag_log.h"
@@ -31,6 +33,7 @@
 // storage -> net is the same direction net/webserver.c already goes the other way
 // (it takes sd_archive_lock() for uploads); both live in the `main` component.
 #include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
+#include "audio/rx_audio.h"  // rx_audio_any_listener() - no SD holds while listening
 
 static const char *TAG = "sd_arch";
 
@@ -177,12 +180,25 @@ static bool copy_file(const char *src, const char *dst)
         fclose(in);
         return false;
     }
-    static char buf[2048];
+    // SD_IO_ALIGNED: an unaligned buffer sends every fread/fwrite below down
+    // the SDMMC bounce path, which allocates 512 B of MALLOC_CAP_DMA per
+    // sector and fails when the DMA pool is low. See storage/sd_io_buf.h.
+    static char buf[2048] SD_IO_ALIGNED;
     size_t n, total = 0;
     bool ok = true;
     while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
         if (fwrite(buf, 1, n, out) != n) { ok = false; break; }
         total += n;
+    }
+    /* ⛔ A READ ERROR LOOKS EXACTLY LIKE EOF to this loop (fread returns 0 for
+     * both), so without this the mirror reports success having copied PART of
+     * the file - and what is mirrored here is qso.adi, the station log. A
+     * backup that is silently short is worse than no backup, because it is
+     * trusted. The write side was already checked; the read side was not. */
+    if (ferror(in)) {
+        ESP_LOGW(TAG, "read error on %s after %u bytes - NOT claiming %s was mirrored",
+                 src, (unsigned)total, dst);
+        ok = false;
     }
     fclose(in);
     if (fclose(out) != 0) ok = false;
@@ -396,7 +412,7 @@ void sd_archive_instr_get(sd_archive_instr_t *out)
 // sites).
 static void mirror_cw(void)
 {
-    char buf[512];
+    char buf[512] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     // PEEK, not take: the bytes stay queued until the write below actually
     // lands, so a transient I/O error (measured on this board - the same
     // SD-vs-WiFi-SDIO contention #153 documents) delays the transcript
@@ -615,7 +631,7 @@ static bool mirror_diag(void)
     // the #153 cadence, in 4 KB pieces with the stream paused - which is the
     // safe path, not the one that has to be raced.
     #define MIRROR_DIAG_MAX_CHUNKS 4      // 16 KB per burst, ~1 burst per 3 s
-    static char buf[DIAG_CHUNK];
+    static char buf[DIAG_CHUNK] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     for (int chunk = 0; chunk < MIRROR_DIAG_MAX_CHUNKS; chunk++) {
         uint64_t next = s_diag_cursor;
         size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
@@ -782,7 +798,7 @@ static int64_t s_mount_retry_last_us = 0;
 #define SLOW_DRAIN_MAX_CHUNKS 16            // <= 64 KB inside one open
 static bool mirror_diag_slow(void)
 {
-    static char buf[DIAG_CHUNK];
+    static char buf[DIAG_CHUNK] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
     uint64_t next = s_diag_cursor;
     size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
     if (got == 0) return true;              // nothing new; not a failure
@@ -889,6 +905,23 @@ static void park_snapshot(void)
                   "for Save-offline / web file browser", SLOW_LOG_MS / 1000);
 }
 
+/* The reason the LAST mount attempt failed. The post-boot give-up is limited
+ * to ESP_ERR_NO_MEM, which is the only failure retrying cannot help. */
+static esp_err_t s_last_mount_err = ESP_OK;
+
+static void unmount(const char *why);
+
+/* See the header. Leaves the card idle so an SoC reset cannot catch it
+ * mid-transaction; safe to call when nothing is mounted. */
+void sd_archive_shutdown(void)
+{
+    if (s_log_file) { fflush(s_log_file); fsync(fileno(s_log_file)); }
+    if (s_mounted) unmount("shutdown");
+    else if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
+}
+
+static void sd_shutdown_handler(void) { sd_archive_shutdown(); }
+
 static void unmount(const char *why)
 {
     // === TEMP INSTRUMENT (#282): "SD card unmounted" said nothing about which
@@ -946,6 +979,9 @@ static void sd_space_report_once(void)
 static void sd_fail_diag(const char *where, int err)
 {
     static int n = 0;
+    /* Recorded for the post-boot give-up, which must apply to ESP_ERR_NO_MEM
+     * and nothing else - see the branch that reads it. */
+    if (where && strcmp(where, "mount") == 0) s_last_mount_err = (esp_err_t)err;
     if (n++ >= SD_FAIL_DIAG_MAX) return;
     sd_space_report_once();
     ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
@@ -954,6 +990,68 @@ static void sd_fail_diag(const char *where, int err)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+}
+
+/* ---- DMA ballast, so a REMOUNT is still possible when the pool is empty ----
+ *
+ * MEASURED 2026-10-04 on bench dev. Once WiFi, the web server, NimBLE and the
+ * QMX are all up, MALLOC_CAP_DMA ends the boot at ~400 B free with a ~176 B
+ * largest block (see the per-consumer accounting in commits 34bd189/672fd8a:
+ * httpd + ws_push ~21.6 KB, the QMX attach ~7 KB, NimBLE ~5.2 KB). At that
+ * point sdmmc_card_init() cannot get its 64-byte buffers:
+ *
+ *   E heapwatch: ALLOC FAILED: 64 B caps=0x8 in task 'sd_archive'
+ *   E heapwatch: ALLOC FAILED: 64 B caps=0x8 in task 'httpd'
+ *   W sd_arch: SDFAIL[slowopen] err=0x5 | DMA free=359 lblk=144
+ *
+ * There are exactly three 64-byte MALLOC_CAP_DMA sites in the card-init path,
+ * and sizeof(sdmmc_switch_func_rsp_t) is exactly 64:
+ *   sdmmc_check_ssr()              esp_dma_capable_calloc(1, SD_SSR_SIZE)
+ *   sdmmc_select_driver_strength() heap_caps_calloc(1, sizeof(rsp), CAP_DMA)
+ *   sdmmc_select_current_limit()   heap_caps_calloc(1, sizeof(rsp), CAP_DMA)
+ * ⚠ Identified by READING the IDF source, not by catching the failure: the
+ * heap_watch callback reports the allocator's name, not the call site, and the
+ * failure did not reproduce in the session that instrument was flashed for.
+ * The 64-byte match is exact at all three, but it is inference.
+ *
+ * This is the problem the comments at "can never be remounted" below have
+ * described for weeks. The fix is not to free memory - the consumers above are
+ * all legitimate - it is to keep a contiguous block in hand from BOOT, when
+ * the pool still holds ~138 KB, and lend it back for the duration of a mount.
+ *
+ * ⛔ The scarce thing is a CONTIGUOUS BLOCK, not free bytes. At the moment of
+ * failure there were 359 free bytes but the largest block was 144 B, so even
+ * a 64-byte request could fail on fragmentation alone. Releasing one block we
+ * allocated early guarantees a contiguous region of this size.
+ *
+ * ⚠ RISK, stated because it is real: holding this from boot lowers the pool
+ * for everyone else by the same amount. The consumers that matter take fixed
+ * sizes and take them BEFORE the pool bottoms out (NimBLE at ~19 s with 8-13
+ * KB still free), so 1 KB should not displace any of them - but if something
+ * starts failing that did not before, this is the first thing to suspect.
+ * Keep it small, and keep it one constant. */
+#define SD_DMA_BALLAST_BYTES 1024
+
+static void *s_dma_ballast;
+
+static void sd_ballast_take(const char *why)
+{
+    if (s_dma_ballast) return;
+    s_dma_ballast = heap_caps_malloc(SD_DMA_BALLAST_BYTES, MALLOC_CAP_DMA);
+    if (!s_dma_ballast) {
+        /* Not fatal: without it we are exactly where we were before. */
+        ESP_LOGW(TAG, "DMA ballast: could not take %d B at %s (free=%u lblk=%u)",
+                 (int)SD_DMA_BALLAST_BYTES, why,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    }
+}
+
+static void sd_ballast_lend(void)
+{
+    if (!s_dma_ballast) return;
+    heap_caps_free(s_dma_ballast);
+    s_dma_ballast = NULL;
 }
 
 static bool try_mount(void)
@@ -966,14 +1064,21 @@ static bool try_mount(void)
     s_instr.mount_enter++;
     ESP_LOGW(TAG, "INSTR mount() entered (mounted=%d parked=%d file=%p)",
              (int)s_mounted, (int)s_parked, (void *)s_log_file);
+    /* Lend the ballast to sdmmc_card_init() for the duration of the mount, and
+     * take it back on BOTH paths - see sd_ballast_take() above. The window is
+     * the bsp_sdcard_init() call and nothing else, so nothing outside the
+     * mount can take the block in between. */
+    sd_ballast_lend();
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
     if (err != ESP_OK) {
         sd_fail_diag("mount", (int)err);
         // Leave the slot in a clean state so the next probe can retry (a failed
         // mount can leave the BSP's card handle dangling otherwise).
         bsp_sdcard_deinit(SD_MOUNT_POINT);
+        sd_ballast_take("after a failed mount");
         return false;
     }
+    sd_ballast_take("after a successful mount");
 
     size_t post_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t post_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -1064,6 +1169,7 @@ static bool try_mount(void)
     }
 
     s_mounted = true;
+    s_last_mount_err = ESP_OK;
     s_instr.mount_ok++;
     /* Mounting wrote README.txt (and the snapshot is about to write qso.adi and
      * qmx-config.txt), so this IS a demonstrated-good write - stamp it, or the
@@ -1348,7 +1454,26 @@ static void sd_archive_task(void *arg)
                  * drains up to 64 KB inside ONE open. The number of times the
                  * stream is interrupted is unchanged at one per 30 s, watcher or
                  * not - which is exactly what makes the browser irrelevant. */
-                if (now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
+                /* ⛔ NOT WHILE SOMEONE IS LISTENING. This 30 s tick is the
+                 * single biggest interruption the web stream takes: measured
+                 * 2026-10-15 at 150-700 ms per tick and once 4807 ms, and it
+                 * is why browser audio broke up about twice a minute. Growing
+                 * the browser's buffer to survive the hold was treating the
+                 * symptom - this removes it.
+                 *
+                 * The cost is bounded and already understood: the backlog
+                 * stays in the RAM ring, which is what it is for, and the next
+                 * tick after the listener stops drains up to 64 KB in one
+                 * open. A crash while someone is listening loses the tail of
+                 * the diag log, which is the same exposure park_snapshot()
+                 * already accepts whenever the card is parked.
+                 *
+                 * rx_audio_any_listener() and not rx_audio_is_enabled(): the
+                 * Tab5's own speaker does not care about this pause, only a
+                 * network listener does, but the flag covers both and the
+                 * speaker case costs nothing extra. */
+                if (!rx_audio_any_listener() &&
+                    now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
                         // ONE call - an earlier version called it twice in the
@@ -1444,10 +1569,36 @@ static void sd_archive_task(void *arg)
             continue;
         }
 
-        // WiFi on and the boot window closed without a mount: further probes are
-        // futile (they fail 0x101 ESP_ERR_NO_MEM regardless of the card), and
-        // retrying every 10 s forever is pure log noise. Stop cleanly instead.
-        if (wifi_on && !s_mounted) {
+        /* ⛔ "FURTHER PROBES ARE FUTILE" IS TRUE FOR ONE FAILURE MODE ONLY.
+         *
+         * It was written for 0x101 (ESP_ERR_NO_MEM) - DMA exhaustion, where
+         * retrying really is pointless because the memory is gone for the
+         * session. It then swallowed a different fault entirely: a card that
+         * answers nothing at init (0x103/0x104/0x108 from send_if_cond and
+         * sdmmc_io_reset), which has nothing to do with memory - measured on
+         * the bench 2026-10-03 with 77 KB of DMA free and a 40 KB largest
+         * block at every failed attempt.
+         *
+         * That card was recoverable; the code had simply stopped asking. So
+         * the give-up is now limited to the memory case it was written for,
+         * and anything else keeps retrying on the slow cadence. A card
+         * reseated, or one that finally settles after an abrupt reset, is
+         * picked up instead of needing a reboot to be noticed. */
+        /* ⛔ THE DOT FOLLOWS THE CARD, NOT THE DECISION TO STOP LOOKING.
+         *
+         * ui_set_sd_state(UI_SD_NONE) used to live inside the give-up branch
+         * below, which was the only path that ran when no card mounted - so
+         * darkening the dot came free. Narrowing that branch to the memory
+         * case (so probing continues) took the dot with it, and the operator
+         * caught it within the hour: "the dot was green all the time - even
+         * with the old card out for 45 sec".
+         *
+         * A green dot with no card in the slot is worse than no dot at all.
+         * It is set here, from the state itself, every pass. */
+        if (!s_mounted)
+            ui_set_sd_state(UI_SD_NONE);
+
+        if (wifi_on && !s_mounted && s_last_mount_err == ESP_ERR_NO_MEM) {
             // ⭐ THE OTHER ANOMALY: reaching here a second time means s_parked
             // was false again, and nothing in this file ever clears it.
             if (s_parked) {
@@ -1648,6 +1799,21 @@ void sd_archive_init(void)
                   "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");
     return;
 #endif
+    /* Take the ballast HERE, not lazily, and BELOW the soft-disable guard - a
+     * disabled build never mounts, so it must not hold the block for ever.
+     * This runs at ~7 s with the DMA pool still at ~138 KB; by 20 s it is
+     * under 10 KB and by 40 s under 1 KB, so there is no later moment at which
+     * a 1 KB contiguous block can be had. */
+    sd_ballast_take("sd_archive_init");
+    /* Put the card down on any reboot WE initiate. Cannot cover esptool - see
+     * the header, and {"action":"prepare_for_flash"} for that gap. */
+    {
+        esp_err_t e = esp_register_shutdown_handler(sd_shutdown_handler);
+        if (e != ESP_OK)
+            ESP_LOGW(TAG, "could not register the SD shutdown handler: %s",
+                     esp_err_to_name(e));
+    }
+
     s_sd_mutex = xSemaphoreCreateMutex();
     // 6144 -> 12288: a qmx_settings_t local in this file (gs). CONFIRMED
     // crashing this task on hardware 2026-09-14 (Stack protection fault,
@@ -1726,7 +1892,8 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
         ESP_LOGI(TAG, "ADIF restore: %s not on the card", path);
     } else {
         size_t len = (size_t)st.st_size;
-        buf = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        // Aligned, not plain PSRAM: this is a whole-file fread off the card.
+        buf = sd_io_buf_alloc(len + 1);
         if (!buf) {
             ESP_LOGE(TAG, "ADIF restore: out of memory for %u bytes", (unsigned)len);
         } else {
@@ -1738,7 +1905,7 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
             if (got != len) {
                 ESP_LOGE(TAG, "ADIF restore: read %u of %u bytes - card error",
                          (unsigned)got, (unsigned)len);
-                free(buf);
+                sd_io_buf_free(buf);
                 buf = NULL;
             } else {
                 buf[len] = '\0';

@@ -39,11 +39,126 @@ static volatile uint32_t s_frames;
  * "pixels requested", a load proxy, not an exact blit figure. O(1) per event. */
 static volatile uint64_t s_inval_px;
 
+/* Render DURATION, to separate "the draw is slow" from "the drawer was
+ * blocked". Frame spacing alone cannot tell those apart, and they want opposite
+ * fixes - the same reason dec_ms had to be split into search/main/join before
+ * the FT8 decode could be understood. */
+static volatile int64_t  s_refr_start_us;
+static volatile uint32_t s_refr_max_us;
+static volatile uint64_t s_refr_sum_us;
+static volatile uint32_t s_refr_n;
+
+static void disp_refr_start_cb(lv_event_t *e)
+{
+    (void)e;
+    s_refr_start_us = esp_timer_get_time();
+}
+
+/* ⭐ FRAME SPACING, NOT FRAME RATE. Steffen, 2026-10-05: the Tab5 is "jaggy all
+ * the time" while the web waterfall looks smooth - and the web runs SLOWER.
+ * Measured the same minute: Tab5 12.2 fps mean (10.9-13.0), web exactly 10.0.
+ * So the rate is not the complaint; a rate that high cannot look choppy unless
+ * the frames are unevenly SPACED.
+ *
+ * The web push is clocked by vTaskDelayUntil, so its rows land every 100 ms
+ * whatever else happens. An LVGL frame lands whenever core 0 gets round to it,
+ * and core 0 idles at ~11%. Same approximate rate, different spacing, and the
+ * eye reads spacing.
+ *
+ * The existing fps figure CANNOT show this: cpu_stats averages over 10 s, which
+ * is exactly where millisecond-scale spacing goes to hide. Hence the interval
+ * itself.
+ *
+ * O(1) per frame - a subtract and a few compares, no division, no walk. The
+ * rule at the top of this block applies to this callback too. */
+static volatile uint32_t s_fr_min_us = UINT32_MAX;
+static volatile uint32_t s_fr_max_us;
+static volatile uint64_t s_fr_sum_us;
+static volatile uint32_t s_fr_n;
+static volatile uint32_t s_fr_late;    /* intervals over FRAME_LATE_US */
+#define FRAME_LATE_US 150000u          /* ~2x the nominal 83 ms at 12 fps */
+
 static void disp_refr_ready_cb(lv_event_t *e)
 {
     (void)e;
     s_frames++;
+
+    static int64_t last_us;
+    int64_t now = esp_timer_get_time();
+    if (s_refr_start_us) {
+        uint32_t rd = (uint32_t)(now - s_refr_start_us);
+        if (rd > s_refr_max_us) s_refr_max_us = rd;
+        s_refr_sum_us += rd;
+        s_refr_n++;
+    }
+    if (last_us) {
+        uint32_t dt = (uint32_t)(now - last_us);
+        if (dt < s_fr_min_us) s_fr_min_us = dt;
+        if (dt > s_fr_max_us) s_fr_max_us = dt;
+        if (dt > FRAME_LATE_US) s_fr_late++;
+        s_fr_sum_us += dt;
+        s_fr_n++;
+    }
+    last_us = now;
 }
+
+/* Frame-interval spread since the previous call, then reset. All microseconds.
+ * n == 0 means no frames were rendered in the window - a real reading, not an
+ * error (the display can be idle). */
+void display_frame_spacing(display_frame_spacing_t *out)
+{
+    if (!out) return;
+    uint32_t n = s_fr_n;
+    out->n       = n;
+    out->min_us  = (n && s_fr_min_us != UINT32_MAX) ? s_fr_min_us : 0;
+    out->max_us  = s_fr_max_us;
+    out->mean_us = n ? (uint32_t)(s_fr_sum_us / n) : 0;
+    out->late    = s_fr_late;
+    out->draw_mean_us = s_refr_n ? (uint32_t)(s_refr_sum_us / s_refr_n) : 0;
+    out->draw_max_us  = s_refr_max_us;
+    s_refr_max_us = 0;
+    s_refr_sum_us = 0;
+    s_refr_n      = 0;
+    s_fr_min_us = UINT32_MAX;
+    s_fr_max_us = 0;
+    s_fr_sum_us = 0;
+    s_fr_n      = 0;
+    s_fr_late   = 0;
+}
+
+/* ⭐ WHICH PANEL IS ASKING FOR THE PIXELS.
+ *
+ * The total alone named nothing, and the arithmetic said the total was the
+ * wrong size: at 10 rows/s the waterfall canvas (1280x370) and the spectrum
+ * (1280x200) together account for ~7.3 Mpx/s, which matches the LOW readings -
+ * but the same screen at the SAME rate also reads 16-20 Mpx/s, i.e. about 1.5
+ * whole screens per frame. Something other than the two big canvases is
+ * invalidating roughly 10 Mpx/s and nothing had looked at it.
+ *
+ * So the pixels are bucketed by where they land. Attribution by y is enough
+ * because this screen is six stacked full-width panels, and it stays O(1) per
+ * event - one compare chain, no walk (the cyan-flash rule applies here too).
+ *
+ * ⛔ THE BAND EDGES MIRROR ui.c's LAYOUT #defines and cannot include them
+ * (display.c is below the UI, not above it). If the panel heights change there,
+ * these move or the attribution lies. They are asserted against DISPLAY_V_RES
+ * at init, which catches a total that stops adding up but not a redistribution.
+ * Bands, in ui.c's terms: TOP_BAR_H 60, SPECTRUM_H 200, LABEL_BAR_H 32,
+ * WATERFALL_H 370, BANDPLAN_H 22, BOTTOM_BAR_H 36. */
+#define INVAL_BANDS 6
+static const int16_t s_inval_band_y[INVAL_BANDS + 1] = { 0, 60, 260, 292, 662, 684, 720 };
+static volatile uint64_t s_inval_band_px[INVAL_BANDS];
+static volatile uint32_t s_inval_n;        /* events, to separate "big" from "often" */
+static volatile uint32_t s_inval_max_px;   /* largest single request */
+static volatile uint32_t s_inval_band_n[INVAL_BANDS];  /* requests per band: big vs often */
+/* Requests covering (almost) the WHOLE panel. These showed up as max 921kpx in
+ * some windows and nothing had attributed them; a full-screen invalidate is
+ * ~2 waterfall canvases of work in one frame, so whether it happens twice a
+ * session or twice a second is the difference between ignoring it and chasing
+ * it. 90% rather than 100% so a screen-sized request that is one pixel short
+ * still counts. */
+#define INVAL_FULLSCREEN_PX  ((uint32_t)DISPLAY_H_RES * DISPLAY_V_RES * 9u / 10u)
+static volatile uint32_t s_inval_full_n;
 
 static void disp_inval_area_cb(lv_event_t *e)
 {
@@ -51,7 +166,55 @@ static void disp_inval_area_cb(lv_event_t *e)
     if (!a) return;
     int32_t w = a->x2 - a->x1 + 1;
     int32_t h = a->y2 - a->y1 + 1;
-    if (w > 0 && h > 0) s_inval_px += (uint64_t)w * (uint64_t)h;
+    if (w <= 0 || h <= 0) return;
+    uint32_t px = (uint32_t)w * (uint32_t)h;
+    s_inval_px += (uint64_t)px;
+    s_inval_n++;
+    if (px > s_inval_max_px) s_inval_max_px = px;
+    if (px >= INVAL_FULLSCREEN_PX) s_inval_full_n++;
+
+    /* Charged to the band holding the request's MIDPOINT. A request spanning a
+     * boundary is charged whole to one band rather than split: splitting would
+     * need a loop per event, and the question here is "who asks", for which the
+     * midpoint is unambiguous enough. Full-screen requests therefore land in
+     * the waterfall band - which is why s_inval_max_px is printed beside it,
+     * since a 921600 px max is the tell for exactly that case. */
+    int32_t mid = a->y1 + h / 2;
+    for (int i = 0; i < INVAL_BANDS; i++) {
+        if (mid >= s_inval_band_y[i] && mid < s_inval_band_y[i + 1]) {
+            s_inval_band_px[i] += (uint64_t)px;
+            s_inval_band_n[i]++;
+            break;
+        }
+    }
+}
+
+/* Thousands of invalidated pixels per second per band since the previous call,
+ * plus the event count and the largest single request. Same windowing as
+ * display_inval_kpx_per_s() - the caller's cadence sets the window. */
+void display_inval_bands(display_inval_bands_t *out)
+{
+    static int64_t last_us;
+    int64_t now = esp_timer_get_time();
+    int64_t dt  = (last_us && now > last_us) ? (now - last_us) : 0;
+    for (int i = 0; i < INVAL_BANDS; i++) {
+        uint64_t px = s_inval_band_px[i];
+        s_inval_band_px[i] = 0;
+        if (out) {
+            out->kpx_per_s[i] = dt ? (unsigned)((px * 1000000ULL) / (uint64_t)dt / 1000ULL) : 0;
+            out->reqs[i] = s_inval_band_n[i];
+        }
+        s_inval_band_n[i] = 0;
+    }
+    if (out) {
+        out->events     = s_inval_n;
+        out->max_px     = s_inval_max_px;
+        out->fullscreen = s_inval_full_n;
+    }
+    s_inval_n = 0;
+    s_inval_max_px = 0;
+    s_inval_full_n = 0;
+    last_us = now;
 }
 
 // Thousands of invalidated pixels per second since the previous call.
@@ -90,14 +253,52 @@ unsigned display_fps_x10(void)
 static lv_display_t *s_disp = NULL;
 static bool s_flipped = false;   // false = normal landscape (90), true = upside-down (270)
 
-bool display_lock(uint32_t timeout_ms)
+static volatile int64_t s_lock_at_us;
+static const char *volatile s_lock_owner;
+static const char *volatile s_lock_site;   /* __func__ of the caller - see display.h */
+
+/* ⭐ WHO HOLDS THE DISPLAY LOCK, AND FOR HOW LONG.
+ *
+ * 54 call sites in main/ take this, and LVGL cannot render while any of them
+ * holds it - so a long hold shows up as a LATE FRAME and nothing else. This
+ * project already lost an evening to a display_lock priority inversion
+ * (USB audio loss), so "something held it too long" is not a hypothesis here,
+ * it is a repeat.
+ *
+ * The holder names itself for free: pcTaskGetName() at lock time costs a
+ * pointer read. Reported only above the threshold, so a healthy system is
+ * silent and the log does not become another periodic walk. */
+#define DISPLAY_LOCK_LOUD_MS 60
+
+#undef display_lock
+bool display_lock_tagged(uint32_t timeout_ms, const char *site)
 {
-    return bsp_display_lock(timeout_ms);
+    bool ok = bsp_display_lock(timeout_ms);
+    if (ok) {
+        s_lock_at_us = esp_timer_get_time();
+        s_lock_owner = pcTaskGetName(NULL);
+        s_lock_site  = site;
+    }
+    return ok;
 }
+/* Restore the macro for the rest of this file, so display.c's own callers tag
+ * themselves exactly like everyone else's. */
+#define display_lock(t) display_lock_tagged((t), __func__)
 
 void display_unlock(void)
 {
+    int64_t     at    = s_lock_at_us;
+    const char *owner = s_lock_owner;
+    const char *site  = s_lock_site;
+    s_lock_at_us = 0;
     bsp_display_unlock();
+    if (at) {
+        uint32_t held_ms = (uint32_t)((esp_timer_get_time() - at) / 1000);
+        if (held_ms >= DISPLAY_LOCK_LOUD_MS)
+            ESP_LOGW(TAG, "display lock held %u ms by '%s' in %s() - LVGL could "
+                          "not render for that long", (unsigned)held_ms,
+                     owner ? owner : "?", site ? site : "?");
+    }
 }
 
 void display_set_brightness(int percent)
@@ -317,6 +518,13 @@ esp_err_t display_init(lv_display_t **out_disp)
         ESP_LOGE(TAG, "bsp_display_start_with_config failed");
         return ESP_FAIL;
     }
+    /* The mirrored band table must at least still cover the panel. */
+    if (s_inval_band_y[INVAL_BANDS] != DISPLAY_V_RES) {
+        ESP_LOGE(TAG, "inval band table ends at %d but DISPLAY_V_RES is %d - "
+                      "attribution by band is WRONG until this is fixed",
+                 (int)s_inval_band_y[INVAL_BANDS], (int)DISPLAY_V_RES);
+    }
+    lv_display_add_event_cb(s_disp, disp_refr_start_cb, LV_EVENT_REFR_START, NULL);
     lv_display_add_event_cb(s_disp, disp_refr_ready_cb, LV_EVENT_REFR_READY, NULL);
     lv_display_add_event_cb(s_disp, disp_inval_area_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
@@ -332,9 +540,64 @@ esp_err_t display_init(lv_display_t **out_disp)
     // giving it near-top priority cannot starve the CPU - it just guarantees
     // the panel never misses a fetch window. 12 of 15: high, but below max in
     // case something ever genuinely needs the last word.
-    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 12, 12);
-    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 12, 12);
-    ESP_LOGI(TAG, "DSI DW-GDMA AXI QoS priority raised (12/15, rd+wr, both masters)");
+    /* ⭐ 15/15, not 12/15, since 2026-10-06. The comment above chose 12 to keep
+     * something in reserve "in case something ever genuinely needs the last
+     * word". Something does: the operator sees the SAME dropped-frame blank on
+     * every waterfall row shift ("super short black screen then the carpet
+     * again"), at 3 rows/s and at 30, and it predates this session (verified by
+     * reproducing it on c5474b2).
+     *
+     * A row shift is the largest PSRAM burst this board runs: 474 kpx redrawn
+     * through LVGL's software 90-degree rotation, which traverses the strip
+     * COLUMN by column out of PSRAM, ~20 strips per shift, into a framebuffer
+     * that is itself PSRAM while the DSI fetches from it continuously. Exactly
+     * the starvation this QoS field exists to prevent - same fault class as the
+     * cyan flash, different trigger.
+     *
+     * ⚠ TESTED, AND IT IS NOT THE FIX. Operator at 15/15: "blink is probably a
+     * little bit less - but it is definitely still there". Treat that as
+     * suggestive and UNMEASURED, not as confirmation: DSI starvation is at most
+     * a contributor. Kept anyway because the reserve it gives up was itself
+     * speculative ("in case something ever genuinely needs the last word") and
+     * the DSI fetch is the one client that must never miss a window - bounded
+     * at ~110 MB/s of a >600 MB/s budget, as the note above measured.
+     *
+     * ⛔ Do not read this line as the blink's fix, and do not try a third
+     * priority value - the lever is nearly exhausted and what remains is
+     * structural. See the note below. */
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 15, 15);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 15, 15);
+    ESP_LOGI(TAG, "DSI DW-GDMA AXI QoS priority raised (15/15, rd+wr, both masters)");
+
+    /* ⛔ OPEN BUG: THE WATERFALL BLANKS FOR ONE FRAME ON EVERY ROW SHIFT.
+     *
+     * Operator, 2026-10-06: "the whole carpet kind of blinking - not flashing -
+     * but like super short black screen then the carpet again", every row shift
+     * or every second one. PRE-EXISTING: reproduced on c5474b2 with none of
+     * this session's work present. Independent of the row rate (3 rows/s and
+     * 30 both do it).
+     *
+     * Ruled out by test, not by argument:
+     *   - the per-row lv_canvas_set_buffer() teardown, which drops the image
+     *     cache twice and re-sets the source every row (removed in 86bf5d6 -
+     *     the blink did not change)
+     *   - DSI arbiter starvation as the SOLE cause (this QoS line - at most a
+     *     small improvement)
+     *
+     * What is left is how a frame reaches the panel. This display runs partial
+     * draw buffers + double buffering + LVGL SOFTWARE rotation into a PSRAM
+     * framebuffer that the DSI reads continuously - and this BSP cannot avoid
+     * tearing in that configuration at all: m5stack_tab5.c forces
+     * `.sw_rotate = false` under CONFIG_BSP_DISPLAY_LVGL_AVOID_TEAR, with the
+     * comment "Avoid tearing is not supported for SW rotation". So the panel
+     * can latch a framebuffer region while it is still being rewritten, and a
+     * row shift rewrites the entire 1280x370 carpet as ~11 strips.
+     *
+     * ⚠ MEASURE FIRST. Time the flush callback and count strips per row
+     * shift; do not reach for CONFIG_BSP_DISPLAY_LVGL_FULL_REFRESH on reasoning
+     * alone - it costs MORE PSRAM traffic, which is the opposite direction to
+     * what the QoS result hints at, and it forces a full rebuild. Two
+     * hypotheses have already been spent here without a measurement. */
 
     // Start dark, not bsp_display_backlight_on() (=100% immediately): the
     // panel powers up with garbage/white framebuffer content that's visible

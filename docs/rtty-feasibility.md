@@ -317,3 +317,148 @@ R4.
   [`main/ft8_tx.c`](../main/ft8_tx.c) (absolute-timer burst pattern),
   [`main/audio/audio.c`](../main/audio/audio.c) (ring buffer),
   [`main/dsp/dsp.c`](../main/dsp/dsp.c) (FFT/spectrum, for tuning aid).
+
+---
+
+## Update 2026-10-08 — three things have changed since this was written
+
+Agreed order with the operator: **JS8 Normal QSOs first, JS8 chat second, RTTY
+alongside/after.** This section revises the estimate above rather than
+replacing it; the physical-layer and Baudot sections are unchanged and still
+correct.
+
+### 1. R3 (keyboard driver) is DONE — remove it from the estimate
+
+This document budgeted a phase for "first physical keyboard, first non-display
+I2C peripheral". That work shipped:
+
+- `main/keyboard/tab5_keyboard.c` drives the snap-on keyboard (SKU A164,
+  STM32F030C8T6 at I2C **0x6D**) in **String mode**, so the STM32 does the
+  keymap and shift/symbol layers and hands back ready ASCII with a modifier
+  byte. The host needs no row/col table.
+- The I2C bus-sharing worry is settled: the keyboard has its **own bus**
+  (SDA=GPIO0, SCL=GPIO1), separate from touch and the IO expander.
+- A Bluetooth HID keyboard also works (`bt_hid_keyboard_active()`, #273), so
+  RTTY text entry has two input routes already, not none.
+
+RTTY still needs a text-input buffer and a send/edit UI, but that is UI work on
+top of a working driver rather than a new I/O subsystem.
+
+### 2. R4's host side is measured — the gate is now ONLY the radio
+
+This document called the 22 ms bit period "~7x tighter than FT8" and the single
+biggest unknown. Half of that is now answered, measured on bench dev
+2026-10-07:
+
+- A CAT command **with its reply** completes in **~6.3 ms** (947 polls in 6.0 s,
+  a `GP;` probe burst). A TX tone command is fire-and-forget with no reply, so
+  it is cheaper than that.
+- `CONFIG_FREERTOS_HZ=1000`, so `sleep_until()` has 1 ms granularity. A 22 ms
+  bit period is well inside it.
+- FT4 already ships at **48 ms/symbol** over this same path.
+
+So the host has roughly **3.5x headroom** at 45.45 baud. **What remains unknown
+is entirely the QMX's own behaviour**: whether its synthesiser retunes cleanly
+when `TA<freq>;` arrives every 22 ms continuously while keyed, and whether its
+CAT parser keeps up at ~45 commands/s. FT8 gives the radio 160 ms to settle per
+step; RTTY would give it 22 ms, unbroken, for the whole over.
+
+This matters more for RTTY than for FT8 because **RTTY has no FEC**. FT8
+tolerates a bad symbol; a glitched RTTY shift is a corrupted character, and the
+transient lands inside the 170 Hz occupied bandwidth rather than in a gap.
+
+### 3. The R4 bench test, defined
+
+Equipment is not a constraint — the operator has two QMXes, three Tab5s, an
+antenna, dummy loads, several PCs, multiple SDRs, and IC-705 / FTDX-3000D /
+remote Flex receivers.
+
+1. QMX into a **dummy load**, `MD6` (Digi), keyed with `TX;`.
+2. Send `TA<freq>;` alternating mark/space at 22 ms from a bench harness —
+   no Baudot yet, just a square alternation, then a known Baudot test
+   sentence ("RYRYRY..." is the traditional one for exactly this reason).
+3. Capture the RF with an SDR and measure: does each tone actually reach its
+   frequency within the 22 ms slot, how long is the transition, and is there
+   energy outside the 170 Hz shift during it.
+4. In parallel, decode the same transmission with **fldigi or MMTTY on a shack
+   PC** — a real RTTY decoder is the honest arbiter of whether the signal is
+   copyable, rather than our own judgement of a waterfall.
+
+**This is a go/no-go gate and it is cheap.** Half a day, no new firmware
+beyond a throwaway harness, and it decides whether R5 is worth writing at all.
+Do it before any RTTY TX code exists.
+
+⚠ Do NOT validate RTTY TX by decoding it with our own future RTTY RX. Two
+halves of one implementation share their mistakes — the same reason JS8 needs a
+real JS8Call counterpart rather than a second Tab5.
+
+### 4. Prior art: the radio already does RTTY, and the known bottleneck is not on our path
+
+Searched 2026-10-08 at the operator's prompting — he was right that this ground
+has been covered before. Sources are QRP Labs' own product pages and the
+QRPLabs groups.io list, so treat the list posts as user reports rather than as
+measurements we have made.
+
+**QRP Labs list RTTY as a supported mode.** The QMX's Digi mode is described as
+transmitting a single signal for FSK modes, "which covers the majority of
+digital modes in use today, including everything in WSJT-X (except MSK144),
+JS8Call, some fldigi modes e.g. RTTY, Olivia and more". So the synthesiser
+producing clean 45.45 baud FSK is **not** the open question it is treated as
+above — the radio does this today when driven from fldigi over USB audio.
+
+**The known bottleneck is in the AUDIO path, and we do not use it.** When
+driven from a PC, the QMX (like the QDX) measures the incoming audio tone with
+a timer and then sets the synthesiser. A QDX RTTY report on the list describes
+having to reduce the number of tone samples required before setting the output
+frequency — **default 480** — so the radio could keep up with a tone changing
+every 22 ms. That averaging window is the thing that makes RTTY marginal over
+the audio route.
+
+**The Tab5 does not go through tone measurement at all.** `ft8_tx.c` sends
+`TA<freq>;` over CAT and the radio sets its synthesiser from the number. The
+480-sample averaging has nothing to act on. On this path the question is not
+"can the radio follow a 22 ms tone change" — it demonstrably can — but the
+narrower one:
+
+> Does the QMX's CAT parser accept and act on `TA<freq>;` at ~45 commands per
+> second, sustained, while keyed?
+
+That is a smaller and more tractable question than this document originally
+posed, and it is still unmeasured.
+
+**Two user-reported faults worth knowing, both specific to the audio route:**
+
+- *TX drops back to RX a second or two into a RTTY over* while fldigi keeps
+  sending. The proposed fix on the list is fldigi's **Soundcard → "Modem signal
+  on left and right channels"** — the QMX takes its input from the right
+  channel. Reported as "probably solved", never confirmed by the original
+  poster.
+- *RX audio too weak for fldigi or MMTTY to decode*, with mark and space
+  measured at only 20–40 µV peak at the scope.
+
+Neither affects the Tab5: we neither send nor receive audio to the radio for
+this purpose. They are listed so that a user's "RTTY does not work on my QMX"
+report is not mistaken for a fault in our implementation.
+
+**Revised R4.** The gate test above stands, but its purpose changes: it is no
+longer asking whether the radio can do RTTY, it is asking whether the CAT route
+can drive it. Keep fldigi or MMTTY on a PC as the arbiter, and if the CAT route
+fails the gate, the fallback worth considering is whether the Tab5 should drive
+RTTY the way a PC does rather than over CAT — which it cannot today, having no
+transmit audio path, and which is the same obstacle that rules out PSK31.
+
+Sources: [QMX product page](https://qrp-labs.com/qmx.html) ·
+[fldigi and QMX transmit RTTY](https://groups.io/g/QRPLabs/topic/fldigi_and_qmx_transmit_rtty/106116158) ·
+[QMX RTTY how](https://groups.io/g/QRPLabs/topic/qmx_rtty_how/108126424) ·
+[QDX works on RTTY](https://www.qsl.net/y/yo4tnv//Transceivers/Qrp-Labs%20QDX/QRPLabs@groups.io%20_%20QDX%20works%20on%20RTTY!.pdf)
+
+### Revised estimate
+
+| | Old | Revised | Why |
+|---|---|---|---|
+| RX-only | 3.5–4 sessions | **2.5–3 sessions** | R3 keyboard work is already done |
+| Full RX+TX | 6.5–8.5 sessions | **5–7 sessions**, gated on R4 | same, plus the host timing question is closed |
+
+**RX-only remains the right first deliverable.** It is self-contained, it has
+abundant live signals to test against, and it is useful on its own as an RTTY
+monitor even if the R4 gate closes and TX never happens.

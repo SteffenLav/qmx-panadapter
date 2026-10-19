@@ -11,7 +11,8 @@
  * implementation of the WSPR message spec and Fano's published algorithm
  * (see main/wspr_proto.c and main/wspr_fano.c's header comments -
  * docs/wspr-phase1-status.md records a real licensing mistake, an initial
- * near-verbatim port of GPL v3 WSJT-X source into this MIT-licensed repo,
+ * near-verbatim port of GPL v3 WSJT-X source into what was then an
+ * MIT-licensed repo (it relicensed to GPL-3 on 2026-10-09),
  * and the same-day clean-room rewrite that fixed it), BEFORE any of it
  * touches a task or an ISR. A wrong generator polynomial or a wrong
  * grid-packing formula would compile, run, and never decode anything -

@@ -19,6 +19,7 @@
 #include "iq_balance.h"
 #include "psram_task.h"
 #include "ui.h"
+#include "storage/settings.h"   // rx_source_is_real: which producer feeds the ring
 
 static const char *TAG = "audio";
 
@@ -206,7 +207,32 @@ esp_err_t audio_init(void)
 
     // Start the periodic internal-heap watchdog (every 10 s; v2 = O(1)-only,
     // see heap_watchdog_task's comment).
-    psram_task_create(heap_watchdog_task, "heap_wd", 3072, NULL, 1, tskNO_AFFINITY);
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 780 B of 3072 (75% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and this task's DEEP path is the emergency
+ * heap dump below the low-heap threshold, which had NOT run.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
+    psram_task_create(heap_watchdog_task, "heap_wd", 6144, NULL, 1, tskNO_AFFINITY);
+
+    /* ⛔ A REAL SOURCE GETS THE RING AND NOTHING ELSE.
+     *
+     * The ES7210 capture channel and the USB host cannot coexist: bringing up
+     * the I2S RX side claims a second GDMA channel and the DMA-capable RAM
+     * the host needs for its endpoints, so CDC-ACM/CAT cannot claim theirs
+     * (the same reason rx_audio.c's preopen creates a TX-ONLY channel).
+     * Installing the driver here and then never opening a device would still
+     * spend that RAM and leave a background task polling nothing.
+     *
+     * Returning here leaves the ring, the IQ-balance state and the heap
+     * watchdog exactly as the USB path has them, so line_in.c only has to
+     * supply samples. */
+    if (rx_source_is_real(settings_get_rx_source())) {
+        ESP_LOGW(TAG, "RX source is %s - UAC host driver NOT installed",
+                 rx_source_str(settings_get_rx_source()));
+        return ESP_OK;
+    }
 
     const uac_host_driver_config_t cfg = {
         .create_background_task = true,
@@ -325,6 +351,34 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
     size_t pairs = got_bytes / (sizeof(int16_t) * 2);
     s_pairs_read += pairs;
     return pairs;
+}
+
+/* Push I/Q pairs into the same ring the UAC path feeds.
+ *
+ * ⛔ THE ONLY OTHER PRODUCER, and it exists so that everything downstream -
+ * the FFT, the waterfall, zoom, the S-meter, the FT8/JS8/WSPR capture ring -
+ * stays exactly as it was. line_in.c synthesises the quadrature channel with
+ * a Hilbert transform and hands the result over here, so the shape of what
+ * reaches the ring is identical to what the QMX sends: interleaved int16
+ * I,Q at 48 kHz. Nothing after this point has to know which one is running.
+ *
+ * ⛔ NEVER BOTH AT ONCE. The two sources are mutually exclusive at boot (see
+ * rx_source_t) - audio_init() does not even install the UAC driver when a
+ * real source is selected - so there is no second writer to serialise with.
+ *
+ * Drops are counted on the same counters as the UAC path, so the existing
+ * "DROPPED=" diagnostics mean the same thing for either source. */
+void audio_push_pairs(const int16_t *iq, size_t pairs)
+{
+    if (!s_ring || !iq || pairs == 0) return;
+    size_t bytes = pairs * sizeof(int16_t) * 2;
+    if (xRingbufferSend(s_ring, iq, bytes, 0) == pdTRUE) {
+        s_pairs_written       += pairs;
+        s_samples_this_period += pairs;
+    } else {
+        s_dropped_this_period += pairs;
+        s_dropped_total       += pairs;
+    }
 }
 
 size_t audio_ring_backlog_pairs(void)
@@ -540,10 +594,23 @@ static inline int32_t s24_to_s32(const uint8_t *p)
 // frames are not happening and the mirror images have another cause.
 static bool process_rx(void)
 {
+    /* ⭐ BOTH IN PSRAM. These two were the largest internal-RAM statics in the
+     * whole firmware - 19200 + 12804 = 31 KB of a 185 KB internal .bss - on a
+     * board that idles with under 30 KB of internal heap free and prints its
+     * own "WiFi & USB crash risk < 16KB" warning.
+     *
+     * ⛔ SAFE BECAUSE NO DMA TOUCHES THEM, and that was checked rather than
+     * assumed: uac_host_device_read() is `_ring_buffer_pop(iface->ringbuf,
+     * data, size, ...)` (uac_host.c:2555), a memcpy out of the driver's own
+     * ring buffer into whatever pointer we hand it. `decoded` is ours alone.
+     * The USB controller writes the driver's buffer, never these.
+     *
+     * The cost is a PSRAM memcpy of about 19 KB per poll - roughly 2 MB/s at
+     * this poll rate, against PSRAM bandwidth in the hundreds of MB/s. */
     // Raw 24-bit packed bytes from the QMX
-    static uint8_t raw[RX_BUF_BYTES];
+    static EXT_RAM_BSS_ATTR uint8_t raw[RX_BUF_BYTES];
     // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
-    static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
+    static EXT_RAM_BSS_ATTR int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
 
     // Whether this call moved any audio at all. NOT simply "the last read
     // returned data": the drain loop always ends on an empty read, so a healthy

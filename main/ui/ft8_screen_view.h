@@ -1,5 +1,6 @@
 #pragma once
 #include "lvgl.h"
+#include "ft8_test.h"   // ft8_op_mode_t - the sub-mode these take and return
 
 // Step 4c.2 v0.10: FT8 screen LVGL view.
 //
@@ -38,14 +39,34 @@ void ft8_screen_view_request_refresh(void);
 // only raises a flag that the FT8 view's 1 Hz timer drains on the LVGL thread, since
 // the QSO state machine belongs to that task. Ignored, with a log line, if FT8 mode
 // is not up - there would be nothing to transmit on.
-/* The conventional FT8/FT4 calling frequencies, so the WEB can offer the same
- * list the Tab5 does instead of keeping a second copy that drifts. One table,
- * one set of numbers - the rule pan_view.h states for geometry applies just as
- * well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31). */
+/* The conventional FT8/FT4/JS8 calling frequencies, so the WEB can offer the
+ * same list the Tab5 does instead of keeping a second copy that drifts. One
+ * table, one set of numbers - the rule pan_view.h states for geometry applies
+ * just as well to a band plan (Randy N4OPI asked for the dropdown, 2026-08-31).
+ *
+ * ⚠ JS8 SHARES TWO FREQUENCIES WITH FT4 - 17 m 18.104 and 6 m 50.318 are
+ * identical. Nothing may work out the sub-mode from the dial frequency; the
+ * mode travels with the request. */
 typedef struct { const char *band; uint32_t freq_hz; } ft8_preset_t;
-const ft8_preset_t *ft8_preset_list(bool ft4, int *out_count);
+const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count);
 
 void ft8_screen_view_request_cq(void);
+
+/* Ask the Tab5 to transmit `text` as JS8 free text, from the browser. Records
+ * the request only; the 1 Hz LVGL timer encodes and arms it, and the outcome
+ * comes back through ft8_screen_view_freetext_result() in /api/status - a
+ * toast on the glass is invisible from another room. */
+void ft8_screen_view_request_freetext(const char *text);
+void ft8_screen_view_freetext_result(char *out, size_t out_len);
+
+/* The JS8 macro buttons from the browser: 0 = SNR, 1 = GRID. Records the
+ * request only - both end in ft8_tx_arm() or js8_ftx_start(), which belong to
+ * the LVGL task, the same deferral as the free text above. The outcome lands
+ * in the same web-result line the page already shows.
+ *
+ * ⛔ THESE ARE THE ONLY WAY A JS8 REPORT LEAVES THIS STATION BY HAND NOW. A
+ * row click selects and transmits nothing - see js8_target.h. */
+void ft8_screen_view_request_js8_macro(int which);
 
 // CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
 // TXCQ button and the web page drive the SAME state - set is deferred to the
@@ -65,10 +86,10 @@ void ft8_screen_view_request_reply(const char *call);
 // request cannot key the radio minutes later.
 void ft8_screen_view_request_override(int what);
 
-// #221: switch FT8/FT4 (and optionally retune) from the API. Deferred to the
+// #221: switch sub-mode (and optionally retune) from the API. Deferred to the
 // LVGL task, because the switch also retunes the radio, clears stale decodes
 // and repaints labels. freq_hz 0 keeps the current frequency.
-void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4);
+void ft8_screen_view_request_preset(uint32_t freq_hz, ft8_op_mode_t mode);
 const char *ft8_screen_view_get_web_reply_result(void);
 
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
@@ -84,3 +105,26 @@ void ft8_screen_view_refresh_preset(void);
 // gesture. No-op (silent) if there's no adjacent visible row or nothing was
 // ever confirmed this session. LVGL-thread only.
 void ft8_screen_view_nudge_confirm(int delta);
+
+/* Re-apply the JS8 screen's pane layout: the Stations/Conversation tab bar and
+ * the TXCQ parity button, both of which exist only while the sub-mode is JS8.
+ * Called from the view itself on a sub-mode change; exposed so anything else
+ * that changes the sub-mode can keep the screen honest. */
+void ft8_screen_view_js8_tabs_refresh(void);
+
+/* Repaint the big MODE label. It names the JS8 SUBMODE when that is not
+ * Normal ("JS8 TURBO"), because a non-Normal submode decodes nothing from the
+ * Normal stations everyone runs and is persisted across reboots - Ryan KK6DZB
+ * lost JS8 entirely to it and the screen still said "MODE: JS8". Call it from
+ * anywhere that changes the submode: the drawer picker and /api/cmd. */
+void ft8_screen_view_refresh_mode_label(void);
+
+/* Flush the JS8 conversation from the browser - the Tab5 tab bar's Flush has
+ * always done this and the web page had no equivalent (Ryan KK6DZB,
+ * 2026-10-14). Records the request only; the LVGL tick clears and repaints,
+ * so both surfaces run the one code path. */
+void ft8_screen_view_request_js8_flush(void);
+
+/* Which JS8 pane is showing. Reported in /api/status so the capture and the
+ * API can say what is on the screen without asking the operator. */
+bool ft8_screen_view_js8_tab_is_conversation(void);

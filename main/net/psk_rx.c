@@ -20,7 +20,6 @@
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "wifi/wifi.h"
-#include "webserver_ws.h"
 #include "util/psram_task.h"
 
 #include "esp_log.h"
@@ -291,13 +290,12 @@ static void fetch_once(const char *mycall)
     // asks that clients be attributable.
     esp_http_client_set_header(client, "User-Agent", "qmx-panadapter (github.com/SteffenLav/qmx-panadapter)");
 
-    // Same courtesy the spot fetcher and the uploads pay - keep the spectrum
-    // stream off this link while the transfer runs.
-    webserver_ws_set_paused(true);
+    /* No webserver_ws_set_paused() - periodic background fetch, same reason as
+     * net/spots.c, where the measurement is. The pause is for user-initiated
+     * transfers only. */
     esp_err_t err = esp_http_client_perform(client);
     int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
     esp_http_client_cleanup(client);
-    webserver_ws_set_paused(false);
 
     if (status == 200) {
         int n = parse_body(buf);
@@ -344,7 +342,7 @@ static void psk_rx_task(void *arg)
         // Also not while RX audio is on (2026-09-20) - the single largest
         // periodic allocation on the device is exactly what audio needs the
         // room back from.
-        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_is_enabled()) continue;
+        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_any_listener()) continue;
 
         // One floor for both paths. An operator hammering a refresh button must
         // not be able to breach the collector's stated rate limit.

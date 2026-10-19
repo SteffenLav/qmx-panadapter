@@ -6,7 +6,13 @@
 // last 87 bits are the (systematic) plain-text.
 // this is an implementation of the sum-product algorithm
 // from Sarah Johnson's Iterative Error Correction book.
-// codeword[i] = log ( P(x=0) / P(x=1) )
+//
+// SIGN: upstream's comment here read codeword[i] = log(P(x=0)/P(x=1)), which
+// is the wrong way round for this code. The hard decision below is
+// plain[n] = (llr > 0) ? 1 : 0, so a POSITIVE value means a ONE bit, and that
+// is the convention decode.c feeds it. Getting it backwards does not warn or
+// crash - it simply never converges, which reads exactly like a bad parity
+// table. Cost one debug cycle on 2026-10-08.
 //
 
 #include "ldpc.h"
@@ -17,14 +23,21 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-static int ldpc_check(uint8_t codeword[]);
+static int ldpc_check(const ftx_ldpc_code_t* code, uint8_t codeword[]);
 static float fast_tanh(float x);
 static float fast_atanh(float x);
 
 // codeword is 174 log-likelihoods.
 // plain is a return value, 174 ints, to be 0 or 1.
 // max_iters is how hard to try.
-// ok == 87 means success.
+// *ok is the number of UNSATISFIED parity checks, so 0 means success. (The
+// upstream comment here said "ok == 87 means success", which is the opposite
+// of what the code returns.)
+//
+// Nothing in this project calls this - decode.c uses bp_decode(). It is kept
+// only to stay close to upstream ft8_lib, and it is FT8-only on purpose: its
+// two float[M][N] working arrays are ~58 kB EACH on the stack, which is not
+// something to carry onto the device for a second protocol.
 void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
 {
     float m[FTX_LDPC_M][FTX_LDPC_N]; // ~60 kB
@@ -68,7 +81,7 @@ void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
             plain[i] = (l > 0) ? 1 : 0;
         }
 
-        int errors = ldpc_check(plain);
+        int errors = ldpc_check(&kFTX_LDPC_code_174_91, plain);
 
         if (errors < min_errors)
         {
@@ -108,16 +121,16 @@ void ldpc_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
 // returns the number of parity errors.
 // 0 means total success.
 //
-static int ldpc_check(uint8_t codeword[])
+static int ldpc_check(const ftx_ldpc_code_t* code, uint8_t codeword[])
 {
     int errors = 0;
 
-    for (int m = 0; m < FTX_LDPC_M; ++m)
+    for (int m = 0; m < code->M; ++m)
     {
         uint8_t x = 0;
-        for (int i = 0; i < kFTX_LDPC_Num_rows[m]; ++i)
+        for (int i = 0; i < code->Num_rows[m]; ++i)
         {
-            x ^= codeword[kFTX_LDPC_Nm[m][i] - 1];
+            x ^= codeword[code->Nm[m][i] - 1];
         }
         if (x != 0)
         {
@@ -127,12 +140,49 @@ static int ldpc_check(uint8_t codeword[])
     return errors;
 }
 
-void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
+/* ⭐ stall_limit: give up after this many iterations with NO improvement in
+ * min_errors. 0 disables it and restores the original behaviour.
+ *
+ * The only other exit is SUCCESS (errors == 0), so without this a candidate
+ * that will never decode burns every one of max_iters. On a busy band most of
+ * the 140 candidates are exactly that, and they, not the decodes, are what
+ * dec_ms is spent on - measured 2026-10-04 at 0.13 ms for a failure against
+ * 0.02 ms for a success on the host bench.
+ *
+ * A candidate that is still converging keeps lowering min_errors, so it is
+ * never cut short. What a stall limit costs is the candidate that sits on a
+ * plateau and then breaks through late.
+ *
+ * Measured over the 35 ground-truth WAVs in test/wav_reference with
+ * test/ft8_decode_bench.c (cand=140, min score 5, 30 iters - the device's own
+ * settings), on top of the multi-symbol fallback already being off:
+ *
+ *     stall off   405 decodes   565.6 ms
+ *     stall 8     403 decodes   340.3 ms     <- chosen
+ *     stall 5     396 decodes   263.3 ms
+ *     stall 3     388 decodes   191.3 ms
+ *
+ * 8 costs 2 decodes in 405 (0.5%) for 40% of the time.
+ *
+ * ⛔ FT8 ONLY, and that is deliberate. The corpus is all FT8; FT4 uses a
+ * DIFFERENT parity matrix and is not measured here. An FT8-derived LDPC limit
+ * was applied to FT4 once before - FT8_LDPC_MAX_ITERS 30->15, 2026-06-29 -
+ * and it badly hurt FT4 decode, confirmed by a field report immediately after
+ * release. ftx_decode_candidate() passes 0 for FT4 until someone measures it
+ * with an FT4 corpus. */
+void bp_decode(float codeword[], int max_iters, int stall_limit, uint8_t plain[], int* ok)
+{
+    bp_decode_code(&kFTX_LDPC_code_174_91, codeword, max_iters, stall_limit, plain, ok);
+}
+
+void bp_decode_code(const ftx_ldpc_code_t* code, float codeword[], int max_iters, int stall_limit,
+                    uint8_t plain[], int* ok)
 {
     float tov[FTX_LDPC_N][3];
-    float toc[FTX_LDPC_M][7];
+    float toc[FTX_LDPC_M_MAX][7];
 
-    int min_errors = FTX_LDPC_M;
+    int min_errors = code->M;
+    int last_improve = 0;
 
     // initialize message data
     for (int n = 0; n < FTX_LDPC_N; ++n)
@@ -157,7 +207,7 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
         }
 
         // Check to see if we have a codeword (check before we do any iter)
-        int errors = ldpc_check(plain);
+        int errors = ldpc_check(code, plain);
 
         if (errors < min_errors)
         {
@@ -168,19 +218,26 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
             {
                 break; // Found a perfect answer
             }
+            last_improve = iter;
+        }
+        else if (stall_limit > 0 && (iter - last_improve) >= stall_limit)
+        {
+            // No better guess for stall_limit iterations - this one is not
+            // going to converge, and the remaining iterations are pure cost.
+            break;
         }
 
         // Send messages from bits to check nodes
-        for (int m = 0; m < FTX_LDPC_M; ++m)
+        for (int m = 0; m < code->M; ++m)
         {
-            for (int n_idx = 0; n_idx < kFTX_LDPC_Num_rows[m]; ++n_idx)
+            for (int n_idx = 0; n_idx < code->Num_rows[m]; ++n_idx)
             {
-                int n = kFTX_LDPC_Nm[m][n_idx] - 1;
+                int n = code->Nm[m][n_idx] - 1;
                 // for each (n, m)
                 float Tnm = codeword[n];
                 for (int m_idx = 0; m_idx < 3; ++m_idx)
                 {
-                    if ((kFTX_LDPC_Mn[n][m_idx] - 1) != m)
+                    if ((code->Mn[n][m_idx] - 1) != m)
                     {
                         Tnm += tov[n][m_idx];
                     }
@@ -194,12 +251,12 @@ void bp_decode(float codeword[], int max_iters, uint8_t plain[], int* ok)
         {
             for (int m_idx = 0; m_idx < 3; ++m_idx)
             {
-                int m = kFTX_LDPC_Mn[n][m_idx] - 1;
+                int m = code->Mn[n][m_idx] - 1;
                 // for each (n, m)
                 float Tmn = 1.0f;
-                for (int n_idx = 0; n_idx < kFTX_LDPC_Num_rows[m]; ++n_idx)
+                for (int n_idx = 0; n_idx < code->Num_rows[m]; ++n_idx)
                 {
-                    if ((kFTX_LDPC_Nm[m][n_idx] - 1) != n)
+                    if ((code->Nm[m][n_idx] - 1) != n)
                     {
                         Tmn *= toc[m][n_idx];
                     }

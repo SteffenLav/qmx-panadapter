@@ -529,13 +529,41 @@ Download the whole log as a signed `.tq8` file, for manual upload to LoTW or off
 
 ## WebSocket (Streaming)
 
-The web UI uses WebSocket for **live spectrum streaming**:
+**Single-client** endpoint for live spectrum:
 
 ```
 ws://<tab5-ip>:80/ws
 ```
 
-The server streams FFT magnitude bins and waterfall data every ~100 ms. This is handled automatically by the web UI — you don't need to implement it yourself unless building a custom client.
+Each binary frame is **1026 bytes**:
+
+| Bytes | Meaning |
+|-------|---------|
+| `0` | Frame type: `0x01` = spectrum |
+| `1` | Zoom decimation factor (1 = base 1024-bin spectrum, >1 = zoom-FFT with that decimation) |
+| `2–1025` | 1024 unsigned bytes, one per bin, quantised −130 dBm (0) to −30 dBm (255) |
+
+Bins are **pre-shifted server-side**, so byte 2 is the leftmost screen pixel and
+a client does not have to know where the VFO sits in the FFT. Push rate is about
+**10 fps**.
+
+!!! warning "One client at a time"
+    A second connection takes the stream over from the first. Opening the web UI
+    in two tabs is enough to do it.
+
+## Screenshot
+
+### GET /ss.bmp
+
+Returns what is on the Tab5's screen right now, as a BMP.
+
+```powershell
+Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
+```
+
+!!! note "It freezes animations while it reads"
+    The screen is captured from the live framebuffer, so a waterfall or a
+    blinking indicator stops for the duration of the read.
 
 ## Error Responses
 

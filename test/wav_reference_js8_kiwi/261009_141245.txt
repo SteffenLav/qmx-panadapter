@@ -1,0 +1,3 @@
+# JS8 slot UTC 1791555165  dial 14078000 Hz  KiwiSDR 85.183.11.108:8073 (Hamburg)
+# THIS BUILD'S OWN OUTPUT, not ground truth - a regression floor. See README.md.
+#F F6HCM: SQUARESDR2, 20W, EF ANTENNA 10/(15/)20

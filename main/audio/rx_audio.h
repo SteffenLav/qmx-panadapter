@@ -47,6 +47,45 @@ void rx_audio_preopen(void);
 void rx_audio_set_enabled(bool en);
 bool rx_audio_is_enabled(void);
 
+/* ⛔ TRUE WHEN THE SWITCH IS ON AND IS DOING NOTHING.
+ *
+ * The ES8388/I2S codec is opened once at boot, and only when the saved enable
+ * flag was already set - it has to claim its DMA RAM before the USB host takes
+ * that pool, so it cannot be opened later in the session. Turning RX audio on
+ * afterwards therefore sets the flag, logs "restart required", and produces no
+ * sound at all until the next boot.
+ *
+ * Samuel W7STF, 2026-10-02: booted with audio off, used the radio for 15
+ * minutes, turned audio on and heard nothing - "I had to reboot the Tab5 and
+ * QMX/+ for audio to work. This is not the way it's supposed to be switched
+ * on/off, is it?" The behaviour was right and the UI was silent about it,
+ * which is the part that was wrong. Ask this after enabling and say so. */
+bool rx_audio_restart_pending(void);
+
+// ---- Web audio (Sam W7STF, 2026-07-15) -------------------------------------
+// The browser listens to the SAME demodulated audio the speaker gets, taken
+// after the mode filter, the AGC, the squelch and the limiter and decimated to
+// mono 12 kHz. Not persisted: a listener who closes the page must not leave the
+// chain running for ever, so the WS session's end clears it.
+//
+// ⭐ IT DOES NOT NEED THE CODEC. rx_audio_set_enabled() is the SPEAKER; this is
+// independent of it and of rx_audio_restart_pending(), because the use case is
+// a Tab5 sitting silent in another room. The chain runs for either consumer.
+// True when EITHER the speaker or a browser is listening. This, not
+// rx_audio_is_enabled(), is what the background spot feeds gate on: their
+// transfers pause the WebSocket that carries the browser's audio.
+// ⛔ Enabling web audio MUTES the speaker - the operator's call, 2026-10-15:
+// "we do not need audio both places at once".
+bool     rx_audio_any_listener(void);
+void     rx_audio_web_set_enabled(bool en);
+bool     rx_audio_web_is_enabled(void);
+// Drain up to `max` samples at RX_AUDIO_WEB_RATE_HZ into dst; returns how many.
+int      rx_audio_web_read(int16_t *dst, int max);
+// Samples the producer overwrote because the reader fell behind - the one
+// number that says whether a break-up was the link or the device.
+uint32_t rx_audio_web_dropped(void);
+#define RX_AUDIO_WEB_RATE_HZ 12000
+
 // Output volume, 0..100 (persisted to NVS).
 void rx_audio_set_volume(uint8_t vol_0_100);
 uint8_t rx_audio_get_volume(void);
@@ -158,9 +197,200 @@ typedef struct {
     uint32_t read_us_max;
     uint32_t write_us_avg;
     uint32_t write_us_max;
+    /* ⭐ THE PITCH, AND IT WAS OBSERVABLE NOWHERE UNTIL 2026-10-17 (T21).
+     * Sam W7STF reports the WWV 1-second tone changing pitch over time on the
+     * Tab5 itself. Pitch is set by exactly one number - s_up_inc, the phase
+     * advance per output sample - and it appeared in no log line, no API
+     * field and no header, so the symptom could only ever be argued about.
+     *
+     * Reported as PARTS PER MILLION from nominal (1/D), because that is the
+     * quantity the ear hears: 1000 ppm is a tenth of a percent, about 1.7
+     * cents, and a steady tone that wanders by tens of ppm is inaudible while
+     * one that wanders by hundreds is not. Nominal reads 0.
+     *
+     * NOT since-the-last-call like the fields above - these three are an
+     * instantaneous reading plus a running total: */
+    int32_t  resample_ppm;      /* s_up_inc vs nominal, ppm. 0 = no correction */
+    int32_t  resample_ppm_min;  /* lowest and highest seen since the last call, */
+    int32_t  resample_ppm_max;  /* so a wander between two samples cannot hide */
+    uint32_t resample_railed;   /* times the +/-2% clamp was hit, cumulative */
 } rx_audio_diag_t;
 
 void rx_audio_take_diag(rx_audio_diag_t *out);
+
+/* ⛔ THE AM AUDIO BANDWIDTH, AND IT IS THIS FILE'S TO STATE.
+ *
+ * AM is demodulated on the Tab5 from the raw I/Q (the QMX's own AM filter,
+ * fixed at 3.2 kHz, is in the radio's AUDIO and not in the I/Q - CAT manual
+ * Q9: "the raw I & Q samples from the ADC are streamed directly to the USB
+ * Sound card"). So the passband an operator is actually listening through is
+ * set HERE, by the decimation in rx_audio.c, and not by the radio.
+ *
+ * 4800 Hz, measured in test/am_demod_harness.c. AM runs at its own decimation
+ * factor (RX_DECIM_D_AM = 4, a 12 kHz internal rate and a 5400 Hz stage-1
+ * cutoff), and against that chain the skirt is -0.42 dB at 4500, -1.33 at
+ * 4800, -6.05 at 5400 and -17.04 at 6000.
+ *
+ * ⛔ BUT THE DEFAULT IS 3000, NOT THE CHAIN'S 4800, AND THE REASON IS THE
+ * BAND AND NOT THE DSP. Shortwave broadcast channels are spaced 5 kHz, so the
+ * NEIGHBOURING station's carrier sits 5 kHz from the one being listened to. A
+ * +/-4800 filter puts its edge essentially on that neighbour and would hand
+ * the operator the adjacent channel along with 4.5 kHz of fidelity - a bad
+ * trade on a crowded band, and the reason every receiver with an AM mode
+ * offers a CHOICE of width rather than its widest.
+ *
+ * 3000 (6 kHz RF) is the classic "wide" communications AM filter: it leaves
+ * 2 kHz of margin to the adjacent carrier and still carries far more audio
+ * than the 1600 that started this. The operator, on air 2026-10-15 on a very
+ * strong Chinese broadcaster at 7.410 MHz: "listening now 3.2 kHz but wf
+ * indicates signal is approx 5 kHz".
+ *
+ * ⚠ A strong signal LOOKS wider on a waterfall than it is - the visible
+ * width is a function of the display's dynamic range - so that 5 kHz is not a
+ * measurement of the transmitted bandwidth. The 5 kHz channel SPACING is the
+ * solid argument, not the trace width.
+ *
+ * ▶ The chain is now capable of 4800 (measured -1.33 dB there, -0.42 dB at a
+ * broadcaster's 4500), so a selectable AM width is a small addition on top of
+ * this - it needs a setting, a drawer row and a web control, not more DSP.
+ *
+ * ⚠ IT WAS 2400 FOR ONE COMMIT, when AM shared CW's D=8 (that chain is
+ * -3.06 dB at 2400 and -6.00 at 2700). That was half a broadcast station, and
+ * the operator heard it as "like you had your ear in a cup".
+ *
+ * ⚠ ui.c's compute_passband_edges_hz() DRAWS this, so it is exported rather
+ * than duplicated: the tint and the filter must be the same number or the
+ * display describes a passband nobody is listening through. It was a literal
+ * in both files for one commit and that is exactly how they drift.
+ *
+ * ✅ This now covers what a broadcast station actually transmits. The two
+ * earlier values are the history worth keeping: +/-1600 (reading the radio's
+ * reported filter as a width) and +/-2400 (the chain's limit while AM shared
+ * CW's decimation). */
+#define RX_AUDIO_AM_HALF_BW_HZ  3000
+
+/* ⛔ THE DECIMATION FACTORS LIVE HERE, NOT ONLY IN rx_audio.c, because
+ * test/am_demod_harness.c is the instrument that decides what they may be
+ * and it used to keep its OWN copies, with a comment claiming they matched.
+ * On 2026-10-15 AM moved from 4 to 2 and the harness went on measuring 4 -
+ * still passing, still printing the old ceiling. A test that cannot see the
+ * constant it is testing is not a test. One definition, both readers.
+ *
+ * NARROW is CW, CW-R, USB and LSB; AM runs at its own factor. Why they
+ * differ, and why CW must keep 8, is in rx_audio.c beside decim_for_mode(). */
+#define RX_AUDIO_DECIM_D_NARROW 8
+#define RX_AUDIO_DECIM_D_AM     4
+/* ⛔ D=2 IS PAID FOR BY WIDTH, NOT BY MODE. Measured on the bench,
+ * 2026-10-15, AM on 7.0393 MHz with the panadapter and waterfall up, the
+ * same screen and frequency on both builds:
+ *
+ *                 idle0      idle1
+ *     D=4         ~18.4%     ~24.6%
+ *     D=2         ~17.3%     0.0-0.5%   <- core 1 pinned
+ *
+ * The audio stayed clean at D=2 (LATE 2/455, clips=0), so it WORKS - and
+ * core 1 had nothing left for anything else to want. Running every AM
+ * listener at D=2 to give two of the eight widths their bandwidth was the
+ * wrong trade, and the first build of this change did exactly that.
+ *
+ * So: D=4 up to the width D=4 can actually carry, D=2 above it. The
+ * threshold is not a round number, it is the old measured ceiling -
+ * the D=4 skirt is -1.33 dB at 4800 Hz and -2.40 dB at 5000. */
+#define RX_AUDIO_DECIM_D_AM_WIDE    2
+#define RX_AUDIO_AM_D4_MAX_HALF_BW_HZ 4800
+
+/* What the chain can carry if a selectable width is ever added - measured, not
+ * assumed (test/am_demod_harness.c). Here so the ceiling and the default are
+ * not the same number by accident again.
+ *
+ * ⛔ 4800 IS A MEASUREMENT, NOT A BAND-PLAN NUMBER. On 2026-10-15 I raised
+ * it to 5000 so the list could reach 10.0 kHz, the legal maximum for amateur
+ * AM below 29 MHz, and wrote in this comment that 4800 had only ever been
+ * about broadcast channel spacing. The harness said otherwise. The D=4
+ * stage-1 decimator skirt:
+ *
+ *     4500 Hz  -0.42 dB
+ *     4800 Hz  -1.33 dB   <- here
+ *     5000 Hz  -2.40 dB
+ *     5200 Hz  -3.94 dB
+ *     5400 Hz  -6.05 dB
+ *
+ * Nyquist at D=4 is 6000 Hz and the arithmetic says ±5000 "fits" with 1 kHz
+ * to spare. The FILTER does not: at 5000 the top of the passband is the
+ * decimator's own skirt, 2.4 dB down, which is the exact failure this
+ * harness's header warns about - it does not fail, it quietly rolls off and
+ * nobody knows where. That paragraph stands: at D=4 the ceiling WAS 4800.
+ *
+ * ✅ 2026-10-15, LATER THE SAME DAY: AM MOVED TO D=2 AND THIS IS NOW
+ * 10000. Measured first, in the same harness, before any constant was
+ * touched - the stage-1 skirt at D=2:
+ *
+ *      5000 Hz  +0.01 dB      <- 10.0 kHz RF, the HF legal maximum
+ *     10000 Hz  -0.62 dB      <- 20.0 kHz RF, here
+ *     10500 Hz  -3.07 dB      <- and this is why it stops at 10000
+ *     12000 Hz  (Nyquist)
+ *
+ * ⛔ THE REASON IS SHORTWAVE BROADCAST, NOT A WIDER HAM ALLOWANCE.
+ * The 29.7 MHz argument the previous paragraph made is still correct and
+ * still irrelevant: a broadcaster runs ±5 kHz of audio on a 9 or 10 kHz
+ * channel, which is a 20 kHz RF signal in the middle of the HF bands this
+ * radio already receives. Operator, 2026-10-15: "AM BW on tab5/Web: where
+ * is 20 kHz for BC?". Dropping it on HF-only grounds was my error - SWL
+ * is an HF use.
+ *
+ * ⚠ D=2 HALVES THE DECIMATION, so stage 2 runs on twice the samples.
+ * The buffers are safe (they are all DSP_FFT_SIZE, the FULL rate, so a
+ * smaller D only uses MORE of an allocation that was always big enough -
+ * checked, not assumed), but the CPU cost is real and is paid only while
+ * AM is the mode. CW and SSB stay at D=8. */
+/* ⛔ 4800, NOT 10000 - THE WIDTHS THAT NEEDED D=2 ARE GONE. 10.0 and
+ * 20.0 kHz were added 2026-10-15 and withdrawn 2026-10-17, because D=2 does
+ * not play cleanly on this hardware. MEASURED on bench dev, AM 7.078 MHz,
+ * panadapter + waterfall, speaker off:
+ *
+ *                              idle1    frame avg   worst frame
+ *     6.0 kHz  (D=4)           18.4%      7.3 ms          -
+ *     10.0 kHz (D=2)            0.0%     21.9 ms        65 ms
+ *     10.0 kHz (D=2) + listener 0.0%     22.2 ms        80 ms
+ *     6.0 kHz  (D=4) + listener 13-18%   10.9 ms        56 ms
+ *
+ * Core 1 is pinned at D=2 with NOBODY listening - the browser is not the
+ * cost, the width is - and a web listener logged one re-prime in 95 s at
+ * 10 kHz against none in 100 s at 6 kHz. That re-prime is the hiccup Samuel
+ * W7STF reported, and the operator's rule is that a width which does not play
+ * cleanly should not be offered: "it is a ham radio after all".
+ *
+ * 9.6 kHz was the ceiling D=4 was measured to carry as a FILTER (-1.33 dB at
+ * 4800 Hz). That measurement was about the passband, not about what the chain
+ * costs to run.
+ *
+ * ⛔ 2026-10-17: THE LIST NOW STOPS AT 6.0 kHz (half-bw 3000), and the reason
+ * is evidence, not cost. Matched 60 s windows measured AM 4.0 and AM 6.0 at
+ * the same CPU duty - 455 and 460 ms/s - so width is genuinely FREE within
+ * D=4 and 8.0/9.6 would cost the same. But 8.0 and 9.6 have never been run
+ * at all: they were put in the list on a filter measurement and a listening
+ * report, and the instrument that would have caught trouble did not exist
+ * until this week. Sam W7STF's WWV pitch drift is still unexplained
+ * (T21/T29), and the honest move while a known symptom is open is to offer
+ * only the widths that have actually been measured end to end.
+ *
+ * ⚠ So this is a RETREAT TO WHAT IS MEASURED, not a statement that the P4
+ * cannot do 9.6 kHz. If T29 finds the cost and T21 gets a cause, raising this
+ * back is one line - and the -1.33 dB passband evidence for 9.6 still stands.
+ * Do not re-derive it. */
+#define RX_AUDIO_AM_HALF_BW_MAX_HZ  3000
+
+/* The AM half-bandwidth actually in force. Settable, because the figure above
+ * is a default and the right choice depends on the band: on a crowded evening
+ * the neighbour 5 kHz away matters more than fidelity, and on a clear channel
+ * the opposite. Clamped to RX_AUDIO_AM_HALF_BW_MAX_HZ, which is what the chain
+ * was measured to carry.
+ *
+ * ⚠ ui.c's compute_passband_edges_hz() must draw THIS, not the default -
+ * a tint that describes a filter nobody is listening through is the mistake
+ * that shipped in 7fcd1b1f. */
+void rx_audio_set_am_half_bw_hz(int hz);
+int  rx_audio_get_am_half_bw_hz(void);
 
 #ifdef __cplusplus
 }

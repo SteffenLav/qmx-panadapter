@@ -30,14 +30,15 @@ instruction. Ask, or wait for the word.
 
 **What to do instead:** say what is ready and what is unverified, and stop.
 
-## ⛔⛔ CRITICAL: THE QMX NEVER SURVIVES A FLASH
+## ⛔⛔ CRITICAL: THE QMX NEVER SURVIVES A FLASH — OR ANY TAB5 RESET
 
-**Every flash with the radio attached wedges the QMX** (#74). It ALWAYS needs a manual power cycle by the operator afterwards. No exceptions. See [full rule](../../../memory/project_qmx_flash_wedge.md).
+**Every flash OR reboot with the radio attached wedges the QMX** (#74). It ALWAYS needs a manual power cycle by the operator afterwards. No exceptions, and `{"action":"reboot"}` is not the cheaper option. See [full rule](../../../memory/project_qmx_flash_wedge.md).
 
 Standing rule:
-1. Before flashing with radio attached: announce it needs a power cycle
-2. After flashing: **ask** if they've power-cycled — never infer
-3. If audio flows, they fixed it — don't credit the firmware
+1. Before flashing or rebooting with the radio attached: mention once that it needs a power cycle
+2. Never infer that it survived. He almost always power-cycles unprompted, so assume HE is the reason it is alive
+3. If audio flows, he fixed it — don't credit the firmware
+4. ⛔ **NEVER tell him to hold off, skip or defer the power cycle.** No reading licenses it — not pairs/s, not `/api/status`, not CAT answering. They describe the state, never how it got there. If he has offered to power-cycle, the answer is "yes, do it". ⚠ 2026-10-08: he said "flash it and I'll power-cycle", and I opened with "hold off — audio is already flowing, so the QMX may not need it". He had almost certainly already done it.
 
 ## ⛔ FOUR boards share this machine — resolve by BENCH NAME
 
@@ -53,6 +54,17 @@ at v1.10.1, when it said three and there were four. A count in prose cannot keep
 Get-ChildItem tools/patches/apply_*.ps1 | ForEach-Object { powershell -File $_.FullName }
 python tools/check_patches.py     # the authority - refuses the build if any is missing
 ```
+
+## ⛔ What can key the radio is a FILE, not a memory
+
+`python tools/check_unattended_tx.py` is the authority over
+`docs/unattended-tx-inventory.md` — **run it for the number**. This line said
+11 arming sites while the checker and the inventory both said 12 (corrected
+2026-10-17); a count in prose cannot keep up, the same rot the patches section
+above records. Today: 12 sites, **6 unattended**. Run it
+every release; if the table changed, say so in the notes. ⛔ Never call a
+capability "not completed" or "not yet": say implemented or not, then proven or
+not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
 
 They live in git-ignored `managed_components/`, so `idf.py fullclean`, a dependency
 refresh, or the release's `rm -r managed_components/` wipes them. All are idempotent.
@@ -75,6 +87,32 @@ See [patches detail](../../../memory/project_standing_patches.md).
 3. A stale file + process still running = dead capture (check content, not timestamps)
 4. `bench standdown <name>` stops capture + clears watchdog
 
+## "todo-table" — he asks for it by name, show exactly this
+
+Re-read `TODO.md` first (newest work queue at the top) and reconcile against the
+repo. It is a fresh table every time, never a replay of the last one.
+
+⛔ **Only work that is NOT IMPLEMENTED.** Leave out anything whose remaining
+work is verifying, flashing or looking at something already built — he does not
+want the unverified list here. An unexplained symptom with no known cause IS new
+work and stays in.
+
+⛔ **Every row carries its `Tnn` ID** from the ID INDEX in `TODO.md` — that is
+how he refers to them. IDs are permanent: never renumber, never reuse, never
+close a gap. A new item takes the next free number and is added to the index in
+the same change.
+
+Grouped by **implementation effort**, in this order, columns `ID | Item | Who | Note`:
+
+1. **Minutes** — writing, or one question to a user
+2. **Small** — the mechanism already exists
+3. **Moderate** — a day; name what it is blocked on, usually a decision of his
+4. **Large** — multi-day or architectural
+5. **Investigation** — cause unknown
+
+Close with the two to take first and why. Name the reporter in `Who`; a row
+nobody asked for says `—`.
+
 ## Project documentation
 
 Detailed sections moved to memory for session speed:
@@ -87,6 +125,7 @@ Detailed sections moved to memory for session speed:
 - [Diagnostic logging](../../../memory/project_diagnostic_logging.md)
 - [FT8/FT4 features](../../../memory/project_ft8_features.md)
 - [Release process](../../../memory/project_release_process.md)
+- [Internal RAM audit](../../../memory/project_internal_ram_bss_audit.md) — where the 445 KB goes, what may and may NOT move to PSRAM
 
 ## CW page lives on `feat/cw-page`, NOT on main (branch contract)
 

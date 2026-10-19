@@ -3,15 +3,21 @@
 Live spots put other stations **on your spectrum**, at the frequency they are
 actually operating on, so you can see who is where without leaving the radio.
 
-Two sources feed the same display:
+Three sources feed the same display:
 
 | Source | What it tells you | Default |
 |--------|-------------------|---------|
 | **POTA** (Parks On The Air) | Park activations currently spotted, any mode | **On** |
 | **RBN** (Reverse Beacon Network) | CW stations the skimmer network is hearing right now | **Off** (opt-in) |
+| **DX cluster** | What other operators are spotting by hand - this is where **phone** activity comes from | **Off** (opt-in) |
 
-Both need WiFi. Nothing here transmits, and nothing here touches the radio until
-you tap a spot.
+DX cluster is the only one of the three that shows SSB. No machine recognises a
+callsign spoken into a microphone, so RBN cannot see phone at all; the cluster
+sees it because a human typed it in.
+
+All three need WiFi. Nothing here transmits, and nothing here touches the radio
+until you tap a spot. Each source switches on separately in **Network -> Live
+spots**.
 
 ---
 
@@ -62,7 +68,16 @@ preference to older ones.
 
 ### 2. Tapping a spot
 
-**Tap a callsign** and the radio tunes to it *and* switches mode:
+**Press, slide, lift.** Put a finger on a callsign and it highlights. Keep the
+finger down and slide along the lane and the highlight follows, so you can
+correct your aim on a crowded band instead of mistuning. Lift, and the radio
+tunes to whichever spot is highlighted.
+
+A quick tap is simply the short version of that. And if you change your mind,
+slide off the lane before lifting: the selection is abandoned and nothing is
+tuned.
+
+Either way the radio tunes to the station *and* switches mode:
 
 | Spot mode | Radio goes to |
 |-----------|---------------|

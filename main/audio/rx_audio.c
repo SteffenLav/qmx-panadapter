@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 
 #include "bsp/m5stack_tab5.h"
+#include "util/webaudio_codec.h"   // the 48k->12k tap and mu-law, shared with the harness
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
 #include "es8388_codec.h"
@@ -19,6 +20,7 @@
 
 #include "dsp.h"          // DSP_FFT_SIZE, DSP_SAMPLE_RATE_HZ, DSP_FFT_TASK_PRIORITY, dsp_rxaudio_*
 #include "cat.h"          // cat_get_mode_str(), cat_get_cw_offset_hz()
+#include "am_demod.h"     // AM envelope detector (shared with test/am_demod_harness.c)
 #include "settings.h"
 #include "ui.h"           // ui_get_passband_width_hz() - the QMX's actual selected filter width
 
@@ -56,6 +58,7 @@ typedef enum {
     RXAUD_MODE_CW,
     RXAUD_MODE_SSB,        // USB: wanted audio sits ABOVE the dial
     RXAUD_MODE_SSB_L,      // LSB: wanted audio sits BELOW the dial
+    RXAUD_MODE_AM,         // AM: carrier ON the dial, audio is the ENVELOPE
 } rxaud_mode_t;
 
 /* ⛔ LSB AND USB ARE NOT THE SAME PASSBAND, AND THEY WERE TREATED AS ONE UNTIL
@@ -78,6 +81,12 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
     if (strcmp(m, "CW") == 0 || strcmp(m, "CW-R") == 0) return RXAUD_MODE_CW;
     if (strcmp(m, "USB") == 0) return RXAUD_MODE_SSB;
     if (strcmp(m, "LSB") == 0) return RXAUD_MODE_SSB_L;
+    /* AM was in this list as "unsupported" until 2026-10-14, which is the
+     * whole reason guide/audio.md said "AM is silent". Nothing about the
+     * radio prevented it: the QMX streams IQ whatever mode it is in, and the
+     * chain below already produces the complex baseband an envelope detector
+     * needs. Only the detector was missing. See am_demod.h. */
+    if (strcmp(m, "AM") == 0)  return RXAUD_MODE_AM;
     return RXAUD_MODE_NONE;
 }
 
@@ -127,7 +136,87 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
 // interpolation if that proves audible.
 #define FIR_LEN        255       // stage-2 narrow lowpass taps (odd, linear phase) - shared by both modes
 #define FIR_DECIM_LEN  63        // stage-1 decimator taps (fixed, coarse - same as dsp.c's ZOOMFIR)
-#define RX_DECIM_D     8         // internal rate = DSP_SAMPLE_RATE_HZ / RX_DECIM_D
+/* ⛔ DECIMATION IS PER-MODE, AND IT HAS TO BE.
+ *
+ * D=8 (6 kHz internal, 2700 Hz stage-1 cutoff) is right for CW and SSB and is
+ * the reason stage 2's transition band is 78 Hz - see the long note above, and
+ * the 2026-09-04 bug where a wider transition let nearby FT8 tones bleed
+ * through a nominal 150 Hz CW filter. CW filters go down to 50 Hz, so that
+ * figure is not negotiable.
+ *
+ * D=4 (12 kHz internal, 5400 Hz cutoff) is what AM needs. A shortwave
+ * broadcast station transmits about 4.5 kHz of audio in a 9 kHz RF signal; at
+ * D=8 we delivered 2400 Hz of it and the operator, on air at 7.325 MHz, heard
+ * the difference: "it demodulates fine but it sounds like you had your ear in
+ * a cup", and then diagnosed it himself - "its because i listen at 3.4kHz and
+ * it should be 9 kHz".
+ *
+ * ⛔ BUT D=4 EVERYWHERE WOULD HAND CW BACK THE 2026-09-04 BUG: stage 2 is
+ * FIR_LEN taps at the DECIMATED rate, so its transition is 3.3*fs_dec/FIR_LEN
+ * - 78 Hz at D=8 and 155 Hz at D=4. AM does not care (its filter is 2400 Hz
+ * wide); a 50 Hz CW filter cares enormously. Hence one D per mode rather than
+ * one D for the firmware.
+ *
+ * ⚠ EVERYTHING DERIVED FROM D NOW HAS TO FOLLOW IT AT RUNTIME, and that is
+ * the whole risk in this change: the stage-1 coefficients AND its decimation
+ * factor, stage 2's cutoff, the NCO2 step, the AGC and limiter time constants,
+ * and the resampler's nominal increment. Each one is silent when wrong. They
+ * are all funnelled through set_decim_factor() so there is exactly one place
+ * that knows the list. */
+/* From rx_audio.h, so the harness measures the SAME factors the firmware
+ * runs. The local names are kept because the whole file reads them. */
+#define RX_DECIM_D_NARROW RX_AUDIO_DECIM_D_NARROW  // CW, CW-R, USB, LSB - keeps the 78 Hz transition
+/* AM - 10800 Hz stage-1 cutoff, a 24 kHz internal rate. ✅ WAS 4, RAISED TO
+ * 2 ON 2026-10-15 so the width list can reach 10.0 kHz (the HF legal maximum
+ * for amateur AM) and 20.0 kHz (a shortwave broadcaster's full audio). The
+ * skirt was MEASURED at D=2 before this was touched - +0.01 dB at 5000 Hz,
+ * -0.62 dB at 10000, -3.07 dB at 10500 (test/am_demod_harness.c). D=4 carried
+ * neither: it is already -2.40 dB at 5000.
+ *
+ * ⛔ THIS IS WHY D IS PER-MODE. CW and SSB must stay at 8 - D=4 everywhere
+ * brought back the 2026-09-04 CW bleed-through, because the stage-1 transition
+ * widens from 78 Hz to 155 Hz and a 50 Hz CW filter cares enormously. At D=2
+ * it would be wider still. AM pays the CPU for its own width and nothing
+ * else does. */
+#define RX_DECIM_D_AM      RX_AUDIO_DECIM_D_AM        // AM up to 9.6 kHz RF
+#define RX_DECIM_D_AM_WIDE RX_AUDIO_DECIM_D_AM_WIDE   // measured, NOT selectable - see decim_for_mode()
+/* ⛔ THERE IS NO D_MIN, AND THE BUFFERS DO NOT NEED ONE. This used to define
+ * RX_DECIM_D_MIN and claim the buffers were sized from it. They are not, and
+ * it was READ NOWHERE - a dead constant carrying a rule nothing enforced,
+ * which is worse than no rule, because the next person lowering D would have
+ * trusted it. Checked on 2026-10-15 before taking AM to D=2: every stage
+ * buffer is allocated at DSP_FFT_SIZE, the FULL rate, and n_out = pairs/D is
+ * at most DSP_FFT_SIZE/D. A SMALLER D therefore uses MORE of an allocation
+ * that is already large enough for D=1. Nothing to size. */
+/* The value every D-derived quantity is currently built for. Written only by
+ * set_decim_factor(), read everywhere else. */
+static int s_decim_d = RX_DECIM_D_NARROW;
+
+/* Which D a mode wants. The ONLY place the mapping lives.
+ *
+ * ⛔ IT TAKES THE WIDTH, because in AM the answer depends on it. D=2 costs
+ * the whole of core 1's idle (see rx_audio.h) and buys bandwidth only the
+ * two widest settings use, so an operator listening to a 6 kHz AM signal
+ * pays nothing for the existence of the 20 kHz one.
+ *
+ * half_bw_hz is ignored outside AM - CW and SSB are always D=8, whatever
+ * filter is in force. */
+static inline int decim_for_mode(rxaud_mode_t m, int half_bw_hz)
+{
+    if (m != RXAUD_MODE_AM) return RX_DECIM_D_NARROW;
+    /* ⛔ ALWAYS D=4 NOW. This used to pick D=2 above
+     * RX_AUDIO_AM_D4_MAX_HALF_BW_HZ, for the 10.0 and 20.0 kHz widths. Those
+     * widths are withdrawn (see RX_AUDIO_AM_HALF_BW_MAX_HZ, which is now that
+     * same 4800 Hz), so the branch could never be taken again and a branch
+     * that cannot be taken is a trap for whoever reads this next.
+     *
+     * RX_DECIM_D_AM_WIDE and the threshold stay DEFINED: test/am_demod_harness.c
+     * still measures the D=2 skirt, and that measurement is the evidence for
+     * why D=2 was tried at all. Defined and unreachable is the honest state;
+     * deleted would lose the record. */
+    (void)half_bw_hz;
+    return RX_DECIM_D_AM;
+}
 // Headroom for the continuous clock-drift resampler (see rx_audio_preopen's
 // s_out allocation and the upsample loop). Sized for the resample clamp's
 // worst case, not the ~2.5 extra samples the measured 0.24% drift actually
@@ -140,6 +229,28 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
 #define CW_DEF_WIDTH_HZ   300
 #define SSB_DEF_WIDTH_HZ  2700
 #define SSB_LOW_HZ        200    // matches ui.c's PB_SSB_LOW_HZ (not exported)
+// AM: matches ui.c's compute_passband_edges_hz() AM branch (w==0 -> 6000), so
+// the tint on the spectrum and the filter actually in force agree.
+#define AM_DEF_WIDTH_HZ   6000
+/* ⛔ THE AUDIO BANDWIDTH CEILING IS SET BY STAGE 1, NOT BY THE RADIO.
+ * build_decimator() is fixed at cutoff 0.45/RX_DECIM_D of the FULL rate =
+ * 2700 Hz with 63 Hamming taps, and the internal rate's Nyquist is 3000 Hz.
+ * 2400 is where the harness measures the chain still flat enough to be worth
+ * passing; above it the response is the decimator's skirt, not the station.
+ * ✅ 2026-10-15: AM now runs at its OWN D (RX_DECIM_D_AM), so this figure is
+ * the AM chain's -3 dB point and not a compromise with CW's. The AGC and
+ * limiter constants that "are written in terms of it" are now stored as TIMES
+ * and derived per D - see DEF_AGC_ATTACK_S. */
+#define AM_MAX_HALF_BW_DEFAULT_HZ RX_AUDIO_AM_HALF_BW_HZ   /* exported: rx_audio.h */
+/* The ceiling is reachable only at the WIDE D, which is the whole reason the
+ * wide D exists - checking it against RX_DECIM_D_AM would be checking it
+ * against a rate it is never used at. */
+_Static_assert(RX_AUDIO_AM_HALF_BW_MAX_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM_WIDE),
+               "the AM half-bandwidth CEILING must stay inside the WIDE AM rate's Nyquist");
+/* And the threshold itself must fit the rate it keeps you on, or the cheap
+ * D would alias before the expensive one was ever selected. */
+_Static_assert(RX_AUDIO_AM_D4_MAX_HALF_BW_HZ * 2 < (DSP_SAMPLE_RATE_HZ / RX_DECIM_D_AM),
+               "the D=4 width threshold must stay inside the D=4 internal rate's Nyquist");
 
 // Runtime-adjustable (see rx_audio_set_tuning() / the /api/cmd "rxaudio"
 // action) instead of #define constants - 2026-09-04, after several
@@ -190,15 +301,48 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
  *
  * ⚠ NOT VERIFIED ON AIR. Both are live-tunable over /api/cmd "rxaudio", so if
  * this does bring back a CW artifact it can be put back without a reflash. */
-#define DEF_AGC_ATTACK     (0.007f   * (float)RX_DECIM_D)  // ~3 ms at the 6 kHz loop rate
-#define DEF_AGC_RELEASE    (0.00014f * (float)RX_DECIM_D)  // ~150 ms at the 6 kHz loop rate
+/* ⛔ STORED AS TIMES, NOT AS COEFFICIENTS - 2026-10-14, when D became
+ * per-mode. The coefficient is alpha = 1/(tau*fs_dec), so a coefficient is
+ * only meaningful for the fs_dec it was computed at. While D was a constant
+ * that distinction cost nothing. With AM at D=4 and CW at D=8 the SAME stored
+ * coefficient means 3 ms in one mode and 1.5 ms in the other, which is the
+ * exact trap described above arriving by a new route - and silently, because
+ * nothing reports an AGC time constant.
+ *
+ * So the TIME is the stored intent and the coefficient is derived from
+ * whichever rate is in force. agc_recompute_for_decim() does it, and
+ * set_decim_factor() calls it. */
+#define DEF_AGC_ATTACK_S   0.003f    // 3 ms
+#define DEF_AGC_RELEASE_S  0.150f    // 150 ms
+/* The peak limiter's release, same treatment and same reason - see LIM_THRESH
+   below for what the limiter is for. 1/(0.00008*8*6000) is 260 ms, the figure
+   that block's comment has always claimed. Declared here rather than beside
+   LIM_THRESH because the statics that derive from it come first. */
+#define DEF_LIM_RELEASE_S  0.260f
 #define DEF_AGC_GAIN_MAX   200.0f    // allow weak signals up
 #define AGC_NOISE_TC   0.00010f  // noise-floor tracker (diag/squelch)
 
 static volatile float s_out_clamp    = DEF_OUT_CLAMP;
 static volatile float s_agc_target   = DEF_AGC_TARGET;
-static volatile float s_agc_attack   = DEF_AGC_ATTACK;
-static volatile float s_agc_release  = DEF_AGC_RELEASE;
+/* The stored INTENT (seconds). These survive a change of D; the coefficients
+ * below are rebuilt from them whenever the rate changes. */
+static volatile float s_agc_attack_s  = DEF_AGC_ATTACK_S;
+static volatile float s_agc_release_s = DEF_AGC_RELEASE_S;
+static volatile float s_lim_release_s = DEF_LIM_RELEASE_S;
+/* Derived per-sample coefficients for the rate currently in force. */
+static volatile float s_agc_attack   = 0.0f;   /* set by agc_recompute_for_decim() */
+static volatile float s_agc_release  = 0.0f;
+static volatile float s_lim_release  = 0.0f;
+
+/* tau seconds -> one-pole per-sample coefficient at the rate D implies.
+ * Clamped at 1.0: a coefficient above 1 overshoots and rings. */
+static inline float alpha_from_seconds(float tau_s, int decim_d)
+{
+    if (tau_s <= 0.0f) return 1.0f;
+    float fs_dec = (float)DSP_SAMPLE_RATE_HZ / (float)decim_d;
+    float a = 1.0f / (tau_s * fs_dec);
+    return (a > 1.0f) ? 1.0f : a;
+}
 static volatile float s_agc_gain_max = DEF_AGC_GAIN_MAX;
 /* AGC bypass (Samuel W7STF, 2026-09-25). See rx_audio_set_agc_off(). */
 static volatile bool  s_agc_off      = false;
@@ -390,10 +534,16 @@ static TaskHandle_t s_task = NULL;
 static int16_t *s_rxbuf   = NULL;   // [DSP_FFT_SIZE*2] raw I/Q pairs from the ring
 static float   *s_mix_re  = NULL;   // [DSP_FFT_SIZE] complex baseband after NCO1, real part, full rate
 static float   *s_mix_im  = NULL;   // [DSP_FFT_SIZE] complex baseband after NCO1, imag part, full rate
-static float   *s_filt_re = NULL;   // [DSP_FFT_SIZE/RX_DECIM_D] stage-1 (coarse decimate) output, real part
-static float   *s_filt_im = NULL;   // [DSP_FFT_SIZE/RX_DECIM_D] stage-1 (coarse decimate) output, imag part
-static float   *s_narrow_re = NULL; // [DSP_FFT_SIZE/RX_DECIM_D] stage-2 (narrow, mode-width) output, real part
-static float   *s_narrow_im = NULL; // [DSP_FFT_SIZE/RX_DECIM_D] stage-2 (narrow, mode-width) output, imag part
+static float   *s_filt_re = NULL;   // [DSP_FFT_SIZE] stage-1 (coarse decimate) output, real part
+static float   *s_filt_im = NULL;   // [DSP_FFT_SIZE] stage-1 output, imag part. ⚠ These say DSP_FFT_SIZE and
+                                    // MEAN it: only pairs/D are ever used, but the
+                                    // allocation is full-rate, which is why a per-mode
+                                    // D needed no resizing. The comments claimed
+                                    // /RX_DECIM_D until 2026-10-14 and were wrong -
+                                    // reading them would have made this change look
+                                    // like a buffer overrun waiting to happen.
+static float   *s_narrow_re = NULL; // [DSP_FFT_SIZE] stage-2 (narrow, mode-width) output, real part
+static float   *s_narrow_im = NULL; // [DSP_FFT_SIZE] stage-2 output, imag part
 static int16_t *s_out     = NULL;   // [DSP_FFT_SIZE*2] interleaved L/R for codec, full rate (sample-and-hold upsampled)
 // Stage 1: fixed coarse decimator, built once at init, never rebuilt.
 static float   *s_dec_coeff    = NULL;  // [FIR_DECIM_LEN]
@@ -436,7 +586,7 @@ static float   *s_delay_low_im   = NULL;
 static float   *s_delay_high_re  = NULL;
 static float   *s_delay_high_im  = NULL;
 static fir_f32_t s_fir_low_re, s_fir_low_im, s_fir_high_re, s_fir_high_im;
-static float   *s_low_re  = NULL, *s_low_im  = NULL;  // [DSP_FFT_SIZE/RX_DECIM_D] each - final, post-filter
+static float   *s_low_re  = NULL, *s_low_im  = NULL;  // [DSP_FFT_SIZE] each - final, post-filter
 static float   *s_high_re = NULL, *s_high_im = NULL;
 static float   *s_pre_low_re  = NULL, *s_pre_low_im  = NULL;  // scratch: pre-shifted, pre-filter
 static float   *s_pre_high_re = NULL, *s_pre_high_im = NULL;
@@ -509,7 +659,8 @@ static float s_agc_env = 1.0f;
    DSP_SAMPLE_RATE_HZ/RX_DECIM_D, the same trap that made SSB unintelligible
    until it was found. ~250 ms at the 6 kHz rate. */
 #define LIM_THRESH   26000.0f
-#define LIM_RELEASE  (0.00008f * (float)RX_DECIM_D)
+/* Its release time is DEF_LIM_RELEASE_S, declared with the AGC's above - the
+   coefficients are derived together because they share the same fs_dec. */
 static float s_lim_gain = 1.0f;
 /* Fractional-resample state for the clock-drift corrector. s_up_inc is the
    phase advance per OUTPUT sample; 1/RX_DECIM_D is exactly no correction, and
@@ -517,8 +668,14 @@ static float s_lim_gain = 1.0f;
    radio. Clamped hard: this multiplies the playback rate, so a runaway value
    would change the pitch. */
 static float s_up_phase = 0.0f;
-static float s_up_inc   = 1.0f / (float)RX_DECIM_D;
+static float s_up_inc   = 1.0f / (float)RX_DECIM_D_NARROW;   /* set_decim_factor() resets it */
 static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its clamp */
+/* T21 instrumentation. Signed, and deliberately NOT reset by the rate loop:
+   rx_audio_take_diag() clears the min/max so each reader sees the span since
+   ITS last call, while s_resample_ppm stays live. */
+static volatile int32_t s_resample_ppm     = 0;
+static volatile int32_t s_resample_ppm_min = INT32_MAX;
+static volatile int32_t s_resample_ppm_max = INT32_MIN;
 static float    s_up_target    = 0.0f;   /* smoothed increment from the measured source rate */
 static uint32_t s_in_pairs_win = 0;      /* input pairs seen in the current measuring window */
 static int64_t  s_in_win_us    = 0;      /* when that window started */
@@ -609,7 +766,7 @@ static void build_lpf(int half_bw_hz)
     // decimated stream (see the FIR_LEN comment above for why the earlier
     // single-stage version normalising against this same rate was wrong -
     // that stage ran on the FULL-rate input via a fused decimating call).
-    float fs = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
+    float fs = (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d;
     float fc = (float)half_bw_hz / fs;
     int   M  = FIR_LEN - 1;
     float half = M / 2.0f;
@@ -676,7 +833,7 @@ static void build_lpf_half(int half_bw_hz)
     if (quarter_bw_hz < 10) quarter_bw_hz = 10;
     if (quarter_bw_hz > half_bw_hz) quarter_bw_hz = half_bw_hz;   // never wider than the source passband itself
 
-    float fs = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
+    float fs = (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d;
     float fc = (float)quarter_bw_hz / fs;
     int   M  = FIR_LEN - 1;
     float half = M / 2.0f;
@@ -704,9 +861,12 @@ static void build_lpf_half(int half_bw_hz)
     s_half_built_for_hz = half_bw_hz;
 }
 
-// Stage 1: fixed, coarse anti-alias/decimate filter, built exactly ONCE
-// (called from rx_audio_init(), never rebuilt on mode/width change - it has
-// no mode-dependent parameter). dsps_fird_f32 IS a single-stage decimator,
+// Stage 1: the coarse anti-alias/decimate filter.
+// ⚠ IT USED TO BE BUILT EXACTLY ONCE and described here as having "no
+// mode-dependent parameter". That stopped being true on 2026-10-14, when the
+// decimation factor became per-mode: its cutoff is 0.45/D and its decimation
+// factor is D, so both change with the mode now. It is rebuilt from
+// set_decim_factor() and nowhere else. dsps_fird_f32 IS a single-stage decimator,
 // so per its own header its coefficients must be normalised against the
 // FULL input rate - the same convention this codebase's own zoom-FFT already
 // uses (dsp.c's zoom_design_lpf, cutoff_norm = 0.45/D against the full
@@ -715,7 +875,7 @@ static void build_lpf_half(int half_bw_hz)
 // work at the now-lower rate.
 static void build_decimator(void)
 {
-    float cutoff_norm = 0.45f / (float)RX_DECIM_D;   // fraction of the FULL rate
+    float cutoff_norm = 0.45f / (float)s_decim_d;   // fraction of the FULL rate
     int   M    = FIR_DECIM_LEN - 1;
     float half = M / 2.0f;
 
@@ -736,8 +896,8 @@ static void build_decimator(void)
     // contrast with stage 2's non-decimating convention.
     memset(s_dec_delay_re, 0, FIR_DECIM_LEN * sizeof(float));
     memset(s_dec_delay_im, 0, FIR_DECIM_LEN * sizeof(float));
-    dsps_fird_init_f32(&s_dec_fir_re, s_dec_coeff, s_dec_delay_re, FIR_DECIM_LEN, RX_DECIM_D);
-    dsps_fird_init_f32(&s_dec_fir_im, s_dec_coeff, s_dec_delay_im, FIR_DECIM_LEN, RX_DECIM_D);
+    dsps_fird_init_f32(&s_dec_fir_re, s_dec_coeff, s_dec_delay_re, FIR_DECIM_LEN, s_decim_d);
+    dsps_fird_init_f32(&s_dec_fir_im, s_dec_coeff, s_dec_delay_im, FIR_DECIM_LEN, s_decim_d);
 }
 
 // RBJ audio-EQ-cookbook lowpass biquad, Butterworth (Q = 1/sqrt(2)) - the
@@ -799,10 +959,104 @@ static inline float smooth_step_r(float x)
 // points s_nco_l and s_nco_r at the SAME frequency as plain center_hz would
 // have used - i.e. the mono path is an exact special case of this one, not
 // an approximation of it (see the per-sample loop for what that buys).
+/* The AM filter width in force, Hz. The loop below picks this up through
+ * filter_params_for_mode(), so a change retunes on the next frame with no
+ * special handling - want_half_bw simply differs and the existing
+ * "half_bw_changed" path rebuilds stage 2. */
+static int s_am_half_bw_hz = AM_MAX_HALF_BW_DEFAULT_HZ;
+
+void rx_audio_set_am_half_bw_hz(int hz)
+{
+    /* ⭐ 1000 = a 2.0 kHz SIGNAL. It was 2000 (a 4.0 kHz signal), on the
+     * reasoning that nothing narrower than the radio's own filter was worth
+     * having. That is wrong for amateur AM: 2.0-3.0 kHz is a real, used width
+     * - an operator brick-walls their transmit audio to 1.0-1.5 kHz to stay
+     * copyable in heavy QRM. It sounds like a telephone line and that is the
+     * point. */
+    if (hz < 1000) hz = 1000;
+    if (hz > RX_AUDIO_AM_HALF_BW_MAX_HZ) hz = RX_AUDIO_AM_HALF_BW_MAX_HZ;
+    s_am_half_bw_hz = hz;
+}
+int rx_audio_get_am_half_bw_hz(void) { return s_am_half_bw_hz; }
+
+/* AM envelope-detector state. One instance: the path demodulates one signal
+ * at a time and AM is mono by construction (see the output loop). */
+static am_demod_t s_am;
+static float      s_am_alpha = 0.0f;
+
+/* ⛔ THE ONE PLACE THAT KNOWS WHAT DEPENDS ON D.
+ *
+ * Changing the decimation factor changes six things at once, and five of them
+ * are silent when they are left behind:
+ *
+ *   1. stage 1's coefficients (cutoff 0.45/D) AND its decimation factor -
+ *      rebuilt here, which is why build_decimator() is no longer "built once";
+ *   2. stage 2's cutoff, which is computed against fs/D - the CALLER rebuilds
+ *      it, because it also needs the mode's half-bandwidth (see retune());
+ *   3. the NCO2/pre steps, likewise the caller's;
+ *   4. the AGC and limiter coefficients, which are 1/(tau*fs_dec) - a
+ *      coefficient kept across a change of D silently halves or doubles the
+ *      time constant it represents;
+ *   5. the resampler's nominal increment, 1/D. Left stale this plays the audio
+ *      at the WRONG RATE - a pitch error, not a subtle one - so the phase and
+ *      the drift measurement window are reset with it rather than carried
+ *      across a rate change they no longer describe.
+ *
+ * Returns true if D actually changed, so the caller knows the filters below it
+ * must be rebuilt even if the mode's width did not move. */
+static void agc_coeffs_for_decim(void)
+{
+    s_agc_attack  = alpha_from_seconds(s_agc_attack_s,  s_decim_d);
+    s_agc_release = alpha_from_seconds(s_agc_release_s, s_decim_d);
+    s_lim_release = alpha_from_seconds(s_lim_release_s, s_decim_d);
+}
+
+static bool set_decim_factor(int d)
+{
+    if (d == s_decim_d) return false;
+    s_decim_d = d;
+
+    build_decimator();          /* cutoff AND decimation factor both follow D */
+    agc_coeffs_for_decim();
+
+    /* ⚠ RESET, not rescale. s_up_inc is driven by a measurement of the
+     * radio's actual sample rate against the OLD D; carrying either the
+     * increment or the part-measured window across would servo towards the
+     * wrong ratio for up to a second, which is a second of wrong pitch. */
+    s_up_inc       = 1.0f / (float)s_decim_d;
+    s_up_phase     = 0.0f;
+    s_up_target    = 0.0f;
+    s_in_pairs_win = 0;
+    s_in_win_us    = 0;
+
+    /* Stage 2's half-band pair is designed against fs/D too, so the cached
+     * "already built for this width" marker is no longer true. */
+    s_half_built_for_hz = -1;
+
+    ESP_LOGI(TAG, "decimation -> D=%d (internal %d Hz, stage-1 cutoff %d Hz)",
+             s_decim_d, DSP_SAMPLE_RATE_HZ / s_decim_d,
+             (int)(0.45f * (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d));
+    return true;
+}
+
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
+    /* D FIRST: everything below is computed against fs/D, so the factor has to
+     * be in force before any of it is designed. */
+    set_decim_factor(decim_for_mode(mode, half_bw_hz));
+
     float fs = (float)DSP_SAMPLE_RATE_HZ;
-    float fs_dec = fs / (float)RX_DECIM_D;   // NCO2/pre run on the decimated stream
+    float fs_dec = fs / (float)s_decim_d;    // NCO2/pre run on the decimated stream
+
+    /* ⚠ THE AM CARRIER TRACKER IS RESET HERE, not only on a mode change.
+     * Any retune changes which signal is in the passband, so the mean it has
+     * been tracking describes a carrier that may no longer be there - and
+     * am_demod_step() primes itself from the first sample after a reset, so
+     * this costs one sample rather than the filter's 8 ms settle. Leaving a
+     * stale mean in place would subtract the OLD carrier from the NEW one and
+     * put a step through the AGC. */
+    am_demod_reset(&s_am);
+    s_am_alpha = am_demod_alpha(fs_dec);
     float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
@@ -864,6 +1118,52 @@ static void filter_params_for_mode(rxaud_mode_t mode, int *center_hz, int *half_
         if (w == 0) w = CW_DEF_WIDTH_HZ;
         *center_hz = off;
         *half_bw_hz = (int)w / 2;
+    } else if (mode == RXAUD_MODE_AM) {
+        /* ⛔ AM IS THE ONLY MODE CENTRED ON THE DIAL. The carrier IS the
+         * dial, so centre 0 and a SYMMETRIC passband - both sidebands, which
+         * is what makes the envelope detector in am_demod.h work at all. An
+         * SSB-style offset here would detect the envelope of one sideband
+         * with no carrier, which is not AM and sounds like nothing.
+         * ui.c's compute_passband_edges_hz() already draws AM this way
+         * (w==0 -> 6000, +/-3000), and that function stays the authority on
+         * the display side, as the note by mode_from_cat_str() says.
+         *
+         * ⛔ BUT THE WIDTH IS CAPPED BY THE CHAIN, NOT BY THE RADIO.
+         * build_decimator() is FIXED at cutoff 0.45/RX_DECIM_D of the full
+         * rate = 2700 Hz, and it is only 63 taps, so its response is already
+         * sagging below that. Asking for +/-3000 here would request audio the
+         * stage above has thrown away, and the top of it would alias on the
+         * 6 kHz internal rate (Nyquist 3000). AM_MAX_HALF_BW_HZ is measured,
+         * not assumed - see test/am_demod_harness.c. */
+        /* ⛔ AM DOES NOT TRACK THE RADIO'S FILTER, AND THAT IS NOT AN
+         * OVERSIGHT - IT IS THE DIFFERENCE BETWEEN AM AND EVERY OTHER MODE.
+         *
+         * CW and SSB above read ui_get_passband_width_hz() on purpose: the
+         * operator sets the filter on the radio, the radio applies it to the
+         * audio they would otherwise be hearing, and a WIDER Tab5 filter than
+         * the radio's let nearby FT8 tones bleed into a narrow CW listen
+         * (2026-09-04). Matching it is what makes those modes behave.
+         *
+         * AM is demodulated here from the RAW I/Q, so the radio's AM filter is
+         * not in this signal path at all. Reading its number only imports an
+         * irrelevant constraint - and it did: the QMX reports 3200 in AM, this
+         * code read that as a WIDTH, and the result was a +/-1600 Hz filter.
+         * On a real broadcast station, 7.325 MHz, 2026-10-14, the operator:
+         * "it demodulates fine but it sounds like you had your ear in a cup."
+         * He was hearing 1.6 kHz of audio.
+         *
+         * ⚠ AND 3200 IS PROBABLY NOT A WIDTH ANYWAY. The DiGi branch of
+         * ui.c's compute_passband_edges_hz() records that the QMX reports FW
+         * as the filter's TOP EDGE for digital modes, not its width. Whether
+         * AM is the same was never established, which is the second reason not
+         * to build an audio filter on that number.
+         *
+         * So AM takes the widest the chain can actually deliver, every time.
+         * That is a property of this file (AM_MAX_HALF_BW_HZ, measured in
+         * test/am_demod_harness.c), not of the radio. */
+        (void)w;
+        *center_hz = 0;
+        *half_bw_hz = s_am_half_bw_hz;
     } else {   // RXAUD_MODE_SSB / RXAUD_MODE_SSB_L
         if (w == 0) w = SSB_DEF_WIDTH_HZ;
         int low  = SSB_LOW_HZ;
@@ -894,6 +1194,132 @@ static inline void rxcap_push(const int16_t *out, int pairs)
     if (s_cap_n >= s_cap_cap) s_cap_run = false;   /* one-shot */
 }
 
+/* ---- Web-audio tap ---------------------------------------------------------
+ *
+ * The same samples the speaker gets, decimated to mono 12 kHz for the browser.
+ *
+ * ⭐ THE DEMODULATOR ALREADY EXISTS AND THIS IS DOWNSTREAM OF ALL OF IT.
+ * docs/web-audio-feasibility.md (written at a4d8564, before rx_audio.c) plans
+ * to re-run the FT8 pre-ring branch in dsp.c as a second demodulator. That was
+ * right when it was written and is wrong now: this file demodulates CW/CW-R/
+ * USB/LSB/AM with the mode filters, the AGC, the squelch and the limiter the
+ * operator already tunes, and s_out is "exactly what is played". Tapping it
+ * means the browser and the speaker cannot disagree, and there is one chain to
+ * fix when either is wrong.
+ *
+ * Rate: s_out is at DSP_SAMPLE_RATE_HZ whatever the mode's decimation D is, so
+ * a /4 tap here is a FIXED 12 kHz for every mode and every width. Tapping at
+ * fs_dec instead would hand the browser 6, 12 or 24 kHz depending on which
+ * filter width the operator last touched, and change it mid-stream.
+ *
+ * ⚠ The two channels are NOT always identical - panoramic CW pans them hard
+ * L/R - so this averages rather than taking L like rxcap_push does. A hard-
+ * panned CW pair that was summed without the halving would clip.
+ */
+#define WEBAUD_RATE_HZ  (DSP_SAMPLE_RATE_HZ / WEBAUD_DECIM)   /* 12000 */
+/* ⛔ 3 s, SIZED FROM THE MEASURED HOLD, not from a round number. The web
+ * stream is paused whenever sd_archive.c mirrors the diag log - every 30 s,
+ * measured at 173, 447, 509 and once 4110 ms. The ring is what carries the
+ * audio across one of those, so it has to be longer than the holds it is
+ * expected to cover. 3 s at 12 kHz mono is 72 KB of PSRAM, which is nothing
+ * here, and it covers everything but the rare multi-second burst. */
+#define WEBAUD_RING_N   (WEBAUD_RATE_HZ * 3)                  /* 3.0 s */
+_Static_assert(WEBAUD_RATE_HZ == RX_AUDIO_WEB_RATE_HZ,
+               "the rate the browser is told and the rate it is sent must be one number");
+
+static volatile bool s_web_en = false;
+static int16_t      *s_web_ring = NULL;        /* PSRAM, mono, WEBAUD_RATE_HZ */
+static volatile uint32_t s_web_w = 0;          /* write index, producer only  */
+static volatile uint32_t s_web_r = 0;          /* read index, consumer only   */
+static volatile uint32_t s_web_dropped = 0;    /* samples lost to a slow reader */
+static webaud_decim_t s_web_dec;
+
+/* Producer. Called from rx_audio_task beside rxcap_push, with the frame that
+ * is about to be played (or that would be, when no codec was ever opened). */
+static inline void webaud_push(const int16_t *out, int pairs)
+{
+    if (!s_web_en || !s_web_ring) return;
+    for (int i = 0; i < pairs; i++) {
+        /* ⚠ AVERAGE, do not take L like rxcap_push does. The two channels are
+           NOT always identical - panoramic CW pans them hard L/R, so taking one
+           ear would drop whichever station sat on the other side of the dial. */
+        float mono = 0.5f * ((float)out[2 * i] + (float)out[2 * i + 1]);
+        int16_t v;
+        if (!webaud_decim_push(&s_web_dec, mono, &v)) continue;
+
+        /* ⛔ ONE WRITER EACH. The producer only ever moves s_web_w and the
+         * consumer only ever moves s_web_r - that is the whole reason this
+         * ring needs no lock between a core-1 DSP task and a core-0 network
+         * task. Dropping the OLDEST sample here instead, which is what a
+         * listener actually wants on resume, would mean this task writing
+         * s_web_r behind the reader's back; the reader would then write its
+         * own stale index back and undo it. The staleness is handled at the
+         * READ end, where it costs nothing to own. */
+        uint32_t w  = s_web_w;
+        uint32_t nw = (w + 1) % WEBAUD_RING_N;
+        if (nw == s_web_r) { s_web_dropped++; continue; }  /* full: no reader.
+           continue, not return: the FIR history has to keep running or the
+           first sample after the reader comes back is a discontinuity. */
+        s_web_ring[w] = v;
+        s_web_w = nw;
+    }
+}
+
+void rx_audio_web_set_enabled(bool en)
+{
+    if (en == s_web_en) return;
+    if (en) {
+        /* Start from empty and from a clean filter: whatever is in the ring is
+           from the last listener and is stale by definition. */
+        s_web_r = s_web_w;
+        webaud_decim_reset(&s_web_dec);
+        s_web_dropped = 0;
+    }
+    s_web_en = en;
+    ESP_LOGI(TAG, "web audio %s", en ? "on" : "off");
+    /* The task blocks for ever when local audio is off, so it has to be told. */
+    if (en && s_task) xTaskNotifyGive(s_task);
+}
+
+bool rx_audio_web_is_enabled(void) { return s_web_en; }
+
+int rx_audio_web_read(int16_t *dst, int max)
+{
+    if (!s_web_en || !s_web_ring || max <= 0) return 0;
+    uint32_t r = s_web_r, w = s_web_w;
+
+    /* ⚠ A BACKLOG IS LATENCY, NOT CONTENT. If the reader was held off - a
+     * paused transfer, a congested link - the ring holds audio that is already
+     * seconds old, and draining it in order plays the band late for as long as
+     * it takes to catch up. Skip to RX_AUDIO_WEB_LAG_MAX of the newest instead
+     * and say how much went. The listener hears a break, which is honest,
+     * rather than a delay that never resolves. */
+    uint32_t avail = (w >= r) ? (w - r) : (WEBAUD_RING_N - r + w);
+    /* ⛔ 2.5 s, AND THE OLD 500 ms WAS THE BUG. A backlog is latency, but it is
+     * only worth throwing away when it can no longer be caught up. The first
+     * version skipped anything over 500 ms - which is SHORTER THAN THE PAUSES
+     * THAT CREATE IT, so every diag-mirror hold produced a guaranteed dropout:
+     * the audio was held, then discarded for having been held. The threshold
+     * has to sit above the holds, so the burst goes out and the browser's own
+     * buffer absorbs it, and only a genuinely hopeless backlog is dropped. */
+    const uint32_t lag_max = (WEBAUD_RATE_HZ * 5) / 2;  /* 2.5 s */
+    if (avail > lag_max) {
+        uint32_t skip = avail - WEBAUD_RATE_HZ;         /* leave 1.0 s */
+        r = (r + skip) % WEBAUD_RING_N;
+        s_web_dropped += skip;
+    }
+
+    int n = 0;
+    while (r != w && n < max) {
+        dst[n++] = s_web_ring[r];
+        r = (r + 1) % WEBAUD_RING_N;
+    }
+    s_web_r = r;
+    return n;
+}
+
+uint32_t rx_audio_web_dropped(void) { return s_web_dropped; }
+
 static void rx_audio_task(void *arg)
 {
     (void)arg;
@@ -913,7 +1339,14 @@ static void rx_audio_task(void *arg)
     int64_t s_last_ring_retry_us = 0;
 
     while (1) {
-        if (!s_enabled) {
+        /* ⛔ TWO LISTENERS, ONE CHAIN. The browser is a consumer of this task
+         * exactly like the speaker is, and it does NOT need the codec: a unit
+         * that booted with RX audio off has no ES8388 open and never can have
+         * one this session (the DMA pool is gone to the USB host), yet the
+         * whole point of Sam W7STF's request is listening from another room
+         * while the Tab5 sits silent. So the chain runs for `s_enabled ||
+         * s_web_en`, and only the esp_codec_dev_write() is conditional. */
+        if (!s_enabled && !s_web_en) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Fully asleep - zero wakeups, zero cost - until
             // rx_audio_set_enabled(true) gives this notification. This is the
@@ -922,8 +1355,17 @@ static void rx_audio_task(void *arg)
             continue;
         }
 
-        rxaud_mode_t mode = s_codec_ready ? mode_from_cat_str(cat_get_mode_str())
-                                           : RXAUD_MODE_NONE;
+        /* THE TWO LISTENERS ARE EXCLUSIVE, AND THAT IS THE OPERATOR'S CALL:
+         * "we do not need audio both places at once" (2026-10-15). If he is
+         * listening in a browser he is not at the Tab5, so the speaker is
+         * talking to an empty room - and it is not free, it is the
+         * esp_codec_dev_write() that paces this task and the I2S DMA behind
+         * it. A web listener therefore TAKES OVER from the speaker and hands
+         * it back on disconnect. Nothing is persisted, so a reboot restores
+         * whatever he set. */
+        bool codec_out = (s_enabled && s_codec_ready && !s_web_en);
+        rxaud_mode_t mode = (codec_out || s_web_en) ? mode_from_cat_str(cat_get_mode_str())
+                                                    : RXAUD_MODE_NONE;
         bool active = (mode != RXAUD_MODE_NONE);
 
         if (!active) {
@@ -942,7 +1384,7 @@ static void rx_audio_task(void *arg)
             s_agc_env = 1.0f;
             s_lim_gain = 1.0f;
             s_up_phase = 0.0f;
-            s_up_inc   = 1.0f / (float)RX_DECIM_D;
+            s_up_inc   = 1.0f / (float)s_decim_d;
             s_up_target = 0.0f; s_in_pairs_win = 0; s_in_win_us = 0;
             s_noise   = 1.0f;
             s_last_up_v_l = 0.0f;
@@ -952,9 +1394,14 @@ static void rx_audio_task(void *arg)
             s_rate_written = 0;
             dsp_rxaudio_forward_enable(true);
             active_prev = true;
+            /* ⚠ A DEFAULT OF "USB" HID AM HERE. Adding a mode to the enum
+             * without adding it to this line would have had the log say USB
+             * while the chain ran the envelope detector - the one place that
+             * says which demodulator is live, reporting the wrong one. */
             ESP_LOGI(TAG, "RX audio on (mode=%s vol=%d)",
                      mode == RXAUD_MODE_CW    ? "CW"  :
-                     mode == RXAUD_MODE_SSB_L ? "LSB" : "USB", (int)s_volume);
+                     mode == RXAUD_MODE_SSB_L ? "LSB" :
+                     mode == RXAUD_MODE_AM    ? "AM"  : "USB", (int)s_volume);
         }
 
         // Track the live filter target (CW offset moves; SSB is fixed but the
@@ -970,16 +1417,24 @@ static void rx_audio_task(void *arg)
         float want_overlap = s_pan_overlap;
         bool half_bw_changed = (want_half_bw != s_half_bw_hz);
         bool overlap_changed = (want_overlap != overlap_prev);
+        /* ⛔ A CHANGE OF D REBUILDS STAGE 2 EVEN IF THE WIDTH DID NOT MOVE.
+         * build_lpf()'s cutoff is half_bw/(fs/D), so the SAME half_bw means a
+         * different filter at a different D. Gating the rebuild on the width
+         * alone would leave stage 2 designed for the old rate - and today the
+         * modes happen to use different widths, so it would work by luck and
+         * break the first time they did not. Taken BEFORE retune(), because
+         * retune() is what applies the new D. */
+        bool decim_changed = (decim_for_mode(mode, want_half_bw) != s_decim_d);
         if (mode != mode_prev || want_center != s_center_hz ||
-            want_binaural != binaural_prev || half_bw_changed) {
+            want_binaural != binaural_prev || half_bw_changed || decim_changed) {
             retune(want_center, want_half_bw, mode);
             mode_prev = mode;
             binaural_prev = want_binaural;
         }
-        if (half_bw_changed) {
+        if (half_bw_changed || decim_changed) {
             build_lpf(want_half_bw);
         }
-        if (half_bw_changed || overlap_changed) {
+        if (half_bw_changed || overlap_changed || decim_changed) {
             build_lpf_half(want_half_bw);
             overlap_prev = want_overlap;
         }
@@ -1098,7 +1553,9 @@ static void rx_audio_task(void *arg)
             s_resume_ramp = DSP_SAMPLE_RATE_HZ / 100;
             int64_t w0 = esp_timer_get_time();
             rxcap_push(s_out, DSP_FFT_SIZE);   /* record exactly what is played */
-            esp_codec_dev_write(s_codec, s_out, DSP_FFT_SIZE * 2 * (int)sizeof(int16_t));
+            webaud_push(s_out, DSP_FFT_SIZE);  /* ...and send the browser the same */
+            if (codec_out)
+                esp_codec_dev_write(s_codec, s_out, DSP_FFT_SIZE * 2 * (int)sizeof(int16_t));
             uint32_t w_us = (uint32_t)(esp_timer_get_time() - w0);
             if (w_us > s_write_us_max) s_write_us_max = w_us;
             s_write_us_sum += w_us;
@@ -1128,7 +1585,7 @@ static void rx_audio_task(void *arg)
         // full DSP_FFT_SIZE read is an exact multiple of 8) are simply not
         // consumed this frame - negligible and self-correcting next frame,
         // not worth carrying state for.
-        int n_out = pairs / RX_DECIM_D;
+        int n_out = pairs / s_decim_d;
         if (n_out > 0) {
             dsps_fird_f32(&s_dec_fir_re, s_mix_re, s_filt_re, n_out);
             dsps_fird_f32(&s_dec_fir_im, s_mix_im, s_filt_im, n_out);
@@ -1190,6 +1647,7 @@ static void rx_audio_task(void *arg)
         bool  agc_off      = s_agc_off;
         float out_clamp    = s_out_clamp;
         bool  panoramic_now = (mode == RXAUD_MODE_CW) && s_binaural_en;
+        bool  am_now        = (mode == RXAUD_MODE_AM);
 
         // Stereo width, BANDWIDTH-COMPENSATED: the two half-band filters'
         // own transition zone is a FIXED number of Hz (FIR_LEN taps at
@@ -1234,7 +1692,25 @@ static void rx_audio_task(void *arg)
             // close to it. Panoramic reads each channel from its OWN
             // already-separated half (computed above).
             float re_l, re_r;
-            if (panoramic_now) {
+            if (am_now) {
+                /* ⭐ AM: the audio is the MAGNITUDE of the same complex
+                 * baseband the other modes take the real part of, with the
+                 * carrier's DC removed - see am_demod.h for why the removal
+                 * belongs there and not after the AGC.
+                 *
+                 * The final NCO rotation the SSB/CW branches apply is simply
+                 * not needed: |z * e^j0| == |z| for any rotation, so an
+                 * envelope is immune to it. Reading s_narrow_re/im directly
+                 * is not a shortcut, it is the same number with two
+                 * multiplies and a sinf/cosf pair skipped per sample.
+                 *
+                 * Mono by construction: AM has no stereo content to split
+                 * and the panoramic path is CW-only anyway. */
+                float v = am_demod_step(&s_am, s_narrow_re[i], s_narrow_im[i],
+                                        s_am_alpha);
+                re_l = v;
+                re_r = v;
+            } else if (panoramic_now) {
                 // Swapped 2026-09-20 per the operator's ear: the lower half
                 // of the passband (below the tuned pitch) sounds right to
                 // him in the RIGHT ear, not the left - nco_l/s_low_* etc.
@@ -1351,7 +1827,7 @@ static void rx_audio_task(void *arg)
                 float peak = fmaxf(fabsf(v_l), fabsf(v_r));
                 float need = (peak > LIM_THRESH) ? (LIM_THRESH / peak) : 1.0f;
                 if (need < s_lim_gain) s_lim_gain = need;              /* catch it now */
-                else s_lim_gain += (1.0f - s_lim_gain) * LIM_RELEASE;  /* let go slowly */
+                else s_lim_gain += (1.0f - s_lim_gain) * s_lim_release; /* let go slowly */
                 v_l *= s_lim_gain;
                 v_r *= s_lim_gain;
             }
@@ -1575,7 +2051,18 @@ static void rx_audio_task(void *arg)
          * ⚠ The accumulator resets whenever audio restarts (see !active_prev),
          * or a mode change would be charged as a vast deficit and the corrector
          * would insert a burst. */
-        if (pairs > 0) {
+        /* ⛔ THE SERVO SERVES THE CODEC, AND A BROWSER IS NOT ONE.
+         *
+         * Everything below measures the radio against the ES8388's crystal so
+         * the I2S DMA neither starves nor backs up. With no codec open there
+         * is no second clock to hold to: the browser's own ring absorbs the
+         * radio's 0.24% offset, and running the corrector against a clock
+         * nothing is playing to would stretch the audio for no reason. Pin the
+         * nominal ratio instead - one output sample per input sample, which is
+         * what s_up_inc = 1/D means. */
+        if (pairs > 0 && !codec_out) {
+            s_up_inc = 1.0f / (float)s_decim_d;
+        } else if (pairs > 0) {
             int64_t now_rm = esp_timer_get_time();
             if (s_rate_t0_us == 0) { s_rate_t0_us = now_rm; s_rate_written = 0; }
             int64_t elapsed  = now_rm - s_rate_t0_us;
@@ -1634,7 +2121,7 @@ static void rx_audio_task(void *arg)
              * slow residue from rounding, and it CANNOT run away because
              * s_up_inc is recomputed from the measurement every frame rather
              * than accumulated. */
-            const float inc_nom = 1.0f / (float)RX_DECIM_D;
+            const float inc_nom = 1.0f / (float)s_decim_d;
             int64_t err = expected - written;            /* + = we are behind */
             if (err >  2000) err =  2000;
             if (err < -2000) err = -2000;
@@ -1644,12 +2131,24 @@ static void rx_audio_task(void *arg)
             if (s_in_win_us == 0) { s_in_win_us = now_rm; s_in_pairs_win = 0; }
             else if (win_us >= 1000000) {                /* 1 s of measurement */
                 float src_rate = (float)s_in_pairs_win * 1000000.0f / (float)win_us;
-                float target   = src_rate / ((float)RX_DECIM_D * (float)DSP_SAMPLE_RATE_HZ);
+                float target   = src_rate / ((float)s_decim_d * (float)DSP_SAMPLE_RATE_HZ);
                 s_up_target = (s_up_target <= 0.0f) ? target
                                                     : s_up_target + (target - s_up_target) * 0.25f;
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
+
+            /* T21: record the pitch, in ppm from nominal. Taken HERE, right
+             * where the value is decided, rather than sampled by the reader -
+             * the rate loop runs per frame and a reader polling every few
+             * seconds would alias straight past a wander. min/max make a
+             * wander between two API calls impossible to miss. */
+            {
+                int32_t ppm = (int32_t)lrintf((s_up_inc / inc_nom - 1.0f) * 1.0e6f);
+                s_resample_ppm = ppm;
+                if (ppm < s_resample_ppm_min) s_resample_ppm_min = ppm;
+                if (ppm > s_resample_ppm_max) s_resample_ppm_max = ppm;
+            }
 
             /* ±2% is far more than any real unit needs (0.24% here) and is the
                only thing between a wrong measurement and a pitch change, so it
@@ -1681,8 +2180,16 @@ static void rx_audio_task(void *arg)
         s_out_sq_n += (uint32_t)pairs;
 
         rxcap_push(s_out, pairs);   /* record exactly what is played */
+        webaud_push(s_out, pairs);  /* ...and send the browser the same */
         rxcap_auto_tick();          /* self-arm / self-dump, no host needed */
-        esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
+        /* ⛔ WITHOUT THE CODEC, THIS LOOP HAS NO PACER. The blocking write is
+         * what holds the task to real time; dsp_rxaudio_read()'s 60 ms
+         * timeout is the only thing left when the browser is the sole
+         * listener. That is enough - the radio delivers at its own rate and
+         * the read blocks for a full frame - but it is the reason this task
+         * must never be given a shorter read timeout. */
+        if (codec_out)
+            esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
         s_write_us_sum += write_us;
@@ -1721,7 +2228,8 @@ static void rx_audio_task(void *arg)
                 uint32_t favg = fc ? (uint32_t)(s_frame_us_sum / fc) : 0;
                 uint32_t gn = s_gap_iv_n;
                 ESP_LOGI(TAG, "diag: frame %lu/%luus (n=%lu)  write max=%luus  "
-                         "LATE %lu/%lu  OUT %lu smp/s  drift +%lu/-%lu  I2Sovf %lu  "
+                         "LATE %lu/%lu  OUT %lu smp/s  drift +%lu/-%lu  "
+                         "pitch %+ld ppm (%+ld..%+ld, railed %lu)  I2Sovf %lu  "
                          "read to=%lu  clips=%lu  gap iv %lu/%lu/%lums (n=%lu)",
                          (unsigned long)favg, (unsigned long)s_frame_us_max, (unsigned long)fc,
                          (unsigned long)s_write_us_max,
@@ -1731,6 +2239,13 @@ static void rx_audio_task(void *arg)
                                           / (uint64_t)(now_us - s_win_start_us))
                              : 0),
                          (unsigned long)s_rate_ins, (unsigned long)s_rate_drop,
+                         /* T21: the number that IS the pitch. Printed every
+                            10 s so the standing serial capture carries it -
+                            a wander only shows as a series. */
+                         (long)s_resample_ppm,
+                         (long)(s_resample_ppm_min == INT32_MAX ? s_resample_ppm : s_resample_ppm_min),
+                         (long)(s_resample_ppm_max == INT32_MIN ? s_resample_ppm : s_resample_ppm_max),
+                         (unsigned long)s_rate_railed,
                          (unsigned long)s_i2s_ovf,
                          (unsigned long)s_read_timeout_count, (unsigned long)s_clip_count,
                          (unsigned long)(gn ? s_gap_iv_min_ms : 0),
@@ -1776,6 +2291,7 @@ void rx_audio_apply_settings(void)
     rx_audio_set_pan_blend   ((float)settings_get_rxaud_pan_blend_x100() / 100.0f);
     rx_audio_set_pan_overlap ((float)settings_get_rxaud_pan_ovlp_x100()  / 100.0f);
     rx_audio_set_agc_attack_ms (settings_get_rxaud_agc_attack_ms());
+    rx_audio_set_am_half_bw_hz ((int)settings_get_rxaud_am_half_bw_h100() * 100);
     rx_audio_set_agc_release_ms(settings_get_rxaud_agc_release_ms());
     rx_audio_set_agc_off       (settings_get_rxaud_agc_off());
 }
@@ -1818,6 +2334,14 @@ void rx_audio_init(void)
     // of the runway/growing-crackle bug (2026-09-23): see the note by
     // RX_OUT_HEADROOM's use in the upsample loop for the mechanism.
     s_out       = heap_caps_malloc((DSP_FFT_SIZE + RX_OUT_HEADROOM) * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    /* The browser's 1 s mono ring - 24 KB, PSRAM, touched once per output
+       sample by this task and once per 100 ms by ws_push_task. */
+    s_web_ring  = heap_caps_malloc(WEBAUD_RING_N * sizeof(int16_t),   MALLOC_CAP_SPIRAM);
+    webaud_decim_init(&s_web_dec, DSP_SAMPLE_RATE_HZ);
+    /* Deliberately NOT in the fatal list below: the speaker must not be
+       lost because the browser's ring could not be allocated. */
+    if (!s_web_ring) ESP_LOGW(TAG, "web-audio ring alloc failed; "
+                                   "browser audio unavailable this session");
     s_dec_coeff    = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_re = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
     s_dec_delay_im = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float),  MALLOC_CAP_SPIRAM);
@@ -1865,8 +2389,14 @@ void rx_audio_init(void)
         ESP_LOGE(TAG, "buffer alloc failed; RX audio disabled");
         return;
     }
+    /* ⚠ THE COEFFICIENTS MUST EXIST BEFORE THE FIRST FRAME, and retune()
+     * cannot be relied on to create them: set_decim_factor() returns early
+     * when D is already the value asked for, which at boot it is. Without this
+     * the AGC and limiter would run with coefficients of 0.0 - an envelope
+     * that never moves and a limiter that never releases. */
+    agc_coeffs_for_decim();
     retune(CW_DEF_OFFSET, CW_DEF_WIDTH_HZ, RXAUD_MODE_NONE);   // panoramic is never live before mode is known
-    build_decimator();                // stage 1 - fixed, built once
+    build_decimator();                // stage 1 - for the boot D; rebuilt by set_decim_factor()
     build_smoothing_biquad();         // post-upsample smoothing - fixed, built once
     build_lpf(CW_DEF_WIDTH_HZ / 2);        // stage 2 placeholder - rebuilt on first active loop iteration
     build_lpf_half(CW_DEF_WIDTH_HZ / 2);   // panoramic split placeholder - same
@@ -1912,8 +2442,15 @@ void rx_audio_init(void)
      * wakes at 4 Hz, does two I2C transactions and sleeps. It has no latency
      * requirement and touches no DMA buffer. It also never exits, so there is
      * no vTaskDeleteWithCaps site to get wrong. */
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 1212 B of 3072 (60% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and a jack insert/removal path that may not
+ * have been exercised in that session is exactly what it misses.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
     BaseType_t hp = xTaskCreatePinnedToCoreWithCaps(rx_audio_headphone_task, "rx_hp",
-                                                    3072, NULL, 1, NULL, 0,
+                                                    6144, NULL, 1, NULL, 0,
                                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (hp != pdPASS)
         ESP_LOGW(TAG, "headphone follower task not created - speaker/jack "
@@ -2119,13 +2656,34 @@ void rx_audio_set_enabled(bool en)
         // Codec is only opened at boot (before the USB host takes the DMA
         // RAM). Turning RX audio on mid-session can't open it safely, so it
         // takes effect after a restart.
+        //
+        // ⛔ AND THE OPERATOR HAS TO BE TOLD, ON THE GLASS. Until 2026-10-17
+        // this warning went to the serial console and nowhere else: the box
+        // ticks, stays ticked, and nothing happens, with no explanation on
+        // any surface the operator can see. Found while trying to measure
+        // T21 - I ticked it, read frame_count=0, and only the capture said
+        // why. Three operators asked about silent audio in the same week
+        // (Bryan N0LUF, Randy N4OPI, Sam W7STF); this is one of the ways to
+        // arrive there. The restart requirement itself is correct and stays.
         ESP_LOGW(TAG, "RX audio enabled - restart required to take effect");
+        ui_toast("RX audio needs a restart before it plays");
         return;
     }
     if (s_task) xTaskNotifyGive(s_task);   // wake it out of the indefinite block
 }
 
 bool rx_audio_is_enabled(void) { return s_enabled; }
+
+/* ⛔ THE QUESTION THE BACKGROUND FEEDS ARE REALLY ASKING is "is anybody
+ * listening", not "is the speaker on". They gate themselves off for the
+ * speaker because a standing telnet session and an MQTT task are the heaviest
+ * periodic users on the device - and MEASURED 2026-10-15, their transfers also
+ * pause the WebSocket for 300-716 ms EVERY ~31 SECONDS, which a web listener
+ * hears as a break-up twice a minute. Same cost, same answer. */
+bool rx_audio_any_listener(void) { return s_enabled || s_web_en; }
+
+/* On, but the codec was never opened for this session - see rx_audio.h. */
+bool rx_audio_restart_pending(void) { return s_enabled && !s_codec_ready; }
 
 void rx_audio_set_volume(uint8_t vol)
 {
@@ -2158,16 +2716,17 @@ void rx_audio_set_agc_off(bool off)     { s_agc_off = off; }
 void rx_audio_set_agc_attack_ms(uint8_t ms)
 {
     if (ms == 0) return;
-    float fs_dec = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
-    float alpha = 1000.0f / ((float)ms * fs_dec);
-    rx_audio_set_agc_attack(alpha > 1.0f ? 1.0f : alpha);
+    /* Stores the TIME and lets the coefficient follow whatever D is in force -
+     * see the note at DEF_AGC_ATTACK_S. Setting a coefficient directly here
+     * would be correct for one mode and wrong for the other. */
+    s_agc_attack_s = (float)ms / 1000.0f;
+    s_agc_attack   = alpha_from_seconds(s_agc_attack_s, s_decim_d);
 }
 void rx_audio_set_agc_release_ms(uint16_t ms)
 {
     if (ms == 0) return;
-    float fs_dec = (float)DSP_SAMPLE_RATE_HZ / (float)RX_DECIM_D;
-    float alpha = 1000.0f / ((float)ms * fs_dec);
-    rx_audio_set_agc_release(alpha > 1.0f ? 1.0f : alpha);
+    s_agc_release_s = (float)ms / 1000.0f;
+    s_agc_release   = alpha_from_seconds(s_agc_release_s, s_decim_d);
 }
 
 void rx_audio_get_tuning(rx_audio_tuning_t *out)
@@ -2212,6 +2771,16 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     out->read_us_max    = s_read_us_max;
     out->write_us_avg   = loops ? (uint32_t)(s_write_us_sum / loops) : 0;
     out->write_us_max   = s_write_us_max;
+    /* T21. An untouched window (no audio running) would report
+       INT32_MAX/INT32_MIN, which reads as a wild excursion rather than as
+       'nothing happened' - so an empty span collapses to the live value. */
+    int32_t pmin = s_resample_ppm_min, pmax = s_resample_ppm_max;
+    out->resample_ppm     = s_resample_ppm;
+    out->resample_ppm_min = (pmin == INT32_MAX) ? s_resample_ppm : pmin;
+    out->resample_ppm_max = (pmax == INT32_MIN) ? s_resample_ppm : pmax;
+    out->resample_railed  = s_rate_railed;
+    s_resample_ppm_min = INT32_MAX;
+    s_resample_ppm_max = INT32_MIN;
     s_frame_us_max       -= s_frame_us_max;
     s_frame_us_sum        = 0;
     s_frame_count         -= frames;

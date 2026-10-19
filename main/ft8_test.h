@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "ft8/message.h"
+#include "ft8/constants.h"   // ftx_protocol_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -105,6 +106,17 @@ bool ft8_get_last_applied_ms(int *out_ms);
 // SS box) without needing a callback/notification mechanism.
 uint32_t ft8_get_timing_seq(void);
 
+// How many DISTINCT STATIONS contributed timing samples to the consensus that
+// ft8_get_last_timing_ms() returns. 0 = no measurement yet.
+//
+// A DT shown as "station offset minus consensus" is only meaningful when the
+// consensus came from somebody else as well. With one station on the band the
+// consensus IS that station's offset and the subtraction is identically zero,
+// so the display must blank rather than print +0.0. The SAMPLE count does not
+// answer this - one station routinely yields three to five candidate decodes in
+// a slot (Randy N4OPI's 2026-10-08 capture: five samples, one callsign).
+int ft8_get_last_timing_stations(void);
+
 // ---- Operating sub-mode (FT8 vs FT4) ------------------------------------
 // FT4 and FT8 share the QMX's USB/DiGi data mode and the same ft8_lib
 // primitives - they differ only in slot length (15 s vs 7.5 s), symbol rate,
@@ -133,16 +145,115 @@ uint32_t ft8_get_timing_seq(void);
 typedef enum {
     FT8_OP_MODE_FT8 = 0,
     FT8_OP_MODE_FT4 = 1,
+    /* JS8 "Normal" (submode A). Selectable as of J5: its own decode branch,
+     * its own tone encoder, its own message text both ways, and the QSO ladder
+     * reaches it through ft8_op_mode_protocol().
+     *
+     * ⛔ NOT VERIFIED ON THE AIR. No JS8 frame of ours has been decoded by
+     * another station - see ftx_protocol_is_implemented()'s note for exactly
+     * what is proven and by what.
+     *
+     * ft8_op_mode_set() still refuses any sub-mode the build cannot do, which
+     * is the gate that kept this one out before it worked. */
+    FT8_OP_MODE_JS8 = 2,
 } ft8_op_mode_t;
 
 void          ft8_op_mode_set(ft8_op_mode_t m);
 ft8_op_mode_t ft8_op_mode_get(void);
 
-// Slot period in ms for the current sub-mode (15000 FT8 / 7500 FT4). Single
+/* The current sub-mode as a decoder/encoder protocol. Public because the QSO
+ * ladder and the TX builders need the same answer the slot engine uses, and a
+ * second copy of the mapping is exactly the three-way-ternary problem J3 swept
+ * out of 14 places. */
+ftx_protocol_t ft8_op_mode_protocol(void);
+
+/* The same answer for a mode we are ABOUT to ask for rather than the one we
+ * are in - what a "switching to X" log line needs. ⛔ ft8_screen_view.c kept
+ * its own copy of this switch until the JS8 submodes landed, at which point
+ * the copy would have gone on saying "JS8" while the radio ran Turbo. One
+ * implementation, asked two ways. */
+ftx_protocol_t ft8_op_mode_protocol_for(ft8_op_mode_t m);
+
+// Slot period in ms for the current sub-mode (15000 FT8 and JS8, 7500 FT4).
+// Single
 // source of truth for anything outside ft8_test.c that needs slot timing -
 // the countdown bar/label in ft8_screen_view.c, in particular - so it can
 // never drift out of sync with the slot engine's own period.
 int ft8_op_mode_slot_ms(void);
+
+/* "FT8", "FT4" or "JS8" for the current sub-mode. One spelling, because this
+ * string reaches the ADIF log, /api/status and the screen alike - and a QSO
+ * logged under the wrong mode is a wrong record, not a cosmetic slip. */
+const char *ft8_op_mode_name(void);
+
+/* ---- JS8 free text (J7) ------------------------------------------------
+ *
+ * Who is sending free text, on what offset, for how long - and the message
+ * itself. Before this the frames were dropped without trace, so a band busy
+ * with JS8 chat looked idle.
+ *
+ * ⚠ The text can be EMPTY while the frame count is not. A frame decodes to
+ * nothing when the transmission was joined late, or when its word index sits
+ * above the truncated table (kJS8_JSC_words - js8_jsc.h says why it is
+ * truncated at all). That is a visible state, not a failure. */
+typedef struct {
+    char    sender[16];     /* "" when the run was never identified */
+    int     freq_hz;
+    int     frames;         /* frames SEEN, including any beyond the store */
+    int     secs;           /* how long the run has been going */
+    bool    compressed;     /* the coding its first frame declared */
+    bool    truncated;      /* the message was cut - frame cap or text room */
+    char    text[256];      /* the message so far; "" is a real state */
+} ft8_js8_freetext_t;
+
+int  ft8_js8_freetext_count(void);
+bool ft8_js8_freetext_at(int i, ft8_js8_freetext_t *out);
+
+/* ---- Slot-audio capture (the JS8/FT8 reference corpus, M1) --------------
+ *
+ * There are 35 reference WAVs for FT8 in test/wav_reference and ZERO for JS8,
+ * so every RX change from J7 onwards is unguarded. Recording one needs the
+ * audio THE DECODER SEES, and that is this buffer and nothing else:
+ * dsp_ft8_capture() fills 180000 floats at 12 kHz, anchored to the UTC slot
+ * boundary by its own backfill.
+ *
+ * ⛔ rxcap (/api/rxaudio.wav) is NOT this signal and must not be used for a
+ * corpus. It records s_out - the codec OUTPUT, 48 kHz, after the AGC and the
+ * audio filter chain. It answers "what did the speaker play", which is a
+ * different question from "what did the decoder get". The M1 note in
+ * docs/js8-feasibility.md said no firmware change was needed; that was wrong
+ * for exactly this reason.
+ *
+ * One buffer, deliberately. A download takes ~1 s and the next slot lands
+ * 15 s later, so a snapshot skipped while the socket is draining costs one
+ * slot in fifteen - cheaper than the tearing window a second buffer would
+ * have to be reasoned about.
+ *
+ * Arm/disarm is runtime, so the PSRAM (360 KB) is only spent while a corpus
+ * is actually being recorded. */
+void ft8_slotcap_set_enabled(bool on);
+bool ft8_slotcap_enabled(void);
+
+/* The last COMPLETE slot, as int16 at 12 kHz. Returns NULL until one lands.
+ * *n = samples, *slot_sec = the slot's UTC boundary (names the file),
+ * *proto = "FT8"/"FT4"/"JS8", *seq increments once per snapshot so a host
+ * loop can tell a new slot from a re-read.
+ *
+ * TWO peaks, and the difference matters. *fpeak is the largest |sample| of
+ * the DECODER'S OWN float buffer, before anything is done to it; *peak is the
+ * largest |sample| of the stored int16 AFTER the slot is normalised to full
+ * scale. The stored audio is normalised because monitor_process() packs each
+ * bin as a CLAMPED `2*db + 240` over -120..0 dB, so an un-normalised slot can
+ * saturate the waterfall to a flat 255 and decode nothing. *fpeak is kept
+ * because it, and only it, says whether the LIVE path is already in that
+ * state - see the note at slotcap_take(). */
+const int16_t *ft8_slotcap_data(uint32_t *n, int64_t *slot_sec, int *peak,
+                                const char **proto, uint32_t *seq,
+                                float *fpeak);
+
+/* Held across the whole /api/slot.wav body: the snapshot is skipped while
+ * true, so the socket cannot read a buffer being overwritten. */
+void ft8_slotcap_hold(bool on);
 
 #ifdef __cplusplus
 }

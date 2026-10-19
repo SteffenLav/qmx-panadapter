@@ -117,7 +117,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Cycle Panadapter -> FT8/FT4 -> WSPR |
+| Swipe → from **left edge** | Cycle Panadapter -> FT8/FT4/JS8 -> WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
@@ -136,14 +136,24 @@ You're now receiving. The **spectrum** shows signal strength across the band, an
 - **Tap Band** to switch between your configured bands
 - **Tap Mode** to switch USB/LSB/CW/DiGi
 
-## Step 8: FT8 Mode (Optional)
+## Step 8: FT8, FT4 and JS8 (Optional)
 
-Swipe → from the left edge to switch to **FT8 view**. You'll see:
+Swipe → from the left edge to switch to the **decode view**. You'll see:
 
-- **Live decode list** — all FT8 stations heard on frequency
+- **Live decode list** — every station heard on frequency
 - **Waterfall** — same real-time spectrum waterfall
 - **Call CQ** button — transmit a CQ (requires QMX to be on the air)
 - **Reply** rows — tap a station to reply to their CQ
+
+**Three modes share this page.** Tap the **Preset** button at the top of the left
+column to pick **FT8**, **FT4** or **JS8**; the Tab5 retunes to that mode's calling
+frequency on the band you are on.
+
+**JS8** *(beta)* is the keyboard mode: it carries free text instead of FT8's fixed
+exchange, so you hold a short conversation. In JS8 the page gains a **Conversation**
+tab beside **Stations**, and a **Free text** button under Call CQ opens a box to type
+a message — it tells you how many seconds the message will hold the frequency before
+anything is transmitted. See [JS8](guide/js8.md).
 
 
 ## Step 9: WiFi & Web UI (Optional)
@@ -256,4 +266,4 @@ off and on again afterwards — the screen will tell you if so.
 
 ---
 
-**Next steps:** Read the full [User Guide](guide/panadapter.md) or dive into [FT8 Transmit](guide/ft8-tx.md).
+**Next steps:** Read the full [User Guide](guide/panadapter.md), or dive into [FT8 Transmit](guide/ft8-tx.md) or [JS8](guide/js8.md).

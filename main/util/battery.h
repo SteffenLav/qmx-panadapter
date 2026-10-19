@@ -26,6 +26,20 @@ int battery_get_mv(void);
 // True when current is flowing into the battery (charging).
 bool battery_is_charging(void);
 
+/* RAW pack voltage and charge current, straight off the INA226 with no IR
+ * compensation applied.
+ *
+ * battery_get_mv() subtracts |I| x R + polarisation while charging, so it can
+ * never answer a question ABOUT that compensation. These two can: they are what
+ * the batcal trace logs, and what R was derived from in the first place
+ * (dV/dI across the charge cutoff, 2026-10-09).
+ *
+ * Both return false if the read failed; *out is untouched then. ma is signed,
+ * and NEGATIVE means current flowing INTO the pack (Tab5 polarity - see the
+ * note at the top of battery.c). */
+bool battery_get_raw_mv(int *out_mv);
+bool battery_get_charge_ma(int *out_ma);
+
 // False only once a missing pack has been positively detected (latched after a
 // few seconds of erratic rail voltage). True otherwise, including the first
 // seconds before a verdict. Drives the "no battery" icon in the status bar.

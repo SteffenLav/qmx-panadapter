@@ -108,9 +108,22 @@ wspr_cap_sweep.exe
 wspr_decode_harness.exe
 wspr_subtract_sweep.exe
 
+# Host harness binaries built by hand at the repo root. tools/run_harnesses.py
+# builds into a temp dir and leaves nothing behind, but building one directly
+# from its own header gcc line - which is how you run a harness against a
+# directory of your own WAVs - drops the .exe here.
+*_harness.exe
+
 # Serial capture output (cap_serial_reboot.ps1 default -Out)
 reboot.txt
 
 # tools/gen_world_map.py's downloaded Natural Earth source cache (~10 MB) -
 # fetched on demand, not source. Re-run the script to regenerate it.
 tools/ne_*m_land.geojson
+
+# graphify knowledge-graph output (graph.json, cache/, HTML viz) -
+# a build artefact, regenerate with /graphify <path> --update
+graphify-out/
+
+# Host harness build output (test/build_*.sh)
+build_host/

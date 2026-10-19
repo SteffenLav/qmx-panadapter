@@ -7,6 +7,7 @@
 // a phone hotspot the next.
 
 #include "mdns_svc.h"
+#include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 
 #include "mdns.h"
 #include "esp_log.h"
@@ -61,6 +62,7 @@ void mdns_svc_start(void)
 
     s_up = true;
     ESP_LOGI(TAG, "responder up: http://%s.local (and its IP, as before)", MDNS_SVC_HOSTNAME);
+    MEM_LEDGER("mdns responder");   // DMA-pool bracket, 2026-10-04
 }
 
 bool mdns_svc_is_up(void)

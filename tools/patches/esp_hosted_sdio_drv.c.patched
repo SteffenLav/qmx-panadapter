@@ -1057,16 +1057,42 @@ static void sdio_read_task(void const* pvParameters)
 		 * oversize. */
 		if (len_from_slave > ESP_RX_BUFFER_SIZE) {
 			uint32_t slave_reg = 0;
+			uint32_t drained   = 0;   /* bytes actually taken off the slave */
 #if DO_COMBINED_REG_READ
 			slave_reg = (*read_len_index) & ESP_SLAVE_LEN_MASK;
 #endif
 			ESP_LOGW(TAG, "SDIO RX oversize: len=%lu host_cnt=%lu slave_reg=%lu - draining to recover",
 					(unsigned long)len_from_slave, (unsigned long)sdio_rx_byte_count,
 					(unsigned long)slave_reg);
-			/* An absurd delta means total desync; draining it would issue
-			 * hundreds of CMD53 reads to no benefit, so just re-align the
-			 * counter (best effort). */
-			if (len_from_slave <= (16u * (uint32_t)ESP_RX_BUFFER_SIZE)) {
+			/* ⛔ THIS BOUND WAS 16 BUFFERS AND THAT IS WHAT KILLED THE LINK.
+			 *
+			 * Skipping the read but still advancing sdio_rx_byte_count below
+			 * tells the host it consumed bytes it never took off the slave.
+			 * That IS the desync, manufactured by the guard meant to avoid
+			 * one. It never recovers, which is why the "recovered" line has
+			 * never appeared in any capture and why only a reboot fixes it.
+			 *
+			 * MEASURED, bench dev 2026-10-03, flooding the Tab5 with unicast
+			 * UDP at full MTU (tools/sdio_flood.py):
+			 *
+			 *   len=22890 (15 frames)  -> drained, link fine
+			 *   len=25942 (17 frames)  -> SKIPPED, and 5.8 s later:
+			 *   rpc_core: Timeout waiting for Resp for Req[0x126]   forever
+			 *
+			 * 25,942 = 17 x 1526 (a 1514-byte Ethernet frame + the 12-byte
+			 * esp_payload_header), and 16 x ESP_RX_BUFFER_SIZE is 24,576 - so
+			 * a FULL slave queue lands 1,366 bytes the wrong side of the line,
+			 * every single time. The value is always 25,942 and never 18
+			 * frames' worth, here and in Bryan N0LUF's field log, where it
+			 * appears four times and is the last oversize event before the
+			 * link dies on each one.
+			 *
+			 * So the bound has to sit above the slave's real queue, not below
+			 * it. 64 buffers is generous rather than incremental - draining 64
+			 * is 64 CMD53 reads of 1536 B, microseconds - while still refusing
+			 * a genuinely impossible delta from a corrupted register read (the
+			 * register is 20 bits, so it can claim up to 1 MB). */
+			if (len_from_slave <= (64u * (uint32_t)ESP_RX_BUFFER_SIZE)) {
 				if (!sdio_oversize_drain_buf)
 					sdio_oversize_drain_buf = (uint8_t *)MEM_ALLOC(MAX_SDIO_BUFFER_SIZE);
 				if (sdio_oversize_drain_buf) {
@@ -1082,11 +1108,32 @@ static void sdio_read_task(void const* pvParameters)
 							break;
 						}
 						d_left -= chunk;
+						drained += chunk;
 					}
 				}
 			}
-			sdio_rx_byte_count = (sdio_rx_byte_count + len_from_slave) % ESP_RX_BYTE_MAX;
+			/* ⛔ ADVANCE BY WHAT WAS ACTUALLY READ, NEVER BY WHAT WAS CLAIMED.
+			 *
+			 * This used to add len_from_slave unconditionally, which told the
+			 * host it had consumed bytes still sitting on the slave whenever
+			 * the delta was over the bound, the scratch allocation failed, or
+			 * a read failed part-way through the loop. Three routes to one
+			 * manufactured desync, and the desync never recovers - that is
+			 * the fault that killed the link in v1.16.10 and earlier, proved
+			 * on the bench 2026-10-03 (tools/sdio_flood.py).
+			 *
+			 * Raising the bound fixed the common route. This fixes the class:
+			 * the counter can no longer claim a read that did not happen. If
+			 * nothing was drained the counter does not move, the same delta is
+			 * recomputed next pass, and the attempt is simply retried - which
+			 * is correct for a transient failure and, for a permanent one,
+			 * leaves the stall visible as RPC timeouts instead of silently
+			 * corrupting the stream. The yield below keeps a permanent failure
+			 * from becoming a hot spin. */
+			sdio_rx_byte_count = (sdio_rx_byte_count + drained) % ESP_RX_BYTE_MAX;
 			SDIO_DRV_UNLOCK();
+			if (!drained)
+				g_h.funcs->_h_msleep(1);
 			continue;
 		}
 #endif
@@ -1111,16 +1158,26 @@ static void sdio_read_task(void const* pvParameters)
 					(unsigned long)len_from_slave);
 			if (!sdio_oversize_drain_buf)
 				sdio_oversize_drain_buf = (uint8_t *)MEM_ALLOC(MAX_SDIO_BUFFER_SIZE);
+			uint32_t af_drained = 0;
 			if (sdio_oversize_drain_buf) {
 				uint32_t block_len = ((len_from_slave + ESP_BLOCK_SIZE - 1) / ESP_BLOCK_SIZE) * ESP_BLOCK_SIZE;
 				if (g_h.funcs->_h_sdio_read_block(sdio_handle,
 						ESP_SLAVE_CMD53_END_ADDR - len_from_slave,
 						sdio_oversize_drain_buf, block_len, ACQUIRE_LOCK)) {
 					ESP_LOGE(TAG, "SDIO rxbuf-alloc-fail drain read failed");
+				} else {
+					af_drained = len_from_slave;
 				}
 			}
-			sdio_rx_byte_count = (sdio_rx_byte_count + len_from_slave) % ESP_RX_BYTE_MAX;
+			/* Same rule as the oversize drain above: only what was read. This
+			 * route is reached when the RX mempool or the DMA heap is empty,
+			 * which on this board is a condition that recurs - so advancing
+			 * past an allocation that failed would desync the link exactly
+			 * where it is already under pressure. */
+			sdio_rx_byte_count = (sdio_rx_byte_count + af_drained) % ESP_RX_BYTE_MAX;
 			SDIO_DRV_UNLOCK();
+			if (!af_drained)
+				g_h.funcs->_h_msleep(1);
 			continue;
 		}
 

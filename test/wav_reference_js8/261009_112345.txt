@@ -1,0 +1,7 @@
+# JS8 slot UTC 1791544785  dial 14078000 Hz  peak_float 97.00  peak 32767
+# this board's own decodes, NOT ground truth - see the header of tools/js8_corpus.py
+# Hand-corrected: written by the first version of js8_corpus.py, which printed
+# the dt column raw. `dt` is int16 MILLISECONDS (ft8_screen.h:31) and the column
+# is seconds, so 720 ms had gone in as "720.0". peak_float is from the capture
+# log for this slot, not from the status poll.
+112345 -12  0.7  844 ~  HB F4LPU JN15

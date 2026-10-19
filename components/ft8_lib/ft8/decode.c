@@ -1,5 +1,7 @@
 #include "decode.h"
 #include "constants.h"
+#include "js8.h"
+#include "js8_message.h"
 #include "crc.h"
 #include "ldpc.h"
 
@@ -47,6 +49,21 @@
  * get it back; do not define it for the device. */
 #ifndef FT8_STAGE1_DIAG
 #define FT8_STAGE1_DIAG 0
+#endif
+
+/* Stage-1 multi-symbol second-chance decode. OFF - it cost half the decode time
+ * and recovered 0 of 405 decodes across test/wav_reference. The full measurement
+ * is written at its call site in ftx_decode_candidate(). */
+#ifndef FT8_MULTI_SYMBOL_FALLBACK
+#define FT8_MULTI_SYMBOL_FALLBACK 0
+#endif
+
+/* Abandon an FT8 candidate after this many belief-propagation iterations with
+ * no improvement. The table of what each value costs in DECODES is at the
+ * bp_decode() definition in ldpc.c - do not change this without rerunning
+ * test/ft8_decode_bench.c over test/wav_reference. 0 disables it. */
+#ifndef FT8_LDPC_STALL_ITERS
+#define FT8_LDPC_STALL_ITERS 8
 #endif
 
 #if FT8_STAGE1_DIAG
@@ -153,10 +170,14 @@ static void heapify_up(ftx_candidate_t heap[], int heap_size);
 
 static void ftx_normalize_logl(float* log174);
 static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
+static void ft8_extract_symbol(const WF_ELEM_T* wf, const uint8_t* gray, float* logl);
+static int  ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate);
+static int  js8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate);
+#if FT8_MULTI_SYMBOL_FALLBACK  /* off: see ftx_decode_candidate() */
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
 static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
                                           int num_bins, int bit_idx, float* log174);
+#endif
 
 static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
@@ -167,7 +188,17 @@ static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candid
     return wf->mag + offset;
 }
 
-static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+/* Shared by FT8 and every JS8 submode, which have the SAME sync layout - three
+ * 7-symbol groups at 0, 36 and 72 - and different Costas arrays. Passing the
+ * table in keeps one scoring body rather than a copy that can drift.
+ *
+ * ⚠ `costas` is now THREE arrays, one per sync block, because JS8's MODIFIED
+ * set (Fast/Turbo/Slow) really does use a different array in each block. It
+ * used to be a single array indexed costas[k], which was right for FT8 and for
+ * JS8 Normal and silently wrong for everything else. FT8 and JS8 Normal pass
+ * the same array three times; the scorer no longer knows the difference. */
+static int ft8_like_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate,
+                               const uint8_t costas[3][7])
 {
     int score = 0;
     int num_average = 0;
@@ -199,7 +230,7 @@ static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             // ++num_average;
 
             // Check only the neighbors of the expected symbol frequency- and time-wise
-            int sm = kFT8_Costas_pattern[k]; // Index of the expected bin
+            int sm = costas[m][k]; // Index of the expected bin, in THIS sync block
             if (sm > 0)
             {
                 // look at one frequency bin lower
@@ -298,8 +329,10 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
 {
-    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;
-    int num_tones = (wf->protocol == FTX_PROTOCOL_FT4) ? 4 : 8;
+    int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) =
+        (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score :
+        ftx_protocol_is_js8(wf->protocol)  ? js8_sync_score : ft8_sync_score;
+    int num_tones = ftx_protocol_num_tones(wf->protocol);
 
     int heap_size = 0;
     ftx_candidate_t candidate;
@@ -385,7 +418,30 @@ static void ft4_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
     }
 }
 
-static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+/* FT8 uses one array for all three sync groups; the scorer takes three, so it
+ * is spelt out here rather than special-cased in the loop. */
+static int ft8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+{
+    static const uint8_t ft8_costas3[3][7] = {
+        { 3, 1, 4, 0, 6, 5, 2 },
+        { 3, 1, 4, 0, 6, 5, 2 },
+        { 3, 1, 4, 0, 6, 5, 2 },
+    };
+    /* The one table is still kFT8_Costas_pattern; this copy must not drift
+     * from it, so say so where it would be noticed. */
+    _Static_assert(sizeof(ft8_costas3[0]) == 7, "FT8 Costas is 7 symbols");
+    return ft8_like_sync_score(wf, candidate, ft8_costas3);
+}
+
+/* Every JS8 submode. ftx_protocol_js8_costas() picks ORIGINAL (Normal, one
+ * array three times) or MODIFIED (Fast/Turbo/Slow, three different arrays). */
+static int js8_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+{
+    return ft8_like_sync_score(wf, candidate, ftx_protocol_js8_costas(wf->protocol));
+}
+
+static void ft8_like_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                       const uint8_t* gray, float* log174)
 {
     const WF_ELEM_T* mag = get_cand_mag(wf, cand); // Pointer to 8 magnitude bins of the first symbol
 
@@ -407,7 +463,7 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
         }
         else
         {
-            ft8_extract_symbol(mag + (sym_idx * wf->block_stride), log174 + bit_idx);
+            ft8_extract_symbol(mag + (sym_idx * wf->block_stride), gray, log174 + bit_idx);
         }
     }
 }
@@ -415,6 +471,9 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
 // Second-chance likelihood extraction: uses multi-symbol (n_syms=2) instead of single-symbol.
 // Only called if single-symbol bp_decode fails. Pairs consecutive data symbols to improve
 // coherent detection on weak/fading signals.
+// Compiled only when FT8_MULTI_SYMBOL_FALLBACK is on - see the measurement at
+// its one call site in ftx_decode_candidate().
+#if FT8_MULTI_SYMBOL_FALLBACK
 static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
 {
     const WF_ELEM_T* mag = get_cand_mag(wf, cand);
@@ -439,7 +498,7 @@ static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_ca
         else if (k + 1 >= FT8_ND)
         {
             // Last symbol (odd count): just use single-symbol
-            ft8_extract_symbol(mag + (sym_idx_1 * wf->block_stride), log174 + bit_idx);
+            ft8_extract_symbol(mag + (sym_idx_1 * wf->block_stride), kFT8_Gray_map, log174 + bit_idx);
         }
         else
         {
@@ -465,6 +524,7 @@ static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_ca
         }
     }
 }
+#endif  /* FT8_MULTI_SYMBOL_FALLBACK */
 
 static void ftx_normalize_logl(float* log174)
 {
@@ -591,8 +651,81 @@ static void ft8_extract_symbols(const ftx_waterfall_t* wf, const ftx_candidate_t
     }
 }
 
+static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    ft8_like_extract_likelihood(wf, cand, kFT8_Gray_map, log174);
+}
+
+/* JS8 shares FT8's symbol layout exactly - sync at 0, 36 and 72, data at
+ * 7..35 and 43..71 - so only the tone-to-bits map differs, and for JS8 that
+ * map is the identity. */
+static void js8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    ft8_like_extract_likelihood(wf, cand, kJS8_Gray_map, log174);
+}
+
+/* ⭐ THE JS8 DECODE PATH, DELIBERATELY SEPARATE FROM THE FT8 ONE.
+ *
+ * After the LDPC the two have nothing in common: FT8 takes the first 91 bits
+ * as payload+CRC-14, while JS8's codeword columns are PERMUTED, its payload is
+ * the LAST 87 bits of the un-permuted word, and its CRC is 12 bits with an XOR
+ * of 42. Threading that through ftx_decode_candidate() as a third branch would
+ * have put four conditionals inside a function whose FT8 behaviour is measured
+ * against a 35-WAV corpus. A separate function leaves that path byte for byte
+ * as it was.
+ *
+ * ⛔ UNPROVEN ON A REAL SIGNAL. Every piece is host-tested - the LDPC against
+ * JS8Call's own Fortran, the message layer against hand-computed vectors - but
+ * nothing has yet decoded a frame produced by anything other than this code.
+ * A JS8Call station is the only arbiter; a second Tab5 is not. */
+static bool js8_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                 int max_iterations, ftx_message_t* message,
+                                 ftx_decode_status_t* status)
+{
+    status->snr_db = estimate_snr_db(wf, cand);
+
+    float log174[FTX_LDPC_N];
+    js8_extract_likelihood(wf, cand, log174);
+    ftx_normalize_logl(log174);
+
+    uint8_t plain174[FTX_LDPC_N];
+    /* stall_limit 0: the measurement that chose 8 was taken on an FT8 corpus
+     * with FT8's parity matrix, and an FT8-derived LDPC limit applied to
+     * another code has already hurt FT4 once. See the note in ldpc.c. */
+    bp_decode_code(&kJS8_LDPC_code_174_87, log174, max_iterations, 0,
+                   plain174, &status->ldpc_errors);
+    if (status->ldpc_errors > 0) return false;
+
+    /* Undo colorder, then take the payload from the END: encode174.f90 lays
+     * out [parity(87) | message(87)] and permutes afterwards. */
+    uint8_t itmp[JS8_LDPC_N];
+    for (int i = 0; i < JS8_LDPC_N; ++i) itmp[i] = plain174[kJS8_LDPC_colorder[i]];
+
+    const uint8_t* payload = itmp + JS8_LDPC_M;
+    if (!js8_check_payload_crc(payload)) return false;
+
+    /* The 75 message bits - 72-bit frame then the 3-bit transmission type -
+     * packed MSB first into the shared payload buffer. The caller unpacks the
+     * frame with js8_unpack_directed()/js8_unpack_heartbeat(). */
+    memset(message->payload, 0, FTX_PAYLOAD_LENGTH_BYTES);
+    for (int i = 0; i < JS8_MSG_BITS; ++i)
+    {
+        if (payload[i]) message->payload[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+    }
+
+    status->crc_extracted = 0;
+    status->crc_calculated = 0;
+    message->hash = 0;
+    return true;
+}
+
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
+    if (ftx_protocol_is_js8(wf->protocol))
+    {
+        return js8_decode_candidate(wf, cand, max_iterations, message, status);
+    }
+
     // Estimate SNR early
     status->snr_db = estimate_snr_db(wf, cand);
 
@@ -609,27 +742,56 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     ftx_normalize_logl(log174);
 
     uint8_t plain174[FTX_LDPC_N]; // message bits (0/1)
-    bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
-    // ldpc_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+    /* ⛔ FT8 only - FT4 has a different parity matrix and no measured corpus
+     * here. See the stall_limit comment on bp_decode() in ldpc.c for why that
+     * caution is not theoretical. */
+    int stall_limit = (wf->protocol == FTX_PROTOCOL_FT8) ? FT8_LDPC_STALL_ITERS : 0;
+    bp_decode(log174, max_iterations, stall_limit, plain174, &status->ldpc_errors);
 
     int single_symbol_errors = status->ldpc_errors;
     int fallback_triggered = 0;
     int multi_symbol_errors = 0;
 
-    // Save the original LLRs before multi-symbol extraction
-    float log174_single[FTX_LDPC_N];
-    if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
-        memcpy(log174_single, log174, sizeof(log174_single));
-    }
-
+    /* ⭐ STAGE-1 MULTI-SYMBOL FALLBACK - OFF, because it costs HALF the
+     * decode time and recovered NOTHING when it was finally measured.
+     *
+     * The second chance only ever runs when the single-symbol pass FAILED, and
+     * bp_decode() exits early only on success, so a hopeless candidate burns
+     * the full iteration count TWICE. On a busy band most of the 140
+     * candidates fail, so this doubles dec_ms on exactly the slots that cannot
+     * afford it.
+     *
+     * Measured 2026-10-04 on the 35 ground-truth WAVs in test/wav_reference
+     * (cand=140, min score 5, 30 iterations - the device's own settings),
+     * attenuated '_weak' copies included:
+     *
+     *     with fallback:     405 decodes, 1069.5 ms
+     *     without fallback:  405 decodes,  565.6 ms
+     *
+     * Not one decode in the corpus came from it, on any file, and the decoded
+     * text was identical file by file - so this is not a sensitivity trade.
+     *
+     * ⚠ What is NOT established: whether the idea is worthless or this
+     * implementation is simply broken. 0 of 405 is what a dead code path looks
+     * like as well as a useless one, and nobody has instrumented
+     * ft8_extract_likelihood_multi() itself. It is left here, switched off, for
+     * whoever answers that - not deleted.
+     *
+     * Why dec_ms matters: FT8 capture alone is ~13.2 s of a 15 s slot, so the
+     * whole reply window is 2260 ms into the NEXT slot. Randy N4OPI's busy 20 m
+     * slot, 2026-10-03: cap 13281 + stft 953 + dec 5441 = 19675 ms, i.e.
+     * 2415 ms past the deadline, so every reply waited a full 30 s cycle.
+     * Halving dec_ms is what brings that back inside the window. */
+#if FT8_MULTI_SYMBOL_FALLBACK
     // Second-chance decode: if single-symbol failed, retry with multi-symbol (FT8 only)
     if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
         fallback_triggered = 1;
         ft8_extract_likelihood_multi(wf, cand, log174);
         ftx_normalize_logl(log174);
-        bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+        bp_decode(log174, max_iterations, stall_limit, plain174, &status->ldpc_errors);
         multi_symbol_errors = status->ldpc_errors;
     }
+#endif
 
     if (status->ldpc_errors > 0)
     {
@@ -768,7 +930,7 @@ static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl)
 }
 
 // Compute unnormalized log likelihood log(p(1) / p(0)) of 3 message bits (1 FSK symbol)
-static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
+static void ft8_extract_symbol(const WF_ELEM_T* wf, const uint8_t* gray, float* logl)
 {
     // Cleaned up code for the simple case of n_syms==1
 #if 1
@@ -776,7 +938,7 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
 
     for (int j = 0; j < 8; ++j)
     {
-        s2[j] = WF_ELEM_MAG(wf[kFT8_Gray_map[j]]);
+        s2[j] = WF_ELEM_MAG(wf[gray[j]]);
     }
 
     logl[0] = max4(s2[4], s2[5], s2[6], s2[7]) - max4(s2[0], s2[1], s2[2], s2[3]);
@@ -809,6 +971,7 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
     // printf("\n");
 }
 
+#if FT8_MULTI_SYMBOL_FALLBACK  /* both helpers serve the disabled fallback only */
 // Compute unnormalized log likelihood log(p(1) / p(0)) of bits corresponding to several FSK symbols at once
 // Helper: decode 2 consecutive symbols via coherent demodulation
 static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
@@ -909,6 +1072,7 @@ static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_sy
         log174[bit_idx + i] = max_one - max_zero;
     }
 }
+#endif  /* FT8_MULTI_SYMBOL_FALLBACK */
 
 // Packs a string of bits each represented as a zero/non-zero byte in plain[],
 // as a string of packed bits starting from the MSB of the first byte of packed[]

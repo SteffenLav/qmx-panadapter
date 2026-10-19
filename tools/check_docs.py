@@ -31,13 +31,20 @@ The checks
    printable guide somehow - either the PDF builder injects it, or README has a
    section of its own on the subject. A page in neither is invisible to anyone
    reading the PDF.
-3. DUPLICATE COVERAGE (warning). Headings that exist in BOTH README and the
+3. BROKEN PDF LINKS (error). The user-guide PDF is versioned in its filename and
+   the builder deletes every older one, so any link that spells out a version
+   dies at the next release. Found 2026-10-05: docs/mkdocs/releases.md still
+   pointed at v1.16.9 four releases on - a 404 on the site's "User Guide PDF"
+   button. build_userguide_pdf.ps1 now rewrites those links itself; this check
+   is the net under a hand-edit.
+4. DUPLICATE COVERAGE (warning). Headings that exist in BOTH README and the
    mkdocs tree are the drift surface: two texts, one topic, and no mechanism
    keeping them honest with each other. Fewer is better.
 
 Run standalone for the full report:  python tools/check_docs.py
 """
 
+import io
 import os
 import re
 import sys
@@ -52,6 +59,33 @@ PDF_SCRIPT = os.path.join(REPO, "tools", "build_userguide_pdf.ps1")
 # claim about the present.
 EXEMPT = {"version-history.md", "releases.md"}
 
+# Pages deliberately kept OUT of the printable guide. The PDF is the operator's
+# manual; these are for people working on the source, and they are reachable on
+# the website and in the on-device manual.
+#
+# ⛔ EXEMPT MEANS "DECIDED", NOT "IGNORED". A page listed here must have a
+# reason beside it. The coverage warning is only useful if everything in it is
+# genuinely wrong - a list with permanent residents in it stops being read,
+# which is exactly how guide/audio.md went missing from the PDF unnoticed.
+# Pages whose content reaches the PDF through a README-authored chapter
+# rather than through a guide file. They ARE printed - they just do not arrive
+# by injection, so the injection test cannot see them. The README section that
+# carries each one is named, so a future cut of that section is a decision
+# someone has to make deliberately.
+README_SOURCED = {
+    "quick-start.md":   "README '## Quick Guide'",
+    "getting-help.md":  "README '## Getting help'",
+    "gestures.md":      "README '## Reference'",
+    "hardware.md":      "README '## Reference'",
+    "glossary.md":      "README '## Glossary'",
+    "build.md":         "README '## Build from source'",
+}
+
+PDF_EXEMPT = {
+    "architecture.md",   # developer material - module map, task layout, DSP chain
+    "contributing.md",   # how to send a patch, not how to operate the radio
+}
+
 # Words that carry no subject: the two trees title the same thing differently
 # ("Quick Start" vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and
 # matching on these would either match everything or nothing.
@@ -59,6 +93,15 @@ GENERIC_WORDS = {
     "reference", "overview", "guide", "controls", "configuration", "settings",
     "start", "started", "getting", "introduction", "intro", "notes", "page",
     "the", "and", "your",
+    # A word that could head ANY page is not evidence that a subject is
+    # covered. "features" cost us the whole audio chapter: audio.md is titled
+    # "Audio Features - Tab5 Real-Time Decoding (Beta)", README has a
+    # "## Features" heading, the single shared word satisfied the match, and
+    # the check reported clean while the PDF carried none of the page.
+    # Measured 2026-10-12 with pdftotext: zero occurrences of "Panoramic CW
+    # Split" in the printed guide.
+    "features", "feature", "beta", "advanced", "basics", "using", "about",
+    "tab5", "qmx", "panadapter",
 }
 
 # Phrases that are true only until the next release and never become false again.
@@ -109,6 +152,101 @@ def check_forward_looking():
     return errors
 
 
+# Names the docs may use that are NOT files in this repo: ESP-IDF tooling,
+# upstream sources quoted for reference, and HTTP responses that merely look
+# like filenames.
+#
+# ⛔ KEEP THIS LIST SHORT AND SPECIFIC. A wildcard here is how the rule
+# below stops catching anything, which is the failure mode every other rule in
+# this file has already had once.
+FOREIGN_SOURCES = {
+    # ESP-IDF / toolchain
+    "idf.py", "export.ps1", "export.sh", "esptool.py", "espefuse.py",
+    "idf_monitor.py", "setup.py",
+    # upstream sources quoted in the docs
+    "varicode.cpp", "varicode.h", "mainwindow.cpp", "genjs8.f90", "JS8.cpp",
+    "bootloader_utility.c", "spiffs.h", "esp_spiffs.h",
+    # an HTTP response, not a file on disk
+    "toc.json",
+}
+
+_SRC_RE = re.compile(
+    r"(?<![\w./-])((?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*"
+    r"\.(?:c|h|cpp|py|ps1|f90))(?![\w/-])"
+)
+
+_REPO_SKIP_DIRS = {".git", "build", "managed_components", "graphify-out",
+                   ".claude", "__pycache__", "scratchpad", "node_modules"}
+
+_real_paths = None
+_real_names = None
+
+
+def _repo_index():
+    """Every source path in the tree, by full relative path and by basename.
+
+    Resolving by BASENAME as well is deliberate. The docs name files both bare
+    ("cat.c") and prefixed ("main/cat/cat.c"), and a hardcoded list of
+    directory prefixes went stale the first time it was written - it missed
+    main/cat/ and main/audio/ and reported two real files as ghosts.
+    """
+    global _real_paths, _real_names
+    if _real_paths is not None:
+        return _real_paths, _real_names
+    _real_paths, _real_names = set(), set()
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in _REPO_SKIP_DIRS]
+        for fn in files:
+            rel = os.path.relpath(os.path.join(root, fn), REPO).replace("\\", "/")
+            _real_paths.add(rel)
+            _real_names.add(fn)
+    return _real_paths, _real_names
+
+
+def check_named_source_files():
+    """A doc that names a source file which exists nowhere in the tree.
+
+    ⭐ WHY THIS RULE EXISTS. README's project-layout block listed
+    `util/fps.c` - a file that has never existed here - and
+    build/architecture.md said `util/` holds an "FPS counter". The frame rate
+    is `display_fps_x10()` in display/display.c, reported by util/cpu_stats.c.
+    Both statements survived the 2026-10-12 restructure and check_docs
+    reported CLEAN, because nothing here had ever asked whether a path the
+    prose names is real.
+
+    ⚠ IT CATCHES WRONG NAMES, NOT WRONG FACTS. The same pass found
+    `render/render.c` described as a "30 Hz render task" against
+    RENDER_PERIOD_MS 100. A wrong number in a true filename is invisible to
+    this rule and still has to be read.
+    """
+    paths, names = _repo_index()
+    out = []
+    for path in _md_files():
+        for n, line in enumerate(_read(path).splitlines(), 1):
+            for m in _SRC_RE.finditer(line):
+                named = m.group(1)
+                base = named.rsplit("/", 1)[-1]
+                if named in FOREIGN_SOURCES or base in FOREIGN_SOURCES:
+                    continue
+                # A path WITH a directory must match a real path, whole or
+                # by tail: "main/nope/cat.c" is wrong even though cat.c is
+                # real. Only a BARE basename falls back to "does this name
+                # exist anywhere", because the docs legitimately write both
+                # "cat.c" and "main/cat/cat.c" for the same file and a
+                # hardcoded prefix list went stale the first time it was
+                # written.
+                if "/" in named:
+                    if named in paths or any(q.endswith("/" + named) for q in paths):
+                        continue
+                elif base in names:
+                    continue
+                out.append(
+                    "%s:%d: names %s, which exists nowhere in this tree"
+                    % (_rel(path), n, named)
+                )
+    return out
+
+
 def _normalise_heading(text):
     """Reduce a heading to something comparable across two writing styles.
 
@@ -140,7 +278,12 @@ def _pdf_injected_guides():
     if not os.path.isfile(PDF_SCRIPT):
         return set()
     src = _read(PDF_SCRIPT)
-    return set(re.findall(r'Join-Path \$guideDir "([a-z0-9-]+\.md)"', src))
+    # ⛔ BOTH DIRECTORIES. This matched only $guideDir, so every chapter
+    # injected from $refDir - troubleshooting, and web-api since 2026-10-12 -
+    # read as uninjected. It stayed hidden because a README heading used to
+    # count as coverage and masked it.
+    return set(re.findall(
+        r'Join-Path \$(?:guideDir|refDir) "([a-z0-9-]+\.md)"', src))
 
 
 def _nav_pages():
@@ -161,6 +304,40 @@ def _nav_pages():
     return pages
 
 
+def _banner_version():
+    """The version README's banner claims, as (major, minor). None if absent."""
+    if not os.path.isfile(README):
+        return None
+    m = re.search(r"\*\*(?:Beta|Release) \u2014 v(\d+)\.(\d+)\.\d+",
+                  _read(README))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def check_stale_version_markers():
+    """"(new in vX.Y.Z)" markers older than the last release cycle.
+
+    A pinned version marker has the same shelf life as "new in the next
+    release" and nothing was watching it. The current minor and the one before
+    are left alone, so a marker gets a full cycle before it is called stale.
+    """
+    warnings = []
+    cur = _banner_version()
+    if not cur:
+        return warnings
+    for path in _md_files():
+        text = _read(path)
+        for m in re.finditer(r"new in v(\d+)\.(\d+)\.\d+", text):
+            ver = (int(m.group(1)), int(m.group(2)))
+            if ver >= (cur[0], cur[1] - 1):
+                continue
+            line = text[: m.start()].count("\n") + 1
+            warnings.append(
+                "%s:%d '%s' - the banner says v%d.%d, so this marker has "
+                "outlived its release" % (_rel(path), line, m.group(0),
+                                          cur[0], cur[1]))
+    return warnings
+
+
 def check_pdf_coverage():
     """Site pages that never reach the printable guide."""
     warnings = []
@@ -169,27 +346,31 @@ def check_pdf_coverage():
 
     for page in _nav_pages():
         base = os.path.basename(page)
-        if base in EXEMPT or base == "index.md":
+        if (base in EXEMPT or base in PDF_EXEMPT or base in README_SOURCED
+                or base == "index.md"):
             continue
         if base in injected:
             continue
         path = os.path.join(MKDOCS_DIR, page.replace("/", os.sep))
         if not os.path.isfile(path):
             continue
-        # Does README cover this subject anywhere under its own heading?
+        # ⛔ A README HEADING IS NOT COVERAGE ANY MORE.
         #
-        # Matched on shared SUBJECT WORDS rather than on the whole title: the
-        # two trees name the same thing differently on purpose ("Quick Start"
-        # vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and a check
-        # that flags those is noise - and a noisy check is one nobody reads,
-        # which is how the docs got into this state to begin with.
-        title = _headings(_read(path), levels=(1,))
-        title_key = list(title.keys())[0] if title else _normalise_heading(base[:-3])
-        subject = set(title_key.split()) - GENERIC_WORDS
-        if not subject:
-            continue
-        if any(subject & (set(k.split()) - GENERIC_WORDS) for k in readme_headings):
-            continue
+        # It was, when README carried the manual. Now README is a landing page:
+        # each chapter is a short lede and a link, and the guide file is the
+        # single source the PDF prints. So the only thing that puts a page in
+        # the printed guide is being INJECTED by the builder.
+        #
+        # This check used to accept a shared subject word with any README
+        # heading. Measured 2026-10-12, that hid a chapter that was nearly
+        # empty: README's Web UI section had been cut to a lede while the
+        # web-ui chapter still had GuideFile = $null, so the printed chapter
+        # lost the relay, the file browser, config backup and Tab5Shot - and
+        # this check said CLEAN, because "## Web UI" was still there.
+        #
+        # Deliberately kept out of the printed guide? Put it in PDF_EXEMPT,
+        # with the reason, where the decision is visible.
+        _ = readme_headings
         warnings.append(
             "%s is on the website and in the on-device manual, but nothing in "
             "the PDF covers it - it is neither injected by the PDF builder nor "
@@ -226,6 +407,29 @@ ACCEPTED_OVERLAP = {
 }
 
 
+def check_pdf_links():
+    """Every versioned user-guide PDF link must resolve to a file that exists."""
+    errors = []
+    for base, _dirs, files in os.walk(MKDOCS_DIR):
+        for fn in files:
+            if not fn.endswith(".md"):
+                continue
+            path = os.path.join(base, fn)
+            try:
+                with io.open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for m in re.finditer(r"QMX-Panadapter-UserGuide-v[\d.]+\.pdf", text):
+                target = os.path.join(MKDOCS_DIR, m.group(0))
+                if not os.path.isfile(target):
+                    rel = os.path.relpath(path, REPO).replace(os.sep, "/")
+                    line = text.count(os.linesep[-1], 0, m.start()) + 1
+                    errors.append("%s:%d links %s - no such file"
+                                  % (rel, line, m.group(0)))
+    return errors
+
+
 def check_duplicate_coverage():
     """Topics described in both trees - where drift happens."""
     if not os.path.isfile(README):
@@ -251,14 +455,21 @@ def check_duplicate_coverage():
 def run(verbose=True):
     """Returns (errors, warnings). Errors should fail a docs build."""
     errors = check_forward_looking()
+    bad_links = check_pdf_links()
     missing = check_pdf_coverage()
     dupes = check_duplicate_coverage()
+    stale = check_stale_version_markers()
+    ghosts = check_named_source_files()
 
     if verbose:
         if errors:
             print("check_docs: FORWARD-LOOKING TEXT (%d):" % len(errors))
             for e in errors:
                 print("  " + e)
+        if bad_links:
+            print("check_docs: BROKEN PDF LINKS (%d):" % len(bad_links))
+            for b in bad_links:
+                print("  " + b)
         if missing:
             print("check_docs: NOT IN THE PDF (%d):" % len(missing))
             for w in missing:
@@ -267,10 +478,18 @@ def run(verbose=True):
             print("check_docs: described in BOTH trees (%d) - drift surface:" % len(dupes))
             for d in dupes:
                 print("  " + d)
-        if not (errors or missing or dupes):
+        if stale:
+            print("check_docs: STALE VERSION MARKERS (%d):" % len(stale))
+            for s in stale:
+                print("  " + s)
+        if ghosts:
+            print("check_docs: NAMED SOURCE FILES THAT DO NOT EXIST (%d):" % len(ghosts))
+            for g in ghosts:
+                print("  " + g)
+        if not (errors or bad_links or missing or dupes or stale or ghosts):
             print("check_docs: clean")
 
-    return errors, missing + dupes
+    return errors + bad_links + ghosts, missing + dupes + stale
 
 
 if __name__ == "__main__":

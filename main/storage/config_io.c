@@ -83,17 +83,29 @@ char *config_io_export(size_t *out_len)
     APP("wf_contrast_db     = %.0f\n", (double)c.wf_contrast_db);
     APP("wf_floor_blend     = %u\n", (unsigned)c.wf_floor_blend);
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
-    APP("wf_speed_mult      = %u\n", (unsigned)c.wf_speed_mult);
+    APP("wf_rows_per_s      = %u\n", (unsigned)c.wf_rows_per_s);
     APP("display_flip       = %s\n", yn(c.display_flip));
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    APP("js8_submode        = %u\n", (unsigned)c.js8_submode);   // JS8Call NSUBMODE: 0 Normal 1 Fast 2 Turbo 4 Slow
+    /* ⛔ THE ONE SETTING THAT EXISTS TO PROTECT THE RADIO, and it was
+     * missing from the backup until 2026-10-12, the same cycle that added
+     * it. A restore silently returned the operator to "no ceiling", on a
+     * radio he had said must never see 12 V. Adding state and serving it
+     * are one step - see power_cal_modal.c's header for the two field
+     * cases the ceiling came from. 0 = no ceiling, sweep the full table. */
+    APP("pa_ceiling_x10     = %u\n", (unsigned)c.pa_ceiling_x10);  // 0 = none, else x10 (115 = 11.5 V)
     APP("rxaud_gain_d10     = %u\n", (unsigned)c.rxaud_gain_d10);       // AGC ceiling / 10 (20 = 200)
     APP("rxaud_pan_width    = %u\n", (unsigned)c.rxaud_pan_width_x10);  // stereo width x10 (18 = 1.8)
     APP("rxaud_pan_blend    = %u\n", (unsigned)c.rxaud_pan_blend_x100); // cross-feed x100  (15 = 0.15)
     APP("rxaud_pan_overlap  = %u\n", (unsigned)c.rxaud_pan_ovlp_x100);  // filter overlap x100 (30 = 0.30)
     APP("rxaud_agc_attack_ms  = %u\n", (unsigned)c.rxaud_agc_attack_ms);  // AGC attack, ms (default 3)
     APP("rxaud_agc_release_ms = %u\n", (unsigned)c.rxaud_agc_release_ms); // AGC release, ms (default 150)
+    /* The AM demodulator's own filter, half-bandwidth in units of 100 Hz. Not
+     * the radio's AM filter, which is fixed at 3.2 kHz and is not in the I/Q
+     * path - see RX_AUDIO_AM_HALF_BW_HZ in audio/rx_audio.h. */
+    APP("rxaud_am_half_bw_h100 = %u\n", (unsigned)c.rxaud_am_half_bw_h100);
     APP("rxaud_agc_off        = %s\n", yn(c.rxaud_agc_off));            // AGC bypass: fixed gain at the ceiling
     APP("hp_mute            = %s\n", yn(c.hp_mute_en));            // mute speaker when headphones are in
     APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
@@ -106,6 +118,18 @@ char *config_io_export(size_t *out_len)
     APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
     APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
     APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
+    /* Strings, not the raw enum: a backup file is read by hand as often as by
+       this importer, and "relay"/"unit_gps" says which cable is plugged in
+       where 1 would not. Written AFTER the relay triplet so the file reads in
+       the order the importer applies it - though the importer buffers the mode
+       anyway, because an edited file has no such order. */
+    APP("port_a_mode        = %s\n", port_a_mode_str(c.port_a_mode));
+    /* Which input the board listens to, and the jack's analogue gain.
+       The source is LATCHED AT BOOT, so a restored backup needs a restart
+       before it is actually listening to what this line says - the import
+       logs that rather than leaving it to be discovered. */
+    APP("rx_source          = %s\n", rx_source_str(c.rx_source));
+    APP("line_in_gain_db    = %u\n", (unsigned)c.line_in_gain_db);
     /* #302: 0 = 14.074.000, 1 = 14,074,000 */
     APP("freq_sep_style     = %u\n", (unsigned)c.freq_sep_style);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
@@ -142,6 +166,7 @@ char *config_io_export(size_t *out_len)
     APP("rit_pill           = %s\n", yn(c.rit_pill_show));
     APP("spur_mode          = %u\n", (unsigned)c.spur_mode);   // 0=off 1=subtract 2=interpolate
     APP("cw_decode          = %s\n", yn(c.cw_decode_en));
+    APP("cw_decode_rows     = %u\n", (unsigned)c.cw_decode_rows);
     APP("spots_mode_filter  = %s\n", yn(c.spots_mode_filter));
     APP("drawer_expert      = %s\n", yn(c.drawer_expert));
     APP("distance_in_miles  = %s\n", yn(c.distance_in_miles));
@@ -213,6 +238,7 @@ char *config_io_export(size_t *out_len)
     APP("exclude_worked_before = %s\n", yn(c.ft8_filters.excl_worked_before));
     APP("exclude_plain_cq      = %s\n", yn(c.ft8_filters.excl_plain_cq));
     APP("only_cq               = %s\n", yn(c.ft8_filters.incl_cq_only));
+    APP("cq_show_others        = %s\n", yn(c.ft8_filters.cq_show_others));
 
     /* ⭐ THE POWER CALIBRATION - the reason this whole audit happened.
      *
@@ -345,6 +371,15 @@ int config_io_import(char *text)
     char    act_ref[16];
     bool    act_touched = false;
     snprintf(act_ref, sizeof act_ref, "%s", cur.act_ref);
+    /* The port owner is buffered like the pairs above, and applied LAST: the
+       mode decides whether the relay triplet drives pins at all, so reading it
+       before the wiring it supersedes would hand the port to whichever half of
+       the file happened to come first. */
+    uint8_t port_mode = cur.port_a_mode;
+    bool    port_touched = false;
+
+    uint8_t rx_src     = cur.rx_source;
+    bool    rx_touched = false;
 
     section_t sec = SEC_NONE;
     int applied = 0;
@@ -415,17 +450,22 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_contrast_db"))    settings_set_wf_contrast_db((float)atof(val));
             else if (!strcasecmp(key, "wf_floor_blend"))    settings_set_wf_floor_blend((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
-            else if (!strcasecmp(key, "wf_speed_mult"))     settings_set_wf_speed_mult((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "wf_rows_per_s"))     settings_set_wf_rows_per_s((uint8_t)atoi(val));
+            /* Legacy key from before the unit became rows/s - 1..4x is 10..40. */
+            else if (!strcasecmp(key, "wf_speed_mult"))     settings_set_wf_rows_per_s((uint8_t)(atoi(val) * 10));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "js8_submode"))       settings_set_js8_submode((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "pa_ceiling_x10"))    settings_set_pa_ceiling_x10((uint16_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_gain_d10"))    settings_set_rxaud_gain_d10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_width"))   settings_set_rxaud_pan_width_x10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_blend"))   settings_set_rxaud_pan_blend_x100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_pan_overlap")) settings_set_rxaud_pan_ovlp_x100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_attack_ms"))  settings_set_rxaud_agc_attack_ms((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_release_ms")) settings_set_rxaud_agc_release_ms((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "rxaud_am_half_bw_h100")) settings_set_rxaud_am_half_bw_h100((uint8_t)atoi(val));
             else if (!strcasecmp(key, "rxaud_agc_off"))        settings_set_rxaud_agc_off(to_bool(val));
             else if (!strcasecmp(key, "hp_mute"))             settings_set_hp_mute_en(to_bool(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
@@ -450,6 +490,19 @@ int config_io_import(char *text)
                 else                                            rms = (uint16_t)atoi(val);
                 settings_set_gpio_relay(rp, rl, rms);
             }
+            else if (!strcasecmp(key, "port_a_mode")) {
+                port_mode    = port_a_mode_parse(val);
+                port_touched = true;
+            }
+            /* Buffered like the port owner, and applied at the end for the
+               same reason: the source decides which hardware comes up, so it
+               must not be read before the gain key it governs. */
+            else if (!strcasecmp(key, "rx_source")) {
+                rx_src     = rx_source_parse(val);
+                rx_touched = true;
+            }
+            else if (!strcasecmp(key, "line_in_gain_db"))
+                settings_set_line_in_gain_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "freq_sep_style"))    settings_set_freq_sep_style((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
@@ -476,6 +529,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "rit_pill"))          settings_set_rit_pill_show(to_bool(val));
             else if (!strcasecmp(key, "spur_mode"))         settings_set_spur_mode((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_decode"))         settings_set_cw_decode_en(to_bool(val));
+            else if (!strcasecmp(key, "cw_decode_rows"))    settings_set_cw_decode_rows((uint8_t)atoi(val));
             else if (!strcasecmp(key, "spots_mode_filter")) settings_set_spots_mode_filter(to_bool(val));
             else if (!strcasecmp(key, "drawer_expert"))     settings_set_drawer_expert(to_bool(val));
             else if (!strcasecmp(key, "distance_in_miles")) settings_set_distance_in_miles(to_bool(val));
@@ -546,6 +600,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "exclude_worked_before")) { filt.excl_worked_before = b; filt_touched = true; }
             else if (!strcasecmp(key, "exclude_plain_cq"))      { filt.excl_plain_cq = b; filt_touched = true; }
             else if (!strcasecmp(key, "only_cq"))               { filt.incl_cq_only = b; filt_touched = true; }
+            else if (!strcasecmp(key, "cq_show_others"))        { filt.cq_show_others = b; filt_touched = true; }
             else if (!strcasecmp(key, "include1")) { strncpy(filt.incl_text[0], val, FT8_FILTER_TEXT_LEN - 1); filt.incl_text[0][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }
             else if (!strcasecmp(key, "include2")) { strncpy(filt.incl_text[1], val, FT8_FILTER_TEXT_LEN - 1); filt.incl_text[1][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }
             else if (!strcasecmp(key, "exclude1")) { strncpy(filt.excl_text[0], val, FT8_FILTER_TEXT_LEN - 1); filt.excl_text[0][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }
@@ -671,6 +726,17 @@ int config_io_import(char *text)
     if (known_touched) settings_wifi_known_set_all(known, known_n);
     if (kp_touched)  settings_set_freq_kp_pos(kp_dx, kp_dy);
     if (act_touched) settings_set_activation(act_type, act_ref);
+    /* Dead last, after every key it governs: this is the sequencer call, and it
+       either hands PORT.A to the UART or re-drives the relay pins depending on
+       the mode. */
+    if (port_touched) settings_set_port_a_mode(port_mode);
+    /* Stored, never switched: settings_set_rx_source() returns true when the
+       stored choice differs from the running one, and the only way to apply
+       it is a restart. Say so in the log - a restored backup that quietly
+       keeps listening to the old input is the confusing case. */
+    if (rx_touched && settings_set_rx_source(rx_src))
+        ESP_LOGW(TAG, "imported rx_source=%s - RESTART REQUIRED before it is used",
+                 rx_source_str(rx_src));
     settings_flush();
     /* The RX-audio keys above are STORED by their setters but not heard: the
      * DSP holds its own live copies. Without this a restored backup shows the

@@ -34,6 +34,29 @@ typedef struct
     float fft_norm;      ///< FFT normalization factor
     float* window;       ///< Window function for STFT analysis (nfft samples)
     float* last_frame;   ///< Current STFT analysis frame (nfft samples)
+    /* ⛔ STFT SCRATCH, AND IT USED TO BE TWO VARIABLE-LENGTH ARRAYS ON THE
+     * STACK inside monitor_process():
+     *
+     *     kiss_fft_scalar timedata[me->nfft];
+     *     kiss_fft_cpx    freqdata[me->nfft / 2 + 1];
+     *
+     * At FT8's nfft of 3840 that is 15 360 + 15 368 = ~30 KB of a 64 KB task
+     * stack, which worked and left no sign that it was a problem. JS8 Slow
+     * doubles nfft to 7680 and the pair becomes ~61 KB - the `ft8` task took a
+     * Stack protection fault on its first Slow capture, 2026-10-14, SP 4112
+     * bytes below the stack bottom.
+     *
+     * The fix is not a bigger stack: the cost SCALED WITH THE PROTOCOL, so a
+     * stack large enough for Slow is one that silently waits for the next
+     * longer symbol period. Off the stack entirely, allocated once, and the
+     * stack cost of monitor_process stops depending on nfft at all.
+     *
+     * On the device both are shared across the whole pool and point at one
+     * allocation - monitor_process runs on the capture task only, one monitor
+     * at a time (see s_shared_fft_work in ft8_test.c, same lifecycle, same
+     * reasoning). A standalone monitor_init() owns its own pair. */
+    kiss_fft_scalar* timedata; ///< STFT input scratch (nfft samples)
+    kiss_fft_cpx*    freqdata; ///< STFT output scratch (nfft/2 + 1 bins)
     ftx_waterfall_t wf;  ///< Waterfall object
     float max_mag;       ///< Maximum detected magnitude (debug stats)
 

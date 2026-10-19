@@ -9,6 +9,9 @@
 #include "diag_log.h"
 #include "ft8_test.h"
 #include "settings.h"
+#include "unit_gps.h"        // the bottom-bar Unit GPS chip - pipeline state
+#include "gps_autogrid.h"  // station grid from the fix (operator, 2026-10-09)
+#include "ui/gps_page.h"    // gps_page_grid() - Maidenhead from signed degrees
 #include "bsp/m5stack_tab5.h"
 #include "sd_archive.h"
 #include "esp_heap_caps.h"
@@ -84,6 +87,49 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 // needs to track true resting SoC, not momentarily-loaded terminal voltage.
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
+
+/* The battery percentage AS SHOWN, which is not always the one the charge
+ * cutoff acts on.
+ *
+ * ⚠ Reported 2026-10-09: with the limit set to 80 %, the bar read 79-80 % while
+ * charging and then jumped to "85 % (limit)" the moment charging stopped.
+ * Measured at that moment: mv=8055 at rest, which really is 85.6 % on the
+ * 6.6 V/8.3 V map - the number was arithmetically right. The pack genuinely
+ * overshot, because the IR compensation was a FIXED 200 mV against a measured
+ * total offset of 120 mV at this charger's ~0.5 A. Since measured and replaced
+ * by |I| x R + polarisation (battery.c), so the cutoff should now land on the
+ * limit and this cap is a backstop rather than a mask.
+ *
+ * The operator's call, and his reasoning: what matters is the level you get
+ * when actually running on the battery, not the resting peak you never
+ * experience - and a user is owed a number that matches the limit they set,
+ * not a lecture on internal resistance.
+ *
+ * So the DISPLAY is capped at the limit; the CUTOFF still uses the raw level.
+ * min() and not a hard clamp, so once the pack really does drain below the
+ * limit the true number comes back on its own, and the hysteresis resume still
+ * sees the real value.
+ *
+ * ⛔ The overshoot itself is NOT fixed by this - it is hidden. The real fix is
+ * to scale the IR compensation by the measured charge current
+ * (ina226_read_shunt_ma() already exists, so V_drop = I x R_internal is
+ * available) instead of a fixed constant. That needs a charge cycle with the
+ * current logged to derive R_internal, which has not been done.
+ *
+ * One place, called by both the Tab5 bar and /api/status, so the two screens
+ * cannot disagree about the battery the way they did about DT and the S-meter
+ * earlier the same day. */
+int status_battery_display_level(void)
+{
+    int level = battery_get_level();
+    if (level < 0) return level;
+
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    if (cfg.charge_limit_en && level > (int)cfg.charge_limit_pct)
+        return (int)cfg.charge_limit_pct;
+    return level;
+}
 
 bool status_charge_limit_active(void)
 {
@@ -372,18 +418,70 @@ static void status_task(void *arg)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
 
-        // Battery care: stop charging at a user-set percentage. Uses
-        // level_for_limit (IR-drop compensated while actively charging - see
-        // CHARGE_IR_DROP_MV above), NOT the raw displayed level, so the
-        // decision tracks true SoC instead of the momentarily-loaded
-        // terminal voltage.
+        // Battery care: stop charging at a user-set percentage. Uses the
+        // compensated level (|I| x R + polarisation while actively charging -
+        // see battery.c), NOT the capped display level, so the decision tracks
+        // true SoC instead of the momentarily-loaded terminal voltage.
+        /* ⭐ BATTERY CALIBRATION TRACE. The data R_INTERNAL was derived from,
+         * kept live so the model can be re-checked on another pack or unit
+         * rather than trusted forever.
+         *
+         * R_internal = dV/dI across a charge on/off transition, so V and I must
+         * be sampled together and UNCOOKED - battery_get_mv() has already
+         * subtracted the very constant under test. The line also carries the
+         * compensated level so the error is visible directly.
+         *
+         * Logged only while current is actually flowing, plus one line on every
+         * cutoff/resume transition below. On this bench the pack sits at the
+         * limit with the charger permanently connected, so charging is normally
+         * OFF and this costs nothing; when it does charge, one line a second is
+         * exactly the resolution the transition needs. */
+        {
+            static bool s_batcal_prev_charging = false;
+            int raw_mv = -1, chg_ma = 0;
+            bool have_v = battery_get_raw_mv(&raw_mv);
+            bool have_i = battery_get_charge_ma(&chg_ma);
+            if (have_v && have_i && (charging || s_batcal_prev_charging)) {
+                ESP_LOGI(TAG, "batcal: raw=%dmV ma=%d comp_level=%d%% charging=%d cutoff=%d",
+                         raw_mv, chg_ma, level, (int)charging, (int)s_charge_cutoff_active);
+            }
+            s_batcal_prev_charging = charging;
+        }
+
+        /* ⛔ A FAILED READ IS NOT A FLAT BATTERY. battery_get_level() returns -1
+         * when the INA226 read fails, and -1 satisfies "level < limit - 5", so
+         * a single bad read switched charging straight back on and defeated
+         * battery care. Caught in the operator's own capture on 2026-10-09:
+         *
+         *     battery care: charging resumed at -1% (limit 80%)
+         *
+         * Resuming is the SAFE direction, which is exactly why this went
+         * unnoticed - the pack charges, nothing breaks, and the limit is just
+         * quietly not enforced for a while. Hold the current state instead:
+         * neither branch may act on a level we do not have.
+         *
+         * ⚠ The guard sits on the STOP/RESUME pair only, NOT on the whole
+         * block. Putting it outside would also gate the "feature turned off"
+         * restore below, so a hard INA226 failure - battery_present() still
+         * true, every level read -1 - would leave charging disabled with no way
+         * back. The operator's escape hatch has to work when the sensor does
+         * not. */
         if (battery_present()) {
             if (cfg.charge_limit_en) {
-                if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                if (level < 0) {
+                    /* No usable reading this tick - hold whatever state we are
+                       in and wait for the next poll a second from now. */
+                } else if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                    int rv = -1, rm = 0;
+                    (void)battery_get_raw_mv(&rv); (void)battery_get_charge_ma(&rm);
                     bsp_set_charge_en(false);
                     s_charge_cutoff_active = true;
-                    ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%)",
-                             level, (unsigned)cfg.charge_limit_pct);
+                    /* raw+ma AT THE INSTANT OF CUTOFF. This is the one sample
+                       the whole IR model turns on: pair it with the resting
+                       voltage a minute later and the real drop falls out. */
+                    ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%) "
+                                  "[batcal cut: raw=%dmV ma=%d]",
+                             level, (unsigned)cfg.charge_limit_pct, rv, rm);
                 } else if (s_charge_cutoff_active &&
                            level < (int)cfg.charge_limit_pct - CHARGE_LIMIT_HYSTERESIS_PCT) {
                     bsp_set_charge_en(true);
@@ -446,13 +544,14 @@ static void status_task(void *arg)
         // operator's own call - nobody reading the bar needs the raw cell
         // voltage, and the battery icon already carries the level visually.
         const char *limit_suffix = s_charge_cutoff_active ? "  (limit)" : "";
-        if (level < 0) {
+        int shown = status_battery_display_level();
+        if (shown < 0) {
             snprintf(left, sizeof(left), "--%%");
         } else {
-            snprintf(left, sizeof(left), "%d%%%s%s", level,
+            snprintf(left, sizeof(left), "%d%%%s%s", shown,
                      charging ? "  " LV_SYMBOL_CHARGE : "", limit_suffix);
         }
-        const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
+        const char *batt_icon = (shown < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(shown);
 
         // --- CENTER: UTC time HH:MM:SS + time-source indicator ---
         time_t now = time(NULL);
@@ -461,10 +560,25 @@ static void status_task(void *arg)
         bool time_valid = tm_utc.tm_year > 100;  // sane only after sync (year > 2000)
 
         const char *clk_suffix;
+        // Scoped with clk_suffix because ui_set_bottom_clock() is called at the
+        // end of the same block - the buffer must outlive the pointer.
+        char clk_suffix_buf[16];
         // Effective (current-authority) source, not the last one-off writer - so
         // a stray manual/FT8 nudge doesn't leave the label stuck on FT8 while
         // SNTP/GPS is really in charge.
         switch (time_sync_get_effective_source()) {
+            // Unit GPS on PORT.A. Reaches this switch only when it is LIVE
+            // (LOCKED inside the freshness window) - get_effective_source()
+            // will not return it otherwise - so the GPS claim can never be
+            // made from mode alone or from a stale lock.
+            // "U-GPS", not "GPS": the receiver on the Tab5 itself (Unit GPS
+            // on PORT.A, or Module GPS v2.1 on the M-Bus), told apart from the
+            // QMX's own GPS below. The operator asked for the two to be
+            // distinguishable - they are different antennas, different
+            // failures, and only one of them survives the radio being
+            // unplugged. Same word on the web UI and in the FT8 time modal;
+            // those are the other two copies of this switch.
+            case TIME_SOURCE_UNIT_GPS: clk_suffix = " UTC(U-GPS)"; break;
             case TIME_SOURCE_SNTP:   clk_suffix = " UTC(NTP)"; break;
             // QMX source: GPS when auto-detected as GPS-disciplined, else the
             // plain-QMX RTC (naive offline fallback).
@@ -472,10 +586,13 @@ static void status_task(void *arg)
             case TIME_SOURCE_RTC:    clk_suffix = " UTC(RTC)"; break;
             case TIME_SOURCE_MANUAL: clk_suffix = " UTC(MAN)"; break;
             case TIME_SOURCE_FT8:
-                // Marked "FT8" historically, but the sync can come from either
-                // protocol's slot timing now that FT4's offset calc is fixed -
-                // label it by the sub-mode actually active, not the constant name.
-                clk_suffix = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? " UTC(FT4)" : " UTC(FT8)";
+                // Marked "FT8" historically, but the sync can come from ANY
+                // sub-mode's slot timing - label it by the one actually active,
+                // not by the constant's name. Was a two-way ternary and so said
+                // "UTC(FT8)" while synced from JS8; ft8_op_mode_name() is the
+                // one spelling of the sub-mode (ft8_test.h).
+                snprintf(clk_suffix_buf, sizeof(clk_suffix_buf), " UTC(%s)", ft8_op_mode_name());
+                clk_suffix = clk_suffix_buf;
                 break;
             default:                 clk_suffix = " UTC";      break;
         }
@@ -524,6 +641,68 @@ static void status_task(void *arg)
             }
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
+        /* The Unit GPS chip. It answers "what is the RECEIVER doing", which is
+         * a different question from the suffix's "who is disciplining the
+         * clock" - and it hides itself in relay mode, where there is no
+         * receiver to describe at all (spec: the chip is never shown when
+         * Port mode is relay). */
+        {
+            unit_gps_state_t st = unit_gps_state();
+            if (settings_get_port_a_mode() != PORT_A_MODE_UNIT_GPS ||
+                st == UNIT_GPS_OFF) {
+                ui_set_unit_gps_chip(-1);
+            } else if (st == UNIT_GPS_LOCKED) {
+                ui_set_unit_gps_chip(1);
+            } else if (st == UNIT_GPS_LOST) {
+                ui_set_unit_gps_chip(2);
+            } else {
+                ui_set_unit_gps_chip(0);   // LISTENING or DEVICE - acquiring
+            }
+        }
+        /* ⭐ THE STATION GRID, FROM THE FIX. "We also need to set the grid
+         * automatically when we now have the grid from GPS" - operator,
+         * 2026-10-09. my_grid goes out in every FT8 CQ and TX1 and into every
+         * ADIF record, so WHEN this fires is the careful part and lives in
+         * gps_autogrid.c with its own harness: a minute of agreement, only
+         * when it differs from what is stored, and never twice for the same
+         * square.
+         *
+         * ⭐ "I want it filled in as soon as GPS data is available - operator
+         * can then alter it if needed" (operator, 2026-10-09). So the module
+         * remembers what it wrote and the seed below reads that back from NVS
+         * at first call. Without the seed the operator's correction would be
+         * undone 60 s after every boot, which is the opposite of "can then
+         * alter it". Moving to a DIFFERENT square still writes - that is the
+         * portable case the feature is for. Logged, never silent. */
+        {
+            static gps_autogrid_t s_autogrid;
+            static bool           s_autogrid_init;
+            if (!s_autogrid_init) {
+                gps_autogrid_init(&s_autogrid);
+                char seed[8] = { 0 };
+                settings_get_gps_grid_auto(seed, sizeof(seed));
+                gps_autogrid_set_written(&s_autogrid, seed);
+                s_autogrid_init = true;
+            }
+
+            unit_gps_info_t gi;
+            unit_gps_get_info(&gi);
+            char gbuf[7] = { 0 };
+            const char *gps_grid = NULL;
+            if (gi.valid && gi.has_pos) {
+                gps_page_grid(gi.lat_deg, gi.lon_deg, gbuf);
+                if (gbuf[0]) gps_grid = gbuf;
+            }
+            if (gps_autogrid_step(&s_autogrid, gps_grid, cfg.my_grid)) {
+                ESP_LOGI(TAG, "grid from GPS: '%s' -> '%s'", cfg.my_grid, gbuf);
+                settings_set_my_grid(gbuf);
+                /* Persist WHAT WE WROTE, not just the grid itself: this is the
+                 * only record that distinguishes a later hand edit from a
+                 * square never filled. */
+                settings_set_gps_grid_auto(gps_autogrid_written(&s_autogrid));
+            }
+        }
+
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
         // Bluetooth, next to it. "Started" and "a mouse is on the other end"
         // are separate facts and the glyph shows both.

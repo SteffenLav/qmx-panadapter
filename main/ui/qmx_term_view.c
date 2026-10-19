@@ -67,6 +67,7 @@ _Static_assert(KEY_ROW_END <= 1280 - 8,
 
 static lv_obj_t  *s_overlay;
 static lv_obj_t  *s_grid;
+static lv_obj_t  *s_title_lbl;
 static lv_obj_t  *s_rows[ANSI_ROWS];
 static lv_obj_t  *s_state;
 static lv_obj_t  *s_help;           // shown when the radio offers no second port
@@ -94,7 +95,7 @@ static uint32_t   s_open_tick;      // when this session opened, for the nudge w
  *
  * So: the UI posts a command and returns immediately. This worker owns all
  * port I/O, and the poll timer picks the result up from the screen model. */
-typedef enum { CMD_OPEN, CMD_CLOSE, CMD_KEY } term_cmd_kind_t;
+typedef enum { CMD_OPEN, CMD_CLOSE, CMD_KEY, CMD_GOTO_GPS } term_cmd_kind_t;
 typedef struct { term_cmd_kind_t kind; char key[12]; } term_cmd_t;
 
 static QueueHandle_t s_cmdq;
@@ -122,6 +123,20 @@ static void worker_task(void *arg)
             break;
         case CMD_KEY:
             qmx_term_key(c.key);
+            break;
+        case CMD_GOTO_GPS:
+            /* Walk to the radio's own GPS viewer. Screen-driven both steps -
+             * see qmx_term_select(), and note that this menu's siblings
+             * include the sweeps that key the transmitter, which is why the
+             * walk never presses Enter on a row it did not aim at. */
+            s_status = qmx_term_open() ? ST_CONNECTED : ST_NO_PORT;
+            if (s_status == ST_CONNECTED) {
+                if (!qmx_term_select("Hardware tests") ||
+                    !qmx_term_select("GPS viewer")) {
+                    ESP_LOGW(TAG, "could not reach the radio's GPS viewer - "
+                                  "leaving the session on the menu it reached");
+                }
+            }
             break;
         }
     }
@@ -646,6 +661,7 @@ static void build(void)
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(hdr);
+    s_title_lbl = title;
     lv_label_set_text(title, "Radio menus");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_PRIMARY), 0);
@@ -824,6 +840,9 @@ static void build(void)
 void qmx_term_view_open(void)
 {
     build();
+    /* Back to the generic title. qmx_term_view_open_gps() calls this first and
+     * then overrides it, so a later plain open cannot inherit "GPS". */
+    if (s_title_lbl) lv_label_set_text(s_title_lbl, "Radio menus");
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_overlay);
     s_open = true;
@@ -850,6 +869,30 @@ void qmx_term_view_open(void)
     if (!s_timer) s_timer = lv_timer_create(poll_cb, POLL_MS, NULL);
     lv_timer_resume(s_timer);
     ESP_LOGI(TAG, "open");
+}
+
+/* ⭐ Open straight on the radio's own GPS viewer.
+ *
+ * The QMX reports position and time over CAT and NOTHING else - no satellite
+ * count, no SNR, no elevation or azimuth. The only place those exist is this
+ * screen, inside the radio's menus on serial port 2. So the QMX side of the
+ * GPS page is not a second drawing of the data: it IS the radio's page, in the
+ * viewer already built to render it, with the title saying whose it is.
+ *
+ * ⚠ IT TAKES THE RADIO INTO ITS MENUS, with everything that implies - the
+ * panadapter stops while it is open, and the close path has to re-assert IQ
+ * mode and put the dial back (see close_locked() in qmx_term.c). That is the
+ * price of the only data path there is, and it is the same trip the operator
+ * would make by hand.
+ *
+ * ⛔ Needs "USB serial ports" set to 2 on the radio. Without it there is no
+ * second port and the view says so, as it does for any other session. */
+void qmx_term_view_open_gps(void)
+{
+    qmx_term_view_open();
+    if (s_title_lbl) lv_label_set_text(s_title_lbl, "GPS  -  QMX internal receiver");
+    set_state("opening the radio's GPS viewer...", 0x888888);
+    post(CMD_GOTO_GPS, NULL);
 }
 
 void qmx_term_view_close(void)

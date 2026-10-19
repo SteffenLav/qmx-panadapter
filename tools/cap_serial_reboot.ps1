@@ -22,6 +22,7 @@ param([string]$Port = "COM3", [string]$Out = "reboot.txt", [int]$Seconds = 300,
 $end = (Get-Date).AddSeconds($Seconds)
 $reconnects = 0
 
+$consecutiveLost = 0   # resets on the first real byte; drives the backoff below
 # This process is nearly idle (a 100 ms poll of ~40 bytes/s), so raising its
 # priority costs nothing and buys the one thing that matters: it still gets
 # scheduled when the machine is saturated by something else - a build, or the
@@ -56,14 +57,36 @@ while ((Get-Date) -lt $end) {
         }
         while ((Get-Date) -lt $end) {
             $chunk = $sp.ReadExisting()          # throws when the device vanishes
-            if ($chunk.Length -gt 0) { [System.IO.File]::AppendAllText($Out, $chunk) }
+            if ($chunk.Length -gt 0) {
+                [System.IO.File]::AppendAllText($Out, $chunk)
+                $consecutiveLost = 0                 # real bytes = the port is back
+            }
             Start-Sleep -Milliseconds 100
         }
     } catch {
         $reconnects++
-        [System.IO.File]::AppendAllText($Out,
-            "`n=== [capture] PORT LOST $(Get-Date -Format HH:mm:ss) - device reset? reopening ===`n")
-        Start-Sleep -Milliseconds 400
+        # A flash or a reboot loses the port for a second or two, and saying so
+        # is the point of this line. A board that is UNPLUGGED or switched off
+        # loses it for ever, and at 400 ms a go that wrote 2,506,870 identical
+        # lines into the capture - about 9 KB/min, 13 MB/day - measured
+        # 2026-10-13 after the dev bench was powered down. The capture IS the
+        # diagnostic record, so diluting it with millions of lines of its own
+        # retry noise is the one thing it must not do.
+        #
+        # So: say it the first few times, then back off and say it rarely. The
+        # backoff also stops a dead port spinning a CPU for days.
+        if ($consecutiveLost -lt 3 -or ($consecutiveLost % 150) -eq 0) {
+            $note = if ($consecutiveLost -lt 3) { "device reset? reopening" }
+                    else { "still gone after $consecutiveLost attempts - unplugged or powered off?" }
+            [System.IO.File]::AppendAllText($Out,
+                "`n=== [capture] PORT LOST $(Get-Date -Format HH:mm:ss) - $note ===`n")
+        }
+        $consecutiveLost++
+        # 400 ms for the first few, so a flash is still followed closely, then
+        # up to 4 s. Capped rather than growing without limit: the port coming
+        # back must be noticed within a few seconds, not a few minutes.
+        $wait = if ($consecutiveLost -le 5) { 400 } elseif ($consecutiveLost -le 20) { 1500 } else { 4000 }
+        Start-Sleep -Milliseconds $wait
     } finally {
         if ($sp -and $sp.IsOpen) { try { $sp.Close() } catch {} }
     }

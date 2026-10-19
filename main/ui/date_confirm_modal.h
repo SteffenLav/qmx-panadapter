@@ -11,10 +11,13 @@
 
 // Call from a 1 Hz LVGL-thread timer. Opens the question once per boot when the
 // date is unverified, the unit has been up long enough for SNTP to have had its
-// chance, and nothing else is on screen. Closes it by itself if SNTP arrives.
+// chance, and nothing else is on screen. Closes it by itself if SNTP arrives -
+// but ONLY the question it opened itself (royord, #18).
 void date_confirm_modal_tick(void);
 
-// Open it now (the Set the Clock window's date line). LVGL thread only.
+// Open it now (the Set the Clock window's date line, or the web UI). An
+// operator-opened window is NEVER closed for them, not even once the date is
+// verified - that was #18. LVGL thread only.
 void date_confirm_modal_show(void);
 
 bool date_confirm_modal_is_open(void);

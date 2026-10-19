@@ -30,6 +30,21 @@ static gpio_num_t pin_to_gpio(uint8_t pin)
     return GPIO_NUM_NC;
 }
 
+/* True when PORT.A belongs to the Unit GPS UART, in which case driving these
+ * pins is an electrical fight with a transmitter rather than a preference.
+ *
+ * The refusal lives HERE and not in the HTTP handler or the web page, because
+ * every route into a pin drive has to hit the same wall: /api/cmd's gpio_pulse
+ * and gpio_power_cycle, the power-cycle sequence's own on-pulse, and any
+ * future caller. A guard that only exists in one UI is a guard that the next
+ * UI forgets. */
+static bool port_is_unit_gps(char *err, size_t errlen)
+{
+    if (settings_get_port_a_mode() != PORT_A_MODE_UNIT_GPS) return false;
+    if (err && errlen) snprintf(err, errlen, "PORT.A is in Unit GPS mode");
+    return true;
+}
+
 static void release_cb(void *arg)
 {
     (void)arg;
@@ -40,6 +55,14 @@ static void release_cb(void *arg)
 
 void gpio_relay_init(void)
 {
+    // Belt as well as braces: the boot branch (task 2.3) already does not call
+    // this in Unit GPS mode, but configuring both pins as driven outputs here
+    // would put them straight into the GPS TX line, and this function's whole
+    // job is to decide what the pins are.
+    if (port_is_unit_gps(NULL, 0)) {
+        ESP_LOGI(TAG, "GPIO53/54 left unconfigured - PORT.A is in Unit GPS mode");
+        return;
+    }
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B),
         /* INPUT_OUTPUT, not OUTPUT: the input buffer is what makes
@@ -94,6 +117,10 @@ void gpio_relay_init(void)
 
 bool gpio_relay_pulse(uint8_t pin, bool level, uint16_t ms, char *err, size_t errlen)
 {
+    // Checked first, before the pin/ms range checks: the mode is a statement
+    // about the whole port, and an operator who has chosen Unit GPS must get
+    // the same answer whether or not their stored pin happens to be valid.
+    if (port_is_unit_gps(err, errlen)) return false;
     gpio_num_t g = pin_to_gpio(pin);
     if (g == GPIO_NUM_NC) {
         if (err) snprintf(err, errlen, "pin must be 53 or 54");
@@ -120,6 +147,40 @@ bool gpio_relay_pulse(uint8_t pin, bool level, uint16_t ms, char *err, size_t er
 }
 
 bool gpio_relay_busy(void) { return s_busy; }
+
+bool gpio_relay_release(void)
+{
+    if (s_busy) {
+        ESP_LOGW(TAG, "release refused - a pulse is in flight");
+        return false;
+    }
+    if (gpio_relay_power_cycle_status() == GPIO_PC_RUNNING) {
+        ESP_LOGW(TAG, "release refused - a power cycle is running");
+        return false;
+    }
+
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B),
+        /* INPUT only: the output driver is switched off, so the pads float.
+         * This is the state a UART RX/TX needs - a driven output fighting the
+         * GPS's own TX is an electrical fault, not a slow data transfer. */
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    esp_err_t e = gpio_config(&cfg);
+
+    /* Nothing drives these pins any more, so polarity writes must stop trying
+     * to: gpio_relay_set_polarity() and gpio_relay_init()'s early exits key
+     * off s_inited. */
+    s_inited = false;
+    s_rest_level = false;
+
+    ESP_LOGI(TAG, "GPIO53/54 released to inputs (hi-Z) - PORT.A handed over (%s)",
+             e == ESP_OK ? "ok" : "gpio_config FAILED");
+    return e == ESP_OK;
+}
 
 // ---- Deterministic power-cycle sequence (Randy N4OPI, 2026-09-13) ---------
 //
@@ -182,6 +243,11 @@ static void pc_step_cb(void *arg)
 bool gpio_relay_power_cycle_start(uint8_t pin, bool level, uint16_t off_ms,
                                    char *err, size_t errlen)
 {
+    // Same refusal as gpio_relay_pulse(), stated here too rather than only
+    // arriving through the pulse call below: a caller reading this function
+    // must be able to see that it refuses, and an explicit early return keeps
+    // the answer identical if the pulse checks are ever reordered.
+    if (port_is_unit_gps(err, errlen)) return false;
     if (s_pc_status == GPIO_PC_RUNNING) {
         if (err) snprintf(err, errlen, "a power-cycle is already running");
         return false;
@@ -214,6 +280,19 @@ void gpio_relay_set_polarity(bool active_level)
      * import, say). The stored resting level above is what init() will read,
      * so there is nothing to drive yet. */
     if (!s_inited) return;
+
+    /* 2.2: the wiring triple is still SETTABLE while PORT.A is in Unit GPS
+     * mode - it is the operator's hardware and they may be restoring a backup
+     * - but setting it must not drive a pin. The stored resting level above is
+     * what gpio_relay_init() will apply when mode returns to relay, so the
+     * value is kept and only the drive is skipped. Nothing here claims a READ
+     * BACK either: the log line is a statement about pins this module is
+     * driving, and right now it is not. */
+    if (port_is_unit_gps(NULL, 0)) {
+        ESP_LOGI(TAG, "polarity stored (active %s) - PORT.A is in Unit GPS mode, pins not driven",
+                 active_level ? "HIGH" : "LOW");
+        return;
+    }
     if (s_busy) {
         ESP_LOGI(TAG, "polarity now active %s - resting level applies when the pulse ends",
                  active_level ? "HIGH" : "LOW");

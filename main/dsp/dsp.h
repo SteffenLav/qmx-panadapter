@@ -53,6 +53,15 @@ esp_err_t dsp_init(void);
 /* #298: the dial the samples behind the CURRENT spectrum were captured under.
  * Drawing must locate bins with this, not with the live dial - the pipeline is
  * hundreds of ms deep and its depth was measured varying better than 2:1. */
+/* True when the samples come from a REAL (one-channel) source - the 3.5 mm
+ * jack - rather than complex IQ. line_in.c synthesises the quadrature with a
+ * Hilbert transform, so the spectrum is one-sided and correct, but there is
+ * no RF dial behind it: the frequency axis is AUDIO Hz, and the negative half
+ * of the span is empty because one channel cannot fill it.
+ *
+ * Latched at dsp_init(); the source cannot change without a restart. */
+bool dsp_source_is_real(void);
+
 uint32_t dsp_get_spectrum_dial_hz(void);
 
 void dsp_set_window(uint8_t idx);

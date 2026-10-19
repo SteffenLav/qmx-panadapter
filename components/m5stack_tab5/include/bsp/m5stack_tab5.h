@@ -88,7 +88,8 @@ esp_err_t bsp_cam_osc_init(void);
  * I2C interface
  *
  * There are multiple devices connected to I2C peripheral:
- *  - Codec ES8311 (configuration only)
+ *  - Codec ES8388, output/playback (configuration only)
+ *  - Codec ES7210, 4-channel ADC for capture (configuration only)
  *  - LCD Touch controller
  **************************************************************************************************/
 
@@ -147,7 +148,22 @@ i2c_master_bus_handle_t bsp_grove_i2c_get_handle(void);
  * I2S audio interface
  *
  * There are two devices connected to the I2S peripheral:
- *  - Codec ES8311 for output(playback) and input(recording) path
+ *  - Codec ES8388 for the output (playback) path
+ *  - Codec ES7210 for the input (recording) path: a FOUR-channel ADC, opened
+ *    with all four channels selected and run at 48 kHz / 16-bit / 4ch
+ *    (see bsp_audio_codec_microphone_init() and bsp_codec_es7210_set() in
+ *    m5stack_tab5.c, and the "audio es7210 + es8388" note above them).
+ *
+ * ⛔ THIS BLOCK SAID "Codec ES8311 for output(playback) and input(recording)"
+ * until 2026-10-06, and the I2C block above said ES8311 too. Neither part is on
+ * this board - that is upstream boilerplate from a different BSP. The wrong
+ * comment cost real credibility: asked whether the Tab5 has an analogue audio
+ * input, I read this header instead of the implementation, answered "no, the
+ * jack is output only", and that went out to a user. It is wrong twice over -
+ * the capture codec is an ES7210, and the 3.5 mm jack is a 4-pole headset
+ * socket with a MIC on the ring (confirmed by Tony A, tony1tf, who had the
+ * plug in his hand). If you are answering a hardware-capability question, read
+ * the .c that configures the part, not this file.
  *
  * For speaker initialization use bsp_audio_codec_speaker_init() which is inside initialize I2S with bsp_audio_init().
  * For microphone initialization use bsp_audio_codec_microphone_init() which is inside initialize I2S with

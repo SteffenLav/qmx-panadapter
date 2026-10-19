@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "display.h"
+#include "ui.h"          // ui_bandplan_call_counts
 #include "esp_timer.h"
 
 #include "psram_task.h"
@@ -53,10 +54,51 @@ static void cpu_stats_task(void *arg)
                 // safe on a periodic path (see the cyan-flash rule in CLAUDE.md).
                 unsigned f10  = display_fps_x10();
                 unsigned kpx  = display_inval_kpx_per_s();
-                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s",
+                /* Frame SPACING on the same line as the rate, because the two
+                 * disagree and only the spacing matches what the operator sees:
+                 * the Tab5 renders FASTER than the web waterfall (12.2 vs 10.0
+                 * fps, measured 2026-10-05) and looks worse. A mean near the
+                 * nominal with a large max is jitter; a mean that is simply
+                 * long is a slow renderer. Same O(1) counter read as the rest. */
+                display_frame_spacing_t fs;
+                display_frame_spacing(&fs);
+                ESP_LOGI(TAG, "idle0 %lu.%lu%% idle1 %lu.%lu%% fps %u.%u inval %ukpx/s "
+                              "| frame ms min %u mean %u max %u late %u/%u "
+                              "| draw ms mean %u max %u",
                          (unsigned long)(p0 / 10), (unsigned long)(p0 % 10),
                          (unsigned long)(p1 / 10), (unsigned long)(p1 % 10),
-                         f10 / 10, f10 % 10, kpx);
+                         f10 / 10, f10 % 10, kpx,
+                         (unsigned)(fs.min_us / 1000), (unsigned)(fs.mean_us / 1000),
+                         (unsigned)(fs.max_us / 1000),
+                         (unsigned)fs.late, (unsigned)fs.n,
+                         (unsigned)(fs.draw_mean_us / 1000),
+                         (unsigned)(fs.draw_max_us / 1000));
+
+                /* Second line, same window: WHERE those pixels were asked for.
+                 * The total on the line above swings 6-20 Mpx/s on an
+                 * unchanged screen, and the two big canvases cannot account
+                 * for the high end - so this names the panel. */
+                display_inval_bands_t ib;
+                display_inval_bands(&ib);
+                ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"
+                              " | reqs %u max %ukpx",
+                         ib.kpx_per_s[0], ib.kpx_per_s[1], ib.kpx_per_s[2],
+                         ib.kpx_per_s[3], ib.kpx_per_s[4], ib.kpx_per_s[5],
+                         ib.events, ib.max_px / 1000);
+                if (ib.fullscreen) {
+                    ESP_LOGW(TAG, "inval: %u FULL-SCREEN requests this window "
+                                  "(%u kpx each = ~2 waterfall canvases of work)",
+                             ib.fullscreen, (unsigned)(DISPLAY_H_RES * DISPLAY_V_RES / 1000));
+                }
+
+                /* The band plan's share, resolved into a call rate. bp_calls is
+                 * every path into update_bandplan_strip, bp_poll only the
+                 * unconditional defensive refresh from cat's poll_task. */
+                unsigned bp_calls = 0, bp_poll = 0, bp_skip = 0;
+                ui_bandplan_call_counts(&bp_calls, &bp_poll, &bp_skip);
+                ESP_LOGI(TAG, "bandplan: %u repaints (%u from CAT poll, %u gated) | "
+                              "bp reqs %u = %ukpx/s",
+                         bp_calls, bp_poll, bp_skip, ib.reqs[4], ib.kpx_per_s[4]);
             }
         }
         prev_idle0 = i0;
@@ -68,7 +110,14 @@ static void cpu_stats_task(void *arg)
 
 esp_err_t cpu_stats_init(void)
 {
-    TaskHandle_t h = psram_task_create(cpu_stats_task, "cpu_stats", 3072,
+/* ⚠ Stack raised 2026-10-10. Measured headroom was 920 B of 3072 (70% used)
+ * via /api/cmd {"action":"stacks"}. ⛔ That watermark only reports paths
+ * ALREADY TAKEN, and nothing here establishes that the
+ * widest sampling path had run in that session.
+ * This stack is in PSRAM, where 12.6 MB was free, so the margin costs
+ * nothing from the internal or DMA pools - see the same lesson paid for
+ * twice on the two web stacks in webserver.h. */
+    TaskHandle_t h = psram_task_create(cpu_stats_task, "cpu_stats", 6144,
                                        NULL, 1, tskNO_AFFINITY);
     if (!h) {
         ESP_LOGE(TAG, "task create failed; CPU stats disabled");

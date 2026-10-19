@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "ft8_test.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"   // mem_ledger settling marks
 #include "nvs_flash.h"
 #include "lvgl.h"
 #include "bsp/m5stack_tab5.h"
@@ -16,10 +17,14 @@
 #include "battery.h"
 #include "bsp_info.h"
 #include "gpio_relay.h"
+#include "unit_gps.h"      // PORT.A's other owner - see the branch before time_sync_init()
 #include "cat.h"
 #include "cw_decode.h"
 #include "audio.h"
+#include "line_in.h"   // the 3.5 mm jack as a receive source
+#include "resource_mgmt_modal.h"  // reopened at boot after a source change
 #include "rx_audio.h"
+#include "util/mic_probe.h"   // one-shot ES7210 channel probe (GitHub #17)
 #include "dsp.h"
 #include "render.h"
 #include "render_waterfall.h"
@@ -76,35 +81,76 @@
 
 static const char *TAG = "main";
 
-/* ---- Boot memory ledger -------------------------------------------------
+/* The ledger macro moved to util/mem_ledger.h on 2026-10-04 - the marks
+ * that matter are now outside app_main. See that header for the why. */
+#include "util/mem_ledger.h"
+
+/* SETTLING MARKS (2026-10-04).
  *
- * Internal RAM is THE constraint on this board and nothing measured where it
- * goes. On 2026-09-25 the bench sat at 19 KB free / 10-12 KB largest block
- * with audio on, which is enough to cost three separate features:
- *   - the SD diag mirror (esp_dma_capable_malloc refused, backing off to 240 s),
- *   - four network feeds (gated off whenever RX audio is on),
- *   - the BLE mouse (its guard needs 24576 B and measured 21391 B).
+ * WHY: the ledger above stopped at rx_audio_init, about 9 s into the boot,
+ * with the DMA pool at 26 KB. Randy N4OPI's v1.16.11 diag then shows it at
+ * 13.5 KB by t=17 s and 5.8 KB by t=197 s, and the session that failed was at
+ * 2.5 KB - at which point an SD sector read cannot get its 512 B and the web
+ * file browser answers "file not found" for a file that is on the card.
  *
- * dma_owners can attribute it, but only with CONFIG_HEAP_TASK_TRACKING, which
- * stores an owner handle in EVERY block header and so changes the very numbers
- * being measured (documented in sdkconfig.defaults, measured 2026-08-28).
+ * Twenty kilobytes therefore go AFTER the last ledger line, and nothing in the
+ * log says to what. audio.c's 60 s HEAP line gives the curve but no
+ * attribution; the per-stage ledger gives attribution but stops too early.
+ * These marks close the gap: the per-subsystem marks added in app_main cover
+ * the remaining init, and these timed ones cover the part no call site owns -
+ * WiFi association, the first web client, the FT8 engine reaching steady
+ * state. The next field diag should name the consumer instead of posing the
+ * question.
  *
- * This is the non-perturbing alternative: print free DMA-capable and internal
- * bytes either side of each major init, so the consumer is named by
- * SUBTRACTION rather than by attribution. Two heap_caps_get_free_size() calls
- * and one log line per milestone - no tracking, no allocation, nothing that
- * changes what it observes.
- *
- * Deliberately INFO and deliberately permanent: every field diagnostic then
- * carries the same ledger, so a user reporting "no Bluetooth" or a yellow SD
- * dot arrives with the reason already in the file. */
-#define MEM_LEDGER(stage)                                                     \
-    ESP_LOGI("memledger", "%-26s dma=%6u B (lblk %5u)  int=%6u B (lblk %5u)", \
-             (stage),                                                         \
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),               \
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+ * One-shot chain rather than a periodic timer: three lines total, then it is
+ * gone. It costs nothing and cannot itself become the drain. */
+static void mem_ledger_settle_cb(void *arg);
+
+/* DENSIFIED 2026-10-04. {30,120,600} was too coarse to see the second step.
+ * Commit 34bd189 named the big one - httpd + ws_push_task, 21580 B at ~16.4 s
+ * - but two boots the same afternoon then ended at 763 B and at 4863 B from
+ * the same window, and the ~7 KB that separates them falls between the
+ * btmouse NimBLE line (~19.7 s) and the first mark at 30 s. Nothing looked
+ * there. These eight points bracket it at 4-5 s intervals through the step
+ * and then thin out, still one-shot, still gone after the last one. */
+static const int64_t MEM_LEDGER_SETTLE_S[] = { 22, 26, 30, 35, 40, 60, 120, 600 };
+
+static void mem_ledger_settle_cb(void *arg)
+{
+    size_t i = (size_t)(uintptr_t)arg;
+    char stage[32];
+    snprintf(stage, sizeof(stage), "T+%llds settled",
+             (long long)MEM_LEDGER_SETTLE_S[i]);
+    MEM_LEDGER(stage);
+
+    if (++i >= sizeof(MEM_LEDGER_SETTLE_S) / sizeof(MEM_LEDGER_SETTLE_S[0]))
+        return;
+
+    const esp_timer_create_args_t a = {
+        .callback = mem_ledger_settle_cb,
+        .arg = (void *)(uintptr_t)i,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "memledger",
+    };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK) {
+        esp_timer_start_once(t, (MEM_LEDGER_SETTLE_S[i] - MEM_LEDGER_SETTLE_S[i - 1])
+                                * 1000000LL);
+    }
+}
+
+static void mem_ledger_start_settling_marks(void)
+{
+    const esp_timer_create_args_t a = {
+        .callback = mem_ledger_settle_cb,
+        .arg = (void *)(uintptr_t)0,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "memledger",
+    };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&a, &t) == ESP_OK)
+        esp_timer_start_once(t, MEM_LEDGER_SETTLE_S[0] * 1000000LL);
+}
 
 
 /* ⭐ cJSON OUT OF INTERNAL RAM (2026-09-26).
@@ -324,6 +370,44 @@ void app_main(void)
     // Initialise INA226 battery monitor (shares main I2C bus with PI4IO)
     battery_init(bsp_i2c_get_handle());
 
+    /* PORT.A, immediately before time_sync_init().
+     *
+     * ONE setting decides which backend owns GPIO53/54, and it branches here
+     * rather than twice, early enough for both: the Unit GPS case needs its
+     * UART up and its pipeline reporting before the time-sync task starts
+     * reading the clock authority, and the relay case needs its pins driven
+     * from boot rather than left floating for the rest of it. */
+    if (settings_get_port_a_mode() == PORT_A_MODE_UNIT_GPS) {
+        if (!unit_gps_start()) {
+            ESP_LOGE(TAG, "Unit GPS UART failed to start - PORT.A left idle; "
+                          "switch Port mode back to relay to drive the relay pins");
+        }
+    } else {
+        gpio_relay_init();   // GPIO53/54 remote relay pulse - see gpio_relay.h
+    }
+
+    /* ⭐ M-Bus GNSS, and it is NOT an else of the branch above.
+     *
+     * The Module GPS v2.1 (M5Stack M003-V21) mounts on the 30-pin bus on the
+     * back and its RX lands on GPIO2, so it shares nothing with PORT.A: the
+     * relay can keep G53/G54 and the receiver still works. Same AT6668 silicon
+     * and the same NMEA at 115200 8N1 as the PORT.A unit, so it is the same
+     * driver with a different pin - see unit_gps_start_on().
+     *
+     * Running both at once is refused inside the driver (one UART, one parser),
+     * which is why this is a plain if and not an else-if: the operator can have
+     * the setting on while PORT.A is also in GPS mode, and what they get is a
+     * log line saying which one won, not a silently rebound pin. */
+    if (settings_get_gnss_mbus_en()) {
+        if (unit_gps_start_on(UNIT_GPS_MBUS_RX_GPIO)) {
+            ESP_LOGI(TAG, "Module GPS v2.1 started on the M-Bus (GPIO%d)",
+                     UNIT_GPS_MBUS_RX_GPIO);
+        } else {
+            ESP_LOGE(TAG, "M-Bus GNSS failed to start on GPIO%d",
+                     UNIT_GPS_MBUS_RX_GPIO);
+        }
+    }
+
     // Init RX8130CE supercap RTC and apply stored time to system clock.
     // Spawns the periodic QMX time-sync background task.
     time_sync_init(bsp_i2c_get_handle());
@@ -397,29 +481,65 @@ void app_main(void)
     // Opens the ES8388/I2S output path before USB host claims DMA-capable RAM
     // (see rx_audio.h). No-op unless RX audio is persisted-enabled, so this
     // costs nothing on any unit that has never turned it on.
-    rx_audio_preopen();
-    MEM_LEDGER("rx_audio_preopen (I2S)");
+    /* ⛔ BEFORE rx_audio_preopen(), which claims the I2S port with a TX-only
+     * channel. The probe needs the RX half, and the two cannot coexist - see
+     * util/mic_probe.h. Does nothing unless armed, and never returns when it
+     * runs: it reboots into a normal session. */
+    mic_probe_run_if_pending();
 
-    ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
-    MEM_LEDGER("usb_host_start");
-    ESP_LOGI(TAG, "USB host started");
-    // Make every firmware-initiated reboot tear the USB link down properly, so
-    // the QMX is told we are going rather than finding out (see usb_shutdown.h).
-    usb_shutdown_install_handler();
+    /* ⛔ THE INPUT SOURCE IS LATCHED HERE, FOR THE WHOLE SESSION.
+     *
+     * A real source (the 3.5 mm jack) and the QMX over USB cannot coexist:
+     * the ES7210 capture channel claims a second GDMA channel and the
+     * DMA-capable RAM the USB host needs for its endpoints, so CDC-ACM/CAT
+     * cannot claim theirs. He ruled on 2026-10-10 that nothing needs both.
+     *
+     * ⛔ rx_audio_preopen() IS SKIPPED TOO, and that is not an oversight.
+     * It claims the I2S port with a TX-only channel and keeps its own
+     * data_if, so bsp_audio_codec_microphone_init() would then find the
+     * port taken and fail. The cost is that RX audio to the speaker is not
+     * available in line-in mode - monitoring an audio source through the
+     * Tab5 is a separate job, not a line this branch can quietly add.
+     *
+     * Switching back needs a restart, which settings_set_rx_source() says
+     * and every surface that offers the choice repeats.
+     */
+    const bool rx_src_real = rx_source_is_real(settings_get_rx_source());
+    if (!rx_src_real) {
+        rx_audio_preopen();
+        MEM_LEDGER("rx_audio_preopen (I2S)");
 
-    // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
-    // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
-    // descriptor bytes after some warm reboots) is QMX-firmware-side and
-    // survives every host-side cue - bus resets, root-port power cycles,
-    // USB5V_EN cuts up to 8 s. A boot replug can't cure it, and aborting a
-    // healthy first enumeration (which normally succeeds) risks INDUCING
-    // the wedge. usb_replug() remains available via the hidden /api/cmd
-    // action for experiments; the task below detects the wedge and tells
-    // the operator to power-cycle the QMX instead of leaving a dead screen.
-    usb_replug_watchdog_start();
+        ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
+        MEM_LEDGER("usb_host_start");
+        ESP_LOGI(TAG, "USB host started");
+        // Make every firmware-initiated reboot tear the USB link down properly, so
+        // the QMX is told we are going rather than finding out (see usb_shutdown.h).
+        usb_shutdown_install_handler();
+
+        // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
+        // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
+        // descriptor bytes after some warm reboots) is QMX-firmware-side and
+        // survives every host-side cue - bus resets, root-port power cycles,
+        // USB5V_EN cuts up to 8 s. A boot replug can't cure it, and aborting a
+        // healthy first enumeration (which normally succeeds) risks INDUCING
+        // the wedge. usb_replug() remains available via the hidden /api/cmd
+        // action for experiments; the task below detects the wedge and tells
+        // the operator to power-cycle the QMX instead of leaving a dead screen.
+        usb_replug_watchdog_start();
+    } else {
+        ESP_LOGW(TAG, "RX source is %s - NO USB host, NO CAT, NO RX audio out",
+                 rx_source_str(settings_get_rx_source()));
+    }
 
     ESP_ERROR_CHECK(audio_init());
     MEM_LEDGER("audio_init (UAC ring)");
+    /* The ring exists now, so the jack has somewhere to push. audio_init()
+     * skipped the UAC driver for this source; line_in.c is the only
+     * producer. A failure here is logged and left: the board still boots,
+     * with a dead spectrum and a log line saying why, which beats a crash
+     * loop on a unit whose operator cannot see a console. */
+    if (rx_src_real && line_in_start() != ESP_OK)
+        ESP_LOGE(TAG, "line input failed to start - no samples this session");
     iq_balance_set_enabled(cfg->iq_enabled);
     ui_set_flat_mode(cfg->flat_mode);
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
@@ -468,23 +588,37 @@ void app_main(void)
     /* #302: the stored frequency punctuation, applied before any UI is built.
        Every caller reads g_freq_style at format time, so this is the only
        place it has to be set. */
+    uint8_t cw_rows_boot = 0;
     {
         /* Heap, not stack - same reasoning as the cfg block above. */
         qmx_settings_t *fs = heap_caps_malloc(sizeof(*fs), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (fs) {
             settings_load_all(fs);
             g_freq_style = (fs->freq_sep_style == 1) ? FREQ_STYLE_COMMA : FREQ_STYLE_DOTS;
+            cw_rows_boot = fs->cw_decode_rows;
             heap_caps_free(fs);
         }
     }
     cw_decode_init();
-    ESP_ERROR_CHECK(cat_init());
-    MEM_LEDGER("cat_init (CDC)");
+    /* AFTER cw_decode_init(): it creates the mutex that cw_decode_set_rows()
+       takes, and clears the grid the setter would otherwise have just wiped.
+       The stored choice has to reach the decoder, not only the UI, because it
+       is the wrap modulus - see cw_decode_set_rows(). */
+    if (cw_rows_boot == 2 || cw_rows_boot == 4) cw_decode_set_rows(cw_rows_boot);
+    /* No USB host means no CDC-ACM to find. Starting CAT anyway leaves its
+     * link task retrying a device that cannot appear, and the UI showing a
+     * radio that is not there. */
+    if (!rx_src_real) {
+        ESP_ERROR_CHECK(cat_init());
+        MEM_LEDGER("cat_init (CDC)");
+    }
 
     // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
     // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
     // via a powered hub. No-op if no mouse/hub is present.
-    usb_hid_mouse_init();
+    /* The HID driver installs onto the USB host, which is not running in
+     * this mode. */
+    if (!rx_src_real) usb_hid_mouse_init();
 
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
@@ -581,7 +715,7 @@ void app_main(void)
     render_waterfall_set_contrast_db(cfg->wf_contrast_db);
     render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
     dsp_set_window(cfg->wf_window);
-    render_set_waterfall_speed_mult(cfg->wf_speed_mult);
+    render_set_waterfall_rows_per_s(cfg->wf_rows_per_s);
     if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
     cfg = NULL;
 
@@ -591,16 +725,51 @@ void app_main(void)
     // polling every 120 ms even when idle) cost FT8 decode yield, and how
     // this supersedes it. Confirmed clean over an 8.7 h live FT8 session
     // before this call was re-enabled (memory project_rx_audio_track.md).
-    rx_audio_init();
-    MEM_LEDGER("rx_audio_init");
+    /* Skipped for the same reason preopen was: the I2S port belongs to the
+     * ES7210 capture side in this mode, and rx_audio demodulates IQ, which
+     * a one-channel source does not produce. */
+    if (!rx_src_real) {
+        rx_audio_init();
+        MEM_LEDGER("rx_audio_init");
+    }
 
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
     cpu_stats_init();   // v2: idle-only O(1) sampler (see cpu_stats.c for why no per-task walks)
-    gpio_relay_init();  // GPIO53/54 remote relay pulse - see gpio_relay.h
+    /* gpio_relay_init() USED TO BE HERE. It moved up to the PORT.A branch
+     * before time_sync_init() when the Unit GPS landed (#15): one setting
+     * decides which backend owns GPIO53/54, and the relay case needs its
+     * pins driven from boot rather than left floating. The ledger label
+     * lost its "+ gpio_relay" with it. */
+    MEM_LEDGER("cpu_stats");
+
+    /* ⭐ REOPEN AUDIO SETTINGS IF THE RESTART CAME FROM ITS SAVE BUTTON.
+     *
+     * Save switching to the 3.5 mm jack restarts the board, and the first
+     * thing needed afterwards is the level meter - which lives in that
+     * window. Reopening it here puts the meter in front of the operator
+     * instead of three taps away on a board that has just rebooted and has
+     * no radio. Going back to the QMX does NOT set the flag: there is
+     * nothing to set up there, so the window would only be dismissed.
+     *
+     * Last, after everything else is up, and under display_lock because
+     * this builds LVGL objects from the main task. One-shot and consumed
+     * inside the call, so a failure here cannot loop. */
+    if (resource_mgmt_modal_reopen_pending()) {
+        if (display_lock(1000)) {
+            resource_mgmt_modal_open();
+            display_unlock();
+        } else {
+            ESP_LOGW(TAG, "reopen Audio Settings: display lock timed out");
+        }
+    }
 
     ESP_LOGI(TAG, "Init complete - main task idle");
+    /* Only now may the "Now turn on or reboot your QMX/+" prompt appear.
+     * Powering the radio on before this starves internal RAM for the whole
+     * session - see the gate in ui.c's qmx_wait_poll_cb(). */
+    ui_notify_boot_complete();
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
     // Verifies ft8_lib encoder + monitor + decoder work on ESP32-P4.
     // Logs PASS/FAIL with per-stage timing once the worker completes.
@@ -627,6 +796,7 @@ void app_main(void)
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     dxcluster_selftest();  // parser vs lines captured from a real cluster node
     dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
+    MEM_LEDGER("net/spot subsystems");
     /* ⛔ RESTORE THE MODE BEFORE THE SELF-TESTS, NOT AFTER THEM.
      *
      * It used to sit below the four calls that follow, and two of those
@@ -653,6 +823,7 @@ void app_main(void)
      * audio, dsp and cat. Late is fine - the page is already correct and fills
      * as data arrives. */
     ui_apply_saved_mode_start();
+    MEM_LEDGER("ui_apply_saved_mode");
 
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
@@ -669,6 +840,7 @@ void app_main(void)
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is
     // down, so it's harmless on offline/POTA units.
     update_check_start();
+    MEM_LEDGER("selftests + update_check");
 
     // #218: confirm this image so the bootloader stops treating it as on trial.
     // With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE a freshly OTA'd firmware boots
@@ -677,5 +849,8 @@ void app_main(void)
     // came up, which is the only working definition of "this image is fine"
     // available from inside it. No-op on a cable-flashed image.
     ota_update_mark_valid();
+
+    MEM_LEDGER("app_main exit");
+    mem_ledger_start_settling_marks();
 }
 

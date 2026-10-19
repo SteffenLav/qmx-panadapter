@@ -328,7 +328,7 @@ static void watchdog_task(void *arg)
         // rx_audio_is_enabled(), not net_quiet: that flag is OTA-only again,
         // see net_quiet.h's 2026-09-20 note - this is a direct check because
         // this feed's standing task is heavy enough to matter on its own.
-        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_is_enabled();
+        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_any_listener();
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }

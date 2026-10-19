@@ -56,6 +56,31 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len);
 // to this slot and not stale ones from previous slots).
 void ft8_qso_advance(int64_t slot_sec);
 
+/* Second look at a slot whose advance already ran EARLY (ft8_test.c advances
+ * the moment a decode addressed to us appears, which used to spend the slot's
+ * only look at the band). Call once, after the candidate list is finished,
+ * with the complete decode table: it refreshes the pile-up and, if and only
+ * if the machine is still calling CQ, re-runs the answer picker so the
+ * strongest caller wins rather than the first decoded.
+ *
+ * It is NOT a second advance - it never steps an exchange. Safe to call from
+ * either decode task; it keeps its own once-per-slot guard. */
+void ft8_qso_slot_late_look(int64_t slot_sec);
+
+/* Close a QSO whose final message has finished transmitting, without waiting
+ * for the next slot to be decoded.
+ *
+ * ⛔ WHY THIS EXISTS: ft8_qso_advance() runs once per slot, so a completed
+ * exchange used to stay "busy" for a whole extra cycle after our 73 left the
+ * air - the operator could not start anyone else in the meantime (Bruce N9JCV,
+ * POTA, 2026-10-13). Poll this from an idle context instead.
+ *
+ * Cheap when there is nothing to do (one lock, one state read). When there IS,
+ * it writes the ADIF record synchronously - measured at 31-342 ms - so call it
+ * only where that is affordable, never from the LVGL timer or the TX path. */
+void ft8_qso_poll_finish(void);
+
+
 // Called by ft8_task immediately after ft8_tx_run() returns. Re-arms the
 // current outgoing message for the next matching slot, so the re-arm happens
 // at T+12.7 s (TX end), not at T+19 s (after decode) which would be too late
@@ -227,7 +252,11 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
 // worked-before knew nothing and the partner's trailing 73 re-entered the
 // pileup. No-op if a machine QSO is already in progress (its own path logs).
 // LVGL thread only.
-void ft8_qso_notify_manual_final(const char *target_call);
+// `final_extra` is the closing message's third field as the modal armed it -
+// "RR73" or "73". It is what gets re-sent if the partner never decodes it, so
+// passing the wrong one (or NULL, which means "73") answers them with a
+// message that does not mean what ours did. See s_final_sent_kind in ft8_qso.c.
+void ft8_qso_notify_manual_final(const char *target_call, const char *final_extra);
 
 // Note the station the operator is working MANUALLY (called on every manual
 // Transmit arm). Keeps the partner out of the pileup capture and lets the
@@ -249,7 +278,7 @@ bool ft8_filter_match(const char *text, const ft8_filters_t *f);
 
 // True if this callsign was worked on this band inside the recently-worked
 // grace window (30 min, RAM-only, cleared by a reboot). The UNATTENDED pickers
-// consult this regardless of the "Exclude worked-before" checkbox, because the
+// consult this regardless of the "Never auto-call worked-before" checkbox, because the
 // decode list already greys such a station unconditionally and because the
 // duplicate guard would refuse to LOG a repeat inside its own window - so
 // working one would key the radio through a full exchange and discard it.

@@ -449,6 +449,15 @@ rubbish are filtered out before anything reaches the screen:
 A dropped run leaves one space behind, so words either side of it are not welded
 together.
 
+**Clearing it, and how many rows** (from v1.20.1). A **Clear** button empties the
+pane, and the row count is **2 or 4**, chosen beside the on/off switch. Four rows
+of wrapped text can make it hard to find the boundary between fresh decode and
+old; two rows keeps the recent text where you can see it *(Bryan N0LUF)*.
+
+A click *inside* the pane still tunes the radio rather than clearing it. That is
+deliberate - the waterfall underneath stays click-to-tune - which is why Clear is
+its own button.
+
 **Turning it off.** Settings drawer -> **Radio** -> **Show decoded CW**, beside CW
 centre and the transmit offset. It is on by default and the setting is shared
 with the browser.

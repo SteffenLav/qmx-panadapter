@@ -105,6 +105,34 @@ def check_css(html):
             problems.append("style block %d: selector %r opens straight into %r "
                             "- a missing closing brace, and every rule after it "
                             "is discarded" % (i, opener[:50], m.group(2).strip()[:50]))
+        # ⛔ A RULE THAT CANCELS ITS OWN SELECTOR. v1.19.0 shipped with a
+        # new `.pill.dial-locked { pointer-events:none }` rule pasted INTO the
+        # middle of the FT8/WSPR hover selector list, so it read as
+        #
+        #     #ft8-actions button:hover:not(:disabled),
+        #     #ft8-actions select:hover,
+        #     .pill.dial-locked { opacity:.45; pointer-events:none; }
+        #
+        # Hovering an action button then removed it from hit testing, :hover
+        # dropped, pointer-events came back, :hover re-applied - the border
+        # flickered at paint rate and clicks landed only by luck. Randy N4OPI
+        # and Ryan KK6DZB both reported it the day the release went out.
+        # The CSS is VALID, so the brace checks above pass on it, and so did
+        # check_web.py - this is the only check that can see it.
+        for m in re.finditer(r'([^{}]+)\{([^{}]*)\}', n):
+            sel, decls = m.group(1), m.group(2)
+            if sel.lstrip().startswith('@'):
+                continue
+            if (re.search(r'pointer-events\s*:\s*none', decls) and
+                    re.search(r':(hover|active|focus)\b', sel)):
+                bad = [t.strip() for t in sel.split(',')
+                       if re.search(r':(hover|active|focus)\b', t)]
+                problems.append(
+                    "style block %d: %s gets pointer-events:none - the element "
+                    "stops being the hover/focus target the moment the rule "
+                    "applies, so it flickers and swallows clicks. Split the "
+                    "pointer-events rule out of this selector list."
+                    % (i, ', '.join(bad)[:120]))
         print("  css: block %d, %d bytes, %s"
               % (i, len(b), "OK" if not problems else "BROKEN"))
     return problems

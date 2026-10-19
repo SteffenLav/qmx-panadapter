@@ -67,6 +67,43 @@
      3-7, FT8 in a spanning notice, WSPR in a card - and a per-card heading
      would have sat at a different height on each. One row, one position. */
   #mode-banner  { grid-row: 2; }
+  /* ⭐ IN JS8 THE HEADING IS THE SUBMODE CONTROL, as it is on the Tab5.
+     Only the affordance lives here - .is-picker is toggled from the status
+     poll, so a heading that is not a picker keeps the plain cursor and no
+     hover response at all.
+     ⛔ NO pointer-events IN THIS RULE. See check_webui.py: a hover selector
+     that removes itself from hit testing flickers and swallows clicks, which
+     is exactly what v1.19.0 shipped. */
+  #mode-banner.is-picker        { cursor: pointer; }
+  #mode-banner.is-picker:hover  { text-decoration: underline; }
+  /* The list itself. Absolutely positioned against the document rather than
+     the heading, because the heading is RELOCATED between the FT8 status line
+     and its own grid row, and a child would have moved with it. */
+  #submode-pop {
+    position: absolute;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    min-width: 170px;
+    padding: 4px;
+    gap: 2px;
+    background: #14161a;
+    border: 1px solid #3a3f46;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.6);
+  }
+  #submode-pop button {
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  #submode-pop button:hover  { background: #262b31; }
+  #submode-pop button.active { background: var(--accent); color: #000; }
   #spec-wrap    { grid-row: 3; }
   #freqaxis     { grid-row: 4; }
   #split-handle { grid-row: 5; }
@@ -197,6 +234,17 @@
     -webkit-tap-highlight-color: transparent;
   }
   #flatbtn.on { background: var(--accent); color: var(--bg); }
+  #listenbtn {
+    background: #1f2937; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px;
+    width: 2rem; height: 1.8rem; margin-left: 0.3rem;
+    font-family: inherit; font-weight: 700; cursor: pointer; flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #listenbtn.on  { background: var(--accent); color: var(--bg); }
+  /* Asked for and not yet arriving - the device may be in a mode it does not
+     demodulate, so the button must not claim to be playing. */
+  #listenbtn.wait { background: #1f2937; color: var(--warn, #fbbf24); }
   #fps {
     color: var(--ok); font-size: 0.75rem; min-width: 4.5rem;
     text-align: right; flex-shrink: 0;
@@ -597,15 +645,34 @@
              white-space: pre; overflow: hidden;
              background: rgba(0,0,0,.7); padding: 2px 6px;
              pointer-events: none; }   /* the waterfall under it is click-to-tune */
+  /* ⛔ THE PANE STAYS pointer-events:none AND THE BUTTON OPTS BACK IN.
+     Bryan N0LUF, 2026-10-16, asked for a click inside the decoder area to
+     clear the buffer - and in the same message noticed that a click there
+     currently tunes the radio, because the pane is transparent to the mouse on
+     purpose. Making the whole pane clickable would take click-to-tune away
+     from the bottom quarter of the waterfall to pay for it. So only this
+     button takes the click, and every other pixel of the pane still tunes. */
+  #cw-clear { position: absolute; right: 6px; bottom: 4px; pointer-events: auto;
+              background: rgba(0,0,0,.65); color: var(--dim);
+              border: 1px solid #3a4149; border-radius: 4px;
+              padding: 1px 8px; font-size: 12px; line-height: 1.6;
+              cursor: pointer; opacity: .55; transition: opacity .15s; }
+  #cw-clear:hover { opacity: 1; color: #30e0e0; border-color: #30e0e0; }
   #cw-head { color: #30e060; }         /* green header, as on the Tab5 */
-  #cw-text, #cw-text2 { color: #30e0e0; }   /* cyan decoded text */
-  /* ⛔ ROW 2 IS INDENTED BY THE HEADER'S OWN WIDTH, not by a guessed number of
-     spaces. #cw-indent is filled with exactly the characters #cw-head holds, in
-     the same monospace font, and made invisible - so the two grids line up
-     whatever the header says ("CW ~08wpm:" and "CW ~??wpm:" are not the same
-     length as a percentage of the line). The text wraps from the end of row 1
-     to the start of row 2, and a misaligned wrap reads as a jump. */
-  #cw-indent { visibility: hidden; }
+  /* .cw-row-text is every row built below the first; #cw-text is row 1, which
+     is in the markup because the header sits beside it. #cw-text2 was the old
+     fixed second row and no longer exists. */
+  #cw-text, .cw-row-text { color: #30e0e0; }   /* cyan decoded text */
+  /* ⛔ EVERY ROW BELOW THE FIRST IS INDENTED BY THE HEADER'S OWN WIDTH, not
+     by a guessed number of spaces. Each .cw-indent is filled with exactly the
+     characters #cw-head holds, in the same monospace font, and made invisible -
+     so the grids line up whatever the header says ("CW ~08wpm:" and
+     "CW ~??wpm:" are not the same length as a percentage of the line). The text
+     wraps from the end of one row to the start of the next, and a misaligned
+     wrap reads as a jump. */
+  /* One per row below the first, built in js - so it is a CLASS now, not the
+     single #cw-indent it was when there were exactly two rows. */
+  .cw-indent { visibility: hidden; }
 
   #ft8-webr { flex: 1 1 160px; min-width: 0; text-align: left; color: var(--dim);
               font-size: clamp(0.9rem, 1.3vw, 1.15rem); min-height: 2rem;
@@ -704,7 +771,28 @@
   #ft8-actions select:hover,
   #wspr-actions button:hover:not(:disabled),
   #wspr-actions select:hover { background: var(--accent); color: #000; }
+  /* The WSPR page owns the dial, so the top bar's Band/Mode/BW/Zoom are inert
+     while it is up - the same rule the Tab5 has always had, and what
+     guide/wspr.md has always said. pointer-events:none is the part that
+     matters: these pills LOOKED inactive to John W5JSS and still fired,
+     because nothing stopped the click. Freq is deliberately NOT in this set.
+
+     ⛔ KEEP THIS RULE ON ITS OWN. In v1.19.0 it was pasted INTO the hover
+     selector list above, so every FT8 action button got pointer-events:none
+     THE MOMENT IT WAS HOVERED. That makes the button stop being the hover
+     target, :hover drops, pointer-events comes back, :hover re-applies - the
+     border flickers at paint rate and a click only lands if it happens to
+     fall in an "auto" frame. Randy N4OPI and Ryan KK6DZB both reported it
+     within a day of the release. */
+  .pill.dial-locked {
+    opacity: .45;
+    pointer-events: none;
+    cursor: default;
+  }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
+  /* A JS8 conversation line that names me, and the row it sits on - js8Poll(). */
+  .js8-me     { background: var(--accent); color: #000; border-radius: 3px; }
+  .js8-row-me { background: rgba(255, 185, 90, 0.13); }
   /* Count, not a binary active-colour: Dirk DK7CVD wanted the Options button to
      show something was on, Roy KI0ER pointed out a plain on/off colour would
      ALWAYS read "on" for an operator who runs filters permanently, telling him
@@ -890,6 +978,15 @@
      its neighbours. */
   #gpio-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.3rem;
               padding: 0.35rem 0.6rem; font-size: 0.78rem; color: #9aa4b2; }
+  #port-mode-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.6rem;
+              padding: 0.45rem 0.6rem 0.15rem; font-size: 0.78rem; color: #9aa4b2; }
+  #port-mode-row label { display: inline-flex; align-items: center; gap: 0.25rem;
+              cursor: pointer; }
+  #port-mode-row input { accent-color: var(--accent); }
+  #port-mode-result { color: var(--dim); }
+  /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
+     applicable - greyed and inert, with its tooltip swapped for the reason. */
+  #gpio-row.port-off { opacity: 0.5; }
   #gpio-row select, #gpio-row input { font: inherit; background: #1f2937;
     color: var(--fg); border: 1px solid var(--border); border-radius: 4px;
     padding: 0.15rem 0.3rem; }
@@ -1084,6 +1181,12 @@
       <canvas id="smeter" width="240" height="40" title="S-meter"></canvas>
       <div class="top-fill"></div>
       <button id="flatbtn" type="button" title="Flat-spectrum mode">F</button>
+      <!-- Listen: the demodulated audio the Tab5's own speaker gets. It sits
+           here and not in a settings panel because it is a thing you turn on
+           while you are watching the band, and because the browser will only
+           start audio from a real click - this button IS that gesture. -->
+      <button id="listenbtn" type="button"
+              title="Listen to the receiver here (the Tab5's own demodulated audio)">&#9654;</button>
       <div id="fps" class="bad">disconnected</div>
     </div>
   </div>
@@ -1105,7 +1208,7 @@
 
   <div id="split-handle" title="Drag to resize"></div>
 
-  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div><span id="cw-indent"></span><span id="cw-text2"></span></div></div></div>
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div><div id="cw-line" hidden><div><span id="cw-head"></span><span id="cw-text"></span></div><div id="cw-rows"></div><button id="cw-clear" type="button" title="Wipe the decoded CW window, here and on the Tab5. What was received is still in the microSD transcript.">Clear</button></div></div>
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
@@ -1123,6 +1226,66 @@
              ordering, so clicking any header does not leave the operator
              wondering how to get the CQ-callers-on-top view back. -->
         <a href="#" id="dec-order-reset" style="color:var(--dim); display:none">↺ CQ callers on top</a>
+        <!-- JS8 only. The Tab5's JS8 screen carries exactly these two tabs, and
+             ⭐ Conversation is the DEFAULT there: it is the only view that can
+             show what a station actually SAID, and Stations is one tap away.
+             Hidden in FT8/FT4, which have no conversation to show. -->
+        <span id="js8-tabs" style="display:none; margin-left:auto;">
+          <!-- Who is selected, and the two macro sends. JS8 only, and they are
+               the ONLY way a report leaves the station by hand now: a row click
+               selects (ft8RowClicked). Ryan KK6DZB: "we need a button that will
+               send the SNR and a button to send GRID as macros". -->
+          <a href="#" id="js8-target" title="The station you are working - click to clear"
+             style="color:#e040fb; margin-right:8px; text-decoration:none;">&gt; click a station</a>
+          <button type="button" id="js8-snr"  class="bot-btn" disabled
+                  title="Send this station a signal report">SNR</button>
+          <button type="button" id="js8-grid" class="bot-btn" disabled
+                  title="Send this station your grid">GRID</button>
+          <!-- ⛔ THE SUBMODE PICKER IS NOT HERE. It is the MODE heading
+               (#mode-banner), exactly as on the Tab5, where tapping "JS8 NORM"
+               opens the list. Operator, 2026-10-15: "Make it like the Tab5 -
+               click JS8 NORMAL to change speed - no need to make a new dropdown
+               button elsewhere". A second control in a second place is how two
+               surfaces end up disagreeing about what is set; the heading is
+               already the thing that TELLS you the speed, so it is the thing
+               that should change it. See js8SubmodePopup(). -->
+          <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
+          <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
+          <!-- The Tab5's JS8 tab bar has had a Flush since the page shipped and
+               this one did not - Ryan KK6DZB, 2026-10-14: "No flush button in
+               the webUI?". Same action and the same code path on the device, and
+               no confirmation for the same reason the glass has none: js8_chat
+               is the DISPLAY store, the QSOs are in the ADIF log. -->
+          <button type="button" id="js8-flush" class="bot-btn"
+                  title="Empty the JS8 conversation list. The log is not touched.">Flush</button>
+        </span>
+      </div>
+      <!-- The conversation grid, composed by the DEVICE (js8_page_render, the
+           same function the glass draws) and only painted here. Newest at the
+           top, age rather than a wall clock, the flag column first - all of
+           that is js8_page.c's and is not repeated in JavaScript. -->
+      <div id="js8-conv" style="display:none; border:1px solid #333; border-radius:6px; background:#000; padding:8px 10px;">
+        <pre id="js8-screen" style="margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:14px; line-height:1.2; white-space:pre;"></pre>
+        <div id="js8-conv-hint" style="color:var(--dim); font-size:12px; margin-top:6px;"></div>
+
+        <!-- The free-text composer. ⭐ The air time is shown BEFORE the radio is
+             keyed: a 12-frame message holds the frequency for three minutes, and
+             the operator agrees to that first. The normalised text comes from the
+             DEVICE (js8_text_plan), not from JavaScript - upper-casing, whitespace
+             collapsing and dropping unsendable characters is the encoder's rule and
+             is not reimplemented here, the same reasoning as the grid above. -->
+        <div id="js8-tx" style="display:none; margin-top:10px; border-top:1px solid #333; padding-top:10px;">
+          <div style="display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;">
+            <input type="text" id="js8-tx-text" maxlength="160" placeholder="Free text to send&hellip;"
+                   autocomplete="off" spellcheck="false"
+                   style="flex:1 1 260px; min-width:0; background:#000; color:#d8d8d8; border:1px solid #333;
+                          border-radius:6px; padding:8px 10px; font-family:'Consolas','DejaVu Sans Mono',monospace;
+                          font-size:14px;">
+            <button type="button" id="js8-tx-send" class="bot-btn">Send</button>
+            <button type="button" id="js8-tx-cancel" class="bot-btn" style="display:none;">Stop</button>
+          </div>
+          <div id="js8-tx-plan" style="color:var(--dim); font-size:12px; margin-top:6px; min-height:1.2em;"></div>
+        </div>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <!-- Monospace, matching the Tab5 (Gyula HA3HZ: "the font of the reception
@@ -1265,8 +1428,9 @@
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
-        <a href="/ss.bmp" id="ss-link" target="_blank" title="Downloads as PNG - most apps and forums won't take a .bmp">Tab5 screenshot</a>
+        <a href="/ss.bmp" id="ss-link" target="_blank" title="Opens in a new tab straight away - quickest way to just look at the screen">Tab5 screenshot</a> <a href="#" id="ss-save" title="Saves a PNG file - slower, but the format forums and apps accept">(save PNG)</a>
         <a href="#" id="reboot-link" title="Restart the Tab5 now. Receiving stops for about ten seconds. Until now this was only reachable after a firmware update.">Reboot the Tab5</a>
+        <a href="#" id="poweroff-link" class="danger" title="Shut the Tab5 down. The radio is put back into receive FIRST, so a transmission in progress cannot be left keyed. It does NOT come back on its own - someone has to press the button, or cut and restore its power.">Power off the Tab5</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
@@ -1280,6 +1444,19 @@
              row rather than the link+subrow "Change ..." pattern the upload
              credentials use. -->
         <a href="#" id="qrz-lookup-creds-link" title="Username and password for QRZ.com's Callsign Lookup (XML) service - used to place the skimmers that heard your own CQ (RBN self-spotting) at their real station position on the spot map. Without this they show at a rough country centroid instead.">Set QRZ Callbook login</a>
+        <!-- PORT.A owner. ONE control for one connector: the remote relay and
+             the Unit GPS v1.1 are the same two pins (G53/G54), so they are
+             mutually exclusive by hardware and the setting only says which
+             cable is plugged in. It sits ABOVE the relay row because it is
+             what decides whether that row can do anything - when Unit GPS
+             owns the port the relay row greys out rather than offering a
+             pulse the device would refuse with "PORT.A is in Unit GPS mode". -->
+        <div id="port-mode-row" title="PORT.A (HY2.0-4P) carries either the remote power-cycle relay OR the M5Stack Unit GPS v1.1 - never both: they are the same two pins.&#10;&#10;Switching is live: the pins are handed over straight away. Leave the GPS unplugged while this is on Relay - relay mode drives the pins, and driving them into the GPS's own transmitter is how you damage it.&#10;&#10;The Unit GPS also disciplines the clock (satellite UTC + date), so this mode is what makes FT8 work with no internet.">
+          <span>Port mode:</span>
+          <label><input type="radio" name="port-a-mode" value="relay" checked> Relay</label>
+          <label><input type="radio" name="port-a-mode" value="unit_gps"> Unit GPS v1.1</label>
+          <span id="port-mode-result"></span>
+        </div>
         <!-- Remote QMX power cycle (Randy N4OPI): a Tab5 firmware upgrade
              wedges the QMX (#74) and needs a manual power cycle, which
              defeats doing the upgrade remotely. Pulses one of two GPIO pins
@@ -1315,6 +1492,7 @@
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
         <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
         <a href="#" id="term-btn" title="The QMX's own menu system, on its second USB serial port - the whole radio, including everything the front panel can reach. Needed if your QMX has no control panel.">Radio menus</a>
+        <a href="#" id="gps-btn" title="The GPS status page - fix, position, grid, satellites and the sky plot. The same page the Tab5 shows when you tap the UTC clock.">GPS status</a>
       </div>
     </div>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
@@ -1632,6 +1810,40 @@
         <button class="bot-btn term-key" data-key="ctrl-q" title="Back out of a menu (the radio's own Ctrl-Q)">Back</button>
         <button class="bot-btn term-key" data-key="bksp" title="Backspace (0x08). In a numeric field the cursor sits on the rightmost digit - backspace leftward, then type the value you want">BS</button>
         <span style="color:#888; font-size:12px; margin-left:8px;">Your keyboard works too &mdash; arrows, Enter, Esc, and typing.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- The GPS status page. ⭐ THE DEVICE COMPOSES IT, THIS ONLY PAINTS IT:
+       /api/gps returns the same 80x24 grid that gps_page_compose() draws on the
+       glass, so there is no second layout here to drift from the Tab5's. The
+       markers and the satellite rows arrive separately because they are
+       coloured, with the colour resolved on the device for the same reason -
+       one satellite must not be green in the plot and amber in the list.
+       The satellite pane is positioned over the hole the device leaves at rows
+       12-23, columns 0-25, from MEASURED character metrics: the sky plot
+       occupies the same rows to the right, so the table cannot simply be moved
+       below the grid. -->
+  <div id="gps-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:1000;">
+    <div style="max-width:960px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0; color:#ffa040; flex:1;" id="gps-title">GPS status</h3>
+        <span id="gps-state" style="color:#888; font-size:12px; margin-right:12px;"></span>
+        <button id="gps-close" class="btn-neutral">Close</button>
+      </div>
+      <div id="gps-msg" style="display:none; background:#1a1a2a; border:1px solid #3a4a7a; border-radius:6px; padding:10px 12px; margin-bottom:10px; color:#c8d4ff; line-height:1.5;"></div>
+      <!-- The black belongs to the WRAP now: the <pre> is transparent so the
+           ring SVG beneath it shows through. -->
+      <div id="gps-wrap" style="position:relative; background:#000; border-radius:6px;">
+        <!-- ⭐ The elevation rings are REAL OVALS, not characters. Three
+             attempts to draw them in the character grid were rejected on the
+             glass - a cell cannot hold a smooth curve, and every spacing that
+             broke the straight-line runs left a visible dotted line instead.
+             The device sends the geometry (gps_page_rings, the same numbers
+             the Tab5 draws) and this paints it under the text. -->
+        <svg id="gps-rings" style="position:absolute; left:0; top:0; pointer-events:none; overflow:visible;"></svg>
+        <pre id="gps-screen" style="position:relative; background:transparent; border:1px solid #333; border-radius:6px; padding:10px 12px; margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:15px; line-height:1.15; white-space:pre;"></pre>
+        <div id="gps-sats" style="position:absolute; display:none; overflow-y:auto; overflow-x:hidden; font-family:'Consolas','DejaVu Sans Mono',monospace; white-space:pre; line-height:1.15;"></div>
       </div>
     </div>
   </div>
@@ -2070,6 +2282,12 @@ function freqToPixelX(freqHz, W) {
 }
 
 let lastSignalDbm = null;
+/* Frame counter for the WS S-meter trailer, so the browser samples at the same
+   1.7 Hz render.c does instead of the 1 Hz status tick that read low. */
+let wsSmeterTick = 0;
+/* When the WS trailer last drove the meter. The 1 Hz status tick stands down
+   while this is recent - see the status handler. */
+let lastSignalFromWsAt = 0;
 
 function updateClock() {
   if (!serverUtcAtTick) return;
@@ -2789,6 +3007,67 @@ function adifImportMessage(j) {
     });
   })();
 
+  /* PORT.A mode: relay vs Unit GPS v1.1 (see #port-mode-row above).
+     The device decides - this control only asks, and /api/status tells the
+     page what actually happened. That matters because the setter is a
+     sequencer that can REFUSE (a relay pulse in flight, or the Unit GPS UART
+     failing to start); a page that optimistically drew the new mode would
+     show a setting the board is not in, and the next poll would fight it. */
+  (function () {
+    const wrap = document.getElementById("port-mode-row");
+    if (!wrap) return;
+    // Same reason as #gpio-row below: the document-level "click anywhere
+    // closes the menu" handler would close the menu on the first radio click.
+    wrap.addEventListener("click", (e) => e.stopPropagation());
+    const out = document.getElementById("port-mode-result");
+    const relayRow = document.getElementById("gpio-row");
+    const relayTitle = relayRow ? relayRow.getAttribute("title") || "" : "";
+    const relayWhy = "PORT.A is in Unit GPS mode - the UART owns GPIO53/54, so the remote relay cannot fire. Switch Port mode back to Relay first.";
+
+    function setPort(mode) {
+      const isUnit = mode === "unit_gps";
+      wrap.querySelectorAll('input[name="port-a-mode"]').forEach((r) => {
+        r.checked = r.value === mode;
+      });
+      if (!relayRow) return;
+      relayRow.classList.toggle("port-off", isUnit);
+      relayRow.querySelectorAll("select,input,button").forEach((el) => { el.disabled = isUnit; });
+      relayRow.setAttribute("title", isUnit ? relayWhy : relayTitle);
+    }
+
+    // Called from the 1 Hz status tick with /api/status's "port" object.
+    window.applyPortStatus = function (port) {
+      if (!port || typeof port.mode !== "string") return;
+      setPort(port.mode);
+    };
+
+    wrap.querySelectorAll('input[name="port-a-mode"]').forEach((r) => {
+      r.addEventListener("change", async function () {
+        const want = r.value;
+        out.textContent = "applying…";
+        try {
+          const res = await fetch("/api/settings", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ port_a_mode: want })
+          });
+          if (res.ok) {
+            out.textContent = want === "unit_gps" ? "Unit GPS owns PORT.A" : "Relay owns PORT.A";
+            setPort(want);           // the device accepted it
+          } else {
+            // Refused (or the UART failed to start): say why and let the next
+            // status poll put the radios back to the truth rather than
+            // guessing it here.
+            const txt = await res.text().catch(() => "");
+            out.textContent = "refused: " + (txt || ("HTTP " + res.status));
+          }
+        } catch (err) {
+          out.textContent = "no answer from the Tab5";
+        }
+        setTimeout(() => { out.textContent = ""; }, 6000);
+      });
+    });
+  })();
+
   /* Remote QMX power-cycle relay (Randy N4OPI) - pulses GPIO53/54, see
      main/util/gpio_relay.c for the whitelisting/bounds-checking this trusts
      the device to do. No confirm() - operator, 2026-09-05: "please do not
@@ -2904,6 +3183,44 @@ function adifImportMessage(j) {
 
   { const rb = document.getElementById("reboot-link");
     if (rb) rb.addEventListener("click", (e) => { e.preventDefault(); plainRestart(); }); }
+
+  /* Power off. Deliberately NOT wireReset(): that helper's copy promises a
+     reboot, and this is the one action on the menu that does not come back.
+     Randy N4OPI runs a headless QMX+ from batteries inside the radio - when
+     the radio shuts itself off on low volts the Tab5 keeps draining the same
+     pack, and he has already lost a set of 18650s to undervoltage that way.
+     ui_power_off_safely() on the device stands the robot down and puts the
+     radio in RX before the power goes, so this cannot leave a keyed radio.
+     ⚠ Whether the board stays off while 5 V is still present on its USB-C
+     input is UNTESTED - say so here rather than in a release note nobody
+     reads at the moment they need it. */
+  { const po = document.getElementById("poweroff-link");
+    if (po) po.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Power the Tab5 off?\n\n" +
+                   "• The radio is put back into receive first.\n" +
+                   "• Decoding, spotting and this web page all stop.\n" +
+                   "• It does NOT come back on its own - someone has to press " +
+                   "its button, or cut and restore its power.\n\n" +
+                   "If it is powered from a USB-C supply that stays live, it " +
+                   "may come straight back on. That case is untested.")) return;
+      const prev = po.textContent;
+      po.textContent = "Powering off …";
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "power_off", confirm: "POWEROFF" })
+        });
+        /* It answers BEFORE powering down precisely so this can tell "it
+           worked" from "it crashed" - see webserver.c. */
+        if (!r.ok) { alert("The device refused: HTTP " + r.status); return; }
+        alert("Powering off. This page will stop responding.");
+      } catch (err) {
+        alert("No answer from the Tab5. It may already be off.");
+      } finally {
+        po.textContent = prev;
+      }
+    }); }
 
   wireReset("reset-settings-link", "reset_settings",
     "Reset ALL app settings and memory channels to defaults?\n\n" +
@@ -3491,16 +3808,22 @@ async function sendCmd(payload) {
   sel.addEventListener("change", async () => {
     const hz = parseInt(sel.value, 10);
     if (!hz) return;
-    const ft4 = !!(window.__ft8Presets &&
-                   window.__ft8Presets.ft4.some(p => p.hz === hz));
+    /* ⛔ THE MODE COMES FROM THE OPTION, NOT FROM THE FREQUENCY. This used to
+       search the FT4 list for the chosen hz, which worked only while no two
+       sub-modes shared a dial frequency. JS8 shares TWO with FT4 - 17 m 18.104
+       and 6 m 50.318 are identical - so picking JS8 on either band would have
+       switched the radio to FT4 instead, on the right frequency, which is the
+       hardest kind of wrong to notice. */
+    const opt = sel.selectedOptions && sel.selectedOptions[0];
+    const mode = (opt && opt.dataset && opt.dataset.mode) || "ft8";
     /* Optimistically, like the wheel: the readout and the marker move now and
        the poll confirms, rather than the control looking dead for a second. */
     lastFreqHz = hz;
     document.getElementById("vfo").textContent = fmtHz(hz);
-    /* set_ft8_mode already exists and already does all of this - retune, FT4
-       switch, stale-decode clear. Adding an ft8_preset action would have been a
-       second door onto the same room. */
-    await sendCmd({ action: "set_ft8_mode", mode: ft4 ? "ft4" : "ft8", freq_hz: hz });
+    /* set_ft8_mode already exists and already does all of this - retune,
+       sub-mode switch, stale-decode clear. Adding an ft8_preset action would
+       have been a second door onto the same room. */
+    await sendCmd({ action: "set_ft8_mode", mode: mode, freq_hz: hz });
   });
 })();
 
@@ -4188,9 +4511,17 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.excl.0.en",   "bool", "  ...enabled", ""],
   ["FT8 filters", "filters.excl.1.text", "text", "Exclude if it contains (2)", ""],
   ["FT8 filters", "filters.excl.1.en",   "bool", "  ...enabled", ""],
-  ["FT8 filters", "filters.excl_worked_before", "bool", "Exclude stations worked before", "Per band - the same call on another band is still new"],
+  /* ⛔ IT WAS CALLED "Exclude stations worked before" AND IT EXCLUDES NOTHING
+     FROM THE LIST. Randy N4OPI, 2026-10-16: "I would expect that with this
+     checked, worked before stations wouldn't show up at all." They always do.
+     What it gates is the four places the machine picks somebody by itself;
+     the row's grey is unconditional and comes from the log, not from here. */
+  ["FT8 filters", "filters.excl_worked_before", "bool", "Never auto-call a station worked before",
+   "Stops the MACHINE calling them - CQ answers, the pile-up, Auto-work and the robot all pass over a call already in your log on this band. It does not hide anything: a worked station is greyed in the decode list whether this is on or off, and you can still work it by tapping it. Per band, so the same call on another band is new"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
+  ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",
+   "While you run CQ, other stations' CQ rows are hidden so replies to you are not buried. Turn this on to keep seeing them in your listening slot"],
   ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
   ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
   ["FT8 filters", "filters.cq_manual_pick",     "bool", "Pick callers myself", "Running CQ: a caller waits in the pile-up until you tap them. The exchange itself is still automatic. Overrides Auto-work the pileup"],
@@ -4238,9 +4569,9 @@ const SET_FIELDS = [
   /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
      this page can reach. All three were Tab5-only for no reason anyone could
      name - the rest of their own group was already here. */
-  ["Radio & display", "display.wf_speed_mult", "sel", "Waterfall speed",
-     "How fast the waterfall scrolls. Faster spreads a signal out in time; slower fits more history on screen. The spectrum and S-meter are unaffected",
-     [["1","Normal"],["2","2x"],["3","3x"],["4","4x"]]],
+  ["Radio & display", "display.wf_rows_per_s", "sel", "Waterfall rate",
+     "Waterfall rows per second. Faster spreads a signal out in time; slower fits more history on screen and costs the Tab5 less to draw. The spectrum and S-meter are unaffected",
+     [["1","1 row/s"],["2","2 rows/s"],["3","3 rows/s"],["4","4 rows/s"],["5","5 rows/s"],["6","6 rows/s"],["7","7 rows/s"],["8","8 rows/s"],["9","9 rows/s"],["10","10 rows/s (normal)"],["20","20 rows/s"],["30","30 rows/s"],["40","40 rows/s"]]],
   /* ⛔ "My QMX has GPS" IS NOT HERE, AND MUST NOT COME BACK. GPS is DETECTED,
      not declared - time_sync.c compares the radio's own second tick against
      SNTP - and the Tab5's drawer dropped this checkbox on 2026-07-19 when that
@@ -4279,6 +4610,14 @@ const SET_FIELDS = [
      "On (the default): the spectrum and waterfall hold still and the VFO marker moves across them, so a signal stays where you last saw it while you tune. Off: the old behaviour, where the view re-centres on the dial at every step and the marker stays in the middle. Either way, the hatched region on the right is frequency the radio genuinely cannot hear"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "cw_decode_en", "bool", "Show decoded CW", "The radio decodes CW itself; this shows it along the bottom of the panadapter in CW mode"],
+  /* Bryan N0LUF: "Maybe an option to select 2 or 4 lines as well?" The strip
+     grows upward from a fixed bottom edge, so two rows hand back about 66 px
+     of waterfall. Changing it wipes the window - the decoder wraps over
+     exactly these rows, so old text in rows it no longer uses would be a
+     ghost. */
+  ["Radio & display", "cw_decode_rows", "sel", "Lines of decoded CW",
+     "Four fills more of the waterfall; two hands that space back. Switching wipes what is on screen now - the microSD transcript keeps it",
+     [["4","4 lines"],["2","2 lines"]]],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   // #302 (Don N2VGU): the options SHOW the two formats rather than naming a
   // convention - "European"/"USA" would make the reader work out what they get,
@@ -4297,6 +4636,12 @@ const SET_FIELDS = [
      "The radio's achievable CW filter centres are 500-950 in 25 Hz steps, and which of them are offered depends on the CW passband in use - the QMX picks the nearest achievable one. Also sets the radio's own CW centre, so its sidetone and offset follow"],
   ["Radio & display", "if_cal_hz",          "num",  "IF calibration (Hz)",
      "Per-unit trim, -200 to +200, so a CW signal sits exactly under the cursor. Default -60"],
+  /* Keyer speed (Ralph Hellmig, 2026-10-10). Goes straight to the radio over
+     CAT and is read back, so the box shows what the QMX accepted rather than
+     what was typed. Not stored here - the radio owns it, and its own encoder
+     changes it behind the browser's back. */
+  ["Radio & display", "keyer_wpm",          "num",  "CW keyer speed (WPM)",
+     "Sent to the radio over CAT and read back, so this shows what the QMX accepted. 0 selects Straight Key mode regardless of the keyer mode setting, which is the quick way to key down for a tune-up. Needs the CAT link up"],
 
   ["Radio & display", "charge_limit_en",    "bool", "Battery care (stop charging early)",
      "Stopping short of full is easier on a lithium pack left plugged in"],
@@ -4397,6 +4742,40 @@ const SET_FIELDS = [
      version exists, which is the part nobody wanted to lose; it just waits
      for you to ask before spending 3.3 MB. Applying an update is a separate,
      always-deliberate press either way. */
+  /* RX audio - the Tab5's Resource Management sliders, which had no web
+     equivalent at all. Scaled exactly as the device stores them, and the
+     device applies each one to the live DSP as well as persisting it (see
+     the POST handler): a control that only persisted would look saved and
+     do nothing until the next boot. */
+  ["RX audio", "rxaudio.gain_d10", "num", "AGC ceiling (÷10)",
+   "5-150. The maximum gain the AGC may reach; 20 means 200. With AGC off this is a fixed gain."],
+  ["RX audio", "rxaudio.agc_off", "bool", "AGC off (fixed gain)",
+   "Pins the gain at the ceiling instead of tracking - for faint signals"],
+  ["RX audio", "rxaudio.agc_attack_ms", "num", "AGC attack (ms)",
+   "1-50. Fast (1) for CW, 3 is the default, 5 for SSB"],
+  ["RX audio", "rxaudio.agc_release_ms", "num", "AGC release (ms)",
+   "10-500. 30 for CW, 150 default, 400 for SSB - a fast release pumps on speech pauses"],
+  ["RX audio", "rxaudio.pan_width_x10", "num", "Panoramic CW width (×10)",
+   "0-30. 18 means 1.8. Only does anything in CW/CW-R"],
+  ["RX audio", "rxaudio.pan_blend_x100", "num", "Panoramic blend (×100)",
+   "0-50. 15 means 0.15"],
+  ["RX audio", "rxaudio.pan_ovlp_x100", "num", "Panoramic overlap (×100)",
+   "0-100. 30 means 0.30"],
+  /* ⛔ An escape hatch, not a preference: two operators lost all audio to the
+     auto-mute after v1.16.4 and neither could be reproduced here. It is on
+     the Tab5 so it can be reached there, and here so it can be reached from
+     a phone when the Tab5 is across the room. */
+  ["RX audio", "rxaudio.hp_mute_en", "bool", "Mute the speaker when headphones are plugged in",
+   "Turn this OFF if you lose all audio - it is the headphone auto-mute"],
+
+  /* Beside WiFi, not under a Device heading, and the Tab5 drawer places it
+     the same way for the same reason: "should this thing download 3.3 MB on
+     my hotspot" is a question about what the network connection does unasked,
+     and the people who asked for the switch would not have found it filed
+     under Expert. It downloads only - it never applies an update (#239).
+     ⚠ It was in the drawer and nowhere on the web until the parity sweep. */
+  ["WiFi", "ota_autodl", "bool", "Download updates in the background",
+   "Fetches a new release quietly when one appears. It is never installed on its own."],
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
   /* Randy N4OPI, 2026-09-23: he runs a DMZ network alongside a home LAN, both
@@ -4464,7 +4843,10 @@ async function ft8LoadPresets() {
     const d = await r.json();
     if (!d.ft8_presets) return;
     ft8PresetsLoaded = true;
-    window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [] };
+    /* js8_presets is absent on a build without JS8, and an absent list simply
+       means no JS8 group is offered. */
+    window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [],
+                            js8: d.js8_presets || [] };
     ft8FillPresets();
   } catch (e) { /* offline - the control just stays empty rather than lying */ }
 }
@@ -4486,7 +4868,8 @@ function ft8FillPresets() {
      offered. Two <optgroup>s mirror the Tab5's own picker, which shows FT8 and
      FT4 side by side in two columns. */
   const groups = [["FT8", window.__ft8Presets.ft8],
-                  ["FT4", window.__ft8Presets.ft4]];
+                  ["FT4", window.__ft8Presets.ft4],
+                  ["JS8", window.__ft8Presets.js8]];
   for (const [label, list] of groups) {
     if (!list || !list.length) continue;
     const g = document.createElement("optgroup");
@@ -4494,12 +4877,14 @@ function ft8FillPresets() {
     for (const p of list) {
       const o = document.createElement("option");
       o.value = String(p.hz);
+      /* The sub-mode travels WITH the option - see the change handler. */
+      o.dataset.mode = label.toLowerCase();
       o.textContent = p.band + " m  " + (p.hz / 1e6).toFixed(3);
       /* Mark the one we are already on, so the control reads as a position and
          not just a jump list. Both mode AND frequency have to match, or the
-         same band in the other mode can look selected. */
-      const inFt4 = (lastMode || "").toUpperCase().indexOf("FT4") >= 0 || ft8IsFt4();
-      if (Math.abs(p.hz - lastFreqHz) < 500 && (label === "FT4") === inFt4)
+         same band in another mode can look selected - and with JS8 sharing two
+         frequencies with FT4, two options can carry the same hz. */
+      if (Math.abs(p.hz - lastFreqHz) < 500 && label === ft8Proto())
         o.selected = true;
       g.appendChild(o);
     }
@@ -4511,8 +4896,10 @@ function ft8FillPresets() {
 /* The device's own answer (/api/status ft8.proto), not a scan of the status
    text - that only ever said FT4 while something was being transmitted, so the
    preset list quietly believed FT8 the rest of the time. */
-function ft8IsFt4() {
-  return lastFtProto === "FT4";
+/* "FT8", "FT4" or "JS8" - the device's own word for what it is running. Used
+   anywhere a two-way FT8/FT4 test would put JS8 on the FT8 branch. */
+function ft8Proto() {
+  return (lastFtProto === "FT4" || lastFtProto === "JS8") ? lastFtProto : "FT8";
 }
 
 /* ==========================================================================
@@ -4659,6 +5046,48 @@ async function ft8OptsRefreshBadge() {
   } catch (e) { /* leave the last-known badge showing */ }
 }
 
+/* Keep in step with drawer_preset_*_cb() in ui/ui.c - same names, same
+   numbers, same order as the Tab5's own row of buttons. */
+const DB_PRESETS = [
+  ["HF Normal", -130, -30, 40],
+  ["HF DX",     -130, -50, 60],
+  ["Strong",    -110, -20, 20],
+  ["Noise",     -150, -30, 40],
+];
+
+function dbPresetRender(body) {
+  const min = body.querySelector('[data-path="display.db_min"]');
+  if (!min) return;                       // the group is not on this panel
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; gap:6px; align-items:center; margin:8px 0 4px; flex-wrap:wrap;";
+  const lab = document.createElement("span");
+  lab.style.cssText = "color:var(--dim); font-size:13px;";
+  lab.textContent = "Presets:";
+  row.appendChild(lab);
+  for (const [name, lo, hi, ema] of DB_PRESETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bot-btn";
+    b.textContent = name;
+    b.title = "Floor " + lo + " dBm, ceiling " + hi + " dBm, smoothing " + ema +
+              "%. Fills the three rows below - press Save to apply.";
+    b.addEventListener("click", () => {
+      const set = (path, v) => {
+        const el = body.querySelector('[data-path="' + path + '"]');
+        if (el) el.value = String(v);
+      };
+      set("display.db_min", lo);
+      set("display.db_max", hi);
+      set("display.ema_pct", ema);
+    });
+    row.appendChild(b);
+  }
+  /* Directly above the floor row the buttons fill, so what changed is in
+     view when it changes. */
+  const host = min.closest("div");
+  if (host && host.parentNode) host.parentNode.insertBefore(row, host);
+}
+
 function setGet(obj, path) {
   return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
 }
@@ -4746,6 +5175,15 @@ function setBuildForm(cfg, ft8Opts) {
      one-control-per-line renderer has no shape for. General settings only -
      it has nothing to do with FT8 options. */
   if (!ft8Opts) cwProfRender(cfg, body);
+  /* The four dB-range presets the Tab5's Spectrum group offers as buttons.
+     They are not a setting of their own - each one is just a (floor, ceiling,
+     smoothing) triple, and all three already have rows above - so this fills
+     those rows in rather than posting anything of its own. The operator still
+     presses Save, which is what makes it safe to offer here: the values are
+     visible before they are sent.
+     ⛔ The triples are the DEVICE's (drawer_preset_*_cb in ui/ui.c). Changing
+     one there and not here would give the same button two meanings. */
+  if (!ft8Opts) dbPresetRender(body);
   // Re-tint a warning select as soon as the choice changes, not on save - the
   // point of the colour is to be seen while deciding.
   body.querySelectorAll("select[data-tintable]").forEach(sel => {
@@ -4930,7 +5368,12 @@ async function cwProfApply(idx) {
 
 async function setOpen(ft8Opts) {
   setGroup = !!ft8Opts;
-  document.getElementById("set-title").textContent = setGroup ? "FT8 Options" : "Settings";
+  /* ⛔ NAME THE PROTOCOL THAT IS RUNNING, not the family. This read
+     "FT8 Options" while JS8 was live - the same defect as the top-right
+     "FT8 mode" chip and the MODE heading before it, and the operator hit
+     all three on 2026-10-15. ft8Proto() is the device's own word. */
+  document.getElementById("set-title").textContent =
+    setGroup ? (ft8Proto() + " Options") : "Settings";
   document.getElementById("set-modal").style.display = "";
   pauseWs();                                  // same discipline as the other modals
   const body = document.getElementById("set-body");
@@ -5150,9 +5593,26 @@ document.getElementById("set-modal").addEventListener("click", (e) => {
    country was not shown anywhere in this list at all. */
 const DEC_COLS = [
   ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["cty", "COUNTRY"],
-  ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["km",   "KM"],
-  ["brg",  "BRG"],  ["age",  "AGE"],
+  ["snr",  "SNR"],  ["dt",   "DT"],   ["dtr",  "DTR"],     ["hz",   "HZ"],
+  ["km",   "KM"],   ["brg",  "BRG"],  ["age",  "AGE"],
 ];
+/* TWO timing columns, because there are two honest answers and this table used
+   to show one of them under the other's name.
+
+   DT  = the station's offset MINUS the band consensus. Identical to the Tab5's
+         DT column, and the WSJT-X-style number: an on-time station reads ~0.0
+         because the consensus carries the RX audio latency both measurements
+         share. Shows "--" when fewer than two STATIONS fed the consensus - then
+         it is one station's offset minus itself, which is zero by construction
+         and not a measurement.
+   DTR = the raw, slot-boundary-relative offset. Includes ~0.5 s of one-way RX
+         audio latency (QMX SDR + USB buffering), so it is NOT comparable with
+         WSJT-X's DT - but it is the number that moves when the transmitter's
+         timing moves, which is what you want when checking a TX.
+
+   Randy N4OPI put the two side by side on 2026-10-08 and reported that they
+   disagreed. They did, by the audio latency, and nothing on either screen said
+   so. */
 /* Sort comparators: how to pull a comparable value out of a row, and which
    direction is the useful default the first time that column is clicked
    (SNR/KM: strongest/furthest first; everything else: low-to-high or A-Z).
@@ -5166,7 +5626,11 @@ const DEC_SORT = {
   text: { get: r => r.text || null, type: "str", def: "asc"  },
   cty:  { get: r => r.cty === undefined ? null : r.cty, type: "str", def: "asc" },
   snr:  { get: r => r.snr === undefined ? null : r.snr, type: "num", def: "desc" },
+  /* Both timing columns sort on the RAW value: the consensus is the same
+     constant for every row in a response, so subtracting it cannot reorder
+     anything. One accessor, no chance of the two columns sorting differently. */
   dt:   { get: r => r.dt  === undefined ? null : r.dt,  type: "num", def: "asc"  },
+  dtr:  { get: r => r.dt  === undefined ? null : r.dt,  type: "num", def: "asc"  },
   hz:   { get: r => r.hz  === undefined ? null : r.hz,  type: "num", def: "asc"  },
   km:   { get: r => r.km  === undefined ? null : r.km,  type: "num", def: "desc" },
   brg:  { get: r => r.brg === undefined ? null : r.brg, type: "num", def: "asc"  },
@@ -5251,6 +5715,10 @@ function wsprCycleLabel(utc) {
    worker, and a request every 5 s for a feature nobody enabled is pure
    contention on the link the spectrum stream shares. */
 let lastFtProto = "FT8";     /* what the device says it is running */
+/* The JS8 submode the DEVICE reports. The MODE heading is painted from
+   this and the picker reads it back, so the Tab5 drawer, the glass and
+   this page cannot disagree about what is set. */
+let lastJs8Submode = 0;
 let wsprEnabled = false;
 let wsprPollInFlight = false;
 /* The band list is fetched ONCE - it never changes - exactly like the FT8
@@ -5518,12 +5986,29 @@ async function pollWspr() {
 setInterval(pollWspr, 5000);
 pollWspr();
 
-const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc" };
+const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc",
+                   dtConsensus: 0, dtStations: 0 };
 let decPollInFlight = false;
 
 function decFmt(k, r) {
   if (k === "snr") return (r.snr > 0 ? "+" : "") + r.snr;
-  if (k === "dt")  return (r.dt / 1000).toFixed(1);
+  /* DT: consensus-corrected, the same arithmetic and the same blanking rule as
+     the Tab5's own column. "--" when fewer than two stations fed the consensus,
+     because then it is a station's offset minus itself. */
+  if (k === "dt") {
+    if (decState.dtStations < 2) return "—";
+    const v = (r.dt - decState.dtConsensus) / 1000;
+    /* >= 0, not > 0: the Tab5 formats with %+.1f, which signs an exact zero as
+       "+0.0". A bare "0.0" here would be the two screens disagreeing again, in
+       the one place they are now meant to match character for character. */
+    return (v >= 0 ? "+" : "") + v.toFixed(1);
+  }
+  /* DTR: raw, boundary-relative, audio latency included. Signed like DT - the
+     sign was missing here and a bare "0.6" reads as a corrected value. */
+  if (k === "dtr") {
+    const v = r.dt / 1000;
+    return (v >= 0 ? "+" : "") + v.toFixed(1);
+  }
   if (k === "hz")  return r.hz;
   if (k === "age") return r.age < 60 ? r.age + "s" : Math.floor(r.age / 60) + "m";
   // The device OMITS km/brg when either grid is missing rather than sending a
@@ -5552,8 +6037,21 @@ function decRenderTable() {
   const head = document.getElementById("dec-head");
   const arrow = key => decState.sortKey === key
     ? '<span class="arrow">' + (decState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
+  /* Hover text for the two timing columns. Without it DT and DTR are two
+     near-identical numbers under near-identical headings, which is the
+     confusion this pair was added to END, not to repeat. */
+  const DEC_TIPS = {
+    dt:  "Offset from the band consensus, as WSJT-X reports DT and as the Tab5 "
+       + "shows it. The consensus carries the RX audio latency both share, so an "
+       + "on-time station reads about 0.0. Shows — while fewer than two "
+       + "stations have fed the consensus.",
+    dtr: "Raw offset from the slot boundary, including about 0.5 s of one-way RX "
+       + "audio latency. Not comparable with WSJT-X's DT, but it is the number "
+       + "that moves when a transmitter's timing moves.",
+  };
   head.innerHTML = DEC_COLS.map(c =>
     '<th class="sortable" onclick="decSetSort(\'' + c[0] + '\')" '
+    + (DEC_TIPS[c[0]] ? 'title="' + DEC_TIPS[c[0]] + '" ' : '')
     + 'style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
     + (c[0] === "km" ? decState.unit : c[1]) + arrow(c[0]) + "</th>").join("");
   document.getElementById("dec-order-reset").style.display = decState.sortKey === null ? "none" : "";
@@ -5612,6 +6110,11 @@ async function pollDecodes() {
     // The KM column has to become MI the moment the Tab5 setting is flipped.
     decState.unit = d.miles ? "MI" : "KM";
     decState.mode = d.mode || "FT8";
+    /* Slot properties, not row properties - DT subtracts the first and blanks
+       on the second. Defaulted so an older device that does not send them makes
+       DT render "--" rather than silently showing the raw value as corrected. */
+    decState.dtConsensus = d.dt_consensus || 0;
+    decState.dtStations  = d.dt_stations  || 0;
     /* Just "Decode list": the mode heading above the panel already says FT8 or
        FT4, and saying it twice on one screen is noise. */
     document.getElementById("dec-title").textContent = "Decode list";
@@ -5639,8 +6142,7 @@ async function pollDecodes() {
         const call = a.getAttribute("data-pcall");
         /* No confirm - working a caller out of the pileup is the point of the
            pileup list. See the note on the mid-QSO Cancel. */
-        document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
-        sendCmd({ action: "reply", call: call });
+        ft8RowClicked(call);
       }));
 
     /* The grey-list: who the auto pickers are skipping, and the way out. */
@@ -5659,6 +6161,37 @@ async function pollDecodes() {
 }
 setInterval(pollDecodes, 2000);
 
+/* ⛔ IN JS8 A CLICK SELECTS. IT DOES NOT TRANSMIT.
+ *
+ * Ryan KK6DZB, after holding a real JS8 QSO on v1.18.0: "anytime I would click
+ * on a call it would auto start sending the SNR which is not handy in this
+ * mode. Works in FT8 :) but not so much in JS8 Call." Gyula HA3HZ saw the same
+ * thing from the far end - stations being answered with no human in the loop.
+ *
+ * So every place this page can click a callsign goes through here. In FT8
+ * nothing changes: "reply" still runs the intelligent Transmit. In JS8 it
+ * selects the station, the conversation filters to them, and the report goes
+ * out only when SNR or GRID is pressed.
+ *
+ * ⚠ The DEVICE enforces this too (webserver.c's "reply" action), because a
+ * browser tab left open across an update would otherwise keep transmitting on
+ * a click. This is the surface, not the guard. */
+async function ft8RowClicked(call) {
+  if (!call) return;
+  const wr = document.getElementById("ft8-webr");
+  if (ft8Proto() === "JS8") {
+    js8Target = call;                 /* optimistic: the poll confirms it */
+    if (wr) wr.textContent = "Working " + call + " - press SNR or GRID to send";
+    js8BarSync();
+    await sendCmd({ action: "js8_select", call: call });
+    js8Shown = "";                    /* force the filtered grid to repaint */
+    js8Poll();
+    return;
+  }
+  if (wr) wr.textContent = "Asking the Tab5 to reply to " + call + "...";
+  await sendCmd({ action: "reply", call: call });
+}
+
 /* Click a decode row to WORK that station - the same intelligent Transmit a
    Tab5 row-tap runs: their fresh CQ starts the full auto-QSO, anything
    mid-exchange sends the one correct next message. It keys the radio, so it
@@ -5670,10 +6203,504 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
   const call = tr.getAttribute("data-call");
   if (!call) return;
   /* No confirm - clicking a station in the decode list to work it is the
-     primary gesture of this page. See the note on the mid-QSO Cancel. */
-  document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
-  await sendCmd({ action: "reply", call: call });
+     primary gesture of this page. See the note on the mid-QSO Cancel.
+     In JS8 it selects instead of transmitting - see ft8RowClicked. */
+  await ft8RowClicked(call);
 })
+
+/* ───────────────────────── JS8 conversation pane ───────────────────────────
+   Parity with the Tab5's JS8 screen, which carries two tabs over the same
+   right-hand pane: Stations (the decode table this page has always had) and
+   Conversation. ⭐ Conversation is the DEFAULT in JS8 on the glass, because it
+   is the only view that can show what a station actually SAID, so it is the
+   default here too.
+
+   The grid comes from /api/js8 already composed by js8_page_render() - the
+   same function the Tab5 draws. Laying it out here would be a second copy of
+   decisions that were argued out once (newest at the top, age not a wall
+   clock, the flag column first so live and truncated marks line up).
+
+   ⛔ Rows are tappable and the row -> message map comes FROM THE DEVICE. A
+   message can wrap onto several rows, so a tap cannot be turned into a message
+   by arithmetic - the glass asks for the map for exactly this reason. */
+let js8Tab = "conv";      // the Tab5's default in JS8
+/* The selected station, mirrored from /api/status (ft8.js8_target) so the Tab5
+   and this page cannot disagree about who is being worked - one piece of state,
+   two surfaces, the rule cq_parity had to learn the hard way. */
+let js8Target = "";
+let js8Prefix = "";      // what a free-text message opens with, from the device
+let js8Timer = null;
+let js8Senders = [];
+let js8Shown = "";   // the grid currently painted - see js8Poll()
+
+function js8Esc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Show the tabs only in JS8, and only ever one pane at a time. Called from the
+   status poll, so switching the Tab5's mode from anywhere updates this page. */
+function js8TabsSync(proto) {
+  const isJs8 = (proto === "JS8");
+  document.getElementById("js8-tabs").style.display = isJs8 ? "" : "none";
+  const conv = document.getElementById("js8-conv");
+  const tbl  = document.getElementById("dec-table").parentElement;
+  const showConv = isJs8 && js8Tab === "conv";
+  conv.style.display = showConv ? "" : "none";
+  tbl.style.display  = showConv ? "none" : "";
+  /* ⭐ The glass HIDES the Stations column header in conversation view
+     (s_col_hdr, ft8_screen_view.c) and lets the tab bar name the pane. Do the
+     same: "Decode list - nothing heard yet" over a conversation is a heading
+     describing the pane that is not on screen. */
+  for (const id of ["dec-title", "dec-count", "dec-rx", "dec-order-reset"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (showConv) { el.dataset.js8Hid = "1"; el.style.visibility = "hidden"; }
+    else if (el.dataset.js8Hid) { delete el.dataset.js8Hid; el.style.visibility = ""; }
+  }
+  for (const [id, want] of [["js8-tab-conv", "conv"], ["js8-tab-stn", "stn"]]) {
+    const b = document.getElementById(id);
+    b.style.opacity = (js8Tab === want) ? "1" : "0.55";
+  }
+  /* The composer belongs to the conversation pane: it is where you are reading
+     what was said, which is where you answer. */
+  document.getElementById("js8-tx").style.display = showConv ? "" : "none";
+  if (showConv) {
+    if (!js8Timer) { js8Poll(); js8Timer = setInterval(js8Poll, 1000); }
+  } else if (js8Timer) {
+    clearInterval(js8Timer); js8Timer = null;
+  }
+}
+
+/* ⭐ THE BOX OPENS ADDRESSED - "THEM US " with a station selected, "US "
+   without one. Ryan KK6DZB: "in the free text window if you type a message
+   directed to another station the outgoing message always starts with their
+   call followed by yours... If you type a free text message not directed at
+   anyone it starts with your call." Before this he had to type both callsigns
+   by hand, which is why he called free text "very difficult to use".
+
+   ⛔ THE RULE IS THE DEVICE'S (js8_text_prefix, served as ft8.js8_prefix) and
+   is not restated here, the same reasoning as js8_text_plan: one definition of
+   what a message opens with, two surfaces.
+
+   Only ever rewrites a box that is EMPTY or still holds nothing but a prefix.
+   Anything the operator has typed is theirs - a poll must never edit it. */
+let js8PrefixShown = "";
+function js8ComposerPrefill() {
+  const ta = document.getElementById("js8-tx-text");
+  if (!ta || !js8Prefix) return;
+  const v = ta.value;
+  if (v === "" || v === js8PrefixShown) {
+    if (v !== js8Prefix) ta.value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+  }
+}
+
+/* The target chip and the two macro buttons. Enabled only with a station
+   selected: a macro with nobody to send it to is a button that can only fail. */
+function js8BarSync() {
+  const t = document.getElementById("js8-target");
+  if (t) t.textContent = js8Target ? "> " + js8Target : "> click a station";
+  for (const id of ["js8-snr", "js8-grid"]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !js8Target;
+  }
+}
+
+/* ⭐ THE SUBMODE, PICKED FROM THE MODE HEADING - the Tab5's arrangement.
+   The heading already names the speed ("JS8 NORM"), so it is also what changes
+   it; there is no second control anywhere on this page. Operator, 2026-10-15.
+
+   The table is the one in main/js8_submode.c, in the same order and the same
+   words. ⛔ THE INDEX IS NOT THE VALUE: JS8Call's NSUBMODE numbering is not
+   dense - 0 Normal, 1 Fast, 2 Turbo, 4 Slow, with 3 absent - so the value is
+   carried explicitly rather than computed from a position.
+
+   The DEVICE decides whether the change is allowed. It refuses while a QSO or
+   a burst is live, because an armed request already carries tones built for
+   the old submode, so the refusal is reported rather than second-guessed here
+   and the heading repaints from the next poll either way. */
+const JS8_SUBMODES = [
+  { v: 0, label: "Normal - 15 s", short: "JS8 NORM"  },
+  { v: 1, label: "Fast - 10 s",   short: "JS8 FAST"  },
+  { v: 2, label: "Turbo - 6 s",   short: "JS8 TURBO" },
+  { v: 4, label: "Slow - 30 s",   short: "JS8 SLOW"  },
+];
+
+/* The heading's own text, mirroring the Tab5's mode_label() word for word.
+   NORM rather than NORMAL because "JS8 NORMAL" does not fit the glass, and the
+   two surfaces must not word it differently. */
+function js8SubmodeShort(v) {
+  const e = JS8_SUBMODES.find(x => x.v === v);
+  return e ? e.short : "JS8 NORM";
+}
+
+function js8SubmodeClose() {
+  const pop = document.getElementById("submode-pop");
+  if (pop) pop.remove();
+}
+
+function js8SubmodePopup(anchor) {
+  if (document.getElementById("submode-pop")) { js8SubmodeClose(); return; }
+  const pop = document.createElement("div");
+  pop.id = "submode-pop";
+  JS8_SUBMODES.forEach(e => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = e.label;
+    if (e.v === lastJs8Submode) b.classList.add("active");
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      js8SubmodeClose();
+      const r = await sendCmd({ action: "js8_submode", submode: e.v });
+      if (r && r.ok === false) {
+        alert("JS8 submode not changed: " + (r.err || "refused by the device"));
+      }
+      js8Poll();          /* re-read it either way */
+    });
+    pop.appendChild(b);
+  });
+  /* Anchored to the heading itself, so it opens where the operator just
+     clicked rather than at a fixed corner of the page. */
+  const r = anchor.getBoundingClientRect();
+  pop.style.left = Math.round(r.left + window.scrollX) + "px";
+  pop.style.top  = Math.round(r.bottom + window.scrollY + 4) + "px";
+  document.body.appendChild(pop);
+}
+
+/* One listener, on the document, so the popup closes on any click that is not
+   inside it - including a click on the heading, which toggles. */
+document.addEventListener("click", (e) => {
+  const pop = document.getElementById("submode-pop");
+  if (pop && !pop.contains(e.target) &&
+      e.target !== document.getElementById("mode-banner")) js8SubmodeClose();
+});
+
+{
+  const mb = document.getElementById("mode-banner");
+  if (mb) mb.addEventListener("click", (e) => {
+    /* JS8 only. In FT8, FT4 and WSPR the heading is a heading and nothing
+       else - there is no submode to pick. */
+    if (ft8Proto() !== "JS8") return;
+    e.stopPropagation();
+    js8SubmodePopup(mb);
+  });
+}
+
+/* Clicking the chip clears the selection, which also unfilters the pane - the
+   only way back to the whole conversation, so it is not optional. */
+document.getElementById("js8-target").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!js8Target) return;
+  js8Target = "";
+  js8BarSync();
+  await sendCmd({ action: "js8_select", call: "" });
+  js8Shown = "";
+  js8Poll();
+});
+
+/* The macros. The device arms them (one message, never the auto-sequencer) and
+   answers with what actually happened, refusal included - see
+   ft8_screen_view_request_js8_macro. It lands on the same banner line every
+   other browser-initiated outcome uses. */
+for (const [id, act, what] of [["js8-snr", "js8_snr", "signal report"],
+                               ["js8-grid", "js8_grid", "grid"]]) {
+  document.getElementById(id).addEventListener("click", async () => {
+    if (!js8Target) return;
+    const wr = document.getElementById("ft8-webr");
+    if (wr) wr.textContent = "Sending your " + what + " to " + js8Target + "...";
+    await sendCmd({ action: act });
+  });
+}
+
+/* ---- the free-text composer -------------------------------------------
+   ⭐ THE PLAN COMES FROM THE DEVICE. js8_text_plan returns the frame count,
+   the air time AND the normalised text - upper-cased, whitespace collapsed,
+   unsendable characters dropped. Showing the device's own answer means the
+   operator sees exactly what will go out, and the encoder's rules are not
+   duplicated in JavaScript where they would drift. */
+let js8PlanTimer = null;
+let js8PlanSeq = 0;
+
+async function js8PlanNow() {
+  const txt  = document.getElementById("js8-tx-text").value;
+  const out  = document.getElementById("js8-tx-plan");
+  const send = document.getElementById("js8-tx-send");
+  if (!txt.trim()) { out.textContent = ""; send.disabled = true; return; }
+  const seq = ++js8PlanSeq;
+  let j;
+  try {
+    j = await (await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "js8_text_plan", text: txt })
+    })).json();
+  } catch (e) { out.textContent = "(could not reach the Tab5)"; return; }
+  if (seq !== js8PlanSeq) return;   /* a later keystroke already answered */
+  if (!j.ok) {
+    out.textContent = "Nothing sendable in that.";
+    send.disabled = true;
+    return;
+  }
+  send.disabled = false;
+  const mins = j.secs >= 60 ? " (" + Math.floor(j.secs / 60) + " min " + (j.secs % 60) + " s)" : "";
+  out.textContent = j.frames + (j.frames === 1 ? " frame, " : " frames, ") +
+                    j.secs + " s of air time" + mins + "  →  " + j.text;
+}
+
+function js8TxInit() {
+  const ta     = document.getElementById("js8-tx-text");
+  const send   = document.getElementById("js8-tx-send");
+  const cancel = document.getElementById("js8-tx-cancel");
+  if (!ta || ta.dataset.wired) return;
+  ta.dataset.wired = "1";
+  send.disabled = true;
+
+  /* Debounced: one plan per pause in typing, not one per keystroke. */
+  ta.addEventListener("input", () => {
+    if (js8PlanTimer) clearTimeout(js8PlanTimer);
+    js8PlanTimer = setTimeout(js8PlanNow, 250);
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !send.disabled) { e.preventDefault(); send.click(); }
+  });
+
+  send.addEventListener("click", async () => {
+    const txt = ta.value;
+    if (!txt.trim()) return;
+    send.disabled = true;
+    try {
+      await fetch("/api/cmd", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "js8_text", text: txt })
+      });
+      /* ⛔ DO NOT CLEAR THE BOX HERE. The device can still refuse this
+         (not in JS8, something already armed, nothing sendable) and the
+         refusal used to arrive with the text already discarded, so the
+         operator had to retype a 160-character message to try again. It is
+         cleared on the first poll that reports the run accepted - see
+         js8TxStatus. */
+      document.getElementById("js8-tx-plan").textContent = "Sending…";
+    } catch (e) {
+      document.getElementById("js8-tx-plan").textContent = "(could not reach the Tab5)";
+      send.disabled = false;
+    }
+  });
+
+  /* ⛔ Reachable mid-transmission on purpose: a run holds the frequency for up
+     to three minutes and must be stoppable from wherever the operator is. */
+  cancel.addEventListener("click", async () => {
+    try {
+      await fetch("/api/cmd", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "js8_text_cancel" })
+      });
+    } catch (e) { /* the status poll will show whether it stopped */ }
+  });
+}
+
+let js8TxResultShown = "";   /* the last ftx_result put on screen */
+/* The falling edge of a run, so the frame count can be replaced once it ends -
+   see the note in js8TxStatus. ftx_result cannot carry this: it stays
+   "sending" for good. */
+let js8TxWasRunning = false;
+let js8TxLastTotal  = 0;
+
+/* Progress, from the status the device already publishes. Called from the
+   status poll rather than polling again - ft8.ftx_* is already in /api/status.
+
+   ⚠ THIS IS NOT THE ONLY PLACE THE FRAME COUNT APPEARS, and it must not be
+   the only one: this line lives inside #js8-tx, which is display:none unless
+   the conversation pane is up, so a run started from anywhere else would be
+   invisible here. The always-visible copy comes from the DEVICE - js8_ftx.c
+   writes "free text, frame N of M" into the request's display_text, which
+   becomes the TX line in the top status box and on the Tab5's own label. */
+function js8TxStatus(ft8) {
+  /* ⚠ BEFORE THE VISIBILITY GATE BELOW. The selection and the prefix are
+     not the composer's business - the chip and the macro buttons sit in the tab
+     row and must track the Tab5 even while the composer is closed, or a station
+     tapped on the glass leaves this page's buttons dead. */
+  {
+    const t = (ft8 && typeof ft8.js8_target === "string") ? ft8.js8_target : "";
+    if (t !== js8Target) {
+      js8Target = t;
+      js8BarSync();
+      js8Shown = "";          /* the pane's filter changed under us */
+    }
+    js8Prefix = (ft8 && typeof ft8.js8_prefix === "string") ? ft8.js8_prefix : "";
+    js8ComposerPrefill();
+    /* ⭐ THE PICKER READS ITSELF BACK. The submode is also set from the Tab5
+       drawer and from the glass, so a control that only ever WROTE would be a
+       second source of truth - the web Pause button shipped exactly that way.
+       The heading is repainted from lastJs8Submode on the status poll, so all
+       this has to do is keep that value current from the JS8 poll as well. */
+    if (ft8 && typeof ft8.js8_submode === "number") {
+      lastJs8Submode = ft8.js8_submode;
+    }
+  }
+  const box = document.getElementById("js8-tx");
+  if (!box || box.style.display === "none") return;
+  const cancel = document.getElementById("js8-tx-cancel");
+  const send   = document.getElementById("js8-tx-send");
+  const plan   = document.getElementById("js8-tx-plan");
+  const run    = !!(ft8 && ft8.ftx_active);
+  cancel.style.display = run ? "" : "none";
+  send.style.display   = run ? "none" : "";
+  if (run && ft8.ftx_total) {
+    /* ⭐ THE WORDS IN THE FRAME, when the device sends them. Ryan KK6DZB:
+       "rather than just show the sending frames" - a count says a run is
+       alive and nothing about what is on the air. The device slices the
+       normalised text with the encoder's own per-frame character counts, so
+       this is never re-packed here. Falls back to the bare count on a device
+       older than the field. */
+    const fTxt = (typeof ft8.ftx_frame_text === "string") ? ft8.ftx_frame_text : "";
+    plan.textContent = "Sending frame " + ft8.ftx_sent + " of " + ft8.ftx_total +
+                       (fTxt ? ": " + fTxt : "…");
+    js8TxWasRunning  = true;
+    js8TxLastTotal   = ft8.ftx_total;
+    js8TxResultShown = "";          /* a new run: the last outcome is history */
+    /* Accepted - see the Send handler. Back to the ADDRESSED empty state, not
+       a blank box: the next message in a conversation goes to the same
+       station. */
+    document.getElementById("js8-tx-text").value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+    return;
+  }
+  /* ⭐ THE OUTCOME, which the page has been receiving and discarding since
+     free text shipped. ftx_result carries js8_ftx_start()'s refusal verbatim -
+     "Not in JS8 mode", "A transmission is already armed", "Nothing sendable in
+     that message" - and the Send handler left the line reading "Sending..."
+     forever when the device had in fact refused. Shown once per change, so it
+     cannot overwrite the plan the operator is typing. */
+  const res = (ft8 && ft8.ftx_result) || "";
+  /* Accepted, but the run already finished between two polls - still the
+     moment to let go of the text. */
+  if (res === "sending") {
+    document.getElementById("js8-tx-text").value = js8Prefix;
+    js8PrefixShown = js8Prefix;
+  }
+
+  /* ⛔ THE FRAME COUNT HAS TO STOP COUNTING WHEN THE RUN STOPS. Ryan
+     KK6DZB, 2026-10-14: "Frames sent is not clearing out on the bottom with
+     the previous call signs."
+
+     ftx_result is set to "sending" on a successful start and the device never
+     clears it again - it is only overwritten by the NEXT request (see
+     s_web_ftx_result in ft8_screen_view.c). So once a run finished, `run`
+     went false, res stayed "sending", and the only branch below that writes
+     this line requires a result that is NOT "sending". Nothing ever touched
+     it, and the panel kept reading "Sending frame 7 of 7..." indefinitely -
+     through a page reload too, because the device still reported "sending".
+
+     Edge-triggered, not level-triggered: a page opened long after the run
+     must not announce a send it never saw. */
+  if (js8TxWasRunning && !run) {
+    js8TxWasRunning = false;
+    plan.textContent = js8TxLastTotal
+      ? "Sent " + js8TxLastTotal + (js8TxLastTotal === 1 ? " frame." : " frames.")
+      : "Sent.";
+    send.disabled = false;
+  }
+  if (res && res !== "sending" && res !== js8TxResultShown) {
+    js8TxResultShown = res;
+    plan.textContent = res;
+    send.disabled = false;
+  }
+}
+
+async function js8Poll() {
+  let j;
+  try { j = await (await fetch("/api/js8", { cache: "no-store" })).json(); }
+  catch (e) { return; }   /* a dropped poll retries */
+
+  const pre  = document.getElementById("js8-screen");
+  const hint = document.getElementById("js8-conv-hint");
+  if (j.mode !== "js8") {
+    js8Shown = "";
+    pre.textContent = "";
+    hint.textContent = "The Tab5 is not in JS8.";
+    return;
+  }
+  js8Senders = j.senders || [];
+  const rowMsg = j.row_msg || [];
+  /* ⛔ Do not rebuild an unchanged grid. This polls once a second, and
+     replacing innerHTML drops whatever the operator had selected to copy -
+     a callsign or a message is exactly what they select. (The glass caches
+     for a different reason, internal-heap churn; the effect to avoid here is
+     the selection.) */
+  const stamp = JSON.stringify(j.lines) + "|" + JSON.stringify(rowMsg);
+  if (stamp === js8Shown) { js8Hint(j); return; }
+  js8Shown = stamp;
+  /* Each row carries the message it belongs to, so a click can be resolved
+     without re-deriving it. data-mi = -1 for a row with no message. */
+  /* ⭐ THE LINES THAT NAME ME ARE MARKED. Ryan KK6DZB, 2026-10-14, after a
+     real JS8 QSO: "Hight light your call sign if someone responds to you.
+     (cant tell who is responding to CQ with out reading through a large list
+     of HB)". A heartbeat list is mostly other people's traffic and the one
+     line that matters is the one with your call in it.
+
+     The callsign comes from the DEVICE (j.me, upper-cased there), not from the
+     settings form this page also has: this pane polls /api/js8 and nothing
+     else, and a callsign arriving on a different schedule is a second source
+     of truth.
+
+     Matched AFTER escaping, which is safe because a callsign is letters,
+     digits and '/' and js8Esc() rewrites none of those, and bounded so that
+     OZ1LAV does not light up inside OZ1LAVX. The whole row is tinted as well
+     as the callsign itself: the point is to find the row at a glance. */
+  /* Stripped to the characters a callsign can contain, which also means the
+     pattern needs no regex escaping at all - the first cut of this line
+     escaped by hand, got it wrong, and check_web.py refused the build. */
+  const me = (j.me || "").toUpperCase().replace(/[^A-Z0-9/]/g, "");
+  const meRe = me
+    ? new RegExp("(^|[^A-Z0-9/])(" + me + ")(?![A-Z0-9/])", "g")
+    : null;
+  pre.innerHTML = (j.lines || []).map((t, r) => {
+    const mi = (r < rowMsg.length) ? rowMsg[r] : -1;
+    const who = (mi >= 0 && mi < js8Senders.length) ? js8Senders[mi] : "";
+    const tap = who ? ' style="cursor:pointer"' : "";
+    let body = js8Esc(t || " ");
+    let mine = false;
+    if (meRe) {
+      const marked = body.replace(meRe, '$1<b class="js8-me">$2</b>');
+      mine = marked !== body;
+      body = marked;
+    }
+    return '<span data-mi="' + mi + '" data-call="' + js8Esc(who) + '"' +
+           (mine ? ' class="js8-row-me"' : '') + tap + '>' + body + "</span>";
+  }).join("\n");
+  js8Hint(j);
+}
+
+function js8Hint(j) {
+  document.getElementById("js8-conv-hint").textContent = j.count
+    ? "Tap a line to reply to that station. " + j.count + " in the store."
+    : "Nothing decoded yet. Heartbeats and directed messages appear here too, not only free text.";
+}
+
+document.getElementById("js8-flush").addEventListener("click", async () => {
+  await sendCmd({ action: "js8_flush" });
+  js8Shown = "";          /* the store is empty now - force a repaint */
+  js8Poll();
+});
+
+document.getElementById("js8-tab-conv").addEventListener("click", () => {
+  js8Tab = "conv"; js8TabsSync("JS8");
+});
+document.getElementById("js8-tab-stn").addEventListener("click", () => {
+  js8Tab = "stn"; js8TabsSync("JS8");
+});
+
+/* Same gesture, and the same command, as clicking a row in the decode list -
+   the glass resolves a conversation tap to the Stations row with that callsign
+   and activates it, so both surfaces do one thing. ⚠ A free-text run that was
+   never attributed has no callsign (the sender reads "- - -"), and there is
+   nothing to reply to: the row simply does not respond. */
+document.getElementById("js8-screen").addEventListener("click", async (e) => {
+  const sp = e.target.closest("span[data-call]");
+  if (!sp) return;
+  const call = sp.getAttribute("data-call");
+  if (!call) return;
+  await ft8RowClicked(call);
+});
 
 /* =====================================================================
    Help: guidance rows + the built-in manual, both served by the Tab5
@@ -6169,6 +7196,7 @@ function buildBwDropdown() {
   const m = (lastMode || "").toUpperCase();
   const isCW  = m.indexOf("CW")  >= 0;
   const isSSB = m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0;
+  const isAM  = m.indexOf("AM")  >= 0;
 
   if (isCW) {
     /* Only the widths the RADIO has enabled (#350, Uwe DL8UG) - the same list
@@ -6205,9 +7233,44 @@ function buildBwDropdown() {
       };
       dd.appendChild(btn);
     });
+  } else if (isAM) {
+    /* ⭐ AM IS THE TAB5'S OWN FILTER, not the radio's. The QMX has no
+       selectable AM bandwidth at all - FW; is GET-only and answers 3200 for
+       everything but CW - and Q9 streams RAW I/Q, so what shapes the audio is
+       our demodulator. This dropdown said "CW / SSB only" and the BW pill read
+       a fixed 3200 Hz, so AM was the one mode where the browser could show the
+       width and not change it. Operator, 2026-10-15: "AM chosen - not possible
+       to change BW? Says CW and SSB only...".
+
+       The SAME SIX WIDTHS the glass offers (ui.c am_bw[]), in the same order
+       and the same RF convention - "6.0 kHz" is 3.0 kHz per sideband. The
+       device halves it; see set_bw in webserver.c, which is also what decides
+       that AM must not reach the radio.
+
+       ✅ 10.0 AND 20.0 kHz ARE IN. AM decimates by 2 as of 2026-10-15 - a
+       24 kHz internal rate, Nyquist 12 kHz - and the stage-1 skirt was
+       measured there before the constant moved: +0.01 dB at 5000 Hz half-
+       bandwidth (10.0 kHz RF), -0.62 dB at 10000 (20.0 kHz RF), -3.07 dB at
+       10500, which is why it stops where it does. 9.6k was the old D=4
+       ceiling and stays as a step. 20.0 kHz is a shortwave broadcaster's full
+       audio; 10.0 kHz is the legal maximum for amateur AM below 29 MHz. */
+    const widths = [2000, 3000, 4000, 6000];   // 10.0/20.0 withdrawn: D=2 pins core 1.
+    // 8.0/9.6 withdrawn 2026-10-17: never measured end to end, and T21 is open.
+    // NOT a cost limit - AM 4.0 and 6.0 measured the same duty. See rx_audio.h.
+    widths.forEach(w => {
+      const btn = document.createElement("button");
+      btn.textContent = (w / 1000).toFixed(1) + " kHz";
+      if (Math.abs(lastPassbandHz - w) < 100) btn.classList.add("active");
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        sendCmd({ action: "set_bw", hz: w });
+      };
+      dd.appendChild(btn);
+    });
   } else {
     const msg = document.createElement("button");
-    msg.textContent = "CW / SSB only";
+    msg.textContent = "CW / SSB / AM only";
     msg.disabled = true;
     msg.style.color = "var(--dim)";
     dd.appendChild(msg);
@@ -6333,6 +7396,25 @@ async function tick() {
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
+    if (s.ft8 && typeof s.ft8.js8_submode === "number") {
+      lastJs8Submode = s.ft8.js8_submode;
+    }
+
+    /* The JS8 tabs follow the DEVICE's mode, not a click on this page: the
+       operator can switch the Tab5 from the glass, from the drawer or from
+       here, and the pane must not go on offering a conversation that the
+       radio is no longer decoding. */
+    js8TabsSync(lastFtProto);
+    js8TxInit();
+    /* ⛔ `s`, NOT `d`. This read `d.ft8` and shipped in v1.17.0. There is no `d`
+       in tick() - the parsed status is `const s` - so every poll threw a
+       ReferenceError here, the catch below turned it into one suppressed
+       console line, and EVERYTHING AFTER THIS POINT never ran: the band, mode
+       and BW pills stayed "--", lastScreen stayed null so the page never left
+       the panadapter, and switching the Tab5's mode did nothing on the web
+       page. Randy N4OPI reported it within hours of the release.
+       The name came from js8Poll(), where the fetch result IS `d`. */
+    js8TxStatus(s.ft8);
 
     /* The Pause button has to SHOW the pause, not just set it - it shipped
        without this and the operator caught it immediately ("clicking the web
@@ -6405,6 +7487,56 @@ async function tick() {
          else: neither decode page produces them, so both hide for FT8 and for
          WSPR alike. One rule for the page - show what the Tab5 is showing. */
       const noPan = isFt8 || isWspr;
+      /* Band/Mode/BW/Zoom belong to the panadapter's idea of the radio; on
+         the WSPR page that page owns the dial. Disabled rather than merely
+         dimmed - the firmware refuses these four with a reason now, and a
+         control that is offered and then refused is worse than one that is
+         plainly unavailable. Freq stays live on purpose, so a beacon off the
+         standard dial frequency can still be chased. */
+      ["band", "mode", "bw", "zoom"].forEach((id) => {
+        const pill = document.getElementById("pill-" + id);
+        if (!pill) return;
+        pill.classList.toggle("dial-locked", isWspr);
+        pill.title = isWspr
+          ? "The WSPR page owns the dial - use its own band button, or leave the page"
+          : "";
+      });
+      /* ⛔ ON THE DIGI SCREEN THESE FOUR ARE NOT HIDDEN BECAUSE THEY ARE
+         UNTIDY - THEY DO NOT WORK. The FT8/FT4/JS8 engine owns the dial, the
+         firmware refuses band, mode and bandwidth while it is running, and the
+         pane carries its own Band... preset list for the only band change that
+         makes sense here. RIT is radio state that the slot timing does not
+         follow at all. Offering a control and then refusing it is worse than
+         not offering it - the same judgement the WSPR page already made, taken
+         one step further because here there is nothing to grey out FOR.
+
+         Operator, 2026-10-15: "band, mode, bw, rit ... not allowed to change
+         and is irrelevant for JS8".
+
+         ⭐ ZOOM, FREQ AND F STAY. Zoom and F belong to the view, not the
+         radio, and the frequency readout is how an off-standard JS8 or FT8
+         frequency is seen and set - which is why freq was already kept out of
+         the WSPR dial-lock set above. Operator's list, unchanged. */
+      ["band", "mode", "bw", "rit"].forEach((id) => {
+        const pill = document.getElementById("pill-" + id);
+        if (pill) pill.style.display = isFt8 ? "none" : "";
+      });
+      /* F (flat-spectrum) goes with them. It is not a pill, so it needs its
+         own line - and it is not kept for being a view control either: there
+         is no spectrum on this screen to flatten, so the button does nothing
+         an operator can see. Operator, 2026-10-15: "let F(lat) go on the JS8
+         page - not relevant". */
+      {
+        const f = document.getElementById("flatbtn");
+        if (f) f.style.display = isFt8 ? "none" : "";
+        /* Listen goes with it, for a harder reason than tidiness: the device
+           PAUSES this whole WebSocket in FT8/FT4 mode (the v0.20.0 gate), so
+           no audio frame can arrive. A button that is on and silent is worse
+           than no button. */
+        const l = document.getElementById("listenbtn");
+        if (l) l.style.display = isFt8 ? "none" : "";
+        if (isFt8 && typeof audioWantOn !== "undefined" && audioWantOn) audioStopAndTell();
+      }
       document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
       document.getElementById("split-handle").style.display  = noPan ? "none" : "";
@@ -6432,7 +7564,10 @@ async function tick() {
         fpsEl.classList.remove("bad");
       }
       if (isFt8) {
-        fpsEl.textContent = "FT8 mode";
+        /* ⛔ SET HERE ONLY FOR THE SCREEN CHANGE. The TEXT is painted in the
+           per-tick block below, because FT8, FT4 and JS8 all share this screen
+           and a protocol swap does not change it - the very fault the heading
+           block below was already written to avoid, repeated here. */
         fpsEl.classList.remove("bad");
         ft8OptsRefreshBadge();   // fresh count each time this screen comes up
       }
@@ -6447,12 +7582,39 @@ async function tick() {
       /* Nothing on the panadapter: the Tab5 has no MODE title on that screen
          either, and mirroring it was the whole request. Hidden rather than
          emptied, so the grid row collapses instead of leaving a gap. */
+      /* ⛔ IN JS8 THE HEADING NAMES THE SPEED, Normal included, and the
+         words are the Tab5's own (JS8 NORM / FAST / TURBO / SLOW). It said
+         "MODE: JS8" whatever was set, so an operator could neither see a wrong
+         submode nor confirm a right one - which is how Ryan KK6DZB lost JS8
+         entirely while the screen looked correct. The Tab5 was fixed in
+         ccd435ca; this is the same fix on the same words, because two surfaces
+         wording it differently is how an operator decides neither is right. */
       const want = screen === "wspr" ? "MODE: WSPR"
-                 : screen === "ft8"  ? "MODE: " + (ft8IsFt4() ? "FT4" : "FT8")
+                 : screen === "ft8"  ? (ft8Proto() === "JS8"
+                                          ? js8SubmodeShort(lastJs8Submode)
+                                          : "MODE: " + ft8Proto())
                                      : "";
       if (mb && mb.textContent !== want) {
         mb.textContent = want;
         mb.style.display = want ? "" : "none";
+      }
+      /* The top-right chip, in the same words and on the same tick. It said
+         "FT8 mode" throughout a JS8 session. */
+      if (screen === "ft8") {
+        const chipWant = ft8Proto() + " mode";
+        if (fpsEl && fpsEl.textContent !== chipWant) fpsEl.textContent = chipWant;
+      }
+      /* The affordance, not just the text: in JS8 this heading is the submode
+         picker (js8SubmodePopup), everywhere else it is a plain heading. Set
+         every tick alongside the text, because the protocol can change under
+         the page from the Tab5. */
+      if (mb) {
+        const pick = (screen === "ft8" && ft8Proto() === "JS8");
+        mb.classList.toggle("is-picker", pick);
+        mb.title = pick
+          ? "JS8 speed - click to change. Both stations must use the same one."
+          : "";
+        if (!pick) js8SubmodeClose();
       }
       /* ⭐ ONE element, relocated - not a second copy. On FT8 it joins the
          status box so the mode sits on the same line as "RX: N decoded"; on
@@ -6499,12 +7661,38 @@ async function tick() {
              as one string and the write position runs straight through, so the
              row split happens here and nowhere else. Row 2 is indented by a
              copy of the header text (hidden) so the two grids line up - see the
-             CSS note on #cw-indent. */
-          const COLS = 72;
-          document.getElementById("cw-indent").textContent =
-            document.getElementById("cw-head").textContent;
-          const rowEls = [document.getElementById("cw-text"),
-                          document.getElementById("cw-text2")];
+             CSS note on .cw-indent. */
+          /* ⭐ THE SHAPE COMES FROM THE DEVICE (cw.rows / cw.cols). COLS was 72
+             here and there were two hardcoded row elements, so CW_LINE_ROWS
+             2 -> 4 would have left this drawing half the decoded line with no
+             error anywhere to notice. The fallbacks are the old values, for a
+             device older than the fields. */
+          const COLS = (typeof cw.cols === "number" && cw.cols > 0) ? cw.cols : 72;
+          const ROWS = (typeof cw.rows === "number" && cw.rows > 0) ? cw.rows : 2;
+          const head = document.getElementById("cw-head").textContent;
+          /* Rows BELOW the first are BUILT, not named. Row 1 keeps the header
+             beside it; every later row gets a hidden copy of that header text as
+             an indent, so all the grids line up and the wrap reads as a
+             continuation rather than a jump - see the CSS note on .cw-indent.
+             Rebuilt only when the count changes; the indent text is refreshed
+             every poll, because the header is. */
+          const cwRows = document.getElementById("cw-rows");
+          if (cwRows.childElementCount !== ROWS - 1) {
+            cwRows.innerHTML = "";
+            for (let r = 1; r < ROWS; r++) {
+              const line = document.createElement("div");
+              const ind  = document.createElement("span");
+              ind.className = "cw-indent";
+              line.appendChild(ind);
+              const txt = document.createElement("span");
+              txt.className = "cw-row-text";
+              line.appendChild(txt);
+              cwRows.appendChild(line);
+            }
+          }
+          for (const d of cwRows.children) d.firstElementChild.textContent = head;
+          const rowEls = [document.getElementById("cw-text")].concat(
+            [...cwRows.children].map(d => d.lastElementChild));
           const haveCol = (typeof cw.col === "number" &&
                            cw.col >= 0 && cw.col <= cw.line.length);
           for (let r = 0; r < rowEls.length; r++) {
@@ -6706,8 +7894,15 @@ async function tick() {
        device's fragile WiFi/httpd and jammed the whole web server, so it was
        reverted — stability beats a snappier meter. (If a faster meter is ever
        wanted, piggyback the dBm on the WS frame — zero extra connections.) */
-    lastSignalDbm = s.signal_dbm ?? null;
-    drawSmeter(lastSignalDbm);
+    /* ...but only while no WS frame is feeding it. The socket carries the same
+       dBm 10 times a second, so when it is up this 1 Hz value is strictly the
+       worse of the two - it is the undersampling signal_handler's own comment
+       warns about. Letting both drive the meter made it alternate between two
+       different instants, which looks like noise and is not. */
+    if (performance.now() - lastSignalFromWsAt > 3000) {
+      lastSignalDbm = s.signal_dbm ?? null;
+      drawSmeter(lastSignalDbm);
+    }
 
     /* Bottom-left: battery */
     const batt = s.battery;
@@ -6756,6 +7951,9 @@ async function tick() {
     const lotwLink = document.getElementById("lotw-link");
     if (s.relay && window.applyRelayCfg) window.applyRelayCfg(s.relay);
     if (typeof s.gpio_pc === "string" && window.applyGpioPc) window.applyGpioPc(s.gpio_pc);
+    // PORT.A mode + Unit GPS pipeline: always sent (mode is never absent), so
+    // the radios and the relay row's grey-out follow the DEVICE, not the page.
+    if (s.port && window.applyPortStatus) window.applyPortStatus(s.port);
     /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
        reads freqSepStyle at call time, so live text follows by itself - but the
        WSPR band picker and the FT8 preset list are composed once behind a
@@ -6818,9 +8016,32 @@ async function tick() {
         console.error("status paint failed (values left stale):", e);
       else if (statusPaintErrs === 4)
         console.error("status paint still failing - further errors suppressed");
+      /* ⛔ AND SAY SO ON THE PAGE, not only in the console. The comment above
+         was written after this exact failure in September and fixed it to a
+         console line - which is a place nobody looks, because the page goes on
+         looking plausible: a live spectrum (it is a separate WebSocket) over
+         fields frozen at "--". It then shipped AGAIN in v1.17.0 and a user
+         found it, not me. A dead status poll is now stated where the operator
+         is already looking. */
+      if (statusPaintErrs === 3) showPaintFailureBanner(e);
     }
   }
   finally { statusInFlight = false; }
+}
+
+/* The banner for a status poll that is throwing. Built on demand so it costs
+   nothing on a healthy page, and it does not clear itself: the condition is a
+   bug in this file, so it is fixed by a new build, not by waiting. */
+function showPaintFailureBanner(e) {
+  if (document.getElementById("paint-fail")) return;
+  const b = document.createElement("div");
+  b.id = "paint-fail";
+  b.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:9999;background:#962020;" +
+                    "color:#fff;font:14px/1.4 system-ui,sans-serif;padding:10px 14px;text-align:center";
+  b.textContent = "This page has stopped reading the radio's status - band, mode and bandwidth " +
+                  "below are stale. The spectrum is a separate stream and is still live. " +
+                  "Please report this: " + (e && e.message ? e.message : String(e));
+  document.body.appendChild(b);
 }
 
 function updateFreqAxis() {
@@ -7525,6 +8746,12 @@ const FRAME_TYPE_SPECTRUM = 0x01;
    reads as a network fault. It cost an hour of chasing a waterfall bug that was
    really two browsers fighting: 340 takeovers in one session. */
 const FRAME_TYPE_TAKEOVER = 0x02;
+/* Demodulated receiver audio, mu-law, mono. ⛔ 0x03 and NOT the 0x02 that
+   docs/web-audio-feasibility.md specifies - the takeover notice took 0x02
+   first, and a page that read an audio frame as "you were displaced" would
+   disconnect itself on the first one. */
+const FRAME_TYPE_AUDIO = 0x03;
+const AUDIO_HDR_LEN = 6;
 let wsDisplaced = false;
 /* When the current socket opened, and the last few close codes - see ws.onclose. */
 let wsOpenedAt = 0;
@@ -7817,53 +9044,96 @@ document.addEventListener("keypress", (e) => {
   }
 })();
 
-/* Tab5 screenshot: convert to PNG client-side before saving.
-   Steffen OZ1LAV, 2026-09-26: "the bmp file cannot be used many places - i
-   need a png file." The device serves plain uncompressed BMP on purpose - no
-   PNG/zlib encoder on an embedded target - so the conversion happens here
-   instead. Every browser can decode BMP through a plain <img>, so this needs
-   no BMP parser: load it into an <img>, draw it to a canvas, re-export as
-   PNG. Falls back to the old inline-BMP behaviour (plain navigation to the
-   href) if anything here fails, so a screenshot is never worse than before. */
-const ssLink = document.getElementById("ss-link");
-if (ssLink) {
-  ssLink.addEventListener("click", (e) => {
+/* Tab5 screenshot: converted to PNG client-side, then EITHER shown in a tab or
+   saved to a file.
+
+   The device serves plain uncompressed BMP on purpose - there is no PNG/zlib
+   encoder on an embedded target - so the conversion happens here. Every browser
+   decodes BMP through a plain <img>, so no BMP parser is needed: load it into an
+   <img>, draw to a canvas, re-export as PNG.
+
+   Two affordances, because the two uses are genuinely different:
+     "Tab5 screenshot"  opens it in a new tab   - John W5JSS, 2026-10-01: "my
+                        typical short-term need [is] to see what's on the
+                        display... I recall it as being much faster, which is
+                        nice when the event is only a few seconds long."
+     "(save)"           downloads the .png file - Steffen OZ1LAV, 2026-09-26:
+                        "the bmp file cannot be used many places - i need a png"
+
+   ⛔ THE TAB IS OPENED SYNCHRONOUSLY, INSIDE THE CLICK. window.open() called
+   later, from the async callback, is treated as an unrequested pop-up and
+   blocked by default in every current browser - which is what made "open in a
+   tab" look impossible once the PNG conversion became asynchronous. Open the
+   blank tab first, then point it at the blob when it is ready.
+
+   Both paths fall back to plain navigation to /ss.bmp if anything fails, so a
+   screenshot is never worse than before. */
+function ssGrabPng(onReady, onFail) {
+  (async () => {
+    try {
+      const resp = await fetch("/ss.bmp", { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const bmpUrl = URL.createObjectURL(await resp.blob());
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        c.getContext("2d").drawImage(img, 0, 0);
+        URL.revokeObjectURL(bmpUrl);
+        c.toBlob((pngBlob) => {
+          if (!pngBlob) { onFail(); return; }
+          onReady(URL.createObjectURL(pngBlob));
+        }, "image/png");
+      };
+      img.onerror = () => { URL.revokeObjectURL(bmpUrl); onFail(); };
+      img.src = bmpUrl;
+    } catch (err) { onFail(); }
+  })();
+}
+
+function ssStamp() {
+  const now = new Date(), pad = (n) => String(n).padStart(2, "0");
+  return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}` +
+         `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}` +
+         `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+}
+
+/* ⛔ THE TAB LINK IS A PLAIN ANCHOR, AND THAT IS THE FAST PATH - MEASURED.
+ *
+ * An earlier version of this fix opened a blank tab and filled it with the
+ * converted PNG. Timed against the real device, 2026-10-02:
+ *
+ *     fetch  7,712 ms   1,843,266 B   <- the raw BMP over WiFi
+ *     decode     3 ms
+ *     encode    59 ms     126,912 B   <- the PNG conversion
+ *
+ * The conversion is 62 ms; the DOWNLOAD is 7.7 s, because /ss.bmp is an
+ * uncompressed framebuffer and the device has no zlib to compress it with. So
+ * waiting for the whole blob before showing anything left the operator looking
+ * at a blank tab for seven seconds - strictly WORSE than the plain navigation
+ * it replaced, which renders the bitmap progressively as it arrives. John
+ * W5JSS asked for the tab back because it was "much faster"; he was right, and
+ * the fast part was the progressive render, not the format.
+ *
+ * So: the tab is a plain <a target="_blank"> with no JavaScript at all, and the
+ * PNG conversion lives only on "(save PNG)", where waiting is expected. */
+
+const ssSave = document.getElementById("ss-save");
+if (ssSave) {
+  ssSave.addEventListener("click", (e) => {
     e.preventDefault();
-    (async () => {
-      const fallback = () => window.open(ssLink.href, "_blank");
-      try {
-        const resp = await fetch("/ss.bmp", { cache: "no-store" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const bmpBlob = await resp.blob();
-        const bmpUrl = URL.createObjectURL(bmpBlob);
-        const img = new Image();
-        img.onload = () => {
-          const c = document.createElement("canvas");
-          c.width = img.naturalWidth;
-          c.height = img.naturalHeight;
-          c.getContext("2d").drawImage(img, 0, 0);
-          URL.revokeObjectURL(bmpUrl);
-          c.toBlob((pngBlob) => {
-            if (!pngBlob) { fallback(); return; }
-            const now = new Date(), pad = (n) => String(n).padStart(2, "0");
-            const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}` +
-                          `${pad(now.getUTCDate())}-${pad(now.getUTCHours())}` +
-                          `${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(pngBlob);
-            a.download = `qmx-shot-${stamp}.png`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-          }, "image/png");
-        };
-        img.onerror = () => { URL.revokeObjectURL(bmpUrl); fallback(); };
-        img.src = bmpUrl;
-      } catch (err) {
-        fallback();
-      }
-    })();
+    ssGrabPng(
+      (pngUrl) => {
+        const a = document.createElement("a");
+        a.href = pngUrl;
+        a.download = `qmx-shot-${ssStamp()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(pngUrl), 10000);
+      },
+      () => { window.open("/ss.bmp", "_blank"); });
   });
 }
 
@@ -9148,25 +10418,35 @@ function termRender(j) {
    pre's own font, and the font size is reset to the base first so repeated
    calls cannot ratchet downward. overflow-x stays as the backstop for a window
    too narrow even at the minimum size. */
-function termFit() {
-  const pre = document.getElementById("term-screen");
-  if (!pre || !pre.offsetParent) return;          // modal not on screen
+function fit80(id) {
+  const pre = document.getElementById(id);
+  if (!pre || !pre.offsetParent) return null;     // modal not on screen
   const BASE = 15, MIN = 6;
   pre.style.fontSize = BASE + "px";
   const cs = getComputedStyle(pre);
   const avail = pre.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  if (!(avail > 0)) return;
+  if (!(avail > 0)) return null;
   const probe = document.createElement("span");
   probe.textContent = "0".repeat(80);
   probe.style.cssText = "position:absolute; visibility:hidden; white-space:pre;";
   pre.appendChild(probe);
-  const w80 = probe.getBoundingClientRect().width;
+  let w80 = probe.getBoundingClientRect().width;
   pre.removeChild(probe);
-  if (!(w80 > 0)) return;
-  if (w80 <= avail) return;                       // already fits at full size
-  const size = Math.max(MIN, Math.floor(BASE * (avail / w80) * 10) / 10);
-  pre.style.fontSize = size + "px";
+  if (!(w80 > 0)) return null;
+  let size = BASE;
+  if (w80 > avail) {                              // does not fit at full size
+    size = Math.max(MIN, Math.floor(BASE * (avail / w80) * 10) / 10);
+    pre.style.fontSize = size + "px";
+    w80 *= size / BASE;
+  }
+  /* The GPS page needs the cell size as well as the fit, to put its satellite
+     pane over the hole in the grid. Measured, never assumed: the character
+     width depends on which fallback font the browser actually picked. */
+  return { size: size, cellW: w80 / 80, lineH: size * 1.15,
+           padL: parseFloat(cs.paddingLeft), padT: parseFloat(cs.paddingTop) };
 }
+
+function termFit() { fit80("term-screen"); }
 
 window.addEventListener("resize", termFit);
 
@@ -9255,6 +10535,266 @@ document.getElementById("term-btn").addEventListener("click", (e) => {
   termOpenModal();
 });
 document.getElementById("term-close").addEventListener("click", termCloseModal);
+
+/* ───────────────────────── GPS status page ─────────────────────────────────
+   The device composes the page; this paints it. /api/gps returns the same
+   80x24 grid gps_page_compose() draws on the glass, with the marker cells and
+   the satellite-table region already blanked, so the only work here is to put
+   the coloured text back into those holes. Laying the page out in JavaScript
+   instead would be a second implementation of a layout whose whole purpose is
+   to look like the radio's own GPS viewer.
+
+   REFRESH matches the glass's own REFRESH_MS (ui/gps_status_view.c): a GNSS
+   receiver reports once a second and a faster poll would only cost HTTP. */
+let gpsTimer = null;
+let gpsMetrics = null;   // cached cell metrics - see the fit80() call
+let gpsGridShown = "";   // the grid currently painted
+const GPS_REFRESH_MS = 1000;
+
+function gpsEsc(t) {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Show or hide the grid. ⛔ Hide the WRAPPER, not just empty the <pre>: an
+   empty pre still draws its black panel and border, which reads as a page
+   that failed to load rather than as no page. */
+function gpsShowGrid(on) {
+  document.getElementById("gps-wrap").style.display = on ? "" : "none";
+  if (!on) {
+    const sv = document.getElementById("gps-rings");
+    while (sv && sv.firstChild) sv.removeChild(sv.firstChild);
+    document.getElementById("gps-screen").innerHTML = "";
+    gpsGridShown = "";
+    gpsSatsShown = "";
+    document.getElementById("gps-sats").style.display = "none";
+    document.getElementById("gps-state").textContent = "";
+  }
+}
+
+function gpsMsg(html) {
+  const el = document.getElementById("gps-msg");
+  el.innerHTML = html || "";
+  el.style.display = html ? "" : "none";
+}
+
+/* One row, with each marker on it written back in its own colour.
+   Built column by column rather than by splicing strings: two markers can sit
+   next to each other on the same row, and the device's own blanking means the
+   cells under them are spaces. */
+function gpsRowHtml(text, marks, row, cols) {
+  const cells = (text + " ".repeat(cols)).slice(0, cols).split("");
+  const colour = new Array(cols).fill(null);
+  for (const m of marks) {
+    if (m.row !== row) continue;
+    for (let k = 0; k < m.text.length; k++) {
+      const c = m.col + k;
+      if (c < 0 || c >= cols) continue;
+      cells[c]  = m.text[k];
+      colour[c] = m.colour;
+    }
+  }
+  let html = "", run = "", runCol = null;
+  const flush = () => {
+    if (!run) return;
+    html += runCol ? '<span style="color:' + runCol + '">' + gpsEsc(run) + "</span>"
+                   : gpsEsc(run);
+    run = "";
+  };
+  for (let c = 0; c < cols; c++) {
+    if (colour[c] !== runCol) { flush(); runCol = colour[c]; }
+    run += cells[c];
+  }
+  flush();
+  return html;
+}
+
+/* The satellite pane, over the hole the device leaves at rows table_row0..23,
+   columns 0..25. It cannot simply go below the grid: the sky plot occupies the
+   same rows to the RIGHT of it. Positioned from fit80()'s measured cell size,
+   and it scrolls because a receiver routinely sees twenty satellites while the
+   hole is twelve rows tall - the same reason the pane on the glass scrolls. */
+/* ⛔ ONLY REBUILD WHEN THE CONTENT CHANGED, AND KEEP THE SCROLL.
+ *
+ * This polls once a second and used to replace the pane's innerHTML every
+ * time. Replacing it resets scrollTop to 0 and repaints every row, so the
+ * list jumped back to the top once a second and visibly flickered - reported
+ * from the glass 2026-10-09 ("the satellite list is flipping all the time").
+ * The Tab5 does not do this because it sets each label's TEXT and leaves the
+ * objects alone; this is the browser-side equivalent.
+ *
+ * ⚠ MEASURED FIRST: four consecutive /api/gps polls on the bench returned the
+ * satellites in an identical order, so the device was not reordering anything
+ * and the fault was entirely here. Do not "fix" this by sorting the list. */
+let gpsSatsShown = "";
+
+function gpsPlaceSats(metrics, j) {
+  const pane = document.getElementById("gps-sats");
+  if (!metrics || !j.sats || !j.sats.length) {
+    pane.style.display = "none";
+    gpsSatsShown = "";
+    return;
+  }
+  const row0 = (j.table_row0 !== undefined) ? j.table_row0 : 12;
+  const rows = (j.rows || 24) - row0;
+  pane.style.left     = (metrics.padL) + "px";
+  pane.style.top      = (metrics.padT + row0 * metrics.lineH) + "px";
+  pane.style.width    = (26 * metrics.cellW) + "px";
+  pane.style.height   = (rows * metrics.lineH) + "px";
+  pane.style.fontSize = metrics.size + "px";
+  pane.style.display  = "";
+
+  const html = j.sats.map(
+    (r) => '<div style="color:' + r.colour + '">' + gpsEsc(r.text) + "</div>").join("");
+  if (html === gpsSatsShown) return;          /* nothing moved - leave it be */
+  const keep = pane.scrollTop;                /* a rebuild loses this */
+  pane.innerHTML = html;
+  pane.scrollTop = keep;
+  gpsSatsShown = html;
+}
+
+/* Paint the elevation rings as thin faint-grey ovals, positioned from the
+   SAME measured cell metrics the satellite pane uses. The geometry is the
+   device's (gps_page_rings), so the browser and the Tab5 cannot disagree
+   about where the horizon is.
+
+   ⛔ Do NOT go back to drawing these as characters. It was tried three times
+   and rejected three times - continuous gives horizontal and diagonal runs,
+   spaced gives a visible ". . ." dotted line (measured: 11 such runs). */
+function gpsDrawRings(metrics, j) {
+  const svg = document.getElementById("gps-rings");
+  if (!svg) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  if (!metrics || ((!j.rings || !j.rings.length) && (!j.axes || !j.axes.length))) return;
+
+  const pre = document.getElementById("gps-screen");
+  svg.setAttribute("width",  pre.offsetWidth);
+  svg.setAttribute("height", pre.offsetHeight);
+
+  /* Axes FIRST, so they sit under everything else in the SVG - and the whole
+     SVG sits under the <pre>, so the satellites are on top of both. That
+     ordering is the operator's instruction, not an incidental: a line through
+     the plot crosses satellites, and the satellite is what he reads. */
+  for (const a of (j.axes || [])) {
+    const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    ln.setAttribute("x1", metrics.padL + a.x0 * metrics.cellW);
+    ln.setAttribute("y1", metrics.padT + a.y0 * metrics.lineH);
+    ln.setAttribute("x2", metrics.padL + a.x1 * metrics.cellW);
+    ln.setAttribute("y2", metrics.padT + a.y1 * metrics.lineH);
+    ln.setAttribute("stroke", "#4a4a4a");
+    ln.setAttribute("stroke-width", "1");
+    svg.appendChild(ln);
+  }
+
+  for (const r of j.rings) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+    el.setAttribute("cx", metrics.padL + r.cx * metrics.cellW);
+    el.setAttribute("cy", metrics.padT + r.cy * metrics.lineH);
+    el.setAttribute("rx", r.rx * metrics.cellW);
+    el.setAttribute("ry", r.ry * metrics.lineH);
+    el.setAttribute("fill", "none");
+    el.setAttribute("stroke", "#4a4a4a");
+    el.setAttribute("stroke-width", "1");
+    svg.appendChild(el);
+  }
+}
+
+async function gpsPoll() {
+  let j;
+  try {
+    j = await (await fetch("/api/gps", { cache: "no-store" })).json();
+  } catch (e) { return; }   /* a dropped poll retries; not worth a message */
+
+  const title = document.getElementById("gps-title");
+
+  if (j.src === "none") {
+    /* The same rule the tap on the glass follows: no page rather than a page
+       of dashes, which reads as a receiver that has failed instead of as no
+       receiver at all. */
+    title.textContent = "GPS status";
+    gpsShowGrid(false);
+    gpsMsg("No GPS receiver is setting the clock, so there is nothing to show. "
+         + "The clock is on NTP, the on-board RTC, FT8 or whatever you set by hand. "
+         + "Attach a Module GPS or a Unit GPS, or let the QMX's own receiver take over.");
+    return;
+  }
+
+  if (j.src === "qmx") {
+    /* Over CAT the radio gives position and time and nothing else, so a page
+       drawn from it would be three rows of data and eight of dashes. The glass
+       hands this case to the radio's own viewer; so does the browser. */
+    title.textContent = "GPS status — the radio's own receiver";
+    gpsShowGrid(false);
+    gpsMsg("The QMX's own GPS is setting the clock. Over CAT the radio reports "
+         + "position and time and nothing else &mdash; no satellites, no signal "
+         + "levels &mdash; so there is no page to draw here. Its own GPS viewer has "
+         + "all of it: open <b>Radio menus</b> and go to Hardware tests &rarr; GPS viewer.");
+    return;
+  }
+
+  gpsMsg("");
+  gpsShowGrid(true);
+  if (j.title) title.textContent = j.title;
+  document.getElementById("gps-state").textContent =
+      (j.sats ? j.sats.length : 0) + " satellites";
+
+  const cols  = j.cols || 80;
+  const marks = j.marks || [];
+  {
+    /* Same rule as the satellite pane: a 1 Hz innerHTML rebuild of the whole
+       grid repaints 24 rows whether or not anything changed, and drops any
+       text the operator had selected. */
+    const grid = (j.lines || []).map((t, r) => gpsRowHtml(t, marks, r, cols)).join("\n");
+    if (grid !== gpsGridShown) {
+      document.getElementById("gps-screen").innerHTML = grid;
+      gpsGridShown = grid;
+    }
+  }
+  {
+    /* One measurement, both overlays - the rings and the satellite pane must
+       land on the same grid or they disagree with the text under them.
+       ⛔ CACHED. fit80() resets the font size to its base and re-measures, so
+       calling it on every 1 Hz poll reflowed the whole grid once a second -
+       the other half of the flicker. The cell size only changes when the
+       window does, and the resize handler drops the cache. */
+    if (!gpsMetrics) gpsMetrics = fit80("gps-screen");
+    gpsDrawRings(gpsMetrics, j);
+    gpsPlaceSats(gpsMetrics, j);
+  }
+}
+
+function gpsOpenModal() {
+  document.getElementById("gps-modal").style.display = "";
+  gpsMetrics = null;        /* the modal was hidden, so nothing was measurable */
+  gpsSatsShown = "";
+  gpsGridShown = "";
+  gpsShowGrid(false);
+  document.getElementById("gps-state").textContent = "reading...";
+  gpsMsg("");
+  gpsPoll();
+  if (gpsTimer) clearInterval(gpsTimer);
+  gpsTimer = setInterval(gpsPoll, GPS_REFRESH_MS);
+}
+
+function gpsCloseModal() {
+  if (gpsTimer) { clearInterval(gpsTimer); gpsTimer = null; }
+  document.getElementById("gps-modal").style.display = "none";
+}
+
+document.getElementById("gps-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  const m = document.getElementById("radio-menu");
+  if (m) m.classList.remove("open");
+  gpsOpenModal();
+});
+document.getElementById("gps-close").addEventListener("click", gpsCloseModal);
+/* The pane is positioned from measured metrics, so a resize has to re-measure
+   - otherwise the satellite table slides off the hole it belongs in. */
+window.addEventListener("resize", () => {
+  if (document.getElementById("gps-modal").style.display === "none") return;
+  gpsMetrics = null;        /* the cell size changed - re-measure once */
+  gpsSatsShown = "";        /* and the pane must be rebuilt at the new size */
+  gpsPoll();
+});
 document.querySelectorAll(".term-key").forEach((b) => {
   b.addEventListener("click", async () => {
     await termSend("key", { key: b.dataset.key });
@@ -9317,15 +10857,451 @@ function wsReclaim() {
 }
 fpsEl.addEventListener("click", wsReclaim);
 
+/* ---- Receiver audio in the browser (Sam W7STF, 2026-07-15) ----------------
+ *
+ * The Tab5 sends the SAME demodulated audio its own speaker gets - after the
+ * mode filter, the AGC and the limiter - as mu-law at 12 kHz on the spectrum
+ * WebSocket. Each 100 ms frame is resampled to this machine's own audio rate
+ * and becomes one AudioBuffer, scheduled to start exactly where the previous
+ * one ended.
+ *
+ * ⛔ AN AudioWorklet CANNOT BE USED HERE, AND A LOCALHOST TEST WILL NOT TELL
+ * YOU THAT. AudioWorklet requires a SECURE CONTEXT. The Tab5 serves plain HTTP
+ * on the LAN, so window.isSecureContext is false and audioCtx.audioWorklet is
+ * undefined - on the real device, for every real listener. The first version
+ * of this used a worklet and passed every test, because the test server was
+ * 127.0.0.1, which browsers treat as secure whatever the scheme. It failed on
+ * the first frame from an actual Tab5. Scheduled AudioBuffers need no secure
+ * context and no deprecated ScriptProcessorNode.
+ *
+ * ⛔ AND WE MUST RESAMPLE, NOT LET THE BROWSER DO IT PER BUFFER. Handing
+ * createBuffer() the device's 12 kHz and letting the browser resample is one
+ * line shorter and it BUZZES. Each 100 ms buffer is resampled on its own, with
+ * no knowledge of the one before it, so every chunk boundary is a small
+ * discontinuity - a click at the frame rate, 10 Hz, whose loudness follows the
+ * signal. The operator heard it as "a strange square wave at various volume
+ * levels" while the instrument said the stream itself was perfect: 40
+ * contiguous frames, no clipping, largest sample-to-sample step 0.0149. A
+ * clean stream that sounds wrong puts the fault after arrival.
+ *
+ * So the interpolation runs here, and its state - the last input sample and
+ * the fractional read position - CARRIES ACROSS CHUNKS. That is the whole
+ * point: the seam is exactly what carrying it removes.
+ *
+ * ⛔ THE TWO CLOCKS ARE NOT RELATED. The radio's sample clock and this
+ * computer's sound card free-run against each other, typically a fraction of a
+ * percent apart, so the scheduling LEAD (how far ahead of the playback clock
+ * the next chunk sits) walks slowly in one direction. It is corrected by
+ * dropping or re-priming a chunk at the limits, not by resampling: 100 ms is
+ * small enough that the correction is rare and audible as nothing much, and a
+ * rate loop against a transport delay is the thing that rang in rx_audio.c
+ * (2026-09-22). */
+let audioCtx = null, audioGain = null, audioNext = 0;
+let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
+/* ⛔ RIDE THROUGH A RECONNECT INSTEAD OF GOING SILENT UNTIL SOMEBODY CLICKS.
+ *
+ * Samuel W7STF, 2026-10-18: "I am still experiencing these web-UI disconnects.
+ * It is fairly frequent... If the web-UI cannot support audio for hours on end
+ * without disconnects, that is unfortunate. Is there any way to make the
+ * overall connection to the web-UI more fault-tolerant and provide
+ * 'ride-through', in this case of the audio?"
+ *
+ * The disconnects themselves are a separate question - the close code in the
+ * fps slot is the evidence for that, and his vary. But the audio did not have
+ * to die with them: the device clears web audio when the session ends (it has
+ * to - a closed tab must not leave the demodulator running for nobody), and
+ * this page then simply waited to be asked again. Every brief network wobble
+ * therefore cost a manual click, and two users have already failed to find that
+ * button at all.
+ *
+ * So the page remembers that audio WAS wanted and re-asks on the next open.
+ * audioStop() only suspends the AudioContext - it never closes it - so the
+ * context resuming here is the same one the operator's original click unlocked,
+ * and no new gesture is needed.
+ *
+ * ⚠ CLEARED BY EVERY DELIBERATE STOP (the Listen button, and the FT8 switch via
+ * audioStopAndTell), never by a socket closing. "The operator stopped it" and
+ * "the link dropped" must not be the same state, or this would restart audio
+ * somebody had just switched off. */
+let audioResumeWanted = false;
+let audioResumeFails  = 0;
+const AUDIO_RESUME_MAX_FAILS = 3;
+let audioLate = 0, audioDropped = 0;
+let audioLatePainted = 0, audioDroppedPainted = 0;
+/* Resampler state, carried from one frame to the next. audioTail holds the
+   last input samples of the previous chunk so the first output of this one can
+   interpolate across the join; audioPhase is the fractional read position
+   within [tail, chunk]. */
+let audioTail = new Float32Array(2);
+let audioPhase = 0;
+/* ⛔ 0.9 s OF BUFFER, AND IT IS NOT A GUESS. The first version held 0.18 s and
+   the operator heard it break up within a minute. The instrument said why, and
+   said it was NOT packet loss: 1068 frames, ZERO sequence gaps, and TEN
+   re-primes - nothing was lost on the wire, the schedule simply ran dry ten
+   times. No loss plus a dry buffer is arrival JITTER, and the size of that
+   jitter is already written down: webserver_ws.c pauses this stream for every
+   background transfer, measured on this bench at 312, 411, 542, 697 and once
+   3094 ms. A buffer has to be bigger than the hole it is bridging. 0.9 s
+   covers all but the worst of those; the cost is 0.9 s of delay on a signal
+   nobody is timing to the millisecond. */
+/* 1.5 s. At 0.9 s a single 686 ms SD hold left only ~0.2 s of margin and the
+   schedule ran dry once in five holds - heard as one break. The holds measured
+   on this bench top out near 700 ms, so the buffer has to be at least twice
+   that to ride one out while the catch-up refills it. The cost is 1.5 s of
+   delay on a signal nobody is timing. */
+const AUDIO_LEAD_S = 1.5;    /* target: how far ahead of the clock we schedule */
+/* 3.0 s, not 2.0: after a diag-mirror pause the device sends up to a second
+   of catch-up in one frame, and that burst lands on top of the 0.9 s target.
+   A ceiling the burst can touch would drop the very chunk the burst exists to
+   deliver. */
+const AUDIO_LEAD_MAX_S = 3.0;
+const ULAW = new Float32Array(256);
+(() => {
+  /* G.711 decode, once. The firmware's encoder is the Sun reference and is
+     checked against it for all 65,536 inputs by test/webaudio_codec_harness.c;
+     this is the matching decode table. */
+  for (let i = 0; i < 256; i++) {
+    const u = (~i) & 0xFF;
+    const sign = u & 0x80, exp = (u >> 4) & 0x07, man = u & 0x0F;
+    let v = (((man << 3) + 0x84) << exp) - 0x84;
+    if (sign) v = -v;
+    ULAW[i] = v / 32768;
+  }
+})();
+
+/* ⛔ resume() IS RACED AGAINST A TIMEOUT, NOT SIMPLY AWAITED. When a browser
+   blocks audio (no usable gesture, or the site is muted in the browser's own
+   autoplay settings) Firefox leaves the promise PENDING for ever rather than
+   rejecting it. A bare await therefore never returns, listenPaint() is never
+   reached, and the button sits unchanged - which reads to the operator as
+   "the page did nothing". The timeout turns that into a state we can read. */
+async function audioResume() {
+  try {
+    await Promise.race([
+      audioCtx.resume(),
+      new Promise(res => setTimeout(res, 1500))
+    ]);
+  } catch (e) { /* state is the authority below, not the exception */ }
+  return audioCtx.state === "running";
+}
+
+async function audioStart() {
+  if (audioCtx) return await audioResume();
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+    audioCtx = new Ctx();
+    /* the click that got us here is the gesture */
+    if (!(await audioResume())) {
+      try { audioCtx.close(); } catch (e) {}
+      audioCtx = null;
+      return false;
+    }
+    audioGain = audioCtx.createGain();
+    audioGain.gain.value = 1.0;
+    audioGain.connect(audioCtx.destination);
+    audioNext = 0;
+    return true;
+  } catch (err) {
+    audioCtx = null; audioGain = null;
+    return false;
+  }
+}
+
+/* Local teardown only - the caller decides whether the DEVICE also needs
+   telling. It does not when the socket just closed (the firmware clears web
+   audio on the session's end), and it does when this page is the one giving
+   up, or the Tab5 keeps demodulating for a listener who has gone. */
+function audioStopAndTell() {
+  audioResumeWanted = false;   /* deliberate - see audioResumeWanted */
+  audioStop();
+  fetch("/api/cmd", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "web_audio", on: false })
+  }).catch(() => {});
+}
+
+function audioStop() {
+  audioWantOn = false;
+  audioNext = 0;
+  if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
+  audioSeq = -1;
+  listenPaint();
+}
+
+/* Re-ask for audio after the socket came back - see audioResumeWanted.
+ *
+ * Bounded: a device or browser that refuses three times in a row stops being
+ * asked, and the button says so rather than sitting on "wait" for ever. The
+ * count is cleared by a frame actually arriving, so a long session with
+ * occasional wobbles never exhausts it. */
+async function audioResumeAfterReconnect() {
+  if (!audioResumeWanted) return;
+  if (audioResumeFails >= AUDIO_RESUME_MAX_FAILS) return;
+
+  if (!(await audioStart())) {
+    audioResumeFails++;
+    if (audioResumeFails >= AUDIO_RESUME_MAX_FAILS) {
+      audioResumeWanted = false;
+      fpsEl.title = "Audio did not come back by itself after a reconnect - "
+                  + "click Listen to start it again.";
+    }
+    listenPaint();
+    return;
+  }
+  try {
+    const r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "web_audio", on: true })
+    });
+    if (!r.ok) { audioStop(); audioResumeFails++; return; }
+    await r.json();
+    audioWantOn = true;
+    audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
+    audioLate = 0; audioDropped = 0; audioNext = 0;
+    audioLatePainted = 0; audioDroppedPainted = 0;
+  } catch (err) {
+    audioStop();
+    audioResumeFails++;
+  }
+  listenPaint();
+}
+
+/* One audio frame off the socket. The header carries its own sample rate and a
+   sequence number, so a dropped frame is visible here rather than becoming an
+   unexplained click. */
+function audioFrame(buf) {
+  if (!audioWantOn || buf.length <= AUDIO_HDR_LEN) return;
+  /* Audio is genuinely flowing, so the auto-resume budget is spent on nothing -
+     give it back, or a long session with occasional wobbles would use it up. */
+  audioResumeFails = 0;
+  const seq  = buf[2] | (buf[3] << 8);
+  const rate = (buf[4] | (buf[5] << 8)) || 12000;
+  if (!audioCtx || audioCtx.state !== "running") return;
+
+  if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xFFFF)) audioGaps++;
+  audioSeq = seq;
+  audioFrames++;
+
+  const n = buf.length - AUDIO_HDR_LEN;
+
+  /* [previous chunk's tail][this chunk], so the first output sample can
+     interpolate across the join instead of starting again from zero. */
+  const T   = audioTail.length;
+  const src = new Float32Array(T + n);
+  src.set(audioTail, 0);
+  for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+
+  /* ⛔ TRIM THE RATE, DO NOT WAIT TO DROP A CHUNK.
+   *
+   * MEASURED on the bench: 1279 frames, ZERO gaps and ZERO drops, and the
+   * scheduling lead had still crept from 0.9 s to 2.04 s. Nothing was lost -
+   * LATENCY was accumulating, because every catch-up burst after an SD hold
+   * adds to the buffer and nothing ever takes it back out. Left alone it
+   * reaches the ceiling and drops a chunk, which is an audible break every few
+   * minutes for no reason at all. The operator heard exactly that.
+   *
+   * So consume very slightly faster when the buffer is long and slightly
+   * slower when it is short, and the latency walks back to target on its own.
+   * ±1% is inaudible as pitch (a sixth of a semitone) and clears a 1 s excess
+   * in about 100 s.
+   *
+   * ⛔ THE SIGN IS THE WHOLE LOOP. ratio is INPUT samples consumed per OUTPUT
+   * sample, so a buffer that is too FULL needs a LARGER ratio. Inverted, this
+   * is positive feedback and it does not drift, it runs away - rx_audio.c
+   * carries the post-mortem of getting this backwards on the device side
+   * (2026-09-22), where it was heard as crackling that grew until the operator
+   * switched his radio off. */
+  let ratio = rate / audioCtx.sampleRate;
+  if (audioNext > 0) {
+    let err = (audioNext - audioCtx.currentTime - AUDIO_LEAD_S) / AUDIO_LEAD_S;
+    if (err >  1) err =  1;
+    if (err < -1) err = -1;
+    /* 3%, not 1%. MEASURED on the bench: with the trim at 1% and pulling at
+       +0.68%, the lead still crept 1.63 -> 2.52 s over 205 s, because a
+       catch-up frame delivers up to 1800 samples against the 1200 consumed in
+       the same tick - the bursts add faster than 1% takes away, and the lead
+       walks to the 3 s ceiling and drops a chunk every few minutes. 3% is
+       about half a semitone at the extreme and only reached when the buffer is
+       a full target off; in normal running the correction is a fraction of
+       that and inaudible. */
+    ratio *= (1 + 0.03 * err);
+  }
+  /* Outputs are produced while there is a sample on BOTH sides of the read
+     position, i.e. while pos + 1 <= src.length - 1. */
+  const outN = Math.max(0, Math.ceil((src.length - 1 - audioPhase) / ratio));
+  if (outN <= 0) return;
+
+  const ab = audioCtx.createBuffer(1, outN, audioCtx.sampleRate);
+  const ch = ab.getChannelData(0);
+  let pos = audioPhase;
+  let produced = 0;
+  for (let i = 0; i < outN && pos < src.length - 1; i++) {
+    const k = pos | 0, f = pos - k;
+    ch[i] = src[k] * (1 - f) + src[k + 1] * f;
+    pos += ratio;
+    produced++;
+  }
+  /* Carry: keep the last T input samples, and express the read position
+     relative to where they will sit at the front of the next chunk. */
+  audioTail = src.slice(src.length - T);
+  audioPhase = pos - (src.length - T);
+  if (audioPhase < 0) audioPhase = 0;
+  if (produced === 0) return;
+
+  const now = audioCtx.currentTime;
+  if (audioNext < now + 0.01) {
+    /* Behind the clock: either the first frame, or the stream stopped for long
+       enough that the gap has already been heard. Re-prime the lead. Playing
+       it late instead would hold that delay for the rest of the session. */
+    if (audioFrames > 1) audioLate++;
+    audioNext = now + AUDIO_LEAD_S;
+  } else if (audioNext > now + AUDIO_LEAD_MAX_S) {
+    /* Drifted long - the radio's clock is faster than this machine's. Drop one
+       chunk rather than letting the delay grow without limit. */
+    audioDropped++;
+    audioNext -= ab.duration;
+    listenPaint();          /* this branch RETURNS - repaint before it does */
+    audioGapsPainted = audioGaps; audioLatePainted = audioLate;
+    audioDroppedPainted = audioDropped;
+    return;
+  }
+
+  const node = audioCtx.createBufferSource();
+  node.buffer = ab;
+  node.connect(audioGain);
+  node.start(audioNext);
+  audioNext += ab.duration;
+
+  /* Repaint on CHANGE, not on every frame: touching the DOM ten times a
+     second to say the same thing is work the spectrum needs.
+     ⛔ "CHANGE" MEANS EVERY COUNTER THE TOOLTIP SHOWS, not just the gaps.
+     This tested audioGaps alone while listenPaint() also prints audioLate
+     (re-primes) and audioDropped (clock-drift drops) - so the two counters
+     that move during a stall or a speed-up were the two that could never
+     repaint it. Sam W7STF, 2026-10-16: "even when the audio stalled or sped
+     up, the diagnostic values did not change. Should they have?" Yes.
+     ⚠ A title tooltip ALREADY ON SCREEN does not re-read the attribute, so
+     the fresh numbers appear the next time he hovers, not under the cursor
+     he is already holding there. */
+  if (audioFrames === 1 || audioGaps !== audioGapsPainted ||
+      audioLate !== audioLatePainted || audioDropped !== audioDroppedPainted) {
+    audioGapsPainted = audioGaps; audioLatePainted = audioLate;
+    audioDroppedPainted = audioDropped;
+    listenPaint();
+  }
+}
+
+function listenPaint() {
+  const b = document.getElementById("listenbtn");
+  if (!b) return;
+  b.classList.toggle("on",   audioWantOn && audioFrames > 0);
+  b.classList.toggle("wait", audioWantOn && audioFrames === 0);
+  b.innerHTML = audioWantOn ? "&#9632;" : "&#9654;";
+  b.title = !audioWantOn
+    ? "Listen to the receiver here (the Tab5's own demodulated audio)"
+    : (audioFrames === 0
+       ? "Asked for audio - nothing arriving yet. The Tab5 only demodulates "
+         + "CW, CW-R, USB, LSB and AM; in any other mode there is nothing to send."
+       : "Listening. " + audioGaps + " frame gap(s), " + audioLate
+         + " re-prime(s), " + audioDropped + " chunk(s) dropped to clock drift. "
+         + "Click to stop.");
+}
+
+async function listenToggle() {
+  const want = !audioWantOn;
+
+  /* ⛔ THE AudioContext IS CREATED FIRST, BEFORE ANY await. It used to be
+     created after the /api/cmd round trip, and that is a gesture bug: the
+     permission to start audio belongs to the click, and an await spends the
+     click's activation window before the context exists. Chrome keeps a
+     sticky activation per page and forgives it; Firefox uses a TRANSIENT one
+     and does not, so the same page that plays on Chrome can sit silent on
+     Firefox with the device happily sending frames. Creating it synchronously
+     here costs nothing and removes the whole class.
+     ⚠ 2026-10-17: a candidate for Bryan N0LUF's silent Firefox/Linux Mint
+     page, NOT a measured cause - his mode could equally have been one the
+     Tab5 does not demodulate. Fixed because it is wrong either way. */
+  let started = false;
+  if (want) {
+    started = await audioStart();
+    if (!started) {
+      alert("This browser would not start audio.\n\n"
+          + "Either it has no Web Audio, or it is blocking sound for this "
+          + "page. In Firefox, check the padlock/shield in the address bar "
+          + "and set Autoplay to \"Allow Audio and Video\" for this address, "
+          + "then click Listen again.");
+      return;
+    }
+  }
+
+  try {
+    const r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "web_audio", on: want })
+    });
+    if (!r.ok) {
+      if (started) audioStop();
+      alert("The device refused: HTTP " + r.status);
+      return;
+    }
+    await r.json();
+    if (want) {
+      audioWantOn = true;
+      audioFrames = 0; audioGaps = 0; audioGapsPainted = 0; audioSeq = -1;
+      audioLate = 0; audioDropped = 0; audioNext = 0;
+      audioLatePainted = 0; audioDroppedPainted = 0;
+    } else {
+      audioResumeWanted = false;   /* the operator stopped it - see the flag */
+      audioStop();
+    }
+  } catch (err) {
+    if (started) audioStop();
+    alert("No answer from the Tab5.");
+    return;
+  }
+  listenPaint();
+}
+
+(() => {
+  const b = document.getElementById("listenbtn");
+  if (b) b.addEventListener("click", listenToggle);
+  listenPaint();
+})();
+
+/* Clear the decoded-CW window - Bryan N0LUF. The DEVICE is cleared, not a copy
+   here, so the Tab5's own strip clears with it; wiping only the page would
+   have the two disagree until the next poll overwrote it anyway.
+   stopPropagation because this button sits INSIDE the pane that is
+   deliberately transparent to the mouse - without it the click would also
+   reach the waterfall and retune. */
+(() => {
+  const b = document.getElementById("cw-clear");
+  if (!b) return;
+  b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cw_clear" })
+    }).catch(() => {});
+  });
+})();
+
 function connectWs() {
   const url=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
   ws=new WebSocket(url);
   ws.binaryType="arraybuffer";
   ws.onopen=()=>{ wsOpenedAt = Date.now();
-                  fpsEl.textContent="connected"; fpsEl.classList.remove("bad"); };
+                  fpsEl.textContent="connected"; fpsEl.classList.remove("bad");
+                  /* Bring the audio back if the drop took it - see
+                     audioResumeWanted. Not awaited: onopen must not block the
+                     first spectrum frames behind an /api/cmd round trip. */
+                  audioResumeAfterReconnect(); };
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
     if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
+    if (buf.length && buf[0]===FRAME_TYPE_AUDIO) { audioFrame(buf); return; }
     if (buf.length<HEADER_LEN+SPEC_W) return;
     if (buf[0]!==FRAME_TYPE_SPECTRUM) return;
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)
@@ -9355,6 +11331,28 @@ function connectWs() {
          both saw it while decoding carried on perfectly. */
       lastViewAt = performance.now();
     }
+    /* S-meter trailer: 2 bytes AFTER the bins, int16 LE, dBm x10, 0x8000 = no
+       reading. Absent on older firmware, which is why this is length-checked
+       rather than assumed - the frame is still perfectly valid without it.
+
+       Decimated to every 6th frame to match render.c's own S-meter tick (10 Hz
+       / 6 = 1.7 Hz) EXACTLY. Same source, same conversion, same cadence, so the
+       two meters now differ only in which instant they happened to catch.
+
+       ⚠ A peak-hold or EMA across the six frames would be a better meter than
+       either screen has today. It is deliberately NOT done here: doing it on
+       one screen only would re-open the very disagreement this closes. If it is
+       wanted, it has to land in render.c at the same time. */
+    if (buf.length >= HEADER_LEN + SPEC_W + 2) {
+      let sq = buf[HEADER_LEN+SPEC_W] | (buf[HEADER_LEN+SPEC_W+1] << 8);
+      if (sq & 0x8000) sq -= 0x10000;              /* signed */
+      wsSmeterTick = (wsSmeterTick + 1) % 6;
+      if (wsSmeterTick === 0) {
+        lastSignalDbm = (sq === -32768) ? null : sq / 10;
+        lastSignalFromWsAt = performance.now();
+        drawSmeter(lastSignalDbm);
+      }
+    }
     const payload=buf.subarray(HEADER_LEN,HEADER_LEN+SPEC_W);
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
        built from the RAW frame, exactly as render.c does it. */
@@ -9380,6 +11378,16 @@ function connectWs() {
          1002/1003/1007  protocol or data error                 -> our framing
        Kept in a short history so a PATTERN is visible rather than one instance,
        and shown in the fps slot so it needs no console to read. */
+    /* ⛔ THE DEVICE TURNS AUDIO OFF WHEN THIS SOCKET GOES. It has to - web
+       audio is not persisted and a closed tab must not leave the demodulator
+       running for nobody - so the button has to stop claiming to be playing.
+       The reconnect gets a fresh session, and the listener asks again. */
+    /* Remember it was wanted BEFORE the local teardown clears the flag, so the
+       next open can bring it back by itself - Samuel W7STF's ride-through, see
+       audioResumeWanted. A takeover is not a wobble: that browser has been
+       displaced deliberately and must not claw the audio back. */
+    if (audioWantOn) { audioResumeWanted = !wsDisplaced; audioStop(); }
+
     if (wsDisplaced) return;
     const secs = wsOpenedAt ? Math.round((Date.now() - wsOpenedAt) / 1000) : 0;
     wsCloseLog.push(ev.code + (ev.reason ? "/" + ev.reason : "") + " after " + secs + "s");

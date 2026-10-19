@@ -54,8 +54,14 @@ static void waterfall_free(ftx_waterfall_t* me)
 
 void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 {
-    float slot_time = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SLOT_TIME : FT8_SLOT_TIME;
-    float symbol_period = (cfg->protocol == FTX_PROTOCOL_FT4) ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    float slot_time = (float)ftx_protocol_slot_ms(cfg->protocol) / 1000.0f;
+    /* ⛔ THIS WAS `(protocol == FTX_PROTOCOL_FT4) ? FT4_... : FT8_...`, which
+     * handed every JS8 submode FT8's 160 ms symbol. Right for Normal by
+     * accident, silently wrong for Fast, Turbo and Slow - and wrong HERE means
+     * the waterfall is binned at the wrong rate, so nothing ever syncs and the
+     * failure looks like a dead band. Integer microseconds from the protocol
+     * facts, not a float constant per protocol. */
+    float symbol_period = ftx_protocol_symbol_period_us(cfg->protocol) / 1000000.0f;
     // Compute DSP parameters that depend on the sample rate
     me->block_size = (int)(cfg->sample_rate * symbol_period); // samples corresponding to one FSK symbol
     me->subblock_size = me->block_size / cfg->time_osr;
@@ -77,6 +83,9 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
         // me->window[i] = (i < len_window) ? hann_i(i, len_window) : 0;
     }
     me->last_frame = (float*)calloc(me->nfft, sizeof(me->last_frame[0]));
+    /* Off the stack - see the note in monitor.h. */
+    me->timedata = (kiss_fft_scalar*)malloc((size_t)me->nfft * sizeof(me->timedata[0]));
+    me->freqdata = (kiss_fft_cpx*)malloc(((size_t)me->nfft / 2 + 1) * sizeof(me->freqdata[0]));
 
     LOG(LOG_INFO, "Block size = %d\n", me->block_size);
     LOG(LOG_INFO, "Subblock size = %d\n", me->subblock_size);
@@ -118,7 +127,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 
 bool monitor_alloc_ok(const monitor_t* me)
 {
-    return me->window && me->last_frame && me->fft_work && me->fft_cfg && me->wf.mag;
+    return me->window && me->last_frame && me->fft_work && me->fft_cfg &&
+           me->timedata && me->freqdata && me->wf.mag;
 }
 
 void monitor_free(monitor_t* me)
@@ -127,6 +137,12 @@ void monitor_free(monitor_t* me)
     free(me->fft_work);
     free(me->last_frame);
     free(me->window);
+    /* ⚠ Like fft_work, these may point at a POOL-SHARED allocation on the
+     * device. The caller NULLs them first in that case, exactly as it already
+     * does for fft_work - freeing a shared block once per monitor is a tlsf
+     * double-free and it reboots the board (ft8_test.c, #199). */
+    free(me->timedata);
+    free(me->freqdata);
 }
 
 void monitor_reset(monitor_t* me)
@@ -148,8 +164,9 @@ void monitor_process(monitor_t* me, const float* frame)
     // Loop over block subdivisions
     for (int time_sub = 0; time_sub < me->wf.time_osr; ++time_sub)
     {
-        kiss_fft_scalar timedata[me->nfft];
-        kiss_fft_cpx freqdata[me->nfft / 2 + 1];
+        /* Pool-shared scratch, not stack arrays - see monitor.h. */
+        kiss_fft_scalar *timedata = me->timedata;
+        kiss_fft_cpx    *freqdata = me->freqdata;
 
         // Shift the new data into analysis frame
         for (int pos = 0; pos < me->nfft - me->subblock_size; ++pos)
@@ -184,9 +201,43 @@ void monitor_process(monitor_t* me, const float* frame)
                 me->wf.mag[offset].mag = db;
                 me->wf.mag[offset].phase = phase;
 #else
-                // Scale decibels to unsigned 8-bit range and clamp the value
-                // Range 0-240 covers -120..0 dB in 0.5 dB steps
-                int scaled = (int)(2 * db + 240);
+                /* Scale decibels to unsigned 8-bit range and clamp.
+                 *
+                 * The stock packing is 2*db + 240: 0.5 dB steps over
+                 * -120..+7.5 dB. MEASURED on bench dev 2026-10-10 on a busy
+                 * 20 m FT8 band, 662-3340 bins PER SLOT clip at the top
+                 * (slotdiag sat=), while 15266 sit pinned at zero - the
+                 * window is squeezed at BOTH ends.
+                 *
+                 * Made build-time adjustable so the trade can be MEASURED on
+                 * recorded slots instead of guessed at: WF_DB_SCALE steps per
+                 * dB, WF_DB_BIAS the offset. The defaults are the stock
+                 * values, so an unconfigured build is bit-identical. */
+#ifndef WF_DB_SCALE
+#define WF_DB_SCALE 2
+#endif
+#ifndef WF_DB_BIAS
+/* 200, not the stock 240: the window is -100..+27.5 dB instead of
+ * -120..+7.5. MEASURED on 12 real 20 m FT8 slots at their LIVE level
+ * (scratchpad/wfsweep), decodes per 12 slots and clipped bins per slot:
+ *
+ *     2/240 (stock)   148 decodes   sat 2598
+ *     2/220           158           sat  445
+ *     2/200           157           sat    6
+ *     2/180           157           sat    0   zero 15926 (bottom suffers)
+ *     2/160           330/335 on the reference corpus - REGRESSES
+ *
+ * +6% decodes, and clipping essentially gone, without pushing weak bins to
+ * zero (15810 -> 15821). Checked for regression on the 35-WAV reference
+ * corpus: 335 -> 336, i.e. neutral. 2/160 is where it starts costing
+ * decodes, so this is the edge of the useful range, not an arbitrary pick.
+ *
+ * ⚠ IT ALSO MOVES THE SNR BASELINE, so it ships WITH
+ * FT8_SNR_CAL_OFFSET_DB - see the note there. Shipping this alone makes the
+ * reported S/N worse (mean error -4.2 -> -7.7 dB against jt9). */
+#define WF_DB_BIAS 200
+#endif
+                int scaled = (int)(WF_DB_SCALE * db + WF_DB_BIAS);
                 me->wf.mag[offset] = (scaled < 0) ? 0 : ((scaled > 255) ? 255 : scaled);
 #endif
                 ++offset;

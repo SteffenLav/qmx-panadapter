@@ -222,6 +222,10 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 // Sticky on purpose - a bad antenna does not fix itself, and auto-resuming
 // would key into the same mismatch every slot. Returns true while latched;
 // *swr_out (optional) gets the reading that tripped it.
+/* Raise the STATION's SWR latch. Called by any transmitter that measures a
+ * mismatch over the operator's limit - ft8_tx.c's own burst, and wspr_tx.c.
+ * The first trip keeps its value; clearing is the operator's, as before. */
+void ft8_tx_trip_swr(float swr);
 bool ft8_tx_swr_tripped(float *swr_out);
 void ft8_tx_clear_swr_trip(void);
 

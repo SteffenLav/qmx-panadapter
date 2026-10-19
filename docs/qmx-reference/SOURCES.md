@@ -53,7 +53,7 @@ manuals (also gitignored) — regenerate with `pdftotext -layout <pdf> <txt>` if
 
 **These PDFs are not committed to the repo** (see `.gitignore`). They are
 copyrighted vendor documentation (© QRP Labs / Hans Summers G0UPL), and this is
-a public MIT-licensed repo — redistributing them here would be a copyright grey
+a public GPL-3 repo — redistributing them here would be a copyright grey
 area at best. Keeping them local-only avoids that, while still letting anyone
 working on this codebase (including future Claude sessions — the files persist
 on disk and are readable even though git ignores them) reference the same

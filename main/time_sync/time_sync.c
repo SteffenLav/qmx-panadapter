@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "psram_task.h"
+#include "unit_gps/unit_gps.h"   // liveness wrapper + the module that owns freshness
 
 static const char *TAG = "time_sync";
 
@@ -131,10 +132,20 @@ static bool gps_is_live(void)
     return s_qmx_gps_confirmed && cat_is_ready();
 }
 
+// The Unit GPS is its own liveness test - a satellite fix with a lock byte,
+// independent of whether any radio is attached. Ranked FIRST: while it is
+// live it outranks the QMX+ internal GPS because it is
+// the only offline source here that also carries the DATE.
+bool time_sync_unit_gps_is_live(void)
+{
+    return unit_gps_is_live();
+}
+
 time_sync_source_t time_sync_get_effective_source(void)
 {
-    if (gps_is_live())                                    return TIME_SOURCE_QMX;   // GPS
-    if (wifi_is_connected() && wifi_time_is_valid())      return TIME_SOURCE_SNTP;
+    if (time_sync_unit_gps_is_live())                   return TIME_SOURCE_UNIT_GPS;  // Unit GPS on PORT.A
+    if (gps_is_live())                                  return TIME_SOURCE_QMX;       // QMX+ GPS
+    if (wifi_is_connected() && wifi_time_is_valid())    return TIME_SOURCE_SNTP;
     return s_source;   // offline: FT8 / manual / RTC / naive-QMX
 }
 
@@ -164,6 +175,7 @@ static bool clock_is_trusted(void)
 {
     if (!epoch_is_sane((int64_t)time(NULL))) return false;
     switch (s_source) {
+    case TIME_SOURCE_UNIT_GPS:
     case TIME_SOURCE_RTC:
     case TIME_SOURCE_SNTP:
     case TIME_SOURCE_MANUAL:
@@ -177,6 +189,7 @@ static bool clock_is_trusted(void)
 static const char *trusted_source_name(void)
 {
     switch (s_source) {
+    case TIME_SOURCE_UNIT_GPS: return "Unit-GPS";
     case TIME_SOURCE_RTC:    return "Tab5 RTC";
     case TIME_SOURCE_SNTP:   return "SNTP";
     case TIME_SOURCE_MANUAL: return "manual";
@@ -194,11 +207,45 @@ static const char *trusted_source_name(void)
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
 // better time than anything the Tab5 carries). Never called when the QMX is
 // the *source* of the sync — only when Tab5 has a better clock.
+/* ⛔ NEVER OVERWRITE A GPS RADIO'S CLOCK. Steffen's QMX+ sat at "not GPS" for
+ * hours, 2026-10-07, and this function is why.
+ *
+ * The only gate used to be s_qmx_gps_confirmed - OUR OWN inference, from the
+ * tick agreeing with SNTP. That makes a trap with no exit: detection fails for
+ * any reason, so we push; cat_set_qmx_time() carries whole seconds only, so a
+ * clock reading 19:16:01.9 pushes :01 and leaves the radio nearly a second
+ * slow; the next tick is a second out and fails the test; so we push again.
+ * The log caught it in one line - the radio's own GPS said 19:16:02 and we
+ * wrote 19:16:01 into it. Nothing recovers from that except a power cycle,
+ * because only then does the QMX drop its software clock and let its GPS
+ * re-discipline it. That is exactly what the operator saw: power-cycle the
+ * radio and it reads GPS immediately.
+ *
+ * So the gate is now the RADIO'S OWN STATEMENT that a GPS is permanently
+ * fitted, which it answers from its own menu and which no inference of ours can
+ * poison. And "it has not answered yet" is held separately from "it said no",
+ * because they used to be the same false - and the first push goes out ~19 s
+ * after boot on the SNTP notify, before the MM query has landed at ~21-51 s.
+ *
+ * ⚠ The whole-second truncation is still there for radios we DO push to. It can
+ * leave any QMX up to a second slow. Not fixed here: doing it properly means
+ * measuring the CAT write latency and aligning to a boundary, and this change
+ * is about the radios we should never have been writing to at all. */
 static void push_to_qmx(time_t utc)
 {
     if (!cat_is_ready()) return;
     if (s_qmx_gps_confirmed) {
         ESP_LOGD(TAG, "QMX is GPS-disciplined — skipping Tab5→QMX time push");
+        return;
+    }
+    if (!cat_qmx_gps_source_known()) {
+        ESP_LOGI(TAG, "Tab5→QMX time push deferred - radio has not said yet "
+                      "whether it has a GPS fitted");
+        return;
+    }
+    if (cat_qmx_gps_source_internal()) {
+        ESP_LOGI(TAG, "QMX reports a permanent GPS - NOT pushing our time to it, "
+                      "whatever our own detection currently thinks");
         return;
     }
     struct tm tm_utc;
@@ -262,8 +309,49 @@ static time_t get_date_anchor(void)
 // has no matching latency, so letting it pull the clock only drags TX late.
 // See apply_ft8_correction().
 
+/* ⛔ THROTTLED, AND THE REASON IS MEASURED.
+ *
+ * On the bench 2026-10-09 the log carried `settings: flushed dirty=...00010000`
+ * ONCE A SECOND, continuously. Bit 16 is DIRTY_LAST_TIME. settings.c's own
+ * comment says that bit is "rewritten every FT8 slot ... ~every 15s" - it was
+ * running 15x faster than the code believed.
+ *
+ * The cause is the Unit-GPS path: it locks the clock on every RMC sentence,
+ * which is 1 Hz, and called this on each one. That is an nvs_commit() AND an
+ * I2C write to the RX8130CE every second - 86,400 flash commits a day for a
+ * value whose only job is to survive a power cycle.
+ *
+ * ⭐ THROTTLE THE PERSIST, NOT THE LOCK. The per-second phase-lock is what
+ * gives the Unit GPS its good phase and must keep running; only writing it
+ * down needed bounding. Fixed HERE rather than at the Unit-GPS call site
+ * because there are eight callers and the next one added would have the same
+ * bug - the QMX-GPS path only escaped it by re-locking every 5 min.
+ *
+ * ⚠ A STEP STILL WRITES IMMEDIATELY. If the new time is not what the old one
+ * would have reached by ticking forward, that is a real correction (a manual
+ * set, a first fix, a jump) and is recorded at once however recently we wrote.
+ * Without that test the throttle would swallow exactly the corrections the
+ * stored value exists to capture.
+ *
+ * Staleness cost: last_unix_time can lag by up to the interval below. It is a
+ * monotonicity floor for distrusting a backwards RTC at boot, not a clock, so
+ * minutes of lag are harmless - and the RTC itself keeps running regardless. */
+#define PERSIST_MIN_INTERVAL_US   (5 * 60 * 1000000LL)
+#define PERSIST_STEP_TOL_US       (2 * 1000000LL)
+
+static int64_t s_last_persist_us;    /* 0 = never written this boot */
+static time_t  s_last_persist_utc;
+
 static void write_to_rtc_and_nvs(time_t utc, const char *source)
 {
+    int64_t now_us = esp_timer_get_time();
+    if (s_last_persist_us != 0) {
+        int64_t since_us  = now_us - s_last_persist_us;
+        int64_t ticked_us = (int64_t)(utc - s_last_persist_utc) * 1000000LL;
+        bool    stepped   = llabs(ticked_us - since_us) > PERSIST_STEP_TOL_US;
+        if (!stepped && since_us < PERSIST_MIN_INTERVAL_US) return;
+    }
+
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
     if (!rtc_set_time(&tm_utc)) {
@@ -272,6 +360,8 @@ static void write_to_rtc_and_nvs(time_t utc, const char *source)
     if (epoch_is_sane((int64_t)utc)) {
         settings_set_last_unix_time((uint32_t)utc);
     }
+    s_last_persist_us  = now_us;
+    s_last_persist_utc = utc;
 }
 
 static void apply_and_persist(time_t utc, const char *source)
@@ -296,7 +386,108 @@ void time_sync_notify_sntp(time_t utc)
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
     s_date_verified = true;
+    settings_set_date_src(DATE_SRC_SNTP);
     push_to_qmx(utc);
+}
+
+/* A disagreement big enough to be worth saying out loud - the same 300 ms that
+ * separates "agrees" from "does not agree" for a QMX tick. SNTP disagreement
+ * is a LOG, never a veto here: the RMC status byte is the receiver telling us
+ * it has a lock, where SNTP agreement was only ever an inference about someone
+ * else's lock (#173). */
+#define UNIT_GPS_SNTP_WARN_MS QMX_GPS_CONFIRM_MS
+
+/* push_to_qmx() is a blocking CAT write of up to 200 ms from a non-poll
+ * context, so a source that speaks every second must not call it every second.
+ * Once when it takes over, then every 5 minutes - the same cadence the QMX
+ * re-locked at. The skip rule inside push_to_qmx() is untouched: only a
+ * GPS-disciplined radio is never pushed to. */
+static time_t s_last_unit_push_utc = 0;
+#define UNIT_GPS_PUSH_INTERVAL_S 300
+
+// Priority 0: Unit GPS on PORT.A - a satellite clock that carries its own DATE,
+// so nothing here asks get_date_anchor() what day it might be (Don WB0LQW's
+// two-days-behind POTA log is the failure this path exists to end).
+bool time_sync_notify_unit_gps(int year, int mon, int mday,
+                               int h, int m, int s,
+                               uint32_t frac_us, int64_t flip_us)
+{
+    struct tm tm_utc;
+    memset(&tm_utc, 0, sizeof(tm_utc));
+    tm_utc.tm_year  = year - 1900;
+    tm_utc.tm_mon   = mon - 1;
+    tm_utc.tm_mday  = mday;
+    tm_utc.tm_hour  = h;
+    tm_utc.tm_min   = m;
+    tm_utc.tm_sec   = s;
+    tm_utc.tm_isdst = 0;
+    // ESP-IDF runs with UTC as the default timezone, so mktime == timegm here
+    // (the same assumption main/rtc/rtc.c documents).
+    time_t t = mktime(&tm_utc);
+    if (t < 0) {
+        ESP_LOGW(TAG, "Unit-GPS date/time did not convert - ignoring");
+        return false;
+    }
+
+    /* Where the clock actually is, in microseconds.
+     *
+     * t*1e6 + frac is UTC AT THE MOMENT THE SENTENCE DESCRIBES. Carrying it
+     * forward by the time since the flip-stamp puts us at "now": when the
+     * sentence has a fractional second that is exact; when it does not, the
+     * flip stamp IS the boundary (arrival of the N->N+1 sentence), which is
+     * precisely what apply_gps_tick() does for a QMX+ tick. With neither - the
+     * first lock - this is a whole-second apply and claims no phase at all. */
+    int64_t carry_us = (flip_us > 0) ? (esp_timer_get_time() - flip_us) : 0;
+    if (carry_us < 0) carry_us = 0;
+    int64_t utc_now_us = (int64_t)t * 1000000LL + (int64_t)frac_us + carry_us;
+    time_t  utc_now    = (time_t)(utc_now_us / 1000000LL);
+
+    if (!epoch_is_sane((int64_t)utc_now)) {
+        ESP_LOGW(TAG, "Unit-GPS time out of range (%lld) - ignoring", (long long)utc_now);
+        return false;
+    }
+
+    // Log a disagreement with the internet, but apply the satellite anyway.
+    if (wifi_is_connected() && wifi_time_is_valid()) {
+        struct timeval sys;
+        gettimeofday(&sys, NULL);
+        int64_t sys_us = (int64_t)sys.tv_sec * 1000000LL + sys.tv_usec;
+        int64_t d_ms   = llabs(utc_now_us - sys_us) / 1000;
+        if (d_ms > UNIT_GPS_SNTP_WARN_MS) {
+            ESP_LOGW(TAG, "Unit-GPS off SNTP by %lld ms - applying Unit GPS anyway "
+                          "(RMC status is the lock indication)", (long long)d_ms);
+        }
+    }
+
+    struct timeval tv = { .tv_sec = utc_now,
+                          .tv_usec = (suseconds_t)(utc_now_us % 1000000LL) };
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(utc_now, "Unit-GPS");
+    s_ft8_cum_offset_ms = 0;   // hard sync: any prior FT8 nudge is now baked in
+
+    s_date_verified = true;    // the DATE came from the satellite - idempotent
+    /* ⛔ ADDED IN THE MERGE, not on either branch. date_src landed on main
+     * (royord #18) on the same day this branch was written, so this path
+     * set the date without recording WHERE it came from - and the next
+     * boot would have distrusted a perfectly good satellite date and asked
+     * the operator anyway. Two changes to the same semantics, merged
+     * cleanly by git because they touch different lines. */
+    settings_set_date_src(DATE_SRC_UNIT_GPS);
+    s_source = TIME_SOURCE_UNIT_GPS;
+
+    struct tm shown;
+    gmtime_r(&utc_now, &shown);
+    ESP_LOGI(TAG, "Time set from Unit-GPS: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC%s",
+             shown.tm_year + 1900, shown.tm_mon + 1, shown.tm_mday,
+             shown.tm_hour, shown.tm_min, shown.tm_sec, (int)(tv.tv_usec / 1000),
+             flip_us > 0 ? " phase-locked" : " (whole second)");
+
+    if (s_last_unit_push_utc == 0 ||
+        (utc_now - s_last_unit_push_utc) >= UNIT_GPS_PUSH_INTERVAL_S) {
+        push_to_qmx(utc_now);
+        s_last_unit_push_utc = utc_now;
+    }
+    return true;
 }
 
 /* Dev only: a bench with WiFi always has a verified date, so without this the
@@ -311,6 +502,67 @@ void time_sync_dev_force_date_unverified(void)
     ESP_LOGW(TAG, "DEV: date forced to unverified (ignores SNTP until answered)");
 }
 
+/* ⭐ THE SUPERCAP RTC SAYING "valid" IS NOT THE SAME AS THE DATE BEING RIGHT.
+ *
+ * royord, #18, 2026-10-07: he flashed the M5 UserDemo (whose default RTC date
+ * is 1901, and he nudged it to 1904), then flashed this firmware back. The RTC
+ * reported valid, so boot marked the date verified and the question was never
+ * asked - the firmware was certain about a date that was over a century out.
+ *
+ * rtc_is_valid() only means the supercap never browned out. It says nothing
+ * about WHO wrote the value, and another firmware writing the RTC leaves our
+ * NVS record untouched. So the RTC is believed only when our own record backs
+ * it up, on all three counts:
+ *
+ *   1. We recorded a date source we trust (SNTP, a GPS fix, or the operator
+ *      reading it off the screen). A fresh flash has none - it asks, which is
+ *      the right default.
+ *   2. The RTC has not gone BACKWARDS past that record. This is what catches
+ *      royord: our record held a 2026 time, the RTC came up in 1904.
+ *   3. It has not run so far past the record that nobody has watched it. A
+ *      Tab5 that sat in a drawer for months gets asked once - which is Don
+ *      WB0LQW's original fault (two days off, two days wrong in the log), just
+ *      at a longer scale.
+ *
+ * The cost of a false NO is one question. The cost of a false YES is a day of
+ * QSOs logged under the wrong date, which has now happened twice to real
+ * operators. The asymmetry decides every judgement call here.
+ */
+#define DATE_TRUST_MAX_UNATTENDED_S  (30LL * 24 * 3600)
+
+static bool rtc_date_is_trustworthy(time_t rtc_now)
+{
+    const uint8_t src = settings_get_date_src();
+    if (src != DATE_SRC_OPERATOR && src != DATE_SRC_SNTP &&
+        src != DATE_SRC_QMX_GPS  && src != DATE_SRC_UNIT_GPS) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: no recorded source (src=%u)", (unsigned)src);
+        return false;
+    }
+
+    const int64_t last = (int64_t)settings_get_last_unix_time();
+    if (last == 0) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: source %u but no recorded time", (unsigned)src);
+        return false;
+    }
+
+    const int64_t now = (int64_t)rtc_now;
+    if (now < last) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: clock went BACKWARDS %lld s past our "
+                      "own record - something else wrote this RTC",
+                 (long long)(last - now));
+        return false;
+    }
+    if (now - last > DATE_TRUST_MAX_UNATTENDED_S) {
+        ESP_LOGW(TAG, "RTC date NOT trusted: %lld days since our last record",
+                 (long long)((now - last) / 86400));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "RTC date trusted: src=%u, %lld s since our record",
+             (unsigned)src, (long long)(now - last));
+    return true;
+}
+
 bool time_sync_date_verified(void)
 {
     if (s_dev_force_unverified) return s_date_verified;
@@ -321,6 +573,7 @@ void time_sync_confirm_date(void)
 {
     if (!s_date_verified) ESP_LOGI(TAG, "date confirmed by the operator");
     s_date_verified = true;
+    settings_set_date_src(DATE_SRC_OPERATOR);
     s_dev_force_unverified = false;
 }
 
@@ -345,6 +598,7 @@ bool time_sync_set_date(int year, int mon, int mday)
     write_to_rtc_and_nvs(utc, "date");
     s_date_verified = true;
     s_dev_force_unverified = false;
+    settings_set_date_src(DATE_SRC_OPERATOR);
     ESP_LOGI(TAG, "date set by the operator: %04d-%02d-%02d (time of day kept)", year, mon, mday);
     return true;
 }
@@ -450,7 +704,9 @@ static int apply_ft8_correction(int delta_ms, bool leash, time_t *out_utc)
         // reference when the radio is unplugged, and suppressing the FT8
         // nudge on the strength of it would leave such a unit with NO
         // discipline at all.
-        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || gps_is_live();
+        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid())
+                      || gps_is_live()
+                      || time_sync_unit_gps_is_live();
         if (ref_ok) {
             // A real absolute reference (SNTP or GPS) exists -> do NOT let FT8
             // touch the clock. Root-caused 2026-07-18: the FT8 timing offset is
@@ -609,6 +865,117 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
     return true;
 }
 
+/* ⭐ GP GIVES THE DATE AND THE GPS ANSWER. IT DOES NOT GIVE THE PHASE.
+ *
+ * ⛔ THIS IS THE SECOND VERSION. The first one applied GP as a phase-locked
+ * time reference, on the reasoning that GP reads the RECEIVER while TM; reads
+ * the radio's free-running clock. The reasoning was right about provenance and
+ * wrong about timing, and the bench said so within the hour.
+ *
+ * Measured 2026-10-07 against the PC clock (itself 60 ms off pool.ntp.org, so
+ * not the term that matters), three runs, QMX+ on 1_04_010:
+ *
+ *     GP second boundary:  +998, +863, +991 ms LATE vs UTC
+ *     TM second boundary:  +102,   -4,  -52 ms vs UTC
+ *
+ * GP reports the PREVIOUS second. That is ordinary NMEA behaviour - a receiver
+ * emits the sentence for second N during second N+1 - and it means the radio's
+ * own clock, disciplined at power-on and then free-running, is the better
+ * PHASE reference by an order of magnitude. Applying GP as a boundary left the
+ * bench Tab5 1.25 s slow, which FT8 slot alignment would have paid for.
+ *
+ * Not poll load: the lag is identical at 50 ms and 200 ms between polls.
+ * Not a constant to subtract either: 863-998 ms over three runs is not clean
+ * enough to call it exactly one second, and it crept ~10 ms per second within
+ * single bursts.
+ *
+ * So GP is used for the two things it IS authoritative about:
+ *
+ *   1. THE DATE. TM; never carried one, which is the whole offline half of
+ *      royord's #18. A date is a whole-day quantity; a 1 s lag cannot touch it
+ *      except within 1 s of midnight, where the clock is re-read every 5
+ *      minutes anyway.
+ *   2. THE GPS ANSWER. A GP reply that parses comes from the receiver, which
+ *      nothing we do can write. That settles provenance outright - no SNTP
+ *      agreement test, no s_qmx_time_pushed guard, works offline.
+ *
+ * The clock itself is left to the TM path below, EXCEPT when there is no
+ * usable clock at all (insane epoch, or a date that disagrees with the
+ * satellite). Then a whole-second GP apply is plainly better than nothing, and
+ * it says so in the log rather than claiming a phase it does not have.
+ */
+static bool apply_qmx_gp(int y, int mo, int d, int h, int mi, int s, int64_t flip_us)
+{
+    struct tm tm_utc = {0};
+    tm_utc.tm_year = y - 1900;
+    tm_utc.tm_mon  = mo - 1;
+    tm_utc.tm_mday = d;
+    tm_utc.tm_hour = h;
+    tm_utc.tm_min  = mi;
+    tm_utc.tm_sec  = s;
+    tm_utc.tm_isdst = 0;
+    time_t gp_utc = mktime(&tm_utc);   // IDF runs UTC, so mktime == timegm
+    if (gp_utc < 0 || !epoch_is_sane((int64_t)gp_utc)) {
+        ESP_LOGW(TAG, "QMX-GP date/time out of range - ignoring");
+        return false;
+    }
+
+    /* The receiver answered, so this radio has a GPS. Its own answer, not our
+     * inference from a clock we might have set ourselves. */
+    set_qmx_gps_confirmed(true);
+    s_date_verified = true;
+    settings_set_date_src(DATE_SRC_QMX_GPS);
+
+    /* Is the clock we are already running good enough to keep its phase? */
+    time_t    now = time(NULL);
+    struct tm now_tm;
+    gmtime_r(&now, &now_tm);
+    bool have_clock = epoch_is_sane((int64_t)now);
+    bool same_day   = have_clock &&
+                      now_tm.tm_year + 1900 == y &&
+                      now_tm.tm_mon  + 1    == mo &&
+                      now_tm.tm_mday        == d;
+
+    if (same_day) {
+        /* Date confirmed; phase stays with TM;. Nothing to write. */
+        ESP_LOGI(TAG, "QMX-GP: date %04d-%02d-%02d confirmed from the receiver "
+                      "(GPS confirmed; phase left to TM;)", y, mo, d);
+        return true;
+    }
+
+    /* No usable clock, or the satellite disagrees about the DAY. Take GP's
+     * whole second - ~1 s late, and labelled as such. The next TM tick fixes
+     * the phase; nothing else would fix the date. */
+    int64_t carry_us = esp_timer_get_time() - flip_us;
+    if (carry_us < 0) carry_us = 0;
+    int64_t utc_us = (int64_t)gp_utc * 1000000LL + carry_us;
+    struct timeval tv = { .tv_sec  = (time_t)(utc_us / 1000000LL),
+                          .tv_usec = (suseconds_t)(utc_us % 1000000LL) };
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(tv.tv_sec, "QMX-GP");
+    s_ft8_cum_offset_ms = 0;
+    s_source = TIME_SOURCE_QMX;
+    ESP_LOGW(TAG, "Time set from QMX-GP: %04d-%02d-%02d %02d:%02d:%02d UTC - "
+                  "WHOLE SECOND ONLY, GP runs ~1 s late; TM; will set the phase",
+             y, mo, d, h, mi, s);
+    return true;
+}
+
+/* One attempt at the GP path. Costs up to ~1.3 s while it brackets a second
+ * boundary, and holds the CAT poll for that long. Returns false - cheaply - on
+ * a radio older than 1.04_004, and after the full 1.3 s on a radio with no fix.
+ *
+ * True means "the receiver answered": the date and the GPS verdict are settled.
+ * It does NOT mean the clock was set, and the caller must still run the TM
+ * tick for the phase. See apply_qmx_gp() for the measurement behind that. */
+bool time_sync_try_qmx_gp(void)
+{
+    int y, mo, d, h, mi, s;
+    int64_t flip_us;
+    if (cat_gps_gp_sync(&y, &mo, &d, &h, &mi, &s, &flip_us) != ESP_OK) return false;
+    return apply_qmx_gp(y, mo, d, h, mi, s, flip_us);
+}
+
 // True once qmx_sync_once() has made its FIRST determination for the current
 // QMX - no longer gates whether detection retries (see the 2026-09-23 fix
 // note below), only whether push_to_qmx() has already seeded a non-GPS
@@ -652,11 +1019,22 @@ static void qmx_sync_once(void)
     int64_t flip_us;
     bool sntp_up = wifi_is_connected() && wifi_time_is_valid();
 
+    /* ⭐ GP FIRST, FOR THE DATE AND THE GPS VERDICT - NOT FOR THE CLOCK.
+     * It settles whether this radio has a GPS from the radio's own answer
+     * instead of inferring it from a clock we may have set, and it carries the
+     * date that TM; never did. The PHASE still comes from the TM tick below:
+     * GP's second boundary measures ~1 s late (see apply_qmx_gp()). */
+    bool gp_answered = time_sync_try_qmx_gp();
+    if (gp_answered) {
+        s_qmx_detect_done = true;   // settled, and not by inference
+        sntp_up = wifi_is_connected() && wifi_time_is_valid();   // GP may have stepped the clock
+    }
+
     // --- Auto-detect (needs SNTP to compare against), retried every periodic
     // pass until confirmed. push_to_qmx() still fires only on the very first
     // attempt - later attempts leave seeding the radio's RTC to the steady-
     // state fallback below, which already runs every pass regardless. ---
-    if (!s_qmx_gps_confirmed && sntp_up) {
+    if (!s_qmx_gps_confirmed && sntp_up && !gp_answered) {
         bool gps = (cat_gps_tick_sync(&h, &m, &s, &flip_us) == ESP_OK) &&
                    apply_gps_tick(h, m, s, flip_us);   // tight-agreement test inside
         set_qmx_gps_confirmed(gps);
@@ -718,7 +1096,11 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     } else if (rtc_is_valid()) {
         if (rtc_apply_to_system()) {
             s_source = TIME_SOURCE_RTC;
-            s_date_verified = true;   // the supercap held, so the date is the one it kept
+            /* ⛔ WAS: s_date_verified = true, "the supercap held, so the date is
+             * the one it kept". The supercap holding only means nobody cut the
+             * power - it does not mean the value is ours. See
+             * rtc_date_is_trustworthy() above and royord, #18. */
+            s_date_verified = rtc_date_is_trustworthy(time(NULL));
         } else {
             ESP_LOGW(TAG, "RTC read failed despite valid flag");
         }

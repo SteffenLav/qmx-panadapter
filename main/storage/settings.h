@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>   // size_t (settings_get_activation_ref)
+#include <strings.h>  // strcasecmp, for port_a_mode_parse below
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,6 +22,154 @@ typedef enum {
     FT8_ROBOT_PRI_WEAKEST   = 1,  // lowest SNR first (help the weak ones / ragchew DX hunt)
     FT8_ROBOT_PRI_DISTANT   = 2,  // greatest great-circle distance from our grid (DX)
 } ft8_robot_priority_t;
+
+// PORT.A (HY2.0-4P) ownership. ONE field, because the connector has one cable
+// and two would be free to disagree: the remote power-cycle relay drives
+// GPIO53/54 from boot, the Unit GPS v1.1 talks UART on exactly those pins, and
+// nothing physical can tell us which is plugged in (no cable detect). Absent
+// NVS key means relay, so an upgrade never moves a
+// pin. 2 is reserved for a future Grove accessory so this enum never has to be
+// renumbered underneath a persisted value.
+typedef enum {
+    PORT_A_MODE_RELAY    = 0,  // relay harness owns the pins (default)
+    PORT_A_MODE_UNIT_GPS = 1,  // Unit GPS v1.1 UART owns the pins
+} port_a_mode_t;
+
+/* The mode's string form and its sanity rule, as static inline rather than as
+ * functions in settings.c: config_io needs the strings, settings.c needs the
+ * rule, and test/port_a_mode_harness.c needs BOTH without linking NVS (which
+ * is the only thing settings.c cannot do on a host). A round-trip that has to
+ * boot a device to be checked is a round-trip nobody checks. */
+static inline const char *port_a_mode_str(uint8_t mode)
+{
+    return mode == PORT_A_MODE_UNIT_GPS ? "unit_gps" : "relay";
+}
+
+/* Anything that is not a mode this build implements resolves to relay: 2 is a
+ * reserved Grove slot, the rest is NVS noise. The default of an ABSENT key is
+ * the same value (0), so "no key", "corrupt key" and "operator chose relay"
+ * are one answer - the pins stay driven the way they were before this setting
+ * existed. */
+static inline uint8_t port_a_mode_normalize(uint8_t raw)
+{
+    return raw == PORT_A_MODE_UNIT_GPS ? PORT_A_MODE_UNIT_GPS : PORT_A_MODE_RELAY;
+}
+
+/* Decode half of the config-file round trip. Anything that is not exactly
+ * "unit_gps" (case-insensitive) means relay, so a hand-edited backup can only
+ * ever select between the two cables, never a third state. */
+static inline uint8_t port_a_mode_parse(const char *val)
+{
+    return (val && strcasecmp(val, "unit_gps") == 0) ? PORT_A_MODE_UNIT_GPS
+                                                     : PORT_A_MODE_RELAY;
+}
+
+/* ============================ RX INPUT SOURCE ==============================
+ *
+ * Where the receive samples come from. ONE field, and the sources are
+ * mutually exclusive in HARDWARE, not by policy:
+ *
+ *   The ES7210 capture side needs the I2S RX channel. Bringing it up claims a
+ *   second GDMA channel and more DMA-capable RAM, and that starves the USB
+ *   host's endpoint allocation so CDC-ACM/CAT cannot claim its endpoints
+ *   (see audio/rx_audio.c's preopen, which creates a TX-ONLY channel for
+ *   exactly this reason). So a jack source and a USB radio cannot both run.
+ *   Asked 2026-10-10, he ruled that no practical application needs both.
+ *
+ * ⛔ THE SOURCE IS LATCHED AT BOOT and a change needs a restart. USB host
+ * start and the I2S channel layout both happen once in app_main() before any
+ * of this is reachable, and tearing the USB host down live is the operation
+ * that wedges the QMX (#74). The setter therefore only records the choice.
+ *
+ * ⚠ TWO OF THE FOUR ARE DECLARED BUT NOT IMPLEMENTED. They are in the enum so
+ * the numbering never has to move underneath a persisted value, and they are
+ * shown disabled in the UI rather than hidden, so the surface does not lie
+ * about what the hardware can do. rx_source_implemented() is the gate.
+ */
+typedef enum {
+    RX_SOURCE_QMX_USB    = 0,  // QMX / QMX+ over USB UAC: 24-bit stereo IQ (default)
+    RX_SOURCE_GENERIC_IQ = 1,  // reserved: some other IQ source. NOT IMPLEMENTED
+    RX_SOURCE_LINE_IN    = 2,  // 3.5 mm jack, mic ring -> ES7210 ch3. REAL audio, one channel
+    RX_SOURCE_MIC_INT    = 3,  // internal microphones (ES7210 ch0/ch2). NOT IMPLEMENTED
+} rx_source_t;
+
+/* Does THIS build actually have a working path for the source? Everything
+ * else must fall back rather than leave the operator with a dead receiver. */
+static inline bool rx_source_implemented(uint8_t src)
+{
+    return src == RX_SOURCE_QMX_USB || src == RX_SOURCE_LINE_IN;
+}
+
+/* Is the source a REAL (single-channel) signal rather than complex IQ?
+ *
+ * This is the one bit the DSP has to branch on. A real source has no
+ * quadrature channel, so the spectrum would be mirrored about the tuned
+ * centre if it were fed to the IQ chain unchanged. line_in.c synthesises the
+ * quadrature with a Hilbert transform before the ring, and the FT8/JS8/WSPR
+ * capture branch skips its fs/4 mixer, because a real source's audio is
+ * already at baseband and there is no +12 kHz IF to move. */
+static inline bool rx_source_is_real(uint8_t src)
+{
+    return src == RX_SOURCE_LINE_IN || src == RX_SOURCE_MIC_INT;
+}
+
+/* Anything this build does not implement resolves to the QMX, which is the
+ * value an ABSENT key also reads as (0). So "no key", "NVS noise" and "a
+ * source a NEWER firmware offered before the operator downgraded" are one
+ * answer: the radio that was working before this setting existed. */
+static inline uint8_t rx_source_normalize(uint8_t raw)
+{
+    return rx_source_implemented(raw) ? raw : RX_SOURCE_QMX_USB;
+}
+
+static inline const char *rx_source_str(uint8_t src)
+{
+    switch (src) {
+    case RX_SOURCE_GENERIC_IQ: return "generic_iq";
+    case RX_SOURCE_LINE_IN:    return "line_in";
+    case RX_SOURCE_MIC_INT:    return "mic_int";
+    default:                   return "qmx_usb";
+    }
+}
+
+/* Decode half of the config-file round trip. An unknown string, or one naming
+ * a source this build cannot run, means the QMX - a hand-edited backup can
+ * never select a source that does not work. */
+static inline uint8_t rx_source_parse(const char *val)
+{
+    if (!val) return RX_SOURCE_QMX_USB;
+    if (strcasecmp(val, "line_in")    == 0) return RX_SOURCE_LINE_IN;
+    if (strcasecmp(val, "generic_iq") == 0) return rx_source_normalize(RX_SOURCE_GENERIC_IQ);
+    if (strcasecmp(val, "mic_int")    == 0) return rx_source_normalize(RX_SOURCE_MIC_INT);
+    return RX_SOURCE_QMX_USB;
+}
+
+/* Line-in analogue gain, in dB, as the ES7210 actually quantises it.
+ *
+ * ⛔ 0 dB IS THE DEFAULT AND IT IS DELIBERATE. The mic test build that Tony
+ * ran used the driver's own init value of 30 dB on all four channels
+ * (es7210.c's _es7210_set_channel_gain(codec, 0xF, 30.0)), and he reported
+ * "very sensitive, a lot of pickup on channel 3 even without anything
+ * connected" - which is what 30 dB on an unterminated input looks like, not a
+ * hardware fault. He fed it a headphone output through a 6:1 (-15.6 dB) lead
+ * and still hit nearly full scale. A line-level source therefore wants no
+ * analogue gain at all; an electret capsule is what the 30 dB was for.
+ *
+ * ⚠ The default is reasoned from Tony's one report, not measured here. The
+ * level meter beside the control is how the operator actually sets it.
+ *
+ * The part takes 3 dB steps from 0 to 30 (es7210.c's get_db()), so the
+ * control steps in 3 dB and anything else would be a number that silently
+ * rounds. The steps above 30 (34.5/36/37.5) are not offered: they exist for
+ * microphone capsules and would only invite clipping on a line input. */
+#define LINE_IN_GAIN_DB_MAX  30
+#define LINE_IN_GAIN_DB_STEP 3
+
+static inline uint8_t line_in_gain_db_normalize(uint8_t raw)
+{
+    if (raw > LINE_IN_GAIN_DB_MAX) return LINE_IN_GAIN_DB_MAX;
+    return (uint8_t)((raw / LINE_IN_GAIN_DB_STEP) * LINE_IN_GAIN_DB_STEP);
+}
 
 typedef struct {
     bool incl_en[2];
@@ -56,6 +205,21 @@ typedef struct {
     // from before this field existed), read as "use the 90 s default", NOT
     // as "expire instantly" - see ft8_screen.c's row_stale_sec().
     uint8_t max_age_sec;
+    /* --- Keep other CQs visible during my own CQ run - appended; old NVS
+     * blobs read back 0 (=off), which is the behaviour everyone had before.
+     *
+     * Randy N4OPI, 2026-10-02: "When calling CQ in FT8 with the WebUI, the
+     * decode list never shows other CQ callers... It would be nice to know if a
+     * station of particular interest is calling CQ during my listening time
+     * slot so I could take a break from calling CQ and make a quick contact."
+     *
+     * ⛔ It was not a setting at all before this: ft8_qso_cq_filter_active()
+     * hid every plain CQ row for the whole of a CQ run, unconditionally, so
+     * there was nothing he could have turned off - which is why he went looking
+     * through the filters and found none that explained it. The hide exists so
+     * replies addressed to us are not buried; this makes it the operator's
+     * choice rather than ours. */
+    bool    cq_show_others;  /* running CQ: keep other stations' CQ rows visible */
 } ft8_filters_t;
 
 // Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/
@@ -188,6 +352,12 @@ typedef struct {
      * shipped dark should not have been sticky across a reboot. */
     uint8_t  last_ui_mode;
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
+    /* WHO last set the DATE - a date_src_t from time_sync.h, 0 = nobody we
+     * trust. Stored beside last_unix_time because the pair is what makes the
+     * supercap RTC believable at boot: a time alone cannot say where it came
+     * from, and another firmware writing the RTC leaves our record untouched.
+     * See rtc_date_is_trustworthy() in time_sync.c (royord, #18). */
+    uint8_t  date_src;
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
@@ -237,7 +407,15 @@ typedef struct {
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
-    uint8_t  wf_speed_mult;   // waterfall scroll speed, 1..4x the normal 10 rows/s (default 1)
+    /* Waterfall scroll rate in ROWS PER SECOND, 1..40, default 10.
+     * Was wf_speed_mult, a 1..4x multiplier over a fixed 10 rows/s. The
+     * operator asked to go the OTHER way - slower, to cut the waterfall's
+     * share of the frame draw - and a multiplier cannot express that, so the
+     * unit became rows/s and the one axis now covers both ends. A second
+     * control for the same axis would have been the wrong answer; see the
+     * drawer comment that already made that call once.
+     * NVS migrates the old key automatically (settings.c, KEY_WF_SPEED). */
+    uint8_t  wf_rows_per_s;
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -257,6 +435,16 @@ typedef struct {
     // short and latched off rather than driving a mismatched load for the
     // whole 12.7 s. The QMX's finals are the thing being protected here.
     uint8_t  swr_limit_x10;
+    /* JS8 submode, as JS8Call's own NSUBMODE: 0 Normal, 1 Fast, 2 Turbo,
+     * 4 Slow. ⛔ NOT an index - the numbering is JS8Call's and it is not
+     * dense (3 and 5..7 do not exist; 8 is Ultra, which this firmware does
+     * not implement). Appended, so an old NVS blob reads back 0 = Normal,
+     * which is what every existing installation is running.
+     *
+     * Each submode is a different physical layer - NSPS, slot period, tone
+     * spacing and sync arrays all change - so this is not a quality knob and
+     * two stations must agree on it before they can hear each other at all. */
+    uint8_t  js8_submode;
     /* RX audio, persisted so a level set by ear is not lost at the next boot -
      * these were live RAM-only values tuned over /api/cmd during development,
      * which is not something a user can reach. Scaled integers, same idiom as
@@ -276,6 +464,13 @@ typedef struct {
      * manual gain control, which is what "AGC off plus a gain knob" means on
      * any other receiver. */
     bool     rxaud_agc_off;
+    /* AM demodulator half-bandwidth, in units of 100 Hz (30 = 3000 Hz, a 6 kHz
+     * wide signal). The Tab5 demodulates AM from the raw I/Q, so this is the
+     * filter the operator actually listens through - the radio's own AM
+     * bandwidth is fixed at 3.2 kHz and is not in that path. See
+     * RX_AUDIO_AM_HALF_BW_HZ in audio/rx_audio.h for the ceiling and why the
+     * default is not it. */
+    uint8_t  rxaud_am_half_bw_h100;
     /* Mute the internal speaker when headphones are detected (v1.16.4).
      * Default TRUE - it is what everyone expects. Switchable because the
      * detection is a single I2C read that DOES fail in the field, and two
@@ -307,6 +502,11 @@ typedef struct {
     // panadapter in CW/CW-R. Default ON - it is the point of the feature - but
     // it is an overlay on someone else's waterfall, so it has an off switch.
     bool     cw_decode_en;
+    /* How many rows of that overlay to draw, 2 or 4. Bryan N0LUF, 2026-10-16.
+       Four is what it has been since 2026-10-15 and stays the default; two
+       gives about 66 px of waterfall back. It is the WRAP modulus inside
+       cw_decode.c, not a draw count - see cw_decode_set_rows(). */
+    uint8_t  cw_decode_rows;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     uint8_t  freq_sep_style;    // #302: 0 = 14.074.000 (default), 1 = 14,074,000 (Don N2VGU)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
@@ -330,12 +530,27 @@ typedef struct {
     // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
     // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
     // plus the QRZ callbook lookups that place an RBN skimmer on the map.
-    // ⛔ NOT A USER SETTING ANY MORE (2026-09-13) - there is no drawer checkbox
-    // for this, on the Tab5 or the web, and it is never written to NVS. It is
-    // driven ENTIRELY by ui/spot_map_view.c's own show()/hide(): true for as
-    // long as the SELFSPOTTER overlay is open, false the instant it closes,
-    // exactly mirroring what a permanent "on" checkbox used to mean while it
-    // was checked. Reasons this exists at all, unchanged from when it was a
+    // ⛔ THIS COMMENT WAS STALE AND IT MISLED A DIAGNOSIS (2026-10-15).
+    // It said spotmap_en is "driven ENTIRELY by ui/spot_map_view.c's own
+    // show()/hide(): true for as long as the SELFSPOTTER overlay is open".
+    // That has not been true since the operator reversed it: spot_map_view.c
+    // sets it TRUE ONCE AT INIT and its own comment there says "show()/hide()
+    // no longer touch this", because PSK Reporter and RBN are live pushes with
+    // no history - a session opened when the map opens can only show what
+    // arrives afterwards, so it has to collect from boot.
+    //
+    // Never written to NVS. The writers are: spot_map_view.c's init (true),
+    // ui/resource_mgmt_modal.c's Spot map checkbox, and a config import.
+    //
+    // ⚠ RX AUDIO HOLDS IT OFF, which is what an operator actually sees.
+    // resource_mgmt_modal.c's refresh_gating() greys and disables the Spot
+    // map, RBN, DX cluster and PSK-RX rows while rx_audio_is_enabled(), and
+    // pskr_self.c:331 tears the MQTT session down on the same test. Gyula
+    // HA3HZ reported it as "checking the Audio Setting causes these settings
+    // to be cleared" - nothing is cleared, they are held off, and the modal
+    // says so in a warning line he did not connect to it.
+    //
+    // Reasons this gating exists at all, unchanged from when it was a
     // checkbox:
     //   - it holds a STANDING MQTT session to mqtt.pskreporter.info subscribed
     //     on the operator's own callsign, for the life of the session. An
@@ -344,8 +559,7 @@ typedef struct {
     //     -6.6 KB and the MALLOC_CAP_DMA pool -2.6 KB, which is roughly half
     //     the headroom that pool has left. That pool is what fails SD mounts,
     //     USB endpoint allocation and TLS when it runs dry (#65/#284) - which
-    //     is exactly why it is now tied to the SCREEN being open rather than
-    //     to a switch someone could forget they left on.
+    //     is exactly why RX audio takes it back - see refresh_gating().
     // Applies live, no reboot: each feed re-reads this every pass, the same
     // way psk_rx_en and rbn_en are read (see net/pskr_self.c).
     bool     spotmap_en;
@@ -450,6 +664,30 @@ typedef struct {
     uint16_t wspr_tx_tone_hz;
     pwr_cal_table_t pwr_cal;  // measured PA-voltage -> watts, per band (see the type's own comment)
     pwr_target_table_t pwr_target;  // operator's own target output power, per band (see the type's own comment)
+    /* ⛔ THE OPERATOR'S OWN PA-VOLTAGE CEILING, and the reason it is OURS and
+     * not the radio's "Max. PA voltage" register.
+     *
+     * That register carries two different meanings at once: a permanent
+     * statement about the radio ("these finals must never see more than
+     * 10 V") and today's output power, which Declared power, the Output power
+     * slider and WSPR all write constantly. They cannot be told apart, so
+     * v1.16.0 resolved the collision by distrusting the register entirely and
+     * always sweeping the full range - which fixed one operator's 600 mW
+     * ceiling (Rick W5NR, a WSPR leftover of 6.0 V) and in the same move threw
+     * away the only protection a fragile radio had.
+     *
+     * ⚠ THE PLATEAU DETECTOR DOES NOT COVER THIS. It stops the sweep when
+     * measured power stops RISING, so it protects a radio that CANNOT reach a
+     * voltage. A radio that can reach 12 V but must not - worn finals, a known
+     * fault, a modified PA - keeps rising all the way and nothing stops it.
+     * This project has already paid that bill once: a QMX had its finals worn
+     * down by WSPR at full power and went away to be re-finalled.
+     *
+     * So the ceiling lives here, where nothing but the operator writes it, and
+     * the radio's register goes on being whatever the power controls last set.
+     * 0 = no ceiling, sweep the full table (the default and the v1.16.0
+     * behaviour). Otherwise in units of 0.1 V, as the sweep table is. */
+    uint16_t pa_ceiling_x10;
     /* Captured windows still to be written to the SD card as WAV.
      *
      * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
@@ -570,6 +808,21 @@ typedef struct {
     uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
     bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
     uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
+    // Who owns PORT.A. Kept next to the relay triplet because it is the switch
+    // that turns those three off: mode != relay means the pin/level/ms are
+    // still stored (a future switch back must restore them) but drive nothing.
+    uint8_t  port_a_mode;       // port_a_mode_t: 0=relay (default), 1=unit_gps
+    /* Module GPS v2.1 on the M-Bus, RX on GPIO2. Independent of port_a_mode:
+     * that one arbitrates PORT.A between the relay and a Unit GPS, and this
+     * receiver is on neither of those pins. Default 0 so an upgrade changes
+     * nothing. */
+    uint8_t  gnss_mbus_en;
+    /* Where the receive samples come from - see rx_source_t. Latched at boot:
+     * changing it marks NVS dirty and nothing else, because USB host start and
+     * the I2S channel layout are both one-shot in app_main(). Default 0 =
+     * the QMX over USB, so an upgrade changes nothing. */
+    uint8_t  rx_source;
+    uint8_t  line_in_gain_db;   // ES7210 analogue gain for the jack, 0..30 in 3 dB steps (default 0)
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
     uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
@@ -626,6 +879,14 @@ void settings_set_colormap_idx(uint8_t idx);
 void settings_set_my_callsign(const char *call);
 void settings_set_my_grid(const char *grid);
 
+// The grid the GPS last wrote into my_grid. Provenance, not configuration:
+// gps_autogrid.c uses it to leave a hand-corrected grid alone (see the ⭐
+// guard 3 in main/util/gps_autogrid.h), and that has to survive a reboot.
+// Written through to NVS immediately - it changes at most once per square.
+// Only status.c should touch these.
+void settings_get_gps_grid_auto(char *out, size_t cap);
+void settings_set_gps_grid_auto(const char *grid);
+
 // FT8 CQ message presets. idx 0..2. Pass NULL/empty to clear a slot.
 // settings_set_cq_sel selects the active preset (0..2). Debounced flush.
 void settings_set_cq_msg(uint8_t idx, const char *text);
@@ -675,7 +936,7 @@ void settings_set_wf_black_db(float db);
 void settings_set_wf_contrast_db(float db);
 void settings_set_wf_floor_blend(uint8_t pct);
 void settings_set_wf_window(uint8_t idx);
-void settings_set_wf_speed_mult(uint8_t mult);
+void settings_set_wf_rows_per_s(uint8_t rows);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
@@ -692,6 +953,10 @@ int16_t settings_get_cw_tx_offset_hz(void);
  * Never load the whole struct on taskLVGL or httpd just to get these two. */
 bool    settings_get_wspr_tx_en(void);
 uint8_t settings_get_wspr_rx_cycles(void);
+/* Waterfall rows/s. Narrow because ui_sync_wf_rate_controls() is called from
+ * the httpd task on /api/settings, and a qmx_settings_t on that stack is the
+ * fault this header warns about four times over. */
+uint8_t settings_get_wf_rows_per_s(void);
 uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may
@@ -716,6 +981,10 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
  * stack of 4 KB or less asks for the fields it needs, never the whole struct.
  */
 uint32_t settings_get_last_unix_time(void);
+/* Narrow accessors for the date-provenance byte - see date_src in the struct.
+ * Narrow on purpose: time_sync runs on small stacks and must not take the
+ * ~1 KB qmx_settings_t copy. */
+uint8_t  settings_get_date_src(void);
 void     settings_get_wifi_creds(char ssid[33], char pass[65], bool *enabled_out);
 /* Band-plan region + grid without copying the whole struct. Same reason as
  * settings_get_wifi_static() above: the callers are the band-plan strip and the
@@ -733,6 +1002,13 @@ bool    settings_get_cluster_en(void);           // narrow: spots_any_source_ena
 void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
+
+/* JS8 submode as JS8Call's NSUBMODE: 0 Normal, 1 Fast, 2 Turbo, 4 Slow.
+ * Anything else is clamped to 0 - an unknown submode must not reach the
+ * physical layer, where it would pick the wrong sync arrays and transmit
+ * something nobody can decode. */
+void    settings_set_js8_submode(uint8_t v);
+uint8_t settings_get_js8_submode(void);
 
 /* RX audio level and panoramic-split shape. Stored scaled; the Resource
  * Management sliders are the only writers. Ranges are clamped to what
@@ -753,6 +1029,8 @@ uint16_t settings_get_rxaud_agc_release_ms(void);
 // AGC bypass - gain pinned at the ceiling instead of tracking. Default false.
 void    settings_set_rxaud_agc_off(bool v);
 bool    settings_get_rxaud_agc_off(void);
+void    settings_set_rxaud_am_half_bw_h100(uint8_t v);  // 10..100 (default 30 = 3000 Hz; 100 = the D=2 ceiling)
+uint8_t settings_get_rxaud_am_half_bw_h100(void);
 // Speaker auto-mute on headphone insert. Default true.
 void    settings_set_hp_mute_en(bool v);
 bool    settings_get_hp_mute_en(void);
@@ -766,6 +1044,10 @@ bool    settings_get_hp_mute_en(void);
 // four times. Reads the staged copy, so it reflects a change immediately.
 bool settings_get_cw_decode_en(void);
 void settings_set_cw_decode_en(bool v);
+/* Rows of decoded CW to draw, 2 or 4. The setter also applies it to
+   cw_decode.c, which WIPES the line - see cw_decode_set_rows(). */
+uint8_t settings_get_cw_decode_rows(void);
+void settings_set_cw_decode_rows(uint8_t rows);
 void settings_set_distance_in_miles(bool v);
 /* Narrow read - the WSPR decode list formats up to 18 rows per repaint on
  * taskLVGL, where settings_load_all()'s multi-kilobyte copy has crashed this
@@ -946,6 +1228,13 @@ bool settings_get_pwr_cal_band(const char *band, uint8_t voltage_x10[PWRCAL_STEP
 // false (watts_x100 untouched) if `band` has no target set yet.
 void settings_set_pwr_target_watts(const char *band, uint16_t watts_x100);
 bool settings_get_pwr_target_watts(const char *band, uint16_t *watts_x100);
+
+/* The operator's own PA-voltage ceiling - see pa_ceiling_x10 in the struct for
+ * why this is not the radio's Max. PA voltage register. 0 = none set, which is
+ * the default: the sweep then runs the whole table as it has since v1.16.0.
+ * Units of 0.1 V. */
+void     settings_set_pa_ceiling_x10(uint16_t v_x10);
+uint16_t settings_get_pa_ceiling_x10(void);
 // Narrow read of just the callsign - out is NUL'd first, always safe to print
 // even if settings aren't ready yet. See pskr_self.c's mqtt_event_handler(),
 // which runs on esp-mqtt's OWN internal task (not ours to resize) and used
@@ -1092,6 +1381,7 @@ void settings_set_last_ui_mode(uint8_t mode);
 // "last known date" anchor so the QMX RTC time-of-day (no date) can be
 // turned into a full timestamp when SNTP is unavailable (e.g. POTA).
 void settings_set_last_unix_time(uint32_t unix_sec);
+void settings_set_date_src(uint8_t src);
 
 // Battery care (debounced flush): when enabled, charging is cut once the
 // battery reaches charge_limit_pct and resumed with a hysteresis gap below
@@ -1117,6 +1407,39 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
 // settings_load_all() - that is a multi-kilobyte struct and this is read from
 // the web handler; see the task-stack notes in CLAUDE.md.
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
+
+// PORT.A ownership mode (port_a_mode_t). Narrow getter for gpio_relay.c's
+// refusals, main.c's boot branch and /api/status - all of them sit on stacks
+// that must not carry a qmx_settings_t. Returns PORT_A_MODE_RELAY before
+// settings_init(), so a caller running early sees the safe answer.
+//
+// The setter is the LIVE MODE SEQUENCER, and it is the
+// ONLY way the mode changes: it refuses while a relay pulse or power cycle is
+// in flight, hands the pins between the two backends, rolls back if the new
+// backend cannot start, and writes NVS only once the hardware already matches.
+// Returns false when the mode did NOT change (refusal, or a failed UART
+// start), so the UI can say so instead of showing a setting that is not real.
+// Callers must not write s_pending.port_a_mode directly.
+uint8_t settings_get_port_a_mode(void);
+
+/* M-Bus GNSS receiver (Module GPS v2.1 on GPIO2). Narrow accessors - time_sync
+ * and main run on small stacks and must not copy qmx_settings_t. */
+bool settings_get_gnss_mbus_en(void);
+void settings_set_gnss_mbus_en(bool en);
+bool    settings_set_port_a_mode(uint8_t mode);
+
+/* RX input source. Narrow accessors for the same reason as the GNSS pair:
+ * app_main() reads the source on a small stack, before anything that could
+ * afford to copy qmx_settings_t.
+ *
+ * ⛔ settings_set_rx_source() DOES NOT SWITCH ANYTHING. It records the choice
+ * and returns true if a restart is now needed to apply it - the source is
+ * latched at boot (see rx_source_t). Every caller must tell the operator;
+ * silently storing it would be a control that looks like it did something. */
+uint8_t settings_get_rx_source(void);
+bool    settings_set_rx_source(uint8_t src);
+uint8_t settings_get_line_in_gain_db(void);
+void    settings_set_line_in_gain_db(uint8_t db);
 
 /* CW profiles (#359). Narrow accessors, NOT settings_load_all() - that copies a
  * multi-hundred-byte struct and CLAUDE.md records four crash-loops from doing
