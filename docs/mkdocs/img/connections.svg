@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" width="920" height="400"
+     role="img" aria-labelledby="t d">
+  <title id="t">What plugs into what</title>
+  <desc id="d">One USB cable carries both the audio and the control: USB-A on the
+  Tab5 as host to USB-C on the radio, data lines required, 3 metres or less. Over
+  it the radio sends I/Q audio as a USB audio device and answers CAT commands as
+  a serial device. The Tab5 is powered separately from USB-C at 5 volts and at
+  least 2 amps. The antenna goes to the radio, never to the Tab5. A GPS receiver
+  is optional, on PORT.A or on the 30-pin bus.</desc>
+
+  <rect x="0" y="0" width="920" height="400" rx="6" fill="#fbfbfd"/>
+
+  <style>
+    .h    { font:600 14px system-ui,sans-serif; fill:#17203a; }
+    .s    { font:12px system-ui,sans-serif; fill:#3d4663; }
+    .ctl  { font:600 12px system-ui,sans-serif; fill:#8a2f2f; }
+    .note { font:italic 12px system-ui,sans-serif; fill:#50405e; }
+    .wire { stroke:#44506b; stroke-width:2.2; fill:none; }
+    .pwr  { stroke:#8a5520; stroke-width:2.2; fill:none; }
+    .opt  { stroke:#8a8f9e; stroke-width:1.6; fill:none; stroke-dasharray:5 4; }
+    .rf   { stroke:#2f6b45; stroke-width:2.4; fill:none; }
+  </style>
+  <defs>
+    <marker id="h1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#44506b"/>
+    </marker>
+  </defs>
+
+  <text class="h" x="40" y="38">What plugs into what</text>
+
+  <!-- Tab5 -->
+  <rect x="300" y="120" width="190" height="110" rx="6" fill="#eef2ff" stroke="#3b4a73" stroke-width="1.8"/>
+  <text class="h" x="395" y="150" text-anchor="middle">M5Stack Tab5</text>
+  <text class="s" x="395" y="169" text-anchor="middle">USB HOST</text>
+  <text class="s" x="395" y="190" text-anchor="middle">spectrum, waterfall,</text>
+  <text class="s" x="395" y="205" text-anchor="middle">decoding, web UI</text>
+
+  <!-- QMX -->
+  <rect x="650" y="120" width="190" height="110" rx="6" fill="#eefaf1" stroke="#2f6b45" stroke-width="1.8"/>
+  <text class="h" x="745" y="150" text-anchor="middle">QMX / QMX+</text>
+  <text class="s" x="745" y="169" text-anchor="middle">the receiver and the PA</text>
+  <text class="s" x="745" y="190" text-anchor="middle">set to DiGi / IQ mode</text>
+  <text class="s" x="745" y="205" text-anchor="middle">USB-C</text>
+
+  <!-- the one cable, two services -->
+  <path class="wire" d="M490,160 L650,160" marker-end="url(#h1)"/>
+  <path class="wire" d="M650,196 L490,196" marker-end="url(#h1)"/>
+  <text class="s" x="570" y="152" text-anchor="middle">CAT commands</text>
+  <text class="s" x="570" y="214" text-anchor="middle">I/Q audio, 48 000 pairs/s</text>
+  <text class="ctl" x="570" y="247" text-anchor="middle">ONE USB cable carries both</text>
+  <text class="s"  x="570" y="263" text-anchor="middle">USB-A (Tab5, host) → USB-C (radio)</text>
+  <text class="s"  x="570" y="277" text-anchor="middle">data lines required — a charge-only lead does nothing</text>
+  <text class="s"  x="570" y="291" text-anchor="middle">3 m or less</text>
+
+  <!-- power to Tab5 -->
+  <path class="pwr" d="M395,120 L395,78"/>
+  <rect x="300" y="44" width="190" height="34" rx="4" fill="#fff6ec" stroke="#8a5520" stroke-width="1.5"/>
+  <text class="s" x="395" y="66" text-anchor="middle">USB-C 5 V, 2 A minimum</text>
+
+  <!-- antenna -->
+  <path class="rf" d="M840,160 L890,160 L890,110"/>
+  <text class="ctl" x="876" y="100" text-anchor="middle">antenna</text>
+  <text class="s" x="860" y="258" text-anchor="middle">to the RADIO,</text>
+  <text class="s" x="860" y="272" text-anchor="middle">never the Tab5</text>
+
+  <!-- optional GPS -->
+  <path class="opt" d="M300,205 L170,205"/>
+  <rect x="20" y="182" width="150" height="46" rx="4" fill="#f3f3f6" stroke="#8a8f9e" stroke-width="1.3"/>
+  <text class="s" x="95" y="202" text-anchor="middle">GPS receiver</text>
+  <text class="s" x="95" y="218" text-anchor="middle">optional</text>
+  <text class="s" x="235" y="198" text-anchor="middle">PORT.A, or</text>
+  <text class="s" x="235" y="222" text-anchor="middle">the 30-pin bus</text>
+
+  <text class="note" x="40" y="330">The radio can also be powered on its own. The USB cable carries 5 V to it, which is optional and is not how most people run it.</text>
+  <text class="note" x="40" y="350">The Tab5 is the USB HOST: the cable goes host-to-device, so a USB-A to USB-C lead in that direction and not the other.</text>
+  <text class="note" x="40" y="370">Nothing RF reaches the Tab5. Everything on the air happens in the radio; the Tab5 only ever sees audio and text over USB.</text>
+</svg>

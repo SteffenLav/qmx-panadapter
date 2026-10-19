@@ -58,6 +58,15 @@ See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md
 
 ## Cables
 
+![What plugs into what: one USB cable from the Tab5 as host to the radio carrying
+both the CAT commands and the I/Q audio, separate USB-C power to the Tab5, the
+antenna on the radio, and an optional GPS receiver](../img/connections.svg)
+
+**One cable does two jobs.** The same USB lead carries the CAT commands out and the
+I/Q audio back — there is no second cable and no audio lead. The Tab5 is the **host**,
+so it is USB-A at the Tab5 end and USB-C at the radio, and a charge-only lead will
+look plugged in and do nothing.
+
 ### Tab5 <- QMX (USB Audio + CAT)
 
 - **Type**: USB-A (Tab5 host) -> USB-C (QMX)
