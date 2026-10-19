@@ -4750,6 +4750,23 @@ const SET_FIELDS = [
      device applies each one to the live DSP as well as persisting it (see
      the POST handler): a control that only persisted would look saved and
      do nothing until the next boot. */
+  /* ⛔ THE SWITCH AND THE VOLUME WERE THE TWO THAT WERE MISSING, and adding
+     them to the API (b1caf7aa) was only half the fix - the Tab5 had both, the
+     API gained both, this table never got either. So the browser could tune
+     an AGC it could not turn on. Found by auditing behaviour rather than
+     presence, 2026-10-19 (T09/T27); the same half-applied shape as the FT4
+     gate in CLAUDE.md.
+
+     "en" is ONE OF ONLY TWO SETTINGS ON THE WHOLE DEVICE THAT NEEDS A RESTART
+     (the other is bt_mouse_en, which says so). The codec is opened at boot,
+     before the USB host takes the DMA RAM, so a mid-session enable cannot
+     open it safely. Switching OFF is immediate. The note says so, because the
+     web had no way of telling anyone - the Tab5 toasts it and the API leaves
+     you to notice that a POST of true reads back false. */
+  ["RX audio", "rxaudio.en", "bool", "Receiver audio on the Tab5 speaker",
+   "Turning it ON takes effect after a restart - the audio codec is opened at boot, before the USB host claims the memory it needs. Turning it OFF is immediate. Until you restart, this reads back as off: that means stored, waiting."],
+  ["RX audio", "rxaudio.vol", "num", "Speaker volume (0-100)",
+   "Applies at once. This is the Tab5's own speaker, not the audio streamed to this browser - that one follows your computer's volume."],
   ["RX audio", "rxaudio.gain_d10", "num", "AGC ceiling (÷10)",
    "5-150. The maximum gain the AGC may reach; 20 means 200. With AGC off this is a fixed gain."],
   ["RX audio", "rxaudio.agc_off", "bool", "AGC off (fixed gain)",
