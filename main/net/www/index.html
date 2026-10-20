@@ -5484,7 +5484,17 @@ async function setSave() {
         st.textContent = msg || ("Save failed (HTTP " + r.status + ")");
       }
     } else {
-      st.textContent = "Saved";
+      /* "Saved", unless the device could not carry something out. Randy
+         N4OPI, 2026-10-19: with no QMX attached the whole save came back
+         "Save failed (HTTP 400)" because the keyer speed could not be sent.
+         The save now succeeds and names what did not happen, which is a
+         different sentence from a failure and has to read like one. */
+      let warn = "";
+      try {
+        const j = await r.json();
+        if (j && Array.isArray(j.warnings) && j.warnings.length) warn = j.warnings.join("; ");
+      } catch (e) { /* older device, or no body - "Saved" is still correct */ }
+      st.textContent = warn ? ("Saved - " + warn) : "Saved";
     }
     if (r.ok && setGroup) ft8OptsRefreshBadge();
   } catch (e) { st.textContent = "Save failed (" + e.message + ")"; }
@@ -5695,7 +5705,14 @@ function wsprCols() {
        a cycle differently, and a letter here names the same trace it names
        there. Blank once the cycle scrolls off the carpet. */
     ["s", "S"],
-    ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
+    ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"],
+    /* BAND. Kevin KQ4DTX: the Tab5 shows it and this page did not. It matters
+       most with band hopping on, where every spot sits inside the same 200 Hz
+       window and the frequency column cannot tell them apart - the same
+       reason Roy KI0ER asked for it on the glass. Blank for a spot recorded
+       before the dial was kept. */
+    ["band", "BAND"],
+    ["snr", "SNR"],
     ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"],
     ["km", wsprMiles ? "MILES" : "KM"], ["brg", "BRG"],
     /* DT - how far into the cycle the transmission started. Nominal +1.0 s, so
@@ -5716,6 +5733,10 @@ function wsprFmt(k, r) {
      answer - it prints blank rather than the em dash used for a measurement
      that was never taken. */
   if (k === "s") return v ? v : "";
+  /* Same rule for BAND: blank means "this spot has no dial recorded", which
+     is an answer, not a missing measurement. A device older than the field
+     sends nothing at all and lands here too, which is the right look. */
+  if (k === "band") return v ? v : "";
   if (v === null || v === undefined) return "—";
   if (k === "snr")   return (v > 0 ? "+" : "") + v;
   if (k === "drift") return (v > 0 ? "+" : "") + v;

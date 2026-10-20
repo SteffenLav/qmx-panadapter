@@ -5974,14 +5974,58 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     const char *s;
     cJSON *it;
 
-    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
-    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
+    /* ⛔ WHAT COULD NOT BE DONE IS A WARNING, NOT A FAILED SAVE.
+     *
+     * Randy N4OPI, 2026-10-19: "I am now unable to save settings in the
+     * Settings page on the WebUI unless there is a QMX connected... Instead of
+     * 'Saving..Saved' it reports 'Save Failed (HTTP 400)'." His log names the
+     * field four times:
+     *
+     *     W (132998) httpd_txrx: httpd_resp_send_err: 400 Bad Request -
+     *                            keyer speed: no CAT link to the radio
+     *
+     * The page posts EVERY field it has rendered on every Save, touched or
+     * not, so an unreachable radio made the keyer-speed pass-through fail a
+     * save of the callsign. And the line after each 400 in his log is
+     * `settings: flushed` - so part of the save had already landed while the
+     * page said it had failed, which is the worse half of the defect.
+     *
+     * The rule this now follows: a 400 means NOTHING was stored, so every
+     * refusal that is a property of the PAYLOAD is checked here, before a
+     * single setting is applied. Anything the device simply cannot deliver
+     * right now - the radio is not plugged in - is applied as far as it goes
+     * and reported in `warnings`, with the save succeeding. */
+    char warn[3][112];
+    int  n_warn = 0;
+    #define SET_WARN(...) do { \
+        if (n_warn < (int)(sizeof(warn) / sizeof(warn[0]))) \
+            snprintf(warn[n_warn++], sizeof(warn[0]), __VA_ARGS__); \
+    } while (0)
+
+    /* Payload validation, before anything is applied. An unknown rx_source is
+     * a malformed request and nothing about the rest of the body should be
+     * stored because of it. This check USED to sit at the apply site further
+     * down, where it rejected after the callsign had already been written. */
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rx_source")))) {
+        if (strcasecmp(s, rx_source_str(rx_source_parse(s))) != 0) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "rx_source: unknown or not implemented in this build "
+                "(qmx_usb and line_in are the working sources)");
+            return ESP_FAIL;
+        }
+    }
 
     /* PORT.A mode. This is the sequencer, not a plain store: it hands the pins
      * between the relay and the Unit GPS UART, and it can REFUSE (a pulse in
      * flight, or the UART failing to start). A refusal is a 400 carrying the
      * reason, because the page has already drawn what the operator asked for
-     * and only a real answer tells it to go back. */
+     * and only a real answer tells it to go back.
+     *
+     * ⚠ FIRST, ahead of the callsign and grid it used to follow. It is the one
+     * remaining refusal that can only be discovered by attempting it, so it has
+     * to be attempted before anything else is written - otherwise its 400 still
+     * means "some of your save landed". */
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "port_a_mode")))) {
         if (!settings_set_port_a_mode(port_a_mode_parse(s))) {
             cJSON_Delete(root);
@@ -5990,6 +6034,9 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
     }
+
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
 
     /* RX input source. Unlike port_a_mode this switches NOTHING live: the
      * source is latched at boot (rx_source_t), so the store always succeeds
@@ -6012,25 +6059,25 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             int wpm = it->valueint;
             if (wpm < 0)   wpm = 0;
             if (wpm > 999) wpm = 999;   /* the 3-digit CAT field, nothing more */
-            if (!cat_is_ready()) {
-                cJSON_Delete(root);
-                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                    "keyer speed: no CAT link to the radio");
-                return ESP_FAIL;
-            }
-            cat_request_keyer_wpm((uint16_t)wpm);
+            /* ⛔ A WARNING, NOT A 400 - Randy N4OPI's report. The radio not
+             * being plugged in says nothing about the rest of the save, and
+             * this field is not even stored here: the QMX owns it, so there
+             * is nothing to keep for later and nothing else depends on it.
+             * Failing the request made every other setting on the page
+             * unsavable without a radio. */
+            if (!cat_is_ready())
+                SET_WARN("CW keyer speed was not sent - no CAT link to the radio");
+            else
+                cat_request_keyer_wpm((uint16_t)wpm);
         }
     }
 
+    /* The unknown-value refusal for this field is NOT here any more - it is in
+     * the validation pre-pass at the top, where a 400 still means nothing was
+     * stored. Deleted rather than left behind: a duplicate that only
+     * misbehaves in a third case outlives everyone's memory of why. */
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rx_source")))) {
         uint8_t want = rx_source_parse(s);
-        if (strcasecmp(s, rx_source_str(want)) != 0) {
-            cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                "rx_source: unknown or not implemented in this build "
-                "(qmx_usb and line_in are the working sources)");
-            return ESP_FAIL;
-        }
         if (settings_set_rx_source(want))
             ESP_LOGW(TAG, "rx_source -> %s over HTTP (restart required)",
                      rx_source_str(want));
@@ -6884,8 +6931,28 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     cJSON_Delete(root);
     settings_flush();
 
+    /* The save succeeded. `warnings` names anything the device could not
+     * carry out - today only the keyer speed with no radio attached - so the
+     * page can say what did not happen without calling the whole save a
+     * failure, which is what Randy N4OPI was shown. Absent when empty, so a
+     * client that does not know the field sees exactly what it saw before. */
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+    if (n_warn == 0)
+        return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+
+    cJSON *resp = cJSON_CreateObject();
+    if (!resp) return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+    cJSON_AddBoolToObject(resp, "ok", true);
+    cJSON *arr = cJSON_AddArrayToObject(resp, "warnings");
+    for (int i = 0; arr && i < n_warn; i++)
+        cJSON_AddItemToArray(arr, cJSON_CreateString(warn[i]));
+    char *out = cJSON_PrintUnformatted(resp);
+    cJSON_Delete(resp);
+    if (!out) return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+    esp_err_t rc = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    free(out);
+    return rc;
+    #undef SET_WARN
 }
 
 // GET /api/decodes - the FT8/FT4 decode list, as the Tab5 shows it.
@@ -7150,6 +7217,21 @@ static esp_err_t wspr_handler(httpd_req_t *req)
         {
             const char *full = country_display(snap[i].call, 64);
             cJSON_AddStringToObject(o, "country", full ? full : "");
+        }
+        /* WHICH BAND THE SPOT CAME FROM. Kevin KQ4DTX, 2026-10-19: "add a
+         * column for band heard on in the WSPR section for the web browser.
+         * It shows this on the Tab5 but doesn't show it when looking at it
+         * over the web browser."
+         *
+         * Derived HERE from the stored dial with wspr_band_name_for_dial(),
+         * the same call the Tab5 column makes, so the two screens cannot name
+         * a band differently. The struct deliberately keeps the DIAL and not
+         * a label (wspr_spots.h says why), and a spot recorded before the
+         * dial was kept has none - that sends "" rather than a guess, which
+         * is the same honesty the Tab5 shows. */
+        {
+            const char *bn = wspr_band_name_for_dial(snap[i].dial_hz);
+            cJSON_AddStringToObject(o, "band", bn ? bn : "");
         }
         cJSON_AddNumberToObject(o, "utc",   (double)snap[i].cycle_utc);
         cJSON_AddNumberToObject(o, "hz",    snap[i].freq_hz);
