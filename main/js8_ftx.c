@@ -278,7 +278,7 @@ bool js8_ftx_active(int *sent, int *total)
  * alone rather than printing an empty one. */
 bool js8_ftx_frame_text(char *out, size_t out_len)
 {
-    if (out && out_len) out[0] = ' ';
+    if (out && out_len) out[0] = '\0';
     if (!s_run.active || !out || out_len == 0) return false;
     const int idx = s_run.sent;
     if (idx < 0 || idx >= s_run.total) return false;
@@ -293,6 +293,6 @@ bool js8_ftx_frame_text(char *out, size_t out_len)
     if (take == 0 || from + take > len) take = len - from;
     if (take >= out_len) take = out_len - 1;
     memcpy(out, s_run.text + from, take);
-    out[take] = ' ';
+    out[take] = '\0';
     return true;
 }

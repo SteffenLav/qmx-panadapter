@@ -1810,7 +1810,7 @@ static void t_clock_cb(lv_timer_t *t)
         } else {
             snprintf(s_web_ftx_result, sizeof(s_web_ftx_result), "sending");
         }
-        s_web_ftx_text[0] = ' ';
+        s_web_ftx_text[0] = '\0';
     }
 
     /* The MODE label, repainted on the LVGL task - see
@@ -2811,7 +2811,7 @@ void ft8_screen_view_request_freetext(const char *text)
 {
     if (!text) return;
     snprintf(s_web_ftx_text, sizeof(s_web_ftx_text), "%s", text);
-    s_web_ftx_result[0] = ' ';
+    s_web_ftx_result[0] = '\0';
     s_web_ftx_pending = true;
 }
 
@@ -3955,8 +3955,8 @@ static void js8_tx_bar_sync(void)
     else         snprintf(b, sizeof(b), "tap a call");
     if (strcmp(lv_label_get_text(s_js8_chip_lbl), b) != 0)
         lv_label_set_text(s_js8_chip_lbl, b);
-    js8_macro_btn_enable(s_btn_js8_snr,  call[0] != ' ');
-    js8_macro_btn_enable(s_btn_js8_grid, call[0] != ' ');
+    js8_macro_btn_enable(s_btn_js8_snr,  call[0] != '\0');
+    js8_macro_btn_enable(s_btn_js8_grid, call[0] != '\0');
 }
 
 /* Arm ONE message, the way the TX modal's Transmit button does - never

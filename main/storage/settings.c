@@ -3987,11 +3987,11 @@ void settings_set_lotw_uploaded_n(uint32_t n)
 void settings_get_gps_grid_auto(char *out, size_t cap)
 {
     if (!out || cap == 0) return;
-    out[0] = ' ';
+    out[0] = '\0';
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     size_t sz = cap;
-    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = ' ';
+    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = '\0';
     xSemaphoreGive(s_mutex);
 }
 
