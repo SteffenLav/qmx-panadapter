@@ -406,7 +406,22 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 **Files ▲**:
 
-- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: the `qrz_key`, `eqsl_user` and `eqsl_pass` lines are in there in plain text, and an edited file uploaded back takes effect on the next upload with no restart. Note it holds your WiFi password in plain text too, so treat the file accordingly
+- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: an edited file uploaded back takes effect on the next upload with no restart.
+
+    !!! danger "This file contains secrets in clear text"
+        It holds your **WiFi password**, your **QRZ API key**, your **eQSL
+        password** and your **LoTW certificate and private key** - all
+        readable, none of them obscured. Anyone who has the LoTW key can sign
+        contacts as you.
+
+        Treat it exactly like a password list. In particular, **do not attach
+        it to a forum post, a GitHub issue or an email when asking for
+        help** - that has already happened once. If you need to share
+        settings for diagnosis, delete the `wifi_pass`, `qrz_key`,
+        `eqsl_pass`, `lotw_cert` and `lotw_key` lines first; everything else
+        in the file is harmless.
+
+        The browser asks you to confirm before the download for this reason.
 - **Config upload ↑** — restore settings from a backup file
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 

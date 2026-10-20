@@ -1447,7 +1447,7 @@
     <div class="bot-menu-wrap">
       <button type="button" class="bot-btn" id="files-group-btn">Files &#9650;</button>
       <div class="bot-menu" id="files-menu">
-        <a href="/api/config" download="qmx-config.txt" title="Download all settings + memory channels as an editable text file">Config download &#8595;</a>
+        <a href="/api/config" id="cfg-dl-link" download="qmx-config.txt" title="Download all settings + memory channels as an editable text file.&#10;&#10;!CONTAINS SECRETS IN CLEAR TEXT! - your WiFi password, QRZ key, eQSL password and your LoTW PRIVATE KEY. Treat the file like a password list.">Config download &#8595;</a>
         <a href="#" id="cfg-up-link" title="Upload an edited config file (merges; restart to apply)">Config upload &#8593;</a>
         <a href="#" id="diag-both-link" title="Download BOTH diagnostic logs: live (RAM, full session) + saved (flash/SD copy that survives power-off, e.g. POTA)">Diagnostic download &#8595;</a>
         <a href="/files" target="_blank" title="Browse the microSD card in your browser: download, upload and delete files. Works on any OS, no setup.">SD Files &#128193;</a>
@@ -2832,6 +2832,38 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     btn.textContent = "Import";
   }
 });
+
+/* ⛔ SAY WHAT IS IN THE FILE, AT THE MOMENT IT IS DOWNLOADED.
+
+   Serhiy AA1SL, 2026-10-21, pasted his whole config into a public GitHub
+   issue while asking for help - with his WiFi password, eQSL password, QRZ
+   key and his LoTW PRIVATE KEY in it. Anyone holding that key can sign
+   contacts as him.
+
+   The file has always carried a NOTE at the top saying so, and that is the
+   wrong place: you read it AFTER you have the file, and not at all if you
+   attach it to a message without opening it. The warning has to be where the
+   decision is, which is this click.
+
+   A confirm, not a toast: this is the page's stated rule for anything
+   irreversible, and disclosure is irreversible in the way deleting a QSO is.
+   You cannot un-send a private key. */
+{
+  const dl = document.getElementById("cfg-dl-link");
+  if (dl) dl.addEventListener("click", (e) => {
+    if (!confirm(
+        "This file contains SECRETS IN CLEAR TEXT:\n\n" +
+        "  \u2022 your WiFi password\n" +
+        "  \u2022 your QRZ API key\n" +
+        "  \u2022 your eQSL password\n" +
+        "  \u2022 your LoTW certificate AND PRIVATE KEY\n\n" +
+        "Anyone who has the LoTW key can sign contacts as you.\n\n" +
+        "Keep it like a password list - do not post it in a forum, an issue " +
+        "or an email when asking for help.\n\nDownload it?")) {
+      e.preventDefault();
+    }
+  });
+}
 
 /* Config restore: pick an edited qmx-config.txt and POST it to /api/config.
    Merge semantics on the device (only keys/sections in the file change). */
