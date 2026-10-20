@@ -3190,6 +3190,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * reach, which is a trap rather than a setting. */
         cJSON *on = cJSON_GetObjectItem(root, "on");
         bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        /* ⛔ SAY SO. This route wrote NVS and logged nothing, and on
+         * 2026-10-20 that cost an evening: WSPR had vanished from the swipe
+         * cycle, and the only trace of why was a dirty bit inside one of
+         * 83,870 `settings: flushed` lines in a 685 MB capture. Finding it
+         * meant knowing that DIRTY_WSPR_EN is bit 105 and decoding the
+         * bitmap by hand.
+         *
+         * It matters beyond this bench. The switch is reachable only over the
+         * API, so when a user reports "I cannot get to the WSPR page" their
+         * diagnostic log is the evidence - and it said nothing either. The
+         * hidden tap-unlock in ota_modal.c has always logged; this, the route
+         * people actually use, did not.
+         *
+         * WARN, not INFO: it removes a whole page from the swipe cycle. */
+        ESP_LOGW(TAG, "WSPR master switch -> %s (over /api/cmd)",
+                 want ? "ENABLED" : "DISABLED - the page leaves the swipe cycle");
         settings_set_wspr_en(want);
         if (!want && ui_mode_get() == UI_MODE_WSPR) {
             wspr_rx_stop();
