@@ -17,6 +17,7 @@ node: QMX time-of-day - offline fallback ONLY
 branch: undisciplined, the QMX's own clock drifts freely; trusting it above SNTP would break FT8 timing whenever it had wandered
 node: manual entry - last resort, no network and no GPS
 note: amber | the BOOT order is not the authority order. The Tab5 RTC is applied first of all, before SNTP or the QMX can answer, which makes it first in TIME and not highest in authority - anything above it replaces it as soon as it arrives
+note: steel | an FT8-derived nudge sits below all of these and is not really a source: it is blocked outright whenever SNTP or a live GPS exists, so it only ever disciplines a unit that has no absolute reference at all
 note: dim | WSPR and FT8 both search only a narrow slice of time either side of the slot boundary, so a clock out by a couple of seconds hears nothing and is heard by nobody
 ```
 
@@ -29,8 +30,9 @@ arrives.
 2. **GPS-disciplined QMX** (auto-detected) — phase-locked to the GPS second, ~10 ms, works offline; on radio firmware 1.04_004 and later it brings the **date** as well
 3. **WiFi + SNTP** (if available) — ~10 ms, re-syncs every ~1 hour
 4. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
-5. **FT8/FT4-derived** — offline fallback only (ignored while GPS/SNTP is up)
-6. **Manual set** — enter time manually via the settings drawer
+5. **The QMX's own clock** (`TM;` over CAT) — offline fallback only, used when SNTP has gone stale. This is a *plain* QMX, with no GPS discipline: its clock drifts freely, which is exactly why it sits below the RTC rather than above SNTP
+6. **FT8/FT4-derived** — a *nudge*, not a source. It is blocked outright whenever a real absolute reference exists (SNTP, a live Unit GPS, or a GPS-disciplined QMX), so it only ever disciplines a unit that has none
+7. **Manual set** — enter time manually via the settings drawer
 
 GPS and SNTP are the accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual). The Unit GPS outranks the others while it has a fresh lock — see [Unit GPS Time Source](#unit-gps-time-source-porta).
 
