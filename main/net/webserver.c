@@ -502,6 +502,27 @@ static void add_ft8_tx_status(cJSON *root)
     }
     cJSON_AddStringToObject(f, "st",   st);
     cJSON_AddStringToObject(f, "text", b);
+    /* The finished contact that has not been acknowledged yet (Don WB0LQW).
+     * A FIELD, not a new `st` value: the contact genuinely is done and logged,
+     * and re-labelling the state would have changed what every other reader of
+     * `st` believes - the TX pill, the slot-row highlight and the override row
+     * all switch on it. This only says "there is still something to re-send",
+     * which is exactly what the override row needs to stay up for. */
+    {
+        char fw_call[FT8_CALL_MAX_LEN] = {0};
+        int  fw_sent = 0, fw_max = 0;
+        if (ft8_qso_final_watch(fw_call, sizeof(fw_call), &fw_sent, &fw_max)) {
+            cJSON *fw = cJSON_AddObjectToObject(f, "final_watch");
+            if (fw) {
+                char fw_extra[16] = {0};
+                ft8_qso_final_extra(fw_extra, sizeof(fw_extra));
+                cJSON_AddStringToObject(fw, "call",  fw_call);
+                cJSON_AddStringToObject(fw, "extra", fw_extra);
+                cJSON_AddNumberToObject(fw, "sent",  fw_sent);
+                cJSON_AddNumberToObject(fw, "max",   fw_max);
+            }
+        }
+    }
     if (tx_st == FT8_TX_ARMED) cJSON_AddNumberToObject(f, "armed_secs", secs_until);
 
     // Power and SWR from the last burst (Randy N4OPI, top of his list for

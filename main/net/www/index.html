@@ -7879,7 +7879,29 @@ async function tick() {
         const ov = document.getElementById("ft8-override");
         if (ov) {
           const live = ["active","armed","wait"].indexOf(s.ft8.st) >= 0;
-          ov.style.visibility = live ? "visible" : "hidden";
+          /* AND while the final is still unacknowledged (Don WB0LQW): his
+             RR73 was missed, the partner kept repeating the report, and the
+             row had already gone - so the one thing worth doing had no
+             button. The device keeps watching for 5 minutes and re-sends by
+             itself; this is how the operator sees that and can push it. */
+          const fw = s.ft8.final_watch || null;
+          ov.style.visibility = (live || fw) ? "visible" : "hidden";
+          /* Only Re-send and Cancel mean anything once the exchange is
+             closed: RR73 and 73 build from the current exchange, which no
+             longer exists, and would answer "No active QSO exchange". */
+          const lbl = ov.querySelector(".ovr-label");
+          if (lbl) lbl.textContent = (!live && fw)
+            ? (fw.call + " has not acknowledged:") : "Mid-QSO:";
+          [["ovr-rr73", live], ["ovr-73", live], ["ovr-pause", live]]
+            .forEach(([id, on]) => {
+              const b = document.getElementById(id);
+              if (b) b.style.display = on ? "" : "none";
+            });
+          const rs = document.getElementById("ovr-resend");
+          if (rs) {
+            const want = (!live && fw && fw.extra) ? ("Re-send " + fw.extra) : "Re-send";
+            if (rs.textContent !== want) rs.textContent = want;
+          }
         }
       }
       /* Power / SWR from the last burst (Randy N4OPI). The age matters as much as

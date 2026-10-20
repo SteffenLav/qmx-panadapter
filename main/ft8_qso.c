@@ -2619,6 +2619,123 @@ static void final_track_add(const char *call, int freq_hz, ft8_tx_kind_t kind,
     f->done_ts = time(NULL);
 }
 
+/* ---- THE CONTACT IS SENT BUT NOT YET ACKNOWLEDGED -------------------------
+ *
+ * Don WB0LQW, 2026-10-16: his RR73 was missed, the partner repeated the
+ * report, and "instead of resending my RR73 the program ends the contact and
+ * logs it". The logging is right (Bruce N9JCV's fix - the final leaves the air
+ * and the QSO is closed), and the machine does keep watching: final_track_add
+ * arms a 300 s watch and re-sends up to FINAL_RESEND_MAX times by itself.
+ *
+ * What was missing is that the OPERATOR could not see or touch any of it. The
+ * moment the final is armed, s_state leaves the WAIT_* set, and both surfaces
+ * hide their Re-send / RR73 / 73 row on exactly that test - so the window in
+ * which the contact can still be saved is the window with no controls in it.
+ *
+ * These three calls are what both surfaces need to keep the row up until the
+ * contact is acknowledged or the operator says it is over. They are the ONLY
+ * readers of s_final[] outside the decode task.
+ *
+ * ⚠ NO LOCK, and deliberately, for the reason js8_chat.h records at length:
+ * s_final[] is written by the decode task WITHOUT the QSO lock (see
+ * final_track_add / final_track_still_asking - neither takes it), so a lock
+ * here would protect nothing and only suggest it did. A torn read costs one
+ * repaint of one callsign on a row the operator is looking at anyway. */
+bool ft8_qso_final_watch(char *call, size_t len, int *resends, int *max)
+{
+    int64_t now_s = (int64_t)time(NULL);
+    int     best  = -1;
+    int64_t newest = 0;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (!s_final[i].call[0]) continue;
+        /* Read-only: the window check here must NOT clear the slot the way
+         * final_track_still_asking() does. That function runs in the decode
+         * task and owns the array; a display poll that reaped entries would
+         * close the watch at whatever rate a browser happened to poll. */
+        if ((now_s - s_final[i].done_ts) > FINAL_RESEND_WINDOW_SEC) continue;
+        if (best < 0 || s_final[i].done_ts > newest) { best = i; newest = s_final[i].done_ts; }
+    }
+    if (best < 0) return false;
+    if (call && len) {
+        strncpy(call, s_final[best].call, len - 1);
+        call[len - 1] = '\0';
+    }
+    if (resends) *resends = s_final[best].resends;
+    if (max)     *max     = FINAL_RESEND_MAX;
+    return true;
+}
+
+void ft8_qso_final_extra(char *buf, size_t len)
+{
+    if (!buf || !len) return;
+    buf[0] = '\0';
+    char call[FT8_CALL_MAX_LEN];
+    if (!ft8_qso_final_watch(call, sizeof(call), NULL, NULL)) return;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (s_final[i].call[0] && strcmp(s_final[i].call, call) == 0) {
+            strncpy(buf, s_final[i].extra, len - 1);
+            buf[len - 1] = '\0';
+            return;
+        }
+    }
+}
+
+void ft8_qso_final_watch_clear(void)
+{
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (!s_final[i].call[0]) continue;
+        ESP_LOGI(TAG, "final watch on %s dropped by the operator", s_final[i].call);
+        s_final[i].call[0] = '\0';
+    }
+    s_final_hold = false;
+    s_final_hold_call[0] = '\0';
+}
+
+bool ft8_qso_final_resend_now(char *err, size_t err_len)
+{
+    char call[FT8_CALL_MAX_LEN];
+    if (!ft8_qso_final_watch(call, sizeof(call), NULL, NULL)) {
+        if (err) snprintf(err, err_len, "Nothing waiting to be acknowledged");
+        return false;
+    }
+    int idx = -1;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++)
+        if (s_final[i].call[0] && strcmp(s_final[i].call, call) == 0) { idx = i; break; }
+    if (idx < 0) {
+        if (err) snprintf(err, err_len, "Nothing waiting to be acknowledged");
+        return false;
+    }
+    final_track_t *f = &s_final[idx];
+
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
+        if (err) snprintf(err, err_len, "Transmitting - try again next slot");
+        return false;
+    }
+
+    ft8_tx_request_t req;
+    char build_err[64];
+    if (!ft8_tx_build_request(f->kind, f->call, f->freq_hz,
+                              (int64_t)time(NULL), f->extra,
+                              &req, build_err, sizeof(build_err))) {
+        if (err) snprintf(err, err_len, "%s", build_err);
+        return false;
+    }
+    char arm_err[64];
+    if (!ft8_tx_arm(&req, arm_err, sizeof(arm_err))) {
+        if (err) snprintf(err, err_len, "%s", arm_err);
+        return false;
+    }
+    /* ⛔ DOES NOT SPEND f->resends. That budget is the MACHINE's - six tries
+     * inside five minutes before it gives up and goes back to calling CQ. A
+     * press of this button is a human deciding to send again, and charging it
+     * to the automatic budget would let the operator exhaust the very fallback
+     * that is meant to keep running after they stop pressing. */
+    ft8_status_set("QSO %s: re-sending %s by hand", f->call, f->extra);
+    ESP_LOGI(TAG, "operator re-sent the final %s to %s (machine has used %d/%d)",
+             f->extra, f->call, f->resends, FINAL_RESEND_MAX);
+    return true;
+}
+
 bool ft8_qso_msg_is_for_us(const char *text)
 {
     if (!text || !text[0]) return false;

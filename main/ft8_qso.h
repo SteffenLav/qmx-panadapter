@@ -258,6 +258,35 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
 // message that does not mean what ours did. See s_final_sent_kind in ft8_qso.c.
 void ft8_qso_notify_manual_final(const char *target_call, const char *final_extra);
 
+/* ---- The contact whose final has gone out but has not been acknowledged ---
+ *
+ * Don WB0LQW: his RR73 was missed and the controls vanished the instant it was
+ * sent, because both surfaces show them only while s_state is one of the WAIT_*
+ * values. The machine keeps watching for 300 s (FINAL_RESEND_WINDOW_SEC) and
+ * re-sends on its own; these let the operator see that and act inside it.
+ *
+ * ft8_qso_final_watch() is true while any just-completed contact is still
+ * inside its window, and names the most recent one. `resends`/`max` are what
+ * the MACHINE has spent of its own budget, for a readout - both may be NULL.
+ * Read-only: it never reaps an expired entry, because a display poll must not
+ * decide when the watch ends.
+ *
+ * ft8_qso_final_resend_now() sends that final again because the operator
+ * asked. It does not spend the machine's budget - see the comment at the
+ * definition.
+ *
+ * ft8_qso_final_watch_clear() is the operator saying the contact is over:
+ * every watch is dropped and the row comes down. Both surfaces call it from
+ * their Cancel. */
+bool ft8_qso_final_watch(char *call, size_t len, int *resends, int *max);
+/* The watched final's third field - "RR73" or "73". "" when nothing is
+ * watched. It is what a re-send would actually put on the air, so a button
+ * that offers one must label itself from this and not from the kind it
+ * assumes. */
+void ft8_qso_final_extra(char *buf, size_t len);
+bool ft8_qso_final_resend_now(char *err, size_t err_len);
+void ft8_qso_final_watch_clear(void);
+
 // Note the station the operator is working MANUALLY (called on every manual
 // Transmit arm). Keeps the partner out of the pileup capture and lets the
 // decode list show the amber "working" highlight during a hand-run exchange.

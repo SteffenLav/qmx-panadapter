@@ -1928,6 +1928,12 @@ static void t_clock_cb(lv_timer_t *t)
             ft8_tx_disarm();
             ft8_qso_abort();
             ft8_tx_request_abort();
+            // Cancel is also the "or he aborts" half of Don WB0LQW's request:
+            // it ends the unacknowledged-final watch as well as the exchange,
+            // so the row comes down and the machine stops re-sending. Without
+            // this, Cancel would clear the QSO and the row would stay up on
+            // the watch that Cancel is supposed to have ended.
+            ft8_qso_final_watch_clear();
             // No confirmation text - operator, 2026-09-05: "do not show
             // anything - just go back to the initial view". Every other
             // override outcome is worth reading (Armed/Busy/refused); Cancel
@@ -1935,6 +1941,27 @@ static void t_clock_cb(lv_timer_t *t)
             // with nothing left to look at afterward.
             web_result_clear();
             ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
+        } else if (what == 1 &&
+                   ft8_qso_get_state() != FT8_QSO_WAIT_RPT &&
+                   ft8_qso_get_state() != FT8_QSO_WAIT_ROGER &&
+                   ft8_qso_get_state() != FT8_QSO_WAIT_RR73 &&
+                   ft8_qso_final_watch(NULL, 0, NULL, NULL)) {
+            /* Re-send, with the exchange already closed, means the FINAL -
+             * Don WB0LQW. ft8_qso_override_next() refuses outside the WAIT_*
+             * states by design (it works on s_cur_req, which the final's own
+             * arming has already cleared), so the two are different sends and
+             * the button has to pick between them rather than retry one.
+             *
+             * ⚠ The state test, not the refusal: falling through on a failed
+             * override would also re-send the final after "No current
+             * message", which is a different fault with a different cause. */
+            if (ft8_qso_final_resend_now(err, sizeof(err))) {
+                web_result_set("Re-sending the final");
+                ESP_LOGI(TAG, "web override: final re-sent by hand");
+            } else {
+                web_result_set("%s", err[0] ? err : "Could not re-send");
+                ESP_LOGW(TAG, "web final re-send refused: %s", err);
+            }
         } else {
             ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
                             : (what == 3) ? FT8_TX_KIND_73
@@ -2391,6 +2418,20 @@ static void t_clock_cb(lv_timer_t *t)
             bool show = (qso_st == FT8_QSO_WAIT_RPT ||
                          qso_st == FT8_QSO_WAIT_ROGER ||
                          qso_st == FT8_QSO_WAIT_RR73);
+            /* ⭐ AND WHILE THE FINAL IS STILL UNACKNOWLEDGED - Don WB0LQW's
+             * request, applied on the Tab5 as well as in the browser. Both
+             * surfaces hid this row on the same three-state test, so his
+             * report was one defect in two places
+             * ([[feedback_sweep_the_class_not_what_i_noticed]]); fixing only
+             * the browser would have brought it back from the glass.
+             *
+             * ⚠ ONLY "Again" during the watch. RR73 and 73 go through
+             * ft8_qso_override_next(), which refuses outside the WAIT_*
+             * states - two buttons that look live and answer "No active QSO
+             * exchange" are worse than two that are not there. */
+            char     fw_call[FT8_CALL_MAX_LEN] = {0};
+            bool     final_watch = !show &&
+                                   ft8_qso_final_watch(fw_call, sizeof(fw_call), NULL, NULL);
             if (show) {
                 // Update "Re-send" label to show what will actually be re-sent
                 // e.g. "Re-send\nJO45" in WAIT_RPT, "Re-send\n-07" in WAIT_ROGER
@@ -2407,6 +2448,22 @@ static void t_clock_cb(lv_timer_t *t)
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+            } else if (final_watch) {
+                /* The contact is sent and logged; what is left is getting it
+                 * acknowledged. The label says WHAT would go out again, the
+                 * same way it does mid-exchange - the tracked final's own
+                 * third field, so "Again RR73" and "Again 73" cannot be
+                 * confused for each other. */
+                if (s_lbl_resend) {
+                    char extra[16] = {0};
+                    ft8_qso_final_extra(extra, sizeof(extra));
+                    if (extra[0]) lv_label_set_text_fmt(s_lbl_resend, "Again\n%s", extra);
+                    else          lv_label_set_text(s_lbl_resend, "Again");
+                    lv_obj_center(s_lbl_resend);
+                }
+                lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_btn_override_rr73, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_btn_override_73,   LV_OBJ_FLAG_HIDDEN);
             } else {
                 // Reset to the bare label so a stale report from the previous
                 // exchange is not shown on the next open. Deliberately does NOT
@@ -2633,6 +2690,19 @@ static void override_resend_cb(lv_event_t *e)
 {
     (void)e;
     char err[64];
+    /* Outside an exchange this button is only visible while a final is
+     * unacknowledged (see the visibility block), and there it re-sends THAT
+     * - Don WB0LQW. Same split as the browser's Re-send, decided on the state
+     * rather than on an override refusal. */
+    ft8_qso_state_t st = ft8_qso_get_state();
+    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER &&
+        st != FT8_QSO_WAIT_RR73 && ft8_qso_final_watch(NULL, 0, NULL, NULL)) {
+        if (!ft8_qso_final_resend_now(err, sizeof(err))) {
+            ft8_status_set("%s", err);
+            ESP_LOGW(TAG, "final re-send failed: %s", err);
+        }
+        return;
+    }
     if (!ft8_qso_override_next(FT8_TX_KIND_REPLY, err, sizeof(err)))
         ESP_LOGW(TAG, "Re-send override failed: %s", err);
 }
@@ -2893,6 +2963,15 @@ static void tx_indicator_tap_cb(lv_event_t *e)
         // window would throw the log entry away.
         ESP_LOGI(TAG, "QSO indicator tapped while TX idle — aborting session");
         ft8_qso_abort();
+    } else if (ft8_qso_final_watch(NULL, 0, NULL, NULL)) {
+        /* Nothing is armed and no session is alive, but a finished contact is
+         * still waiting to be acknowledged and this row is up because of it
+         * (Don WB0LQW). A tap here is "that one is over" - it is the Tab5's
+         * half of the browser Cancel, and it stops the machine's own re-sends
+         * as well as taking the row down. The QSO is already logged; nothing
+         * is thrown away. */
+        ESP_LOGI(TAG, "TX indicator tapped while waiting for an acknowledgement — dropping the watch");
+        ft8_qso_final_watch_clear();
     }
 }
 
