@@ -7384,7 +7384,13 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     for (int i = 0; i < n; i++) {
         const ft8_call_t *r = &snap[i];
         bool is_partner = working[0] && strcasecmp(r->call, working) == 0;
-        if (!is_partner) {
+        /* And anyone talking to US - the same exemption the Tab5 list makes,
+         * swept here at the same time because the two lists filter separately
+         * and this is the second place #176's rule stopped short. Serhiy
+         * AA1SL could not see the stations answering his CQ with only_cq set.
+         * `me` is already upper-cased above for the sort. */
+        const bool mentions_me = me[0] && strstr(r->last_text, me);
+        if (!is_partner && !mentions_me) {
             if (hide_cq && strncmp(r->last_text, "CQ ", 3) == 0) continue;
             // Worked before on this band, and the operator asked for them to go
             // (Randy N4OPI). Applied HERE as well as on the Tab5 because the two

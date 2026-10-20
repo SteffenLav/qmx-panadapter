@@ -1255,7 +1255,21 @@ static void rebuild_list(void)
         // that is hidden.
         bool is_partner = s_qso_active_target[0] &&
                           strcasecmp(snap[i].call, s_qso_active_target) == 0;
-        if (!is_partner) {
+        /* ⛔ AND ANYONE WHO IS TALKING TO US. #176's exemption covered the
+         * contact IN PROGRESS; it did not cover the one trying to START.
+         *
+         * Serhiy AA1SL, 2026-10-21, with only_cq set: "zero connect, not even
+         * attempt to handshake any stations". A reply to his CQ does not
+         * begin with "CQ ", so incl_cq_only dropped it before any exchange
+         * existed to make him a partner - he could not see the people
+         * answering him.
+         *
+         * This row is already painted RED when the text carries our callsign
+         * (update_row, col 2), so the information was here and only the
+         * filter did not use it. A message addressed to us can never be an
+         * answer to "who is worth looking at". */
+        const bool mentions_me = s_my_call[0] && strstr(snap[i].last_text, s_my_call);
+        if (!is_partner && !mentions_me) {
             if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
             /* Worked before on THIS band, and the operator asked for them to
              * go (Randy N4OPI). Same band-aware test the row grey uses, so a
