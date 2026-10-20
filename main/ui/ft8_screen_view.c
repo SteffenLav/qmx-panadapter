@@ -3951,11 +3951,28 @@ static void js8_tx_bar_sync(void)
      * 752), and at font 20 the longer wording rendered as "> tap a stat...".
      * A callsign is at most 15 characters but a real one is 4-6, so the
      * selected form fits with room to spare. */
-    if (call[0]) snprintf(b, sizeof(b), "> %s", call);
-    else         snprintf(b, sizeof(b), "tap a call");
+    /* A station that sent SNR? and has had no answer (Gyula HA3HZ). It shows
+     * in the chip only when nothing is SELECTED: the selection is what the
+     * operator last said they are doing, and a prompt must not look as though
+     * it had replaced it.
+     *
+     * ⚠ The same 136 px between the Stations tab and the SNR button.
+     * Measured, tools/measure_label.py at font 20: "? HA3HZ" is 88.5 px
+     * against "> HA3HZ" at 88.7 and "tap a call" at 91.0 - the new wording is
+     * the narrowest of the three, so it cannot clip where they do not. */
+    char asked[FT8_CALL_MAX_LEN] = {0};
+    if (!call[0]) js8_request_get(asked, sizeof(asked), NULL, NULL);
+
+    if (call[0])       snprintf(b, sizeof(b), "> %s", call);
+    else if (asked[0]) snprintf(b, sizeof(b), "? %s", asked);
+    else               snprintf(b, sizeof(b), "tap a call");
     if (strcmp(lv_label_get_text(s_js8_chip_lbl), b) != 0)
         lv_label_set_text(s_js8_chip_lbl, b);
-    js8_macro_btn_enable(s_btn_js8_snr,  call[0] != '\0');
+    /* SNR is live for a station that ASKED as well as one that is selected -
+     * js8_send_snr() falls back to the asker for exactly this press. GRID is
+     * not: nobody asked for a locator, and offering it here would put a
+     * second unprompted message in front of a one-press button. */
+    js8_macro_btn_enable(s_btn_js8_snr,  call[0] != '\0' || asked[0] != '\0');
     js8_macro_btn_enable(s_btn_js8_grid, call[0] != '\0');
 }
 
@@ -3984,6 +4001,15 @@ static bool js8_send_snr(char *out, size_t out_len)
 {
     char call[FT8_CALL_MAX_LEN];
     js8_target_get(call, sizeof(call));
+    /* ⭐ WITH NOBODY SELECTED, ANSWER WHOEVER ASKED. A station that sent the
+     * directed SNR? is asking this exact question, and making the operator
+     * find and tap them first is the gap Gyula HA3HZ's report left open. One
+     * press, and it is still a press - nothing here transmits on its own.
+     *
+     * ⚠ A SELECTION WINS. If the operator has picked somebody, that is who
+     * they mean; a request arriving from a third station must not redirect a
+     * report at the moment the button goes down. */
+    if (!call[0]) js8_request_get(call, sizeof(call), NULL, NULL);
     if (!call[0]) { snprintf(out, out_len, "Tap a station first"); return false; }
 
     ft8_call_t *snap = table_snapshot();
@@ -4006,6 +4032,15 @@ static bool js8_send_snr(char *out, size_t out_len)
         snprintf(out, out_len, "%s", err);
         ESP_LOGW(TAG, "JS8 SNR macro refused: %s", err);
         return false;
+    }
+    /* Answered. Drop the note so the prompt does not keep asking for a report
+     * that is now on its way - the operator would read it as the press having
+     * failed. */
+    {
+        char asked[FT8_CALL_MAX_LEN];
+        if (js8_request_get(asked, sizeof(asked), NULL, NULL) &&
+            strcasecmp(asked, req.target_call) == 0)
+            js8_request_clear();
     }
     snprintf(out, out_len, "Armed: %s", req.display_text);
     ESP_LOGI(TAG, "JS8 SNR macro armed: '%s'", req.display_text);

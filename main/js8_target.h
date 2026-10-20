@@ -32,6 +32,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Select `call`, or clear the selection with NULL or "". Safe from any task. */
 void js8_target_set(const char *call);
@@ -63,3 +64,36 @@ bool js8_target_is(const char *call);
  * Always ends with a single space when it is not empty, so the first thing
  * typed is a word and not a run-on. */
 void js8_text_prefix(char *out, size_t out_len);
+
+/* ---- A STATION HAS ASKED US FOR A REPORT -----------------------------------
+ *
+ * JS8's directed vocabulary has an explicit command for it: `SNR?`, index 0
+ * (JS8_CMD_SNR_QUERY). Until now nothing read it, so a station that used the
+ * command got SILENCE from us.
+ *
+ * ⛔ THE REPORT EXCHANGE WAS NEVER THE GAP, and conflating the two cost a
+ * wrong answer to Gyula HA3HZ on 2026-10-13. ft8_qso.c has had JS8 branches
+ * all along, and his own diagnostic log showed this unit answering four
+ * stations unattended with reports. What did not exist was handling of the
+ * COMMAND. [[feedback_absent_command_is_not_absent_capability]].
+ *
+ * ⛔ AND IT STILL DOES NOT ANSWER BY ITSELF. Noting the request transmits
+ * nothing: it tells the operator, who presses SNR. An automatic answer here
+ * would be a seventh unattended arming site, pointed at whoever asks, and
+ * that is a decision for the operator and not a side effect of closing a
+ * protocol gap - [[feedback_never_leave_the_radio_transmitting]], and the
+ * same reasoning that made a JS8 row tap stop transmitting.
+ *
+ * The note lapses after JS8_REQUEST_WINDOW_SEC. A report is about conditions
+ * now, and a prompt to answer a station last heard ten minutes ago is a
+ * prompt to transmit at somebody who has moved on.
+ *
+ * Writer: the decode task. Readers: the LVGL task and the HTTP task. Same
+ * mutex, and for the same reason the selection has one. */
+#define JS8_REQUEST_WINDOW_SEC 600
+
+void js8_request_note(const char *call, int freq_hz, int64_t utc);
+/* True while a request is live. `age_s` is how long ago it arrived. Any of
+ * the out parameters may be NULL. */
+bool js8_request_get(char *call, size_t out_len, int *freq_hz, int *age_s);
+void js8_request_clear(void);

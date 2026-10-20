@@ -286,6 +286,21 @@ static void add_ft8_tx_status(cJSON *root)
         cJSON_AddNumberToObject(f, "js8_submode", settings_get_js8_submode());
         cJSON_AddStringToObject(f, "js8_submode_name",
                                 ftx_protocol_label(ft8_op_mode_protocol()));
+        /* A station that sent the directed command SNR? and has had no answer
+         * (Gyula HA3HZ). Served, not inferred from the conversation text: the
+         * command is a frame field, and a browser matching on the words would
+         * also fire on somebody quoting it in free text. */
+        {
+            char rq[FT8_CALL_MAX_LEN];
+            int  rq_age = 0;
+            if (js8_request_get(rq, sizeof(rq), NULL, &rq_age)) {
+                cJSON *o = cJSON_AddObjectToObject(f, "js8_snr_req");
+                if (o) {
+                    cJSON_AddStringToObject(o, "call", rq);
+                    cJSON_AddNumberToObject(o, "age_s", rq_age);
+                }
+            }
+        }
     }
 
     /* ⭐ THE BROWSER MUST BE ABLE TO SEE THE PAUSE, NOT JUST SET IT - the same

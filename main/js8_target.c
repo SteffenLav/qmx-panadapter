@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -65,6 +66,61 @@ bool js8_target_is(const char *call)
     char c[FT8_CALL_MAX_LEN];
     js8_target_get(c, sizeof(c));
     return c[0] && strcmp(c, call) == 0;
+}
+
+/* ---- A station has asked us for a report - see js8_target.h -------------- */
+
+static char    s_req_call[FT8_CALL_MAX_LEN];
+static int     s_req_freq_hz;
+static int64_t s_req_utc;
+
+void js8_request_note(const char *call, int freq_hz, int64_t utc)
+{
+    if (!call || !call[0]) return;
+    SemaphoreHandle_t m = lock_get();
+    if (m) xSemaphoreTake(m, portMAX_DELAY);
+    bool same = (strcmp(s_req_call, call) == 0);
+    snprintf(s_req_call, sizeof(s_req_call), "%s", call);
+    s_req_freq_hz = freq_hz;
+    s_req_utc     = utc;
+    if (m) xSemaphoreGive(m);
+    /* Not once per repeat: JS8 stations re-send a directed command until they
+     * get an answer, and one line per repeat is what turns an overnight
+     * capture into something nobody reads. */
+    if (!same) ESP_LOGI(TAG, "%s sent SNR? - a report is owed (tone %d Hz)", call, freq_hz);
+}
+
+bool js8_request_get(char *call, size_t out_len, int *freq_hz, int *age_s)
+{
+    if (call && out_len) call[0] = '\0';
+    SemaphoreHandle_t m = lock_get();
+    if (m) xSemaphoreTake(m, portMAX_DELAY);
+    bool live = false;
+    if (s_req_call[0]) {
+        int64_t age = (int64_t)time(NULL) - s_req_utc;
+        /* A clock just stepped by SNTP can put the note in the future. That is
+         * "it has only just arrived", not "it has expired": the frame was
+         * decoded whatever the clock then did. */
+        if (age < 0) age = 0;
+        if (age <= JS8_REQUEST_WINDOW_SEC) {
+            live = true;
+            if (call && out_len) snprintf(call, out_len, "%s", s_req_call);
+            if (freq_hz) *freq_hz = s_req_freq_hz;
+            if (age_s)   *age_s   = (int)age;
+        } else {
+            s_req_call[0] = '\0';   /* lapsed - stop offering it */
+        }
+    }
+    if (m) xSemaphoreGive(m);
+    return live;
+}
+
+void js8_request_clear(void)
+{
+    SemaphoreHandle_t m = lock_get();
+    if (m) xSemaphoreTake(m, portMAX_DELAY);
+    s_req_call[0] = '\0';
+    if (m) xSemaphoreGive(m);
 }
 
 void js8_text_prefix(char *out, size_t out_len)

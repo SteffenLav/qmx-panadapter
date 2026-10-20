@@ -6338,13 +6338,28 @@ function js8ComposerPrefill() {
 
 /* The target chip and the two macro buttons. Enabled only with a station
    selected: a macro with nobody to send it to is a button that can only fail. */
+/* A station that sent the directed command SNR? and has had no answer
+   (Gyula HA3HZ, 2026-10-13: the command itself was read by nothing, so
+   whoever used it got silence from us). Mirrored from ft8.js8_snr_req, which
+   the device fills from the FRAME field - matching the words in the
+   conversation text would also fire on somebody quoting "SNR?" in free text. */
+let js8SnrReq = "";
+
 function js8BarSync() {
   const t = document.getElementById("js8-target");
-  if (t) t.textContent = js8Target ? "> " + js8Target : "> click a station";
-  for (const id of ["js8-snr", "js8-grid"]) {
-    const b = document.getElementById(id);
-    if (b) b.disabled = !js8Target;
-  }
+  /* The request shows only when nothing is SELECTED. A selection is what the
+     operator last said they are doing, and a prompt must not read as though
+     it had replaced it. */
+  if (t) t.textContent = js8Target ? ("> " + js8Target)
+       : js8SnrReq ? (js8SnrReq + " asks for a report")
+       : "> click a station";
+  const snr = document.getElementById("js8-snr");
+  /* SNR is live for a station that ASKED as well as for one that is selected:
+     the device answers the asker on that press (js8_send_snr). GRID is not -
+     nobody asked for a locator. */
+  if (snr) snr.disabled = !(js8Target || js8SnrReq);
+  const grid = document.getElementById("js8-grid");
+  if (grid) grid.disabled = !js8Target;
 }
 
 /* ⭐ THE SUBMODE, PICKED FROM THE MODE HEADING - the Tab5's arrangement.
@@ -6561,10 +6576,19 @@ function js8TxStatus(ft8) {
      tapped on the glass leaves this page's buttons dead. */
   {
     const t = (ft8 && typeof ft8.js8_target === "string") ? ft8.js8_target : "";
+    const rq = (ft8 && ft8.js8_snr_req && typeof ft8.js8_snr_req.call === "string")
+             ? ft8.js8_snr_req.call : "";
     if (t !== js8Target) {
       js8Target = t;
+      js8SnrReq = rq;
       js8BarSync();
       js8Shown = "";          /* the pane's filter changed under us */
+    } else if (rq !== js8SnrReq) {
+      /* The request can arrive and lapse without the selection moving, so it
+         needs its own repaint - otherwise the chip only catches up the next
+         time somebody is tapped. */
+      js8SnrReq = rq;
+      js8BarSync();
     }
     js8Prefix = (ft8 && typeof ft8.js8_prefix === "string") ? ft8.js8_prefix : "";
     js8ComposerPrefill();

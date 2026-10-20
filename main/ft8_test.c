@@ -63,6 +63,8 @@
 #include "ft8/js8_text.h"
 #include "ft8/js8_reasm.h"
 #include "js8_chat.h"
+#include "js8_target.h"
+#include "ft8/js8_message.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
@@ -2548,6 +2550,39 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                              src[rr]->js8ev[k].call);
                     snprintf(cm.text, sizeof(cm.text), "%s", jtext);
                     js8_chat_add(&cm);
+
+                    /* ⭐ THE ONE DIRECTED COMMAND WE OWE AN ANSWER TO: SNR?
+                     *
+                     * Gyula HA3HZ, 2026-10-13, from the far end. The report
+                     * EXCHANGE has always been automated - his own log caught
+                     * this unit answering four stations - but the explicit
+                     * command, index 0, was read by nothing, so a station
+                     * that used it got silence.
+                     *
+                     * ⛔ NOTED, NOT ANSWERED. This arms no transmission: it
+                     * tells the operator, who presses SNR. Answering here
+                     * would be a new unattended arming site aimed at whoever
+                     * asks, which is the operator's decision to make and not
+                     * a side effect of closing a protocol gap. The selection
+                     * is deliberately NOT moved either - it filters the
+                     * conversation pane, and yanking that out from under
+                     * somebody mid-read is the behaviour Ryan KK6DZB asked us
+                     * to stop.
+                     *
+                     * Only when it is addressed to US by name. @ALLCALL and
+                     * the group tokens carry the same command and are not a
+                     * question to this station. */
+                    if (js8_frame_type(src[rr]->js8ev[k].frame) == JS8_FRAME_DIRECTED) {
+                        js8_directed_t d;
+                        if (js8_unpack_directed(src[rr]->js8ev[k].frame, &d) &&
+                            d.cmd == JS8_CMD_SNR_QUERY && d.from[0] && d.to[0]) {
+                            char me[20];
+                            settings_get_my_callsign(me, sizeof(me));
+                            if (me[0] && strcasecmp(d.to, me) == 0)
+                                js8_request_note(d.from, src[rr]->js8ev[k].freq_hz,
+                                                 slot_sec);
+                        }
+                    }
                 }
             }
             for (int k = 0; k < js8_reasm_active(&s_js8_reasm); k++) {
