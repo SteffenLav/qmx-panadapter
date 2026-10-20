@@ -37,6 +37,12 @@ That slow rhythm is why the page looks calm compared with the FT8 screen. There 
 
 ### 2. Reading the page
 
+The browser's WSPR list carries the same columns, and from **v1.20.2** that
+includes **BAND** - it was on the Tab5 and not in the browser. It matters most
+with band hopping on, where every spot sits inside the same 200 Hz window and
+the frequency column alone cannot tell them apart. It is blank for spots
+recorded before the dial was kept.
+
 The left pane is a log, not a live list of who is on frequency. Spots stay where they are and new cycles are added — an opening band looks different from a closing one only over time, so the page is arranged to let you see that.
 
 | Column | Meaning |

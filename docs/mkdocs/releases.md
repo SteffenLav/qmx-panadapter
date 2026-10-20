@@ -4,8 +4,34 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.20.1** - 2026-10-18
+**v1.20.2** - 2026-10-20
 
+**A patch release. Everything reported in the two days after v1.20.1, one thing v1.20.1 shipped broken, and a correction that matters to anybody who uploads WSPR spots.**
+
+- ⛔ **WSPR spots were uploaded to wsprnet on the wrong frequency, if you changed band from the browser** *(found while fixing John W5JSS's report)*. The browser's WSPR band change wrote the page's dial figure but never retuned the radio, so the page and the radio disagreed — and every spot decoded after that went to wsprnet under the frequency the page was showing, not the one you were listening on. John's own log caught it: *"dial MISMATCH: the radio is tuned to 21.094600 MHz but this page is set to 14.095600 MHz"*. **This is data already in a public database, under your own callsign, with nothing to mark it wrong.** If you have changed WSPR band from the browser on v1.20.0 or v1.20.1, treat those spots as suspect. Changing band on the Tab5 itself was never affected. Fixed.
+- **WSPR received nothing at all if you came to the page from FT8** *(John W5JSS)*. The receiver needs two large buffers; FT8 had not finished handing its memory back, and the wait gave up 1.8 seconds too early. Every candidate was then rejected and the diagnostic log filled with allocation failures — which reads exactly like a dead band and is not one. The wait now watches for FT8 actually letting go rather than counting seconds, and the same mistake in the other direction is fixed too.
+- **The power you set was not the power transmitted, from the browser** *(John W5JSS)*. A burst at 2 W with Settings declaring 1 W.
+- ⛔ **The AM bandwidth popup had two bad rows** — v1.20.1 only. The 10-17 width trim cut the list to four entries and left the count at six, so two rows were built from whatever happened to follow the list in memory, and tapping one applied a nonsense width. The count is now taken from the list itself and the build refuses them if they ever disagree again.
+- **AM 8.0 and 9.6 kHz are back** *(Kevin KQ4DTX, Samuel W7STF)*. I withdrew them in v1.20.1 because they had never been run end to end. Kevin uses 9.6 kHz daily and Samuel asked for 8.0 kHz back, which is the evidence I said was missing. Measured, those two widths cost nothing over 6.0 kHz.
+- **Settings would not save with no QMX attached** *(Randy N4OPI)*. The Settings page sends every field on every Save, and one of them — the CW keyer speed — goes straight to the radio rather than being stored here. With no radio to send it to, the whole save was refused with "Save Failed (HTTP 400)", and part of it had already been stored anyway. Now anything the device cannot carry out is reported beside a successful save: *"Saved — CW keyer speed was not sent, no CAT link to the radio"*. A refusal now means nothing at all was stored.
+- ⛔ **A Tab5 that cannot save anything now says so** *(Sergei AA1SL)*. Sergei's unit received stations perfectly, forgot every setting, and refused to transmit — which is one fault, not three: with no callsign stored, every transmit path refuses. The firmware knew, and said so only on the serial console. It now says it on the screen at start-up, in the browser as a banner, and on the Save button itself. **The usual cause is installing with the M5Launcher**, whose partition layout has no room for the panadapter's settings; the cure is the project flasher with **E** at the prompt, which rewrites the partition table. The documentation now warns about this in three places.
+- **WiFi ignored the Preferred network on the first boot after an update** *(Randy N4OPI)*. *"A restart of the Tab5 with nothing else touched restarts, honoring the Preferred Network setting."* The preference was being abandoned rather than ignored, on all three paths that set it, and the retry budget was being spent before it got its turn.
+- **Web audio went silent after a disconnect** *(Samuel W7STF)*. *"If the web-UI cannot support audio for hours on end without disconnects, that is unfortunate."* It now carries through a reconnect by itself. Measured here: audio returned 16 seconds after the link came back with nobody touching the browser.
+- **The spot map now centres on your own station** *(BD4AHS)*, rather than merely including it. Fit is still Fit; centring is its own entry.
+- **Stations you have worked before can be hidden, not just greyed** *(Randy N4OPI)*. This is Randy's original request from the "Exclude stations worked before" confusion in v1.20.1, and it is a **separate** switch: "Never auto-call worked-before" still decides who the machine calls, and the new "Hide worked-before" decides whether the rows appear at all. Off by default, so nothing changes unless you ask. Per band, on both screens.
+- **Re-send stays available until your final is acknowledged** *(Don WB0LQW)*. Don's RR73 was missed and the controls vanished the instant it was sent — the one window where the contact could still be saved was the one window with no buttons in it. The row now stays up for the five minutes the machine itself keeps watching, Re-send puts that same final back on the air, and Cancel ends it. On the Tab5 as well as in the browser.
+- **Transmitted morse is drawn in its own colour** *(Samuel W7STF)*, on both screens. The radio already tells us which characters are ours; it was being discarded.
+- **JS8: a station asking for a signal report with the `SNR?` command is no longer ignored** *(Gyula HA3HZ)*. The report exchange was always automated, but the explicit command was read by nothing, so anyone using it got silence. The Tab5 and the browser now say who is asking, and one press of SNR answers them. **It does not answer by itself** — that would be the radio transmitting with nobody deciding to, and it stays a deliberate press.
+- **A BAND column in the browser's WSPR list** *(Kevin KQ4DTX)*. The Tab5 had it and the browser did not. It matters most with band hopping on, where every spot sits inside the same 200 Hz window.
+- **The browser's Listen button says "Listen"** *(Bryan N0LUF, Randy N4OPI)*. Two people never found it, one of them after reading the manual, and Samuel W7STF had to tell them it existed. It was a bare play triangle.
+- **RX audio's switch and volume are on the web page**, not just in the API.
+- **The remote relay can be told to drive only the pin you selected** *(Randy N4OPI)*. Until now both GPIO53 and GPIO54 were held as driven outputs whichever one was set to pulse — which is right when both are wired to relays, and wrong if you share the connector with a Unit GPS, because entering relay mode then drives a pin the GPS is transmitting on. Off by default. ⚠ Only turn it on when the unused pin is unconnected or biased by its own circuit: an undriven pin's level is decided by whatever is on it.
+- **Documentation.** Five diagrams were added to the manual and are on the device as well as the website — the audio chain, the FT8 slot with DT and DTR marked, the WSPR cycle, the clock-source ladder, and what plugs into what. The clock-source list gained the radio's own clock, which it had been missing. The gesture tables now say which one is authoritative. And three pages now say not to install with the M5Launcher.
+
+
+## Previous Releases
+
+### v1.20.1 - 2026-10-18
 **A patch release. Nine field reports from one week, fixed — and the Tab5 can now be powered off from the drawer and from the browser.**
 
 - ⭐ **Power off the Tab5, from either screen** *(Randy N4OPI)*. Randy's QMX+ is headless and runs from 18650s inside the radio; when the radio shuts itself off on low volts the Tab5 keeps draining the same pack, and he has already lost a set to undervoltage. There is now a **Power off the Tab5** button in the settings drawer, directly under Restart, and the same control in the browser's Miscellaneous section. Both ask twice. It is a real shutdown, not a sleep: the radio is put back into receive **first**, so a transmission in progress cannot be left keyed, and settings are flushed before the power goes. I measured that it stays off with 5 V still present on the USB-C input, which is Randy's exact setup. The drawer button is in the **Advanced** section.
@@ -26,7 +52,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 ⚠ **Everything v1.20.0 said still stands.** This release adds no new features beyond the power-off button.
 
 
-## Previous Releases
 
 ### v1.20.0 - 2026-10-15
 
@@ -1104,7 +1129,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

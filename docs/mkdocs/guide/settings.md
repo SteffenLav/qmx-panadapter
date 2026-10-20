@@ -242,6 +242,21 @@ Switching is live — the pins are handed straight over, and a toast confirms wh
 
 **Tip: switch the mode first, then plug the GPS in.** The reverse order works but puts the GPS's transmitter against a driven pin for the moment between the two.
 
+**Sharing PORT.A between the two — "Relay: drive only the selected pin"
+(v1.20.2).** Relay mode normally holds **both** GPIO53 and GPIO54 as driven
+outputs, whichever one is set to pulse, so that changing the pin cannot leave
+the other one resting on its active side with a relay wired to it. If you have
+a Unit GPS on one pin and a relay trigger on the other, that is the wrong
+behaviour: entering Relay mode then drives a pin the GPS is transmitting on,
+and it keeps driving it for as long as you stay in Relay mode - no pulse
+required. Tick this setting and only the pin you selected is driven; the other
+is left floating. A pulse on the floating pin is then refused rather than
+silently doing nothing.
+
+⚠ Only use it when the unused pin is unconnected or biased by its own
+circuit. A floating pin's level is decided by whatever is wired to it, not by
+the Tab5, so this is the wrong choice if you have relays on both pins.
+
 The same control is in the web UI's **Miscellaneous** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
 
 ## Battery Care

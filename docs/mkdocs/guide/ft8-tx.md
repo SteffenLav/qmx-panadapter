@@ -191,6 +191,23 @@ rather than someone else.
 browser page as well as the Tab5 (v1.16.2). It skips exactly one transmission
 and leaves the exchange intact — unlike **Cancel**, which ends it.
 
+**The row now stays up until your final is acknowledged (v1.20.2).** Until this
+release it vanished the instant the closing RR73 or 73 was sent - so the one
+window in which a missed final could still be put right was the one window with
+no buttons in it. The machine has always kept watching for five minutes and
+re-sending on its own; now you can see that it is doing so, and act inside it:
+
+- Only **Re-send** and **Cancel** are offered, because RR73 and 73 are built
+  from an exchange that has already closed.
+- **Re-send** puts that same final back on the air - the RR73 if that is what
+  you sent, not a bare 73.
+- **Cancel**, or a tap on the Tab5's TX indicator, says the contact is over and
+  stops the machine re-sending too.
+- Pressing Re-send does not use up the machine's own six tries.
+
+The QSO is logged when the final leaves the air, as it has been since v1.20.0 -
+none of this delays the log entry.
+
 - It shows a **pause** symbol normally and a **play** symbol on yellow while a
   transmission is being skipped, so you can see the state at a glance.
 - Press it again and the pause is taken straight back, re-arming the

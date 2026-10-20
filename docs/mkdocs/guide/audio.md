@@ -123,7 +123,7 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
-    in the top bar to choose it: **2.0, 3.0, 4.0 or 6.0 kHz**,
+    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**,
     quoted as the width of the whole signal, the way amateur AM
     figures always are. 6.0 kHz is the default and the standard — 3 kHz per
     sideband, what most commercial rigs hard-code. The same list is on the
@@ -135,21 +135,17 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     on a clear channel. Broadcast channels are spaced 5 kHz, so 6.0 already
     reaches into the neighbour's carrier on a crowded shortwave evening.
 
-    **6.0 kHz is the widest the Tab5 offers, from v1.20.1.** Four wider
-    settings were available earlier and have been withdrawn, for two
-    different reasons.
+    **9.6 kHz is the widest the Tab5 offers, from v1.20.2.** Two wider
+    settings were available earlier and have been withdrawn: **10.0 and
+    20.0 kHz** ran the receive chain at half the decimation the others use,
+    and measured on the bench that leaves the second CPU core with no idle
+    time at all and the audio stutters.
 
-    **10.0 and 20.0 kHz** ran the receive chain at half the decimation the
-    others use. Measured on the bench, that leaves the second CPU core with
-    no idle time at all and the audio stutters.
-
-    **8.0 and 9.6 kHz cost nothing extra** — matched 60-second windows
+    **8.0 and 9.6 kHz cost nothing extra** - matched 60-second windows
     measured AM at 4.0 and at 6.0 kHz at the same processor load, so width is
-    free up to that point and those two would have been free as well. They
-    are withdrawn because they were never run end to end: they entered the
-    list on a filter measurement and a listening report, and nothing since
-    has confirmed them. The list now holds only widths that have actually
-    been measured playing.
+    free up to that point. They were briefly withdrawn in v1.20.1 as
+    unproven and are back in v1.20.2: one operator runs 9.6 kHz daily and
+    another asked for 8.0 kHz, which settles whether they work.
 
     CW and SSB are untouched at any setting.
 
