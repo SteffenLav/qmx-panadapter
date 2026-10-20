@@ -405,6 +405,20 @@ void time_sync_notify_sntp(time_t utc)
 static time_t s_last_unit_push_utc = 0;
 #define UNIT_GPS_PUSH_INTERVAL_S 300
 
+/* How quiet the per-second Unit-GPS apply is allowed to be - see the log site
+ * further down for why it had to stop printing every second.
+ *
+ * A STEP worth printing: 50 ms. A phase-locked receiver re-applies the same
+ * instant each second, so the step is normally a handful of milliseconds of
+ * carry arithmetic; 50 ms is far above that and far below anything that would
+ * matter to FT8, so it fires on a real jump and not on noise.
+ *
+ * The HEARTBEAT is 10 minutes: enough that a healthy session adds six lines
+ * an hour instead of 3,600, and short enough that a capture still proves the
+ * receiver was alive - which a fully silent version would not. */
+#define UNIT_GPS_LOG_STEP_MS        50
+#define UNIT_GPS_LOG_HEARTBEAT_US   (600LL * 1000000LL)
+
 // Priority 0: Unit GPS on PORT.A - a satellite clock that carries its own DATE,
 // so nothing here asks get_date_anchor() what day it might be (Don WB0LQW's
 // two-days-behind POTA log is the failure this path exists to end).
@@ -459,6 +473,16 @@ bool time_sync_notify_unit_gps(int year, int mon, int mday,
         }
     }
 
+    /* How far the clock actually moved - the only part of this that is news.
+     * Read BEFORE settimeofday(), or the step is always zero. */
+    int64_t step_ms;
+    {
+        struct timeval before;
+        gettimeofday(&before, NULL);
+        int64_t before_us = (int64_t)before.tv_sec * 1000000LL + before.tv_usec;
+        step_ms = (utc_now_us - before_us) / 1000;
+    }
+
     struct timeval tv = { .tv_sec = utc_now,
                           .tv_usec = (suseconds_t)(utc_now_us % 1000000LL) };
     settimeofday(&tv, NULL);
@@ -475,12 +499,50 @@ bool time_sync_notify_unit_gps(int year, int mon, int mday,
     settings_set_date_src(DATE_SRC_UNIT_GPS);
     s_source = TIME_SOURCE_UNIT_GPS;
 
-    struct tm shown;
-    gmtime_r(&utc_now, &shown);
-    ESP_LOGI(TAG, "Time set from Unit-GPS: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC%s",
-             shown.tm_year + 1900, shown.tm_mon + 1, shown.tm_mday,
-             shown.tm_hour, shown.tm_min, shown.tm_sec, (int)(tv.tv_usec / 1000),
-             flip_us > 0 ? " phase-locked" : " (whole second)");
+    /* ⛔ ONCE PER SECOND, FOREVER - AND IT WAS 43% OF THE ENTIRE LOG.
+     *
+     * This ran unconditionally on every GPS sentence. Measured on the bench
+     * 2026-10-20: 4,056 of 9,459 tagged log lines in one window were this one
+     * sentence. It is also what kept the SD card busy - the diag log never
+     * stopped growing, so sd_archive's diag mirror wrote every ~30 s, which
+     * is why the operator saw the bottom-bar SD dot green for the whole
+     * session rather than just at boot. Those writes hold the web stream:
+     * 110 of them stalled it 40.5 s in total, worst single block 3.3 s.
+     *
+     * The clock being set again, correctly, to the same place it already was
+     * is not news. What IS news: the first lock, the phase changing, a real
+     * step, and - at a low rate - proof the receiver is still alive.
+     *
+     * ⚠ IT MUST NOT GO SILENT. A GPS that stopped and a GPS that is working
+     * perfectly would then read identically in a capture, which is the trap
+     * this project has been caught by before (a dead serial capture looking
+     * like a quiet device). Hence the heartbeat: quiet, but never nothing. */
+    {
+        static bool    s_logged_once;
+        static bool    s_last_phase_locked;
+        static int64_t s_last_log_us;
+
+        const bool    phase_locked = (flip_us > 0);
+        const int64_t now_us       = esp_timer_get_time();
+        const bool    heartbeat    = (now_us - s_last_log_us) >= UNIT_GPS_LOG_HEARTBEAT_US;
+        const bool    stepped      = llabs(step_ms) >= UNIT_GPS_LOG_STEP_MS;
+
+        if (!s_logged_once || stepped || phase_locked != s_last_phase_locked || heartbeat) {
+            struct tm shown;
+            gmtime_r(&utc_now, &shown);
+            ESP_LOGI(TAG, "Time set from Unit-GPS: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC%s"
+                          " (step %+lld ms)%s",
+                     shown.tm_year + 1900, shown.tm_mon + 1, shown.tm_mday,
+                     shown.tm_hour, shown.tm_min, shown.tm_sec, (int)(tv.tv_usec / 1000),
+                     phase_locked ? " phase-locked" : " (whole second)",
+                     (long long)step_ms,
+                     (!s_logged_once || stepped || phase_locked != s_last_phase_locked)
+                         ? "" : " [heartbeat]");
+            s_logged_once       = true;
+            s_last_phase_locked = phase_locked;
+            s_last_log_us       = now_us;
+        }
+    }
 
     if (s_last_unit_push_utc == 0 ||
         (utc_now - s_last_unit_push_utc) >= UNIT_GPS_PUSH_INTERVAL_S) {
