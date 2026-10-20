@@ -3745,6 +3745,27 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
  * turning it off has to start driving it again. Storing it and waiting for a
  * reboot would be a switch that reads as applied and changes nothing - the
  * exact failure the settings sweep for T28 went looking for. */
+/* ⛔ CAN THIS DEVICE KEEP ANYTHING AT ALL?
+ *
+ * settings_init() returns early when the `user_nvs` partition is missing or
+ * cannot be opened, leaving s_ready false - and 167 setters begin
+ * `if (!s_ready) return;`. Every one then silently does nothing and every
+ * getter hands back a default. The device receives perfectly and forgets
+ * everything, which is indistinguishable from the operator clicking wrong.
+ *
+ * Sergei AA1SL, issue #21, 2026-10-20: installed with the M5Launcher, whose
+ * partition layout has no user_nvs, and reported "it will not save my
+ * settings, call sign, location... I can't transmit - it shows bunch of error
+ * messages". The transmit errors are the SAME fault: with no callsign stored
+ * every TX path refuses with "Set your callsign first".
+ *
+ * The firmware knew, every time, and said so only on the serial console -
+ * the same shape as the brownout Samuel W7STF lost days to. */
+bool settings_persist_ok(void)
+{
+    return s_ready;
+}
+
 void settings_set_gpio_relay_solo(bool solo)
 {
     if (!s_ready) return;

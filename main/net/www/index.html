@@ -1135,6 +1135,17 @@
 </style>
 </head>
 <body>
+<!-- This unit cannot store settings - nothing entered will be kept (Sergei
+     AA1SL, issue #21: installed with the M5Launcher, whose partition layout
+     has no user_nvs). position:fixed so it stays out of the page's grid, the
+     same escape the modals use; hidden until the device says no_persist. -->
+<div id="no-persist-banner" style="display:none; position:fixed; left:0; right:0; top:0; z-index:9999;
+     background:#962020; color:#fff; padding:8px 14px; font-size:14px; text-align:center;">
+  <b>Settings cannot be saved on this unit.</b>
+  Nothing you enter here is kept. Re-flash with the QMX-Panadapter flasher and
+  choose <b>E</b> (clean) at the prompt - that rewrites the partition table.
+  Installing with the M5Launcher is the usual cause.
+</div>
   <!-- click-away overlay -->
   <div id="overlay"></div>
 
@@ -5506,7 +5517,16 @@ async function setSave() {
         const j = await r.json();
         if (j && Array.isArray(j.warnings) && j.warnings.length) warn = j.warnings.join("; ");
       } catch (e) { /* older device, or no body - "Saved" is still correct */ }
-      st.textContent = warn ? ("Saved - " + warn) : "Saved";
+      /* ⛔ "Saved" IS A LIE WHEN NOTHING CAN PERSIST. With no settings
+         partition every setter is a no-op and the POST still returns 200 -
+         the device really did accept the request and really did nothing with
+         it. Sergei AA1SL, issue #21, re-flashed twice chasing this. */
+      if (lastNoPersist) {
+        st.textContent = "NOT saved - this unit has no settings storage. " +
+                         "Re-flash with the flasher and choose E (clean).";
+      } else {
+        st.textContent = warn ? ("Saved - " + warn) : "Saved";
+      }
     }
     if (r.ok && setGroup) ft8OptsRefreshBadge();
   } catch (e) { st.textContent = "Save failed (" + e.message + ")"; }
@@ -6377,6 +6397,11 @@ function js8ComposerPrefill() {
    the device fills from the FRAME field - matching the words in the
    conversation text would also fire on somebody quoting "SNR?" in free text. */
 let js8SnrReq = "";
+
+/* The device cannot store anything this session (ft8-level status flag
+   `no_persist`). Absent on a healthy unit and on any older firmware, so
+   this stays false unless the device actually says so. */
+let lastNoPersist = false;
 
 function js8BarSync() {
   const t = document.getElementById("js8-target");
@@ -7429,6 +7454,15 @@ async function tick() {
     const r = await fetch("/api/status?sv=" + lastSpotsV, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
+
+    /* This unit has no settings storage - every save is accepted and
+       discarded. Read on every poll rather than once at load: a browser left
+       open across a re-flash must stop warning, and must start. */
+    lastNoPersist = !!s.no_persist;
+    {
+      const b = document.getElementById("no-persist-banner");
+      if (b) b.style.display = lastNoPersist ? "" : "none";
+    }
 
     /* A retune clears RIT at the radio (cat_set_frequency does it on every path),
        so click-to-RIT mode has to stand down with it - otherwise the next click

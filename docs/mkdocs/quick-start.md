@@ -23,6 +23,16 @@ Power the QMX on standalone and check the firmware version displayed on its scre
 
 Download the latest flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases):
 
+!!! warning "Use this flasher, not the M5Stack launcher"
+    Install the panadapter with the flasher below, unpacked onto your computer
+    first. **Do not install it with the M5Launcher.**
+
+    The launcher writes its own partition layout, which has no place for the
+    panadapter's saved settings and no room for its file storage. A unit
+    installed that way can still receive, but your callsign, grid and WiFi
+    will not save - and with no callsign stored, every transmit refuses. The
+    cure is `flash.bat` with **E**, which rewrites the partition table.
+
 === "Windows"
 
     1. Plug Tab5 into your computer with a **USB-C data cable**

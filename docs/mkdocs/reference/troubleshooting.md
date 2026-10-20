@@ -82,6 +82,27 @@ them back afterwards, and only if the scan actually moved them.
 2. Try a shorter/higher-quality USB cable
 3. Restart both devices
 
+### Settings will not save - callsign, grid and WiFi are forgotten
+
+The device receives normally and shows stations, but nothing you enter sticks,
+and every attempt to transmit refuses with *"Set your callsign first"*.
+
+**Almost always this means the panadapter was installed with the M5Launcher.**
+The panadapter keeps settings in a partition of its own, defined in its own
+partition table. The launcher writes a different layout with no such partition,
+so the firmware has nowhere to store anything. Re-installing the same way
+reproduces it every time.
+
+**The cure:** download the flasher zip from the
+[Releases page](https://github.com/SteffenLav/qmx-panadapter/releases), unpack
+it on your computer, run `flash.bat` (or `flash.command`) and type **E** at the
+flash-type prompt. That rewrites the partition table along with the firmware.
+You will re-enter your callsign, grid and WiFi afterwards.
+
+If it still will not save after a clean flash, the start-up messages say so
+directly - look for `nvs_open failed` or `user_nvs init failed` in the first
+page of the serial log, and send it in.
+
 ### WiFi won't connect
 
 **Symptoms:** WiFi modal shows "Connecting..." for 30+ seconds, then fails.

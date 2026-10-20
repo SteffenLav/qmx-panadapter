@@ -1431,6 +1431,11 @@ void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
 /* Drive only the selected relay pin, leaving the other hi-Z. The setter
  * re-configures the pads immediately - it has to, because turning it on means
  * RELEASING a pin that is currently driven. See gpio_relay_solo above. */
+/* False when the settings partition could not be opened: NOTHING persists
+ * this session and every setter is a no-op. See the definition for why that
+ * has to be visible rather than logged. */
+bool settings_persist_ok(void);
+
 void settings_set_gpio_relay_solo(bool solo);
 bool settings_get_gpio_relay_solo(void);
 

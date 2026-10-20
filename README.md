@@ -352,6 +352,15 @@ Power the QMX on by itself and read the firmware version off its own display at 
 
 ### Step 1 — Flash the Tab5 firmware
 
+> ### Use this flasher, not the M5Stack launcher
+>
+> **Do not install the panadapter with the M5Launcher.** It writes its own
+> partition layout, which has no place for the panadapter's saved settings
+> and no room for its file storage. A unit installed that way can still
+> receive, but your callsign, grid and WiFi will not save - and with no
+> callsign stored, every transmit refuses. The cure is a clean flash
+> (`flash.bat`, type **E**), which rewrites the partition table.
+
 Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadapter%20flasher) (also attached to each [release](https://github.com/SteffenLav/qmx-panadapter/releases)):
 
 1. Plug the Tab5 into your computer with a **USB-C data cable** — charge-only cables will not work.

@@ -1131,6 +1131,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
         cJSON_AddBoolToObject(root, "gpio_busy", gpio_relay_busy());
+    /* ⛔ Settings could not be opened: NOTHING the operator changes will be
+     * kept, on either surface. Served so the browser can say so too - the
+     * Tab5 toast at boot is invisible from another room, which is the split
+     * this project keeps relearning. Sergei AA1SL, issue #21. */
+    if (!settings_persist_ok()) cJSON_AddBoolToObject(root, "no_persist", true);
         // The power-cycle sequence runs on its own timers, well outside the
         // 1 Hz cadence of this poll, so the web UI cannot watch a "busy" flag
         // like the plain Pulse button does - it has to be told what the
