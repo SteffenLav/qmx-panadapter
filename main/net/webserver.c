@@ -1166,6 +1166,7 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(relay, "pin", rpin);
             cJSON_AddNumberToObject(relay, "level", rlevel ? 1 : 0);
             cJSON_AddNumberToObject(relay, "ms", rms);
+            cJSON_AddBoolToObject(relay, "solo", settings_get_gpio_relay_solo());
             cJSON_AddItemToObject(root, "relay", relay);
         }
         /* PORT.A: two facts that must never be conflated. "mode" is what the
@@ -5790,6 +5791,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
+    /* PORT.A: drive only the selected relay pin, leaving the other hi-Z.
+     * A preference about the station's wiring, so it lives here and not in
+     * the gpio_pulse action, whose pin/level/ms describe ONE pulse. */
+    cJSON_AddBoolToObject(root, "relay_solo_pin", c.gpio_relay_solo);
     cJSON_AddBoolToObject(root,   "wspr_tx_en",    c.wspr_tx_en);
     cJSON_AddBoolToObject(root,   "wspr_pa_reduce", c.wspr_pa_reduce);
     /* Tenths of a volt, 0 when nothing is outstanding. Exposed so "is the
@@ -6521,6 +6526,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
         settings_set_bandplan_region((uint8_t)it->valuedouble);
+
+    /* PORT.A: drive only the selected relay pin. The setter re-configures the
+     * pads, so this takes effect on this request and not at the next boot -
+     * which matters, because the whole point of turning it on is to STOP
+     * driving a pin that something else is connected to. */
+    { cJSON *b = cJSON_GetObjectItem(root, "relay_solo_pin");
+      if (cJSON_IsBool(b)) settings_set_gpio_relay_solo(cJSON_IsTrue(b)); }
 
     // CW pitch and the IF trim: live setter AND NVS, same as the drawer's sliders -
     // ui_set_* do both, and ui_set_cw_pitch_hz also pushes the QMX's own CW centre.

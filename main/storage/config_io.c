@@ -118,6 +118,7 @@ char *config_io_export(size_t *out_len)
     APP("relay_pin          = %u\n", (unsigned)c.gpio_relay_pin);
     APP("relay_active_high  = %s\n", yn(c.gpio_relay_level));
     APP("relay_ms           = %u\n", (unsigned)c.gpio_relay_ms);
+    APP("relay_solo_pin     = %s\n", yn(c.gpio_relay_solo));
     /* Strings, not the raw enum: a backup file is read by hand as often as by
        this importer, and "relay"/"unit_gps" says which cable is plugged in
        where 1 would not. Written AFTER the relay triplet so the file reads in
@@ -484,6 +485,12 @@ int config_io_import(char *text)
                 else if (!strcasecmp(key, "relay_active_high")) rl  = to_bool(val);
                 else                                            rms = (uint16_t)atoi(val);
                 settings_set_gpio_relay(rp, rl, rms);
+            }
+            /* Its own key, not part of the trio above: it has its own setter
+             * because applying it re-CONFIGURES the pads rather than just
+             * re-levelling them. */
+            else if (!strcasecmp(key, "relay_solo_pin")) {
+                settings_set_gpio_relay_solo(to_bool(val));
             }
             else if (!strcasecmp(key, "port_a_mode")) {
                 port_mode    = port_a_mode_parse(val);

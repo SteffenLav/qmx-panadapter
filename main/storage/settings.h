@@ -826,6 +826,30 @@ typedef struct {
     uint8_t  gpio_relay_pin;    // 53 or 54 only (gpio_relay.c whitelists these), default 53
     bool     gpio_relay_level;  // pulse level: true = active HIGH (default), false = active LOW
     uint16_t gpio_relay_ms;     // pulse duration, 50..5000 ms (default 1000)
+    /* ⛔ DRIVE ONLY THE SELECTED PIN, leaving the other one hi-Z. Default
+     * FALSE, which is the behaviour every unit has had: BOTH pads driven to
+     * the resting level whichever one is configured to pulse.
+     *
+     * WHY BOTH ARE DRIVEN BY DEFAULT, and why this is an option rather than a
+     * change: the polarity an operator declares is a fact about their wiring,
+     * so leaving the unselected pin undriven can leave a harness resting on
+     * its ASSERTED side after a pin change - on a line wired to a QMX's
+     * PWR_ON. That was Randy N4OPI's own finding on 2026-10-04 and the reason
+     * gpio_relay_init() sets both.
+     *
+     * WHY THE OPTION EXISTS, from the same operator on 2026-10-20: he now
+     * SHARES PORT.A - GPIO54 to a Unit GPS, GPIO53 to an opto-isolator on the
+     * QMX's PWR_ON - and switches modes to use each. Entering relay mode then
+     * drives GPIO54 into the still-connected module's TX output, continuously,
+     * with no pulse involved. He had assumed selecting pin 53 left 54 alone;
+     * it never did.
+     *
+     * ⚠ HI-Z IS NOT "INACTIVE" ON ITS OWN. An undriven pad floats, and what
+     * the harness on it then sees is decided by ITS pull, not by us. Turn this
+     * on only when the unselected pin is either unconnected or biased by the
+     * circuit on it - which is exactly the shared-port case and not the
+     * two-relay case. */
+    bool     gpio_relay_solo;
     // Who owns PORT.A. Kept next to the relay triplet because it is the switch
     // that turns those three off: mode != relay means the pin/level/ms are
     // still stored (a future switch back must restore them) but drive nothing.
@@ -1403,6 +1427,12 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms);
 // settings_load_all() - that is a multi-kilobyte struct and this is read from
 // the web handler; see the task-stack notes in CLAUDE.md.
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms);
+
+/* Drive only the selected relay pin, leaving the other hi-Z. The setter
+ * re-configures the pads immediately - it has to, because turning it on means
+ * RELEASING a pin that is currently driven. See gpio_relay_solo above. */
+void settings_set_gpio_relay_solo(bool solo);
+bool settings_get_gpio_relay_solo(void);
 
 // PORT.A ownership mode (port_a_mode_t). Narrow getter for gpio_relay.c's
 // refusals, main.c's boot branch and /api/status - all of them sit on stacks

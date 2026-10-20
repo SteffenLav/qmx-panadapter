@@ -45,6 +45,76 @@ static bool port_is_unit_gps(char *err, size_t errlen)
     return true;
 }
 
+/* ⭐ THE ONE PLACE THAT DECIDES WHICH PADS THIS MODULE DRIVES.
+ *
+ * Three callers used to spell this out separately - init, the polarity
+ * change, and the mode sequencer's re-drive - and the solo option has to
+ * change all three identically or it is a switch that works from one route
+ * and not another.
+ *
+ * `rest` is the level the driven pad(s) sit at. With solo off, BOTH pads are
+ * driven to it, which is the long-standing behaviour and the reason is in
+ * settings.h: a pin change must not leave the other harness resting on its
+ * asserted side. With solo on, the unselected pad is configured as an INPUT
+ * first - releasing it before anything else is driven - and only the selected
+ * pin is driven.
+ *
+ * The READ BACK in the log is the evidence, not the intent: #189's rule, and
+ * the reason the mode is INPUT_OUTPUT rather than OUTPUT. */
+static esp_err_t relay_configure_pads(bool rest)
+{
+    uint8_t  st_pin = 53;
+    bool     st_level = true;
+    uint16_t st_ms = 1000;
+    settings_get_gpio_relay(&st_pin, &st_level, &st_ms);
+    const bool       solo  = settings_get_gpio_relay_solo();
+    const gpio_num_t sel   = pin_to_gpio(st_pin);
+    const gpio_num_t other = (sel == RELAY_PIN_A) ? RELAY_PIN_B : RELAY_PIN_A;
+
+    esp_err_t e = ESP_OK;
+
+    if (solo) {
+        /* Release FIRST. Turning solo on while the other pad is driven is the
+         * whole point of the option - Randy N4OPI's Unit GPS is on it - so it
+         * must stop being driven before anything else happens. */
+        gpio_config_t hiz = {
+            .pin_bit_mask = (1ULL << other),
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        e = gpio_config(&hiz);
+    }
+
+    gpio_config_t cfg = {
+        .pin_bit_mask = solo ? (1ULL << sel)
+                             : ((1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B)),
+        /* INPUT_OUTPUT, not OUTPUT: the input buffer is what makes
+         * gpio_get_level() report the level actually on the pin. */
+        .mode         = GPIO_MODE_INPUT_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    esp_err_t e2 = gpio_config(&cfg);
+    if (e == ESP_OK) e = e2;
+
+    gpio_set_level(sel, rest ? 1 : 0);
+    if (!solo) gpio_set_level(other, rest ? 1 : 0);
+
+    if (solo)
+        ESP_LOGI(TAG, "GPIO%u driven, resting %s (READ BACK %d) - GPIO%d left hi-Z "
+                      "(reads %d, whatever is on it decides that)",
+                 st_pin, rest ? "HIGH" : "LOW", gpio_get_level(sel),
+                 (other == RELAY_PIN_A) ? 53 : 54, gpio_get_level(other));
+    else
+        ESP_LOGI(TAG, "GPIO53/54 both driven, resting %s - READ BACK %d/%d",
+                 rest ? "HIGH" : "LOW",
+                 gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B));
+    return e;
+}
+
 static void release_cb(void *arg)
 {
     (void)arg;
@@ -56,26 +126,19 @@ static void release_cb(void *arg)
 void gpio_relay_init(void)
 {
     // Belt as well as braces: the boot branch (task 2.3) already does not call
-    // this in Unit GPS mode, but configuring both pins as driven outputs here
+    // this in Unit GPS mode, but configuring the pins as driven outputs here
     // would put them straight into the GPS TX line, and this function's whole
     // job is to decide what the pins are.
+    //
+    // ⚠ THE MODE GUARD IS NOT ENOUGH FOR A SHARED PORT. Randy N4OPI runs a
+    // Unit GPS on GPIO54 and an opto-isolator on GPIO53 and switches modes to
+    // use each, so entering relay mode legitimately drives a pad his module is
+    // still connected to. gpio_relay_solo is the answer to that case - see
+    // settings.h - and it is honoured in relay_configure_pads() below.
     if (port_is_unit_gps(NULL, 0)) {
         ESP_LOGI(TAG, "GPIO53/54 left unconfigured - PORT.A is in Unit GPS mode");
         return;
     }
-    gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << RELAY_PIN_A) | (1ULL << RELAY_PIN_B),
-        /* INPUT_OUTPUT, not OUTPUT: the input buffer is what makes
-         * gpio_get_level() report the level actually on the pin. Driving is
-         * unaffected, and a resting level that is only asserted in a log line
-         * is exactly the kind of claim #189 says must be measured instead. */
-        .mode         = GPIO_MODE_INPUT_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    esp_err_t e = gpio_config(&cfg);
-
     /* ⛔ RESTING LEVEL IS THE STORED POLARITY'S INACTIVE SIDE, NOT A FIXED LOW.
      * This drove both pins LOW unconditionally, under a comment reasoning that
      * "a contact closure should require a deliberate pulse". That reasoning is
@@ -87,14 +150,14 @@ void gpio_relay_init(void)
      *
      * Both pins are set, not just the configured one: the polarity the operator
      * declared is a fact about their wiring, so a later pin change must not
-     * leave the other pin resting on the wrong side. */
+     * leave the other pin resting on the wrong side. gpio_relay_solo turns
+     * that off for a shared port, and settings.h carries the trade-off. */
     uint8_t  st_pin = 53;
     bool     st_level = true;
     uint16_t st_ms = 1000;
     settings_get_gpio_relay(&st_pin, &st_level, &st_ms);   /* narrow accessor - never settings_load_all() here */
     s_rest_level = !st_level;
-    gpio_set_level(RELAY_PIN_A, s_rest_level ? 1 : 0);
-    gpio_set_level(RELAY_PIN_B, s_rest_level ? 1 : 0);
+    esp_err_t e = relay_configure_pads(s_rest_level);
 
     const esp_timer_create_args_t targs = {
         .callback = release_cb,
@@ -109,9 +172,12 @@ void gpio_relay_init(void)
     esp_timer_create(&pc_targs, &s_pc_timer);
 
     s_inited = true;
-    ESP_LOGI(TAG, "GPIO53/54: active %s so resting %s - pins READ BACK %d/%d (%s)",
+    /* The pad states and their READ BACK are logged by relay_configure_pads(),
+     * which is the only code that knows which pads it drove - this line used
+     * to print both pins' levels unconditionally, which would read as a claim
+     * about a pin we deliberately do not drive in solo mode. */
+    ESP_LOGI(TAG, "relay active %s so resting %s (%s)",
              st_level ? "HIGH" : "LOW", s_rest_level ? "HIGH" : "LOW",
-             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B),
              e == ESP_OK ? "ok" : "gpio_config FAILED");
 }
 
@@ -299,9 +365,11 @@ void gpio_relay_set_polarity(bool active_level)
         return;
     }
 
-    gpio_set_level(RELAY_PIN_A, rest ? 1 : 0);
-    gpio_set_level(RELAY_PIN_B, rest ? 1 : 0);
-    ESP_LOGI(TAG, "polarity now active %s - both pins resting %s, READ BACK %d/%d",
-             active_level ? "HIGH" : "LOW", rest ? "HIGH" : "LOW",
-             gpio_get_level(RELAY_PIN_A), gpio_get_level(RELAY_PIN_B));
+    /* Re-CONFIGURES, not just re-levels: this is also the path
+     * settings_set_gpio_relay_solo() takes, and turning solo on has to release
+     * a pad that is currently driven. A bare set_level pair would have stored
+     * the choice and changed nothing until the next boot. */
+    s_rest_level = rest;
+    relay_configure_pads(rest);
+    ESP_LOGI(TAG, "polarity now active %s", active_level ? "HIGH" : "LOW");
 }

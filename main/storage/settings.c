@@ -170,6 +170,7 @@ static const char *TAG = "settings";
 #define KEY_RELAY_PIN      "relay_pin"
 #define KEY_RELAY_LEVEL    "relay_lvl"
 #define KEY_RELAY_MS       "relay_ms"
+#define KEY_RELAY_SOLO     "relay_solo"
 #define KEY_PORT_A_MODE    "port_a_mode"
 #define KEY_RX_SOURCE      "rx_source"
 #define KEY_LINEIN_GAIN    "linein_gain"
@@ -216,6 +217,7 @@ static const char *TAG = "settings";
 #define DEF_RELAY_PIN      (53)
 #define DEF_RELAY_LEVEL    (true)   /* active HIGH */
 #define DEF_RELAY_MS       (1000)
+#define DEF_RELAY_SOLO     (false)  /* both pads driven - what every unit has done */
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -762,6 +764,7 @@ static void flush_task(void *arg)
             nvs_set_u8 (s_nvs, KEY_RELAY_PIN,   snap.gpio_relay_pin);
             nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap.gpio_relay_level ? 1 : 0);
             nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap.gpio_relay_ms);
+            nvs_set_u8 (s_nvs, KEY_RELAY_SOLO,  snap.gpio_relay_solo ? 1 : 0);
         }
         if (dirty_test(&dirty_local, DIRTY_PORT_A_MODE))
             nvs_set_u8(s_nvs, KEY_PORT_A_MODE, snap.port_a_mode);
@@ -1028,6 +1031,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->gpio_relay_pin   = DEF_RELAY_PIN;
     out->gpio_relay_level = DEF_RELAY_LEVEL;
     out->gpio_relay_ms    = DEF_RELAY_MS;
+    out->gpio_relay_solo  = DEF_RELAY_SOLO;
     /* Absent key == relay. This is the upgrade guarantee: a board that has
      * never heard of the Unit GPS boots with both pins driven exactly as they
      * were before the setting existed (task 2.4's READ BACK check). */
@@ -1378,6 +1382,10 @@ static void load_from_nvs(qmx_settings_t *out)
         out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
         out->gpio_relay_level = (rl != 0);
         if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+        /* Absent key == both pads driven, so an upgrade changes nothing. */
+        uint8_t rs = DEF_RELAY_SOLO ? 1 : 0;
+        nvs_get_u8(s_nvs, KEY_RELAY_SOLO, &rs);
+        out->gpio_relay_solo = (rs != 0);
     }
     {
         // 0 when the key was never written, so "no key" and "relay" are the
@@ -3727,6 +3735,35 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
      * in either one leaves the other wrong, so it goes in the single place
      * every caller must pass through. Same reasoning as g_freq_style above. */
     gpio_relay_set_polarity(level);
+}
+
+/* Drive only the selected relay pin - see gpio_relay_solo's comment in
+ * settings.h for why this is an option and not simply the behaviour.
+ *
+ * ⭐ RE-CONFIGURES THE PADS HERE, for the same reason the polarity does and
+ * in the same place: turning this on has to RELEASE the other pin, and
+ * turning it off has to start driving it again. Storing it and waiting for a
+ * reboot would be a switch that reads as applied and changes nothing - the
+ * exact failure the settings sweep for T28 went looking for. */
+void settings_set_gpio_relay_solo(bool solo)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gpio_relay_solo == solo) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gpio_relay_solo = solo;
+    bool level = s_pending.gpio_relay_level;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GPIO_RELAY);
+    gpio_relay_set_polarity(level);
+}
+
+bool settings_get_gpio_relay_solo(void)
+{
+    if (!s_ready) return DEF_RELAY_SOLO;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.gpio_relay_solo;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)

@@ -1486,10 +1486,17 @@
              Randy N4OPI pointed out someone would hunt for a connector that does
              not exist, or pick the wrong one. This is an experimenter feature and
              now says so.
-             Note also that gpio_relay_init() holds both pins as driven OUTPUTS
-             from boot, resting LOW - so they never float. That is deliberate (a
-             contact closure must need a deliberate pulse) and it is the answer to
-             "can GPIO53/54 float?": not as the firmware currently drives them. -->
+             Note also that gpio_relay_init() holds the pins as driven OUTPUTS
+             from boot, resting on the INACTIVE side of the stored polarity - so
+             they never float. That is deliberate (a contact closure must need a
+             deliberate pulse) and it is the answer to "can GPIO53/54 float?":
+             not as the firmware drives them by default.
+             This comment said "resting LOW" long after the polarity fix made
+             that wrong for anyone on active LOW - the same wrong-by-default the
+             code itself had.
+             The exception is the "Only drive the selected pin" setting, which
+             leaves the OTHER pin hi-Z for a shared PORT.A (Randy N4OPI runs a
+             Unit GPS on 54 and an opto-isolator on 53). -->
         <div id="gpio-row" title="!Experimenter feature!&#10;Pulse a Tab5 GPIO pin to trigger an external relay wired to your QMX's PWR_ON/GND signals - for power-cycling it after a remote firmware upgrade with nobody at the bench.&#10;&#10;!Note! The QMX does not natively have a PWR_ON/GND jack. You would need to extend those signals from the main circuit board or front panel to an external connector.&#10;&#10;The pins rest as driven outputs, not floating.">
           <span>Remote relay:</span>
           <select id="gpio-pin"><option value="53">GPIO53</option><option value="54">GPIO54</option></select>
@@ -4667,6 +4674,11 @@ const SET_FIELDS = [
   ["Radio & display", "keyer_wpm",          "num",  "CW keyer speed (WPM)",
      "Sent to the radio over CAT and read back, so this shows what the QMX accepted. 0 selects Straight Key mode regardless of the keyer mode setting, which is the quick way to key down for a tune-up. Needs the CAT link up"],
 
+  /* PORT.A shared between the relay and a Unit GPS - Randy N4OPI, 2026-10-20.
+     Here rather than beside the Pulse button because it is a fact about how
+     the station is wired, not a parameter of one pulse. */
+  ["Radio & display", "relay_solo_pin",     "bool", "Relay: drive only the selected pin",
+     "Normally BOTH GPIO53 and GPIO54 are held as driven outputs at the resting level, whichever one is set to pulse - so a change of pin cannot leave the other one resting on its asserted side. Turn this on if something else is wired to the pin you are NOT pulsing, such as a Unit GPS sharing PORT.A: the unused pin is left hi-Z instead. Only do that when the unused pin is unconnected or biased by its own circuit, because a floating pin's level is decided by what is on it, not by the Tab5"],
   ["Radio & display", "charge_limit_en",    "bool", "Battery care (stop charging early)",
      "Stopping short of full is easier on a lithium pack left plugged in"],
   ["Radio & display", "charge_limit_pct",   "num",  "Stop charging at (%)", "50-100; default 80"],
