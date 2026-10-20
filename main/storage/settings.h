@@ -220,6 +220,27 @@ typedef struct {
      * replies addressed to us are not buried; this makes it the operator's
      * choice rather than ours. */
     bool    cq_show_others;  /* running CQ: keep other stations' CQ rows visible */
+    /* --- Hide worked-before stations from the decode lists - appended, so
+     * old NVS blobs read back 0 (=off) and nothing changes for anyone who
+     * does not ask for it.
+     *
+     * Randy N4OPI, 2026-10-16: "I would expect that with this checked, worked
+     * before stations wouldn't show up at all". The checkbox he meant is
+     * excl_worked_before above, which gates who the MACHINE calls and hides
+     * nothing - 5deb388d relabelled it "Never auto-call worked-before" so it
+     * stops promising a list change.
+     *
+     * ⛔ A SEPARATE SWITCH, NOT A SECOND MEANING FOR THAT ONE. Operator's
+     * decision 2026-10-20. The two are genuinely different questions: an
+     * operator hunting new stations wants them gone from the list, and an
+     * operator who works duplicates on purpose still wants the machine to
+     * leave them alone. Folding both onto excl_worked_before would force one
+     * answer on whoever wanted the other.
+     *
+     * Display only, and the row grey (ft8_screen_view.c) stays unconditional:
+     * with this off, a worked-before station is still dimmed, which is what
+     * everyone has today. */
+    bool    hide_worked_before;
 } ft8_filters_t;
 
 // Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/

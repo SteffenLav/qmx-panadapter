@@ -1202,6 +1202,14 @@ static void rebuild_list(void)
     bool hide_cq = (ft8_qso_cq_filter_active() && !qs.ft8_filters.cq_show_others)
                    || qs.ft8_filters.excl_plain_cq;
 
+    // Hide worked-before stations outright, when the operator asks for it
+    // (Randy N4OPI). The dial is read ONCE for the whole repaint, not per
+    // row: every row in one repaint belongs to the same dial by construction,
+    // and the row grey below reads it per row only because it was already
+    // written that way.
+    bool     hide_wb      = qs.ft8_filters.hide_worked_before;
+    uint32_t hide_wb_freq = hide_wb ? cat_get_frequency() : 0;
+
     // Also hide stations whose last decode landed on OUR TX parity while the
     // CQ run is active: we transmit over every slot we could hear them in, so
     // they can't be worked right now - and since the parity-aging pause
@@ -1249,6 +1257,12 @@ static void rebuild_list(void)
                           strcasecmp(snap[i].call, s_qso_active_target) == 0;
         if (!is_partner) {
             if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+            /* Worked before on THIS band, and the operator asked for them to
+             * go (Randy N4OPI). Same band-aware test the row grey uses, so a
+             * hidden row and a dim row can never disagree about who counts as
+             * worked - and the grey stays unconditional, which is what every
+             * operator who leaves this off still sees. */
+            if (hide_wb && adif_log_contains_call_on_band(snap[i].call, hide_wb_freq)) continue;
             if (cq_hide_our_parity) {
                 // Same nearest-slot parity rounding as the per-row E/O indicator.
                 int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;

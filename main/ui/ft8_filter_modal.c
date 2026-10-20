@@ -32,6 +32,7 @@ static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_cq_show_others = NULL;
+static lv_obj_t *s_cb_hide_worked   = NULL;  // hide worked-before rows outright (Randy N4OPI)
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
@@ -126,6 +127,7 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
     f.cq_show_others     = lv_obj_has_state(s_cb_cq_show_others, LV_STATE_CHECKED);
+    f.hide_worked_before = lv_obj_has_state(s_cb_hide_worked, LV_STATE_CHECKED);
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
@@ -160,11 +162,11 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d hide_wb=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
              f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup,
-             f.cq_show_others);
+             f.cq_show_others, f.hide_worked_before);
     modal_close();
 }
 
@@ -389,7 +391,7 @@ static void modal_build(void)
     // 60 px row spacing (was 44) - big-finger touch clearance around the
     // checkboxes was too tight to safely tap just one (field feedback).
     lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_skip_tx1, *lbl_robot;
-    lv_obj_t *lbl_cq_show_others;
+    lv_obj_t *lbl_cq_show_others, *lbl_hide_worked;
 
     /* ⛔ "EXCLUDE" WAS THE WRONG WORD AND IT COST A REPORT. Randy N4OPI,
      * 2026-10-16: "I would expect that with this checked, worked before
@@ -435,6 +437,23 @@ static void modal_build(void)
      * labels are 16-19 characters and fit, so 18 is the budget here. */
     s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs in my run", RIGHT_COL_X, 390, &lbl_cq_show_others);
     lv_obj_set_style_text_color(lbl_cq_show_others, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    /* The other half of Randy N4OPI's 2026-10-16 report, as its own switch -
+     * operator's decision 2026-10-20. "Never auto-call worked-before" (left
+     * column, same row) gates the machine; this gates the LIST, on both
+     * screens. Separate because working duplicates by hand while the machine
+     * passes over them is a real way to operate.
+     *
+     * ⚠ Placed at RIGHT_COL_X y=330, beside the switch it is paired with, so
+     * the two worked-before questions read as a pair rather than being found
+     * one at a time.
+     *
+     * ⭐ 244.7 px at montserrat_24, tools/measure_label.py - just under "Show
+     * CQs in my run" (247.7 px) directly below it, which renders unclipped in
+     * this column. Measured, not counted: 18 characters is the same count as
+     * the label that shipped clipped. */
+    s_cb_hide_worked = make_labeled_checkbox(panel, "Hide worked-before", RIGHT_COL_X, 330, &lbl_hide_worked);
+    lv_obj_set_style_text_color(lbl_hide_worked, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Max age in list — same row, in the gap before the right column ---
     // How long a station stays in the LIVE decode list with no fresh decode.
@@ -720,6 +739,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
     apply_checkbox_state(s_cb_cq_show_others, f->cq_show_others);
+    apply_checkbox_state(s_cb_hide_worked, f->hide_worked_before);
     apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,

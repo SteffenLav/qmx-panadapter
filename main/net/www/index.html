@@ -4536,6 +4536,12 @@ const SET_FIELDS = [
      the row's grey is unconditional and comes from the log, not from here. */
   ["FT8 filters", "filters.excl_worked_before", "bool", "Never auto-call a station worked before",
    "Stops the MACHINE calling them - CQ answers, the pile-up, Auto-work and the robot all pass over a call already in your log on this band. It does not hide anything: a worked station is greyed in the decode list whether this is on or off, and you can still work it by tapping it. Per band, so the same call on another band is new"],
+  /* The other half of Randy N4OPI's report: the switch above gates the
+     MACHINE, this one gates the LIST. Kept separate on purpose - working
+     duplicates by hand while the machine leaves them alone is a real way to
+     operate, and one switch cannot serve both. */
+  ["FT8 filters", "filters.hide_worked_before", "bool", "Hide stations worked before",
+   "Removes them from the decode list on both screens, instead of only dimming them. Per band, from your log, so the same call on another band still shows. The station you are mid-exchange with is never hidden"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",

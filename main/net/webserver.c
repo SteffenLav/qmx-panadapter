@@ -5626,6 +5626,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(f, "excl_plain_cq",      c.ft8_filters.excl_plain_cq);
     cJSON_AddBoolToObject(f, "incl_cq_only",       c.ft8_filters.incl_cq_only);
     cJSON_AddBoolToObject(f, "cq_show_others",     c.ft8_filters.cq_show_others);
+    cJSON_AddBoolToObject(f, "hide_worked_before", c.ft8_filters.hide_worked_before);
     cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
     cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
     cJSON_AddBoolToObject(f, "cq_manual_pick",     c.ft8_filters.cq_manual_pick);
@@ -6336,6 +6337,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         BOOLF("excl_plain_cq",      excl_plain_cq);
         BOOLF("incl_cq_only",       incl_cq_only);
         BOOLF("cq_show_others",     cq_show_others);
+        BOOLF("hide_worked_before", hide_worked_before);
         BOOLF("skip_tx1",           skip_tx1);
         BOOLF("auto_pileup",        auto_pileup);
         BOOLF("cq_manual_pick",     cq_manual_pick);
@@ -7233,6 +7235,12 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         bool is_partner = working[0] && strcasecmp(r->call, working) == 0;
         if (!is_partner) {
             if (hide_cq && strncmp(r->last_text, "CQ ", 3) == 0) continue;
+            // Worked before on this band, and the operator asked for them to go
+            // (Randy N4OPI). Applied HERE as well as on the Tab5 because the two
+            // lists filter separately - the defect js8_chat_copy() records, one
+            // screen filtering and the other not.
+            if (qs.ft8_filters.hide_worked_before &&
+                adif_log_contains_call_on_band(r->call, dial_hz)) continue;
             if (qs.ft8_filters.incl_cq_only && strncmp(r->last_text, "CQ ", 3) != 0) continue;
             if (!ft8_filter_match(r->last_text, &qs.ft8_filters)) continue;
         }
