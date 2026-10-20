@@ -201,6 +201,35 @@ bool gpio_relay_pulse(uint8_t pin, bool level, uint16_t ms, char *err, size_t er
         if (err) snprintf(err, errlen, "a pulse is already in progress");
         return false;
     }
+    /* ⛔ WITH SOLO ON, ONLY THE SELECTED PIN IS AN OUTPUT - so a pulse on the
+     * other one would call gpio_set_level() on a pad configured as an INPUT,
+     * which drives NOTHING and reports success. The operator would press
+     * Pulse, read "GPIO54 -> 1 for 1000 ms" in the log, and have nothing
+     * happen on the wire.
+     *
+     * Found while exercising the solo option on the bench, 2026-10-20, before
+     * it shipped: the pin is a free parameter here and nothing tied it to the
+     * stored selection, because until solo existed BOTH pads were always
+     * driven and any pin worked.
+     *
+     * Refused rather than re-pointed. Re-configuring the pads to follow the
+     * requested pin would start driving the pin solo mode exists to leave
+     * alone - Randy N4OPI's GPS is on it. Declaring one pin yours means the
+     * other is not available to pulse. */
+    {
+        uint8_t  sel_pin = 53;
+        bool     sel_level = true;
+        uint16_t sel_ms = 1000;
+        settings_get_gpio_relay(&sel_pin, &sel_level, &sel_ms);
+        if (settings_get_gpio_relay_solo() && pin != sel_pin) {
+            /* ⚠ MUST FIT 64 BYTES. Every caller passes char err[64], and the
+             * first wording ran to 83 - the operator was shown a sentence cut
+             * off mid-word at "GPIO5". Measured on the bench, not counted. */
+            if (err) snprintf(err, errlen,
+                "GPIO%u is hi-Z: only GPIO%u is driven", pin, sel_pin);
+            return false;
+        }
+    }
 
     s_busy        = true;
     s_active_pin  = pin;
