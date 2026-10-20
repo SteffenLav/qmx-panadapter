@@ -796,6 +796,33 @@ static int64_t s_mount_retry_last_us = 0;
 // as long as it took. SLOW_DRAIN_MAX keeps the worst case bounded while still
 // being 16x what a single chunk moved.
 #define SLOW_DRAIN_MAX_CHUNKS 16            // <= 64 KB inside one open
+
+/* ⛔ BYTES DO NOT BOUND TIME, AND THAT IS WHY THE CHUNK CAP ABOVE DID NOT
+ * HELP. The worst hold measured on the bench - 3,319 ms - moved 25 KB, well
+ * inside the 64 KB this allows, and the comment at the top of this file
+ * records 8,942 ms to write ONE byte. A cap counted in bytes cannot bound a
+ * stall whose cost is the card's, not the payload's.
+ *
+ * The web stream is PAUSED for the whole of this write (webserver_ws_set_
+ * paused below), so the hold is a gap in the operator's audio. Measured over
+ * 466 writes: median 213 ms, p90 464, p99 942, max 3,319. The median is
+ * inaudible behind rx_audio.c's 3 s ring; the tail is what gets heard, and
+ * what a browser can mistake for a dead socket and reconnect.
+ *
+ * 400 ms, and the arithmetic matters because too SMALL a budget is its own
+ * bug - the drain would stop keeping up and the backlog would grow forever:
+ *
+ *   - the log produces ~6 KB per 30 s pass (p90 7.8 KB)
+ *   - the card moves a median 28 KB/s, so 400 ms clears ~11 KB
+ *   - that is ~1.4x production at the median, so a healthy unit keeps up
+ *     with room to spare, and a slow spell (p10 13 KB/s = 5 KB) catches up
+ *     on the following passes instead of stalling the audio now
+ *
+ * ⚠ WHAT THIS CANNOT DO: the budget is checked BETWEEN chunks, so a single
+ * fwrite that blocks for seconds is not bounded by it. That case exists (the
+ * 8,942 ms one byte). This caps the multi-chunk backlog drain, which is what
+ * every measured outlier actually was. */
+#define SLOW_DRAIN_MAX_HOLD_MS 400
 static bool mirror_diag_slow(void)
 {
     static char buf[DIAG_CHUNK] SD_IO_ALIGNED;   // see storage/sd_io_buf.h
@@ -850,6 +877,17 @@ static bool mirror_diag_slow(void)
             s_diag_cursor = next;
             s_log_bytes  += got;
             wrote        += got;
+            /* Checked AFTER a chunk has landed, so every pass always makes
+             * progress - a budget tested first could livelock on a card slow
+             * enough that one chunk never fits, and the cursor would never
+             * move. What is left stays for the next pass 30 s later; the
+             * cursor is already advanced per chunk, so it resumes exactly
+             * here with nothing rewritten. */
+            if ((esp_timer_get_time() - diag_pause_t0) / 1000 >= SLOW_DRAIN_MAX_HOLD_MS) {
+                ESP_LOGW(TAG, "diag mirror: hold budget reached after %u B - "
+                              "leaving the rest for the next pass", (unsigned)wrote);
+                break;
+            }
             got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
         }
         // One fsync for the whole burst - it is the expensive part, and the
