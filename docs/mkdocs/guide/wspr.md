@@ -12,8 +12,6 @@ Swipe → from the left edge to cycle **Panadapter -> FT8/FT4/JS8 -> WSPR** and 
 
 Everything in WSPR is built on a **two-minute cycle**, aligned to UTC. A transmission starts a second or two after each even minute and lasts about 110 seconds, so one cycle carries exactly one beacon.
 
-![The WSPR cycle: a 110.6 s transmission starting one second into an even minute
-inside a two-minute cycle, the capture and 115 s decode budget on a receive cycle,
 ```qmxdiagram
 type: timeline
 title: One WSPR cycle - 2 minutes

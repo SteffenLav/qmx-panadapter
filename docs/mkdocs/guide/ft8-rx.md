@@ -25,8 +25,6 @@ You'll see:
 
 The list shows every decoded FT8 message:
 
-![The FT8 slot: a 12.64 s transmission in a 15 s slot, the 2.36 s of dead air after
-it, where our own transmission starts, and what DT and DTR each measure from the slot
 ```qmxdiagram
 type: timeline
 title: One FT8 slot - 15 s, and what DT and DTR measure

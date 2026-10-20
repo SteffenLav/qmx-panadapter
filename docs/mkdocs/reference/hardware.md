@@ -58,8 +58,6 @@ See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md
 
 ## Cables
 
-![What plugs into what: one USB cable from the Tab5 as host to the radio carrying
-both the CAT commands and the I/Q audio, separate USB-C power to the Tab5, the
 ```qmxdiagram
 type: flow
 title: What plugs into what

@@ -4,9 +4,6 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 
 ### 1. Time Sources (Priority Order)
 
-![Clock sources in order of authority: Unit GPS on PORT.A, the QMX+ GPS second-tick
-when the GPS flag is set, SNTP over WiFi, the Tab5 RTC, the QMX time-of-day as an
-offline fallback, and manual entry last — with a note that the boot order is not the
 ```qmxdiagram
 type: flow
 title: Which clock source wins - highest authority first
