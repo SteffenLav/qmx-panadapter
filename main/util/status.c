@@ -195,8 +195,47 @@ static void short_ver(const char *in, char *out, size_t out_sz)
 // free to be a plain tap again, and the label is free to say "tap" honestly.
 // Every action now lives in ota_modal.c behind a named button.
 // ---------------------------------------------------------------------------
+/* ⭐ NAME THE DEVICE THAT OPENED IT. Operator, 2026-10-19 and again 2026-10-20:
+ * the bench Tab5 was found showing this modal on two consecutive mornings after
+ * being left alone all night.
+ *
+ * It cannot be the periodic check. That runs about every 30 minutes, logs
+ * "update_check: ... -> up to date" and raises no UI at all - the overnight
+ * capture has a long row of those and nothing else. ota_modal_show() has
+ * exactly ONE caller, which is this one, and this one is a TAP.
+ *
+ * So something produced a press, and the target is unusually easy to hit: while
+ * there is anything to tap, the WHOLE BOTTOM BAR accepts it (see the comment at
+ * the tappable flag below), which is the full width of the screen along its
+ * bottom edge.
+ *
+ * Same shape as the Enter-frequency keypad opening itself with nobody touching
+ * the Tab5 (Roy KI0ER, 2026-09-24) - an oversized hit zone plus a press nobody
+ * made - and that one is still unexplained, with a panel-invented touch, the
+ * Bluetooth mouse and the snap-on keyboard all still candidates. This is the
+ * same instrument freq_label_clicked_cb() carries, so the two can be compared:
+ * if both report POINTER at the same coordinates, it is one fault.
+ *
+ * ⚠ The log line goes in BEFORE the modal opens, so a crash or a freeze after
+ * this point still leaves the evidence. */
 static void update_line_tap(void)
 {
+    lv_indev_t *id = lv_indev_active();
+    if (id) {
+        lv_point_t p = { 0, 0 };
+        lv_indev_get_point(id, &p);
+        lv_indev_type_t t = lv_indev_get_type(id);
+        ESP_LOGW(TAG, "update modal opened by %s at (%d,%d)",
+                 t == LV_INDEV_TYPE_POINTER  ? "POINTER (touch or mouse)" :
+                 t == LV_INDEV_TYPE_KEYPAD   ? "KEYPAD"   :
+                 t == LV_INDEV_TYPE_ENCODER  ? "ENCODER"  :
+                 t == LV_INDEV_TYPE_BUTTON   ? "BUTTON"   : "an unknown device",
+                 (int)p.x, (int)p.y);
+    } else {
+        ESP_LOGW(TAG, "update modal opened with NO active input device "
+                      "(software-generated click)");
+    }
+
     ota_modal_show();
 }
 
