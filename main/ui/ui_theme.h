@@ -135,12 +135,17 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
 #define UI_COLOR_MODE_USB  0xD9634B  /* brick red/brown — was steel blue, too close to CW's blue */
 #define UI_COLOR_MODE_LSB  0x633079  /* purple */
 #define UI_COLOR_MODE_WSPR 0x3D8C40  /* green     — ui/spot_map_view.c's third self-spotting source, no bandplan analogue to match */
+#define UI_COLOR_MODE_AM   0x1F8A8A  /* teal      — no bandplan analogue either (AM lives inside
+                                        the Phone segments), and the five mode
+                                        colours have to be told apart at a glance
+                                        in a 56 px memory-grid cell: kept clear of
+                                        CW's 0x2477B3 blue and WSPR's green. */
 
 /* Map a mode string (as stored in mem_slot_t.mode / used by the freq pad's
  * mode row) to its colour. Substring match so "DiGi"/"FT8"/"FT4"/"RTTY" all
  * land on the DiGi colour without the caller having to enumerate every
  * digital sub-mode name the QMX reports. Falls back to UI_COLOR_KEY_BG for
- * anything unrecognized (AM/FM and not-yet-seen modes). */
+ * anything unrecognized (FM and not-yet-seen modes). */
 static inline uint32_t ui_theme_mode_color(const char *mode)
 {
     if (!mode || !mode[0]) return UI_COLOR_KEY_BG;
@@ -149,6 +154,8 @@ static inline uint32_t ui_theme_mode_color(const char *mode)
     if (strstr(mode, "USB"))                                    return UI_COLOR_MODE_USB;
     if (strstr(mode, "LSB"))                                    return UI_COLOR_MODE_LSB;
     if (strstr(mode, "CW"))                                     return UI_COLOR_MODE_CW;
+    /* After the rest: no other mode string the QMX reports contains "AM". */
+    if (strstr(mode, "AM"))                                     return UI_COLOR_MODE_AM;
     return UI_COLOR_KEY_BG;
 }
 

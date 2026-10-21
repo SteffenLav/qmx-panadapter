@@ -486,16 +486,40 @@ static void freq_apply_keypad_layout(void)
                                              s_freq_calc_layout ? "Phone" : "10 Key");
 }
 
-// Mode row on the freq keypad: DiGi / USB / LSB / CW. Selected mode is
-// highlighted yellow and travels with the typed frequency.
-static const char *const s_freq_modes[4] = {"DiGi", "USB", "LSB", "CW"};
-static lv_obj_t *s_freq_mode_btns[4];
+/* Mode row on the freq keypad: DiGi / USB / LSB / CW, and AM on a radio that
+ * can do it. The selected mode highlights in its own colour and travels with
+ * the typed frequency.
+ *
+ * ⛔ AM WAS MISSING HERE FOR NO REASON - Gyula HA3HZ, 2026-10-21: "the AM
+ * mode cannot be recorded on the memory panel". Nothing refused it; this array
+ * was simply never extended when AM reached the top bar. The slot itself has
+ * always been able to hold it (memory_modal.c stores a char mode[8] string),
+ * cat_request_mode("AM") already maps to MD5, and recall already greys non-DiGi
+ * slots in FT8/FT4. Only the four buttons were in the way.
+ *
+ * Gated exactly as the top-bar mode popup is (cat_qmx_fw_at_least(1,4,0)):
+ * older QMX firmware answers MD5; with "?;", so offering AM there would store
+ * a channel the radio refuses to recall. One rule, two places - if the gate
+ * ever moves, both must move together.
+ *
+ * ⭐ FIVE ACROSS FITS, MEASURED rather than eyeballed, from LVGL's own
+ * adv_w tables. Small pad: content 308 px, gap 6, so 56 px a button against a
+ * widest label of "USB" at 52.1 px in montserrat_24. Large pad: 89 px a button
+ * against 69.4 px in montserrat_32. */
+static const char *const s_freq_modes[5] = {"DiGi", "USB", "LSB", "CW", "AM"};
+static lv_obj_t *s_freq_mode_btns[5];
 static char      s_freq_mode_sel[8] = "";
 static bool      s_freq_mode_changed = false;  // set by freq_mode_cb, cleared on open
 
+/* How many of s_freq_modes[] to show: 5 with AM, 4 without. */
+static int freq_mode_count(void)
+{
+    return cat_qmx_fw_at_least(1, 4, 0) ? 5 : 4;
+}
+
 static void freq_mode_highlight(void)
 {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < (int)(sizeof(s_freq_mode_btns) / sizeof(s_freq_mode_btns[0])); i++) {
         if (!s_freq_mode_btns[i]) continue;
         bool sel = (strcmp(s_freq_modes[i], s_freq_mode_sel) == 0);
         // Selected mode highlights in its own colour (same table the memory
@@ -940,8 +964,9 @@ static void freq_popup_build(void)
     // Mode row: DiGi / USB / LSB / CW. Only for the Memory channel editor;
     // the top-bar keypad omits it (mode lives in the top bar there).
     if (show_mode) {
-        int mode_w = (content_w - 3 * gap) / 4;
-        for (int i = 0; i < 4; i++) {
+        int n_modes = freq_mode_count();
+        int mode_w = (content_w - (n_modes - 1) * gap) / n_modes;
+        for (int i = 0; i < n_modes; i++) {
             lv_obj_t *btn = lv_btn_create(panel);
             lv_obj_set_size(btn, mode_w, btn_h);
             lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
@@ -954,9 +979,15 @@ static void freq_popup_build(void)
             lv_obj_center(lbl);
             s_freq_mode_btns[i] = btn;
         }
+        /* Any mode button this radio does not get must be cleared, or
+         * freq_mode_highlight() reads a dangling pointer from a previous
+         * open that had more buttons. */
+        for (int i = n_modes; i < (int)(sizeof(s_freq_mode_btns) / sizeof(s_freq_mode_btns[0])); i++)
+            s_freq_mode_btns[i] = NULL;
         freq_mode_highlight();
     } else {
-        for (int i = 0; i < 4; i++) s_freq_mode_btns[i] = NULL;
+        for (int i = 0; i < (int)(sizeof(s_freq_mode_btns) / sizeof(s_freq_mode_btns[0])); i++)
+            s_freq_mode_btns[i] = NULL;
     }
 
     // Cancel / Enter row - directly below the unit row when there's no mode row.
