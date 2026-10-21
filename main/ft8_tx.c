@@ -1595,6 +1595,12 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         if (!sim && power_w >= 0.0f && swr > 4.0f) {
             ESP_LOGW(TAG, "SWR protection trip (SWR=%.2f) — cycling TX/RX to clear latch",
                      (double)swr);
+            /* ⚠ NOT band-guarded, and deliberately. This is reachable only
+             * from inside a burst that already passed the guard a few seconds
+             * ago, on the same dial and the same tone, and its whole job is
+             * to clear a tripped SWR latch. A refusal here would leave the
+             * radio latched - a worse outcome than the 150 ms it keys for.
+             * Listed with this reason in tools/check_tx_guard.py. */
             cat_send_raw_cmd("TX;");
             vTaskDelay(pdMS_TO_TICKS(150));
             cat_send_raw_cmd("RX;");

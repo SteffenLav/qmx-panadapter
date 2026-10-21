@@ -14,6 +14,7 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
+#include "tx_band_guard.h"   // T48: refuse to key outside the region's allocation
 
 static const char *TAG = "tune_modal";
 
@@ -105,6 +106,18 @@ static void action_btn_cb(lv_event_t *e)
     if (cat_user_pause_active()) {
         ui_toast("Radio released - take it back before tuning");
         return;
+    }
+    /* ⛔ BAND GUARD (T48). Tune keys a CARRIER, and in MD8 the emitted RF is
+     * the dial itself - no audio offset, unlike the digital modes. Checked
+     * before the mode write, not after: once the radio is in MD8 it is already
+     * transmitting. */
+    {
+        char gerr[160];
+        uint32_t d = cat_get_frequency();
+        if (!tx_band_guard_allows(d, d, "Antenna Tune", gerr, sizeof gerr)) {
+            ui_toast_ms(gerr, 15000);
+            return;
+        }
     }
     const char *cur = cat_get_mode_str();
     strncpy(s_prior_mode, (cur && cur[0]) ? cur : "USB", sizeof(s_prior_mode) - 1);

@@ -55,6 +55,23 @@ Get-ChildItem tools/patches/apply_*.ps1 | ForEach-Object { powershell -File $_.F
 python tools/check_patches.py     # the authority - refuses the build if any is missing
 ```
 
+## ⛔ Every transmit path must pass the band guard
+
+`python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
+out without checking the band**, and it runs PRE_BUILD. Today: 6 keying sites,
+1 exempt (with its reason written in the script, not in prose).
+
+Out-of-band transmission is **his licence**, not a cosmetic defect: *"TX'ing out
+of band no matter what mode is a legal thing that potentially can fall back on
+my shoulders if not prohibited by my device"* (2026-10-21). RX is unrestricted;
+TX is not. See [the guard](../../../memory/project_t48_tx_band_guard.md).
+
+⚠ The guard needs the **IARU region** — set, or from the grid the GPS writes.
+An unknown region REFUSES, exactly as a missing callsign or grid already does.
+
+⛔ Never add a keying site without `tx_band_guard_allows()`, and never silence
+the checker by adding to EXEMPT without writing why.
+
 ## ⛔ What can key the radio is a FILE, not a memory
 
 `python tools/check_unattended_tx.py` is the authority over

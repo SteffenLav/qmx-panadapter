@@ -111,6 +111,7 @@ extern uint32_t qmx_lv_event_chain_bad;
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#include "tx_band_guard.h"   // T48: refuse to key outside the region's allocation
 
 static const char *TAG = "webserver";
 
@@ -625,6 +626,18 @@ static bool web_tune_start(void)
     // Never while the operator has released the radio: Tune keys a carrier, and
     // the mode write it needs would go into a menu they are standing in front of.
     if (cat_user_pause_active()) return false;
+    /* ⛔ BAND GUARD (T48), and the browser path needs it at least as much as
+     * the Tab5's: nobody is standing in front of the radio. Tune keys a
+     * carrier on the DIAL in MD8 - no audio offset. */
+    {
+        char gerr[160];
+        uint32_t d = cat_get_frequency();
+        if (!tx_band_guard_allows(d, d, "Antenna Tune", gerr, sizeof gerr)) {
+            ui_toast_ms(gerr, 15000);
+            ESP_LOGE(TAG, "web tune REFUSED: %s", gerr);
+            return false;
+        }
+    }
     const char *cur = cat_get_mode_str();
     snprintf(s_web_tune_prior, sizeof(s_web_tune_prior), "%s",
              (cur && cur[0] && strcmp(cur, "TUNE") != 0) ? cur : "USB");

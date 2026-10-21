@@ -291,6 +291,23 @@ add_custom_command(
     VERBATIM
 )
 
+# Refuse to build a firmware that can put RF out without checking the band.
+#
+# Transmitting out of band is the operator's licence on the line, not a
+# cosmetic defect - his words, 2026-10-21: "TX'ing out of band no matter what
+# mode is a legal thing that potentially can fall back on my shoulders if not
+# prohibited by my device". The six sites that exist today are guarded; this is
+# about the seventh, the one added next year. A comment claiming completeness
+# would rot exactly as the standing-patch count and the unattended-TX count
+# both did, so the authority is a script. See tools/check_tx_guard.py for what
+# counts as a keying site and how a genuine exemption is recorded.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_tx_guard.py"
+    COMMENT "Checking every transmit path passes the band guard"
+    VERBATIM
+)
+
 # Refuse to build settings.c with two settings sharing one dirty bit.
 #
 # The indices are hand-written #defines, so two features developed on separate
