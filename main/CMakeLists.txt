@@ -142,6 +142,7 @@ idf_component_register(
         "util/world_map_data.c"
         "ft8_robot.c"
         "ft8_directed_cq.c"
+        "tx_band_guard.c"
         "ft8_sim.c"
         "wspr_proto.c"
         "wspr_fano.c"

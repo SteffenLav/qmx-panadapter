@@ -5802,6 +5802,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     }
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
+    cJSON_AddBoolToObject(root, "tx_band_guard_off", c.tx_band_guard_off);
     // #221 API AUDIT, read side: these were WRITE-ONLY - settable but not
     // readable, so a script could change them and never confirm what it had
     // done, and could not restore what it found. An API that only writes is
@@ -6481,6 +6482,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
     BOOLTOP("greylist_en",       settings_set_greylist_en);
+    BOOLTOP("tx_band_guard_off", settings_set_tx_band_guard_off);
     BOOLTOP("qmx_gps",           settings_set_qmx_gps);
     // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool
     // because it is a ladder, not a switch - see ft8_hound.h.

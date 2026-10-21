@@ -271,6 +271,32 @@ setting ticked in v1.20.2 the line is untouched in either mode.
 
 The same control is in the web UI's **Miscellaneous** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
 
+## Transmitting outside the band plan
+
+The Tab5 **refuses to key the radio** if the transmission would fall outside
+your IARU region's allocation, and tells you which frequency and which region
+it judged you against. It checks the frequency actually transmitted, not the
+dial — in a digital mode the carrier is the dial plus the audio tone, so the
+dial on its own is the wrong number.
+
+**You need the IARU region set for this**, under Settings, or a grid for the
+Tab5 to work it out from (the Unit GPS sets one for you). Without either, the
+band cannot be checked and transmission is refused — the region matters as much
+as your callsign and grid, both of which the Tab5 has always required before
+transmitting.
+
+**Allow transmitting outside the band plan** turns the check off. Only tick it
+if your licence gives you access the built-in band plan does not know about —
+an experimental or special allocation, for instance. The table is coarse by
+design, and it has been wrong at a band edge before: until v1.20.3 its 60 m
+upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
+
+!!! warning "What it does not cover"
+    CW keying and SWR Tune are not checked. They are things you start yourself,
+    where the dial is the transmitted frequency and what you see is what goes
+    out; the guard is aimed at the digital modes, which transmit on a schedule
+    and can do so with nobody watching.
+
 ## Battery Care
 
 **Charge Limit** — Optionally stop charging once the battery reaches a set percentage (default **80%**), to reduce long-term wear on the pack. Enable it and choose the target in the settings drawer; charging restarts automatically if the level later falls well below the target (5% hysteresis). Leave it off to always charge to 100%.

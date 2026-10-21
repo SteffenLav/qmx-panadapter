@@ -557,6 +557,22 @@ typedef struct {
                                // slot at a decodable DT. Trades some weak/late-station yield (default true)
     bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     bool     greylist_en;     // FT8: grey-list stations after repeated failed pounces - auto pickers skip
+    /* ⛔ REFUSE TO TRANSMIT OUTSIDE THE EFFECTIVE REGION'S ALLOCATION (T48).
+     *
+     * Stored INVERTED - tx_band_guard_off - so a zero from an old NVS blob
+     * means the guard is ON. Every other appended setting here defaults to
+     * off because off is the old behaviour; this one must not, because the old
+     * behaviour is "transmit whatever is stored", and that is what let a WSPR
+     * 60 m dial 63 kHz below the band go out unattended.
+     *
+     * ⚠ THE OFF SWITCH IS NOT A COURTESY. bandplan.h says its own numbers are
+     * "an operator hint, not a legal authority", and on 2026-10-21 one was
+     * wrong by 500 Hz at exactly the edge WSPR uses. Operators with special or
+     * experimental licences have access this table does not model, and our
+     * Region 2 60 m is a continuous segment where the US has five channels.
+     * A guard that cannot be switched off would eventually stop a legal
+     * transmission with no way round it. */
+    bool     tx_band_guard_off;
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
     bool     spots_en;        // draw live POTA (later RBN) spots on the spectrum (default true)
     bool     rbn_en;          // add the RBN telnet feed as a second spot source (default FALSE:
@@ -1106,6 +1122,8 @@ void settings_set_spur_mode(uint8_t v);
 // boundary and a hand-tapped reply can fire in its own slot at a decodable DT.
 void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
+void settings_set_tx_band_guard_off(bool v);
+bool settings_get_tx_band_guard_off(void);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 bool settings_get_spots_en(void);       // narrow: spots_any_source_enabled() runs on render (4096 B stack)

@@ -124,6 +124,30 @@ bandplan_region_t bandplan_effective_region(bandplan_region_t setting, const cha
     return bandplan_region_from_grid(grid);
 }
 
+bool bandplan_region_is_known(bandplan_region_t setting, const char *grid)
+{
+    if (setting == BP_REGION_1 || setting == BP_REGION_2 || setting == BP_REGION_3)
+        return true;
+    double lat, lon;
+    return grid && maidenhead_to_latlon(grid, &lat, &lon);
+}
+
+bool bandplan_tx_in_band(uint32_t rf_lo_hz, uint32_t rf_hi_hz,
+                         bandplan_region_t region)
+{
+    if (rf_hi_hz < rf_lo_hz) { uint32_t t = rf_lo_hz; rf_lo_hz = rf_hi_hz; rf_hi_hz = t; }
+    const bp_band_t *tbl;
+    int n;
+    region_table(region, &tbl, &n);
+    for (int i = 0; i < n; i++) {
+        /* BOTH edges in the SAME band. Testing them separately would pass a
+         * burst that straddles two bands, and testing only the centre would
+         * pass one whose top tone is outside. */
+        if (rf_lo_hz >= tbl[i].lo_hz && rf_hi_hz <= tbl[i].hi_hz) return true;
+    }
+    return false;
+}
+
 int bandplan_get_segments(uint32_t freq_hz, bandplan_region_t region, const bp_seg_t **out)
 {
     if (out) *out = NULL;

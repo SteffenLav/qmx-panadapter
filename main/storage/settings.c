@@ -125,6 +125,7 @@ static const char *TAG = "settings";
 #define KEY_SPUR_SUP       "spur_sup"
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
+#define KEY_TXBAND_OFF     "txband_off"
 #define KEY_PSKREP_EN      "pskrep_en"
 #define KEY_PSK_RX_EN      "pskrx_en"
 #define KEY_BT_MOUSE_EN    "btmouse_en"
@@ -456,6 +457,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
    DIRTY_PA_CEILING, defined elsewhere in this file. The "spare" counts in
    the comments above had gone stale - the checker is the authority. */
 #define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
+#define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -693,6 +695,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap.spur_mode);
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_TXBAND_OFF))    nvs_set_u8(s_nvs, KEY_TXBAND_OFF,    snap.tx_band_guard_off ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap.psk_rx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap.bt_mouse_en ? 1 : 0);
@@ -947,6 +950,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
+    out->tx_band_guard_off = false;   // guard ON by default - see settings.h
     // ON by default: contributing reception reports is the norm for FT8
     // software (WSJT-X ships PSK Reporter spotting enabled) and the data is
     // inherently public ham activity. Disclosed in the release notes + manual;
@@ -1214,6 +1218,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPUR_SUP, &u8v) == ESP_OK) out->spur_mode = (u8v <= 2) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_TXBAND_OFF, &u8v) == ESP_OK) out->tx_band_guard_off = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSK_RX_EN, &u8v) == ESP_OK) out->psk_rx_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BT_MOUSE_EN, &u8v) == ESP_OK) out->bt_mouse_en = (u8v != 0);
@@ -3114,6 +3119,29 @@ void settings_set_greylist_en(bool v)
     s_pending.greylist_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_GREYLIST_EN);
+}
+
+void settings_set_tx_band_guard_off(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.tx_band_guard_off == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.tx_band_guard_off = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TXBAND_OFF);
+}
+
+/* ⚠ Deliberately FAILS SAFE: with settings not ready the guard is ON, because
+ * the alternative is transmitting unchecked during the one window where
+ * nothing is known. Same reasoning as the 167 setters that return early on
+ * !s_ready, read from the other direction. */
+bool settings_get_tx_band_guard_off(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.tx_band_guard_off;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_pskreporter_en(bool v)

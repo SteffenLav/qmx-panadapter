@@ -8,6 +8,8 @@
 #include "ft8_msg_guard.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode
+#include "tx_band_guard.h"   // T48: refuse to key outside the region's allocation
+#include "ui/ui.h"      // ui_toast_ms - a TX refusal has to reach the screen
 
 #include <string.h>
 #include <stdio.h>
@@ -1265,7 +1267,23 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     // receiving decoder. Invariant: start exactly on time, or not at all.
     // Skipped entirely in sim mode - there's no real radio mode to drift.
     const char *mode = sim ? "DiGi" : cat_get_mode_str();
-    if (strcmp(mode, "DiGi") != 0) {
+    /* ⛔ BAND GUARD (T48), in the same pre-flight and for the same stated
+     * reason: "start exactly on time, or not at all". An FT8 burst spans 8
+     * tones of 6.25 Hz (FT4: 4 of 20.83), so the top tone is base + 50 Hz at
+     * most - checked, because a dial at the top band edge puts the top tone
+     * outside while the base is inside. */
+    char band_err[160] = "";
+    const uint32_t tx_dial = sim ? 0u : cat_get_frequency();
+    const bool band_ok = sim ? true
+        : tx_band_guard_allows(tx_dial + (uint32_t)req->audio_freq_hz,
+                               tx_dial + (uint32_t)req->audio_freq_hz + 50u,
+                               ftx_protocol_name(req->protocol),
+                               band_err, sizeof band_err);
+    if (!band_ok) {
+        ESP_LOGE(TAG, "TX aborted before key-up: %s", band_err);
+        ui_toast_ms(band_err, 15000);
+        ft8_status_set("%s", band_err);
+    } else if (strcmp(mode, "DiGi") != 0) {
         ESP_LOGW(TAG, "TX aborted before key-up: mode drifted to '%s' (need DiGi)", mode);
     } else {
         ESP_LOGI(TAG, "TX burst starting (%s): '%s' base=%d Hz%s",

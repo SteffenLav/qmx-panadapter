@@ -4644,6 +4644,10 @@ const SET_FIELDS = [
   ["Spots & reporting", "spots_mode_filter", "bool", "Mode filter the spots",
      "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
+  /* T48. Worded as turning the CHECK OFF, not the guard on, so the default
+     reads correctly: unchecked = the Tab5 refuses out-of-band transmissions. */
+  ["Station", "tx_band_guard_off", "bool", "Allow transmitting outside the band plan",
+   "Normally the Tab5 refuses to key the radio if the transmission would fall outside your IARU region's allocation, and says so. Tick this only if your licence gives you access the built-in band plan does not know about - it is a coarse table and has been wrong at a band edge before. With the guard on you must also have the IARU region set (or a grid, from the GPS), because the band cannot be checked without it"],
 
   /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
      this page can reach. All three were Tab5-only for no reason anyone could
