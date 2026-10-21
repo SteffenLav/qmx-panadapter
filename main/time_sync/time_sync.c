@@ -460,25 +460,50 @@ static void write_to_rtc_and_nvs(time_t utc, const char *source)
     s_last_persist_utc = utc;
 }
 
-static void apply_and_persist(time_t utc, const char *source)
+/* ⛔ usec IS NOT DECORATION - PASSING 0 ACTIVELY THROWS PHASE AWAY.
+ * A source that knows the sub-second must hand it over. SNTP does, and for
+ * years this function was called with whole seconds only: IDF's sync callback
+ * sets the system clock correctly first, including microseconds, and then our
+ * callback set it AGAIN truncated to the second below - undoing the good set
+ * and leaving the clock up to a second SLOW until something else fixed it.
+ *
+ * MEASURED 2026-10-21 in one day's capture, four hourly SNTP syncs:
+ *   W Unit-GPS off SNTP by 894 ms - applying Unit GPS anyway
+ *   I Time set from Unit-GPS: 11:17:23.000 UTC phase-locked (step +893 ms)
+ * and the same at 12:17, 13:17, 14:17 (876, 860, 845 ms). Always POSITIVE -
+ * the satellite always had to push the clock forward, which is truncation and
+ * not noise. On this bench the Unit GPS repaired it within the second. A
+ * WiFi-only Tab5 has nothing to repair it and carries that lag, uniformly
+ * distributed in 0..1 s and re-rolled at every sync, into FT8 slot timing.
+ *
+ * The QMX TM; and manual paths genuinely have no sub-second to give and still
+ * pass 0 through the wrapper below - for them the whole second IS the
+ * information. */
+static void apply_and_persist_us(time_t utc, suseconds_t usec, const char *source)
 {
-    struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
+    struct timeval tv = { .tv_sec = utc, .tv_usec = usec };
     settimeofday(&tv, NULL);
     write_to_rtc_and_nvs(utc, source);
     s_ft8_cum_offset_ms = 0;  // hard sync: any prior FT8 nudge is now baked in
 
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
-    ESP_LOGI(TAG, "Time set from %s: %04d-%02d-%02d %02d:%02d:%02d UTC",
+    ESP_LOGI(TAG, "Time set from %s: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC",
              source,
              tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
-             tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+             tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, (int)(usec / 1000));
+}
+
+/* The sources that have only a whole second to give. */
+static void apply_and_persist(time_t utc, const char *source)
+{
+    apply_and_persist_us(utc, 0, source);
 }
 
 // Priority 1: SNTP — always authoritative. Sets system clock, RTC, and NVS.
-void time_sync_notify_sntp(time_t utc)
+void time_sync_notify_sntp(time_t utc, suseconds_t usec)
 {
-    apply_and_persist(utc, "SNTP");
+    apply_and_persist_us(utc, usec, "SNTP");
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
     s_date_verified = true;

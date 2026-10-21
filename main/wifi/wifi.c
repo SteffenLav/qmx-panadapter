@@ -214,7 +214,7 @@ static void sntp_sync_cb(struct timeval *tv)
 
     // Write to the Tab5 supercap RTC, persist NVS anchor, update system clock,
     // and push to QMX (unless QMX GPS flag is set).
-    time_sync_notify_sntp(tv->tv_sec);
+    time_sync_notify_sntp(tv->tv_sec, tv->tv_usec);
 }
 
 // Replicates the work IDF's default WIFI_EVENT_STA_START handler (wifi_start in
