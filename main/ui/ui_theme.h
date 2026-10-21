@@ -226,7 +226,18 @@ static inline void ui_theme_style_keyboard(lv_obj_t *kb)
      * etc.) with a bright primary-colour fill - override to keep the same
      * dark key background used everywhere else. CHECKED is repurposed by
      * the shift-cycle below to mark the "Abc" pending-shift state on the
-     * shift key only, shown via gold text rather than a highlight fill. */
+     * shift key only, shown via gold text rather than a highlight fill.
+     *
+     * ⛔ "THE SHIFT KEY ONLY" IS AN INVARIANT WE HAVE TO MAINTAIN, NOT A
+     * FACT ABOUT LVGL. Reported by the operator 2026-10-21: "as soon as i
+     * start using the on screen keyb more than the Abc key turn yellow".
+     * LVGL's own default_kb_ctrl_lc_map / _uc_map / _spec_map set
+     * LV_BUTTONMATRIX_CTRL_CHECKED on the row-4 keys `_` and `-`, on `.` `,`
+     * `:`, and on both arrow keys - so a freshly loaded default map paints
+     * five or seven keys gold before we touch anything.
+     * lv_keyboard_def_event_cb() reloads that map on EVERY mode change, so
+     * clearing the bits once at attach time is not enough; see
+     * ui_theme_kb_clear_stray_checked(). */
     lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COLOR_KEY_BG), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(kb, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_text_color(kb, lv_color_hex(UI_COLOR_ACCENT_GOLD), LV_PART_ITEMS | LV_STATE_CHECKED);
@@ -281,6 +292,19 @@ static inline void ui_theme_kb_apply_state(lv_obj_t *kb, int state, uint32_t shi
     }
 
     lv_obj_set_user_data(kb, (void *)(intptr_t)((shift_btn << 3) | ((uint32_t)state << 1) | 1u));
+}
+
+/* Re-assert "CHECKED means the pending shift key, and nothing else".
+ *
+ * Call after anything that may have reloaded a default map - that is, after
+ * lv_keyboard_def_event_cb(), which calls lv_keyboard_set_mode() for the
+ * "abc"/"1#" keys. Cheap: two buttonmatrix calls, no redraw unless a bit
+ * actually changed. */
+static inline void ui_theme_kb_clear_stray_checked(lv_obj_t *kb, int state, uint32_t shift_btn)
+{
+    lv_buttonmatrix_clear_button_ctrl_all(kb, LV_BUTTONMATRIX_CTRL_CHECKED);
+    if (state == 1 && shift_btn != LV_BUTTONMATRIX_BUTTON_NONE)
+        lv_buttonmatrix_set_button_ctrl(kb, shift_btn, LV_BUTTONMATRIX_CTRL_CHECKED);
 }
 
 /* Find the shift key's button-matrix index in the keyboard's CURRENT map
@@ -357,9 +381,17 @@ static inline void ui_theme_kb_shift_cb(lv_event_t *e)
 
     if (state == 1 && btn_id != shift_btn) {
         /* Pending single-shift consumed by a normal key (the default handler
-         * just typed it in upper case): drop back to lowercase for the next. */
+         * just typed it in upper case): drop back to lowercase for the next.
+         * apply_state() re-asserts the CHECKED invariant itself. */
         ui_theme_kb_apply_state(kb, 0, shift_btn);
+        return;
     }
+
+    /* Still in the same state, but the default handler may have reloaded the
+     * map underneath us and with it LVGL's own CHECKED bits on `_ - . , :`
+     * and the arrows. This is the line that keeps the gold on the shift key
+     * alone. */
+    ui_theme_kb_clear_stray_checked(kb, state, shift_btn);
 }
 
 /* Attach the iPad-style shift-cycle behaviour to a keyboard. Removes LVGL's
