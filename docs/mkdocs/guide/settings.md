@@ -303,9 +303,7 @@ upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
     Region 1.
 
     The power limits are **not** enforced by the Tab5 — it checks frequencies.
-    A QMX at 5 W is inside the 9.15 W figure anyway. Whether an unattended
-    beacon such as WSPR may be run on 60 m in the US is a question for Part 97
-    and your own licence, not something this firmware decides.
+    A QMX at 5 W is inside the 9.15 W figure anyway.
 
 !!! warning "What it does not cover"
     CW keying and SWR Tune are not checked. They are things you start yourself,
