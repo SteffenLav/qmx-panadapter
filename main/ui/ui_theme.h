@@ -240,7 +240,28 @@ static inline void ui_theme_style_keyboard(lv_obj_t *kb)
      * ui_theme_kb_clear_stray_checked(). */
     lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COLOR_KEY_BG), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(kb, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_text_color(kb, lv_color_hex(UI_COLOR_ACCENT_GOLD), LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* ⛔ WAS GOLD, AND THAT IS THE WHOLE BUG. LVGL defines
+     *
+     *   #define LV_KEYBOARD_CTRL_BUTTON_FLAGS (LV_BUTTONMATRIX_CTRL_NO_REPEAT |
+     *                                          LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+     *                                          LV_BUTTONMATRIX_CTRL_CHECKED)
+     *
+     * so EVERY control key - 1#, the shift key, the keyboard icon, OK - is
+     * CHECKED by definition, and the default maps add CHECKED to `_` `-` `.`
+     * `,` `:`, both arrows, backspace and enter on top. Gold on CHECKED paints
+     * all of them, which is what the operator photographed on 2026-10-21.
+     *
+     * ⚠ MY FIRST FIX WAS WRONG AND CHANGED NOTHING ON THE GLASS. It added
+     * more lv_buttonmatrix_clear_button_ctrl_all(CHECKED) calls, on the theory
+     * that a reloaded default map was restoring the bits. But apply_state()
+     * ALREADY cleared them on attach and on every state change - if that call
+     * had the assumed effect the keys would never have been gold in the first
+     * place. Flashed, looked at, unchanged: "No changes at all to the keyb".
+     *
+     * So do not depend on the flag at all. CHECKED keys get the ordinary key
+     * text colour, and the pending-shift state is shown where it always
+     * actually was - the shift key's own label, abc / Abc / ABC. */
+    lv_obj_set_style_text_color(kb, lv_color_white(), LV_PART_ITEMS | LV_STATE_CHECKED);
 }
 
 /* iPad-style 3-state shift key: abc -> Abc -> ABC -> abc, shown via the
