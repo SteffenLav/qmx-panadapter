@@ -2824,8 +2824,39 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     //    progress.
     // Counter is static (persists across slots; this is the decode task, one
     // instance, no concurrency concern).
+    /* ⭐ AND WHEN THE SOFT RESET DOES NOT HELP, SAY SO (T44).
+     *
+     * MEASURED 2026-10-21, scratchpad/capture-dev.txt, boot of
+     * v1.20.2-2-geef9957a: this watchdog fired 37 times over six hours and
+     * recovered nothing, because the fault was not in the audio pipeline - the
+     * QMX had been wedged by the flash at 00:15 and was delivering no signal.
+     * ZERO fires after the operator power-cycled the radio at 08:04. The
+     * separation is total, so the fire count IS the discriminator and no new
+     * threshold is needed.
+     *
+     * ⛔ EVERY OTHER INDICATOR WAS GREEN for those six hours: UAC at a rock
+     * solid 48 000 pairs/s, CAT answering GP;/KS;/RG; all night, no UAC error,
+     * no brownout, and the breathing "turn on the QMX" banner silent - it
+     * watches the STREAM, not its content, so it cannot fire on this. 1513
+     * slots, zero decodes, and the operator found out by noticing no FT8.
+     *
+     * ⛔ TWO LEVEL-BASED DESIGNS WERE ELIMINATED BY MEASUREMENT FIRST, so do
+     * not reintroduce them:
+     *   - absolute audio peak. The wedged dev unit sat at peak L 17-24, but
+     *     the FIELD unit DECODES FT8 at peak L 6 (capture-field.txt), below
+     *     the wedged level. Any constant that catches one false-alarms the
+     *     other.
+     *   - relative spread of the peak over 5 min. Wedged 0.21 median against
+     *     0.23-0.26 healthy on two units. No separation at all.
+     *
+     * ⚠ A genuinely dead band produces the same pattern, which is why this is
+     * a HINT and fires ONCE per stuck episode rather than an alarm that
+     * repeats. At two fires the operator hears about it ~20 min in instead of
+     * six hours in. */
     {
-        static int s_stuck_slots = 0;
+        static int  s_stuck_slots = 0;
+        static int  s_stuck_fires = 0;    // consecutive fires with no decode between
+        static bool s_stuck_told  = false;
         const char *proto = ft8_op_mode_name();
         int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
@@ -2838,15 +2869,49 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         } else if (n_cand > 20 && n_decoded == 0 && n_js8ev == 0) {
             s_stuck_slots++;
             if (s_stuck_slots >= stuck_thresh) {
+                s_stuck_fires++;
                 ESP_LOGW(TAG, "%s: %d consecutive zero-decode idle RX slots "
-                         "(cand=%d) — soft-resetting audio+IQ",
-                         proto, s_stuck_slots, n_cand);
+                         "(cand=%d) — soft-resetting audio+IQ (fire %d)",
+                         proto, s_stuck_slots, n_cand, s_stuck_fires);
                 s_stuck_slots = 0;
                 iq_balance_reset();
                 audio_request_reset();
+
+                /* The second fire is the news: the first one could be a lull,
+                 * but a reset that changed nothing means the audio pipeline was
+                 * never the problem. Said once, and only once, until something
+                 * decodes again. */
+                if (s_stuck_fires >= 2 && !s_stuck_told) {
+                    s_stuck_told = true;
+                    /* A FLOOR, not the elapsed time, and the wording says
+                     * "over" for that reason: a QSO or a CAT pause mid-episode
+                     * resets s_stuck_slots but deliberately NOT s_stuck_fires,
+                     * so the real gap can be longer than fires x 10 min. */
+                    int mins = (s_stuck_fires * FT8_STUCK_RESET_MS) / 60000;
+                    /* 224, not 160: the fixed text alone is ~152 chars and gcc
+                     * sizes %d at 11, so -Werror=format-truncation refused the
+                     * smaller buffer. The mode name is on top of that. */
+                    char msg[224];
+                    snprintf(msg, sizeof(msg),
+                             "No %s decodes for over %d min and resetting the audio did not "
+                             "help. The radio may not be receiving - if the Tab5 was "
+                             "flashed or restarted, power-cycle the QMX.",
+                             proto, mins);
+                    ESP_LOGW(TAG, "%s", msg);
+                    ui_toast_ms(msg, 30000);
+                }
             }
         } else {
             s_stuck_slots = 0;
+            /* Something decoded, so the receiver is alive: forget the episode
+             * and re-arm, or a wedge later in the same session goes unreported.
+             * ⚠ Gated on a real decode, NOT on reaching this branch - it is
+             * also reached on a slot with cand <= 20, which a wedged radio
+             * produces too. */
+            if (n_decoded > 0 || n_js8ev > 0) {
+                s_stuck_fires = 0;
+                s_stuck_told  = false;
+            }
         }
     }
 
