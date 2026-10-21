@@ -257,6 +257,18 @@ silently doing nothing.
 circuit. A floating pin's level is decided by whatever is wired to it, not by
 the Tab5, so this is the wrong choice if you have relays on both pins.
 
+⚠ **It protects the pin you did *not* select, so do not select the one the GPS
+is on.** The setting leaves the *unselected* pin floating — if you pick GPIO54
+as the pin to pulse while the Unit GPS is wired to it, you are back to driving
+the GPS's transmitter and nothing has been gained. Put the relay trigger on
+GPIO53, select GPIO53, and tick the box.
+
+How much it matters, measured by **Randy N4OPI** with a scope on the Unit GPS's
+TX line: in v1.20.1 entering Relay mode pulled that line from **3 V p-p down to
+1.5 V p-p** — the GPS's own driver and the Tab5's output fighting over the same
+pad — and held it there for as long as Relay mode was selected. With this
+setting ticked in v1.20.2 the line is untouched in either mode.
+
 The same control is in the web UI's **Miscellaneous** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
 
 ## Battery Care
