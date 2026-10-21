@@ -159,6 +159,9 @@ No internet needed — FT8 timing works offline.
     line, marked *(unverified)* when it has not been checked. Tap that line to
     change it.
 
+    **The main screen does not show the date at all.** For every place it
+    *is* shown, see [Where to see the DATE](#7b-where-to-see-the-date).
+
 ### 3. WiFi + SNTP
 
 When WiFi is active:
@@ -288,7 +291,8 @@ The center of the bottom bar shows the current UTC time and which source is acti
 
 | Indicator | Meaning | Updates |
 |---|---|---|
-| **UTC(GPS)** | GPS: either the Unit GPS on PORT.A, or a GPS-disciplined QMX (auto-detected, phase-locked to the GPS second, ~10 ms) | every fix / every 5 min |
+| **UTC(U-GPS)** | A receiver on the **Tab5 itself** — Unit GPS on PORT.A, or Module GPS v2.1 on the M-Bus. Phase-locked to the satellite second | every fix (1 Hz) |
+| **UTC(GPS)** | The **QMX’s own** GPS, auto-detected as GPS-disciplined (phase-locked, ~10 ms) | every 5 min |
 | **UTC(NTP)** | WiFi + SNTP | ~1 hour |
 | **UTC(FT4)** / **UTC(FT8)** | FT4/FT8-derived offline sync | Continuous (when decoding, offline only) |
 | **UTC(RTC)** | Tab5 supercap RTC | At boot |
@@ -296,9 +300,40 @@ The center of the bottom bar shows the current UTC time and which source is acti
 | **UTC(QMX)** | Non-GPS QMX RTC fallback (offline only) | Every 5 min |
 | **UTC** | Fallback (no sync source) | — |
 
-The suffix tells you at a glance which source is **currently in charge** (the active authority, not merely the last one that wrote the clock). A GPS source (`UTC(GPS)`) and WiFi/SNTP (`UTC(NTP)`) are both accurate — if you see either, you're set. If you're off-grid you'll see `UTC(FT8)`/`UTC(FT4)` (on-air digital activity), `UTC(QMX)` (non-GPS QMX clock), or `UTC(RTC)` (the supercap RTC you set before leaving home).
+The suffix tells you at a glance which source is **currently in charge** (the active authority, not merely the last one that wrote the clock). A GPS source (`UTC(U-GPS)` or `UTC(GPS)`) and WiFi/SNTP (`UTC(NTP)`) are both accurate — if you see either, you're set. If you're off-grid you'll see `UTC(FT8)`/`UTC(FT4)` (on-air digital activity), `UTC(QMX)` (non-GPS QMX clock), or `UTC(RTC)` (the supercap RTC you set before leaving home).
 
-At the right-hand end of the bar, just left of the Bluetooth glyph, sits the **GPS indicator** when Port mode is *Unit GPS v1.1*: one GPS symbol, coloured by state, with no words beside it — the Bluetooth glyph's construction. It reports the **receiver**, not the clock: amber while it is acquiring, green when locked, red when a lock has gone stale. The suffix only says `UTC(GPS)` when the symbol is green — the two never disagree, because the suffix is derived from the same lock the symbol shows.
+At the right-hand end of the bar, just left of the Bluetooth glyph, sits the **GPS indicator** when Port mode is *Unit GPS v1.1*: one GPS symbol, coloured by state, with no words beside it — the Bluetooth glyph's construction. It reports the **receiver**, not the clock: amber while it is acquiring, green when locked, red when a lock has gone stale. The suffix only says `UTC(U-GPS)` when the symbol is green — the two never disagree, because the suffix is derived from the same lock the symbol shows.
+
+### 7b. Where to see the DATE
+
+**The main screen never shows the date.** The bottom bar shows the time and the
+source and nothing else, and that is deliberate: the clock is centred there, and
+a date would push the firmware version off the right-hand end of the bar.
+
+So if you are looking for today's date, it is in these places and only these:
+
+| Where | What it shows |
+|---|---|
+| **GPS page** — tap the **UTC** field in the bottom bar | row 3, **UT date**, as `DD-Mon-YY`, straight from the receiver's own sentence |
+| **Set and Sync the Clock** | second line, with a pencil to edit it, and `(unverified)` when the date is not trusted |
+| The browser's **GPS page** | the same rows the Tab5 draws |
+
+A Unit GPS brings the date with it, so with one fitted the date is verified on
+every fix, the second line carries no `(unverified)` marker, and the *"Is
+today's date right?"* question never appears at all — that question exists for
+stations **without** a GPS.
+
+Your QSOs are logged with the satellite date whether or not it is on screen.
+
+!!! tip "If the GPS page shows a dash for the date"
+    `UT date` is filled from every well-formed RMC sentence, including one sent
+    before the receiver has a fix. So a page showing **Validity A** cannot also
+    show `-` for the date. If you ever see that combination, it is a fault worth
+    reporting.
+
+*Two operators have gone looking for the date and not found it — Don WB0LQW,
+whose log ran two days behind before the Unit GPS path existed, and Greg ZL4GW,
+who fitted one and reasonably assumed he had missed a setting.*
 
 ### 8. Slot Timing
 
