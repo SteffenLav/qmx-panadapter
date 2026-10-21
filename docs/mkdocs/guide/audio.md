@@ -344,6 +344,17 @@ correct and it is the honest picture: the jack carries one real channel, the sec
 synthesised, and a synthesised channel cannot recover what the missing one would have
 told you. The step sits at audio 0 Hz, which is the centre of the span.
 
+!!! info "New in v1.20.3 — the source and its gain are in the browser too"
+
+    **Audio source** and **Line-in gain** are on the web Settings page, under
+    *Radio & display*. Gain moves in the 3 dB steps the codec actually has, and
+    takes effect immediately while line-in is running.
+
+    ⚠ Changing the **source** from the browser only **stores** the choice — it
+    takes effect at the next restart. The Tab5's own *Audio Settings* window
+    restarts for you; the browser deliberately does not reboot your radio's
+    host from across the house.
+
 ## Listen in the browser
 
 From **v1.20.0** the panadapter streams its own demodulated audio to any browser on

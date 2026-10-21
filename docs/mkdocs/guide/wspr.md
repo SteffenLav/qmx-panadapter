@@ -223,6 +223,25 @@ It needs WiFi and your callsign and grid.
 
 ### 4. Transmitting
 
+!!! danger "The 60 m dial was wrong, and it transmitted out of band — fixed in v1.20.3"
+
+    The 60 metre entry in the band list was **5.287200 MHz**. WSPR puts its
+    signal 1400–1600 Hz above the dial, so that dial emitted at about
+    **5.2886–5.2888 MHz** — roughly **63 kHz below the bottom of the 60 m
+    allocation in all three IARU regions**. If you ran WSPR on 60 m on any
+    earlier version, those transmissions were outside the band.
+
+    The entry is now **5.364700 MHz**, which emits inside the band in all three
+    regions. **A stored 5.287200 is moved for you** when the firmware starts —
+    changing the list alone would have fixed nobody who had already chosen 60 m,
+    because the selection is stored, not read from the list each time. The other
+    ten bands were checked the same way and are inside the allocation
+    everywhere.
+
+    Reported by Wolfgang DF1KZ. From v1.20.3 the firmware also refuses to key
+    the radio outside your region's allocation at all — see
+    [Transmitting outside the band plan](settings.md#transmitting-outside-the-band-plan).
+
 With a callsign and grid set and a transmit count other than **Receive only**, the **TX** button on the page arms the station. Which cycles actually transmit is decided by the transmit schedule, and the button shows what is happening.
 
 **The countdown on the button is the time until a real transmission.** The schedule is worked out in advance, so `TX ON next 6:14` means a burst is coming in six minutes and fourteen seconds — not that a cycle boundary is due and might or might not be used.

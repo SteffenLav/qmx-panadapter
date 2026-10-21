@@ -373,6 +373,21 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
   IF calibration, SWR protection, the battery charge limit, the 180° screen flip,
   Fox/Hound mode, simulation mode and the spot mode filter.
+- **New in v1.20.3, and the last three that were Tab5-only:** the
+  **SelfSpotter (spot map)** switch under *Spots & reporting*, and **Audio
+  source** and **Line-in gain** under *Radio & display*. The audio pair is
+  worth a word: the browser had always been *able* to set them, but the page
+  had no value to show, so there was no control to set them with.
+
+    ⚠ **Audio source behaves differently here than on the Tab5.** From the
+    browser the change is **stored and takes effect at the next restart**;
+    the Tab5's own *Audio Settings* window restarts for you when you press
+    Save.
+
+    ⛔ Two switches are deliberately **not** on this page. The test-tone
+    controls key the radio, and a transmit control belongs nowhere a stray
+    click can reach it; the resource-monitor overlay is a diagnostic, not an
+    operator switch.
 
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.

@@ -390,6 +390,15 @@ decode list **and on the WSPR page** (off by default). Until v1.12.0 the WSPR
 list and its Best DX panel always printed kilometres regardless of this setting,
 and the control was not reachable from the WSPR page at all.
 
+!!! info "New in v1.20.3 — three more settings reach the browser"
+
+    **SelfSpotter (spot map)** moved into *Spots & reporting*, and **Audio
+    source** and **Line-in gain** into *Radio & display*. These were the last
+    operator switches the Tab5 had and the web page did not.
+
+    ⚠ From the browser, **Audio source** is stored and takes effect at the next
+    restart; on the Tab5 the Audio Settings window restarts for you.
+
 **Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.

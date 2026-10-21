@@ -177,7 +177,7 @@ Appears when you tap a text field:
 
 | Key | Effect |
 |---|---|
-| **Shift** | Toggle case (abc -> ABC) |
+| **Shift** | Three states, shown on the key itself: `abc` → `Abc` → `ABC` → `abc`. **`Abc`** capitalises the NEXT letter only and then returns to `abc`; **`ABC`** is a caps lock that stays until you tap it again |
 | **Backspace** | Delete last character |
 | **Space** | Insert space |
 | **Numbers** | Tap to switch to number row |

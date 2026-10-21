@@ -171,6 +171,16 @@ When WiFi is active:
 3. Sets the system clock and writes it to the Tab5 RTC
 4. Checks periodically (~hourly) and re-syncs if time has drifted
 
+!!! info "New in v1.20.3 — the hourly sync no longer throws away the fraction"
+
+    Each SNTP sync used to set the clock to the **whole second below** the real
+    time, so it left you up to a second slow until the next one, with a fresh
+    error every hour. On a Tab5 with its own GPS this was invisible: the
+    satellite put it right within the second, which is what the hourly
+    *"Unit-GPS off SNTP by 890 ms"* line in the log actually was. **A Tab5 with
+    no GPS of its own had nothing to put it right**, and that error went
+    straight into FT8 and WSPR slot timing. The sub-second is now kept.
+
 SNTP sync is **automatic** — you don't need to do anything. The bottom bar shows the current time (updates every second).
 
 ### 4. QMX GPS Time Sync (auto-detected)
@@ -180,6 +190,32 @@ If your QMX has **internal GPS** (QMX+ models often do), there is **nothing to e
 1. **On radio firmware 1.04_004 and later it asks the GPS receiver directly** (`GP;`). A reply settles two things at once: this radio *has* a GPS — the receiver's own answer, not a guess — and **today's date**, which the radio's clock has never carried. Both work offline and on the first try.
 2. It then catches the QMX's `TM;` seconds *flip* (the true GPS second boundary) and **phase-locks the clock to that edge** (~10 ms, drift-free), not just to the whole second. Re-locks every 5 minutes.
 3. On older radio firmware, or a radio with no GPS, there is no `GP;` answer. Then the `TM;` flip is compared against SNTP: if they agree tightly — **and the Tab5 has not itself set that radio's clock** — the QMX is flagged GPS-disciplined. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback, and the check is **repeated every 5 minutes** until it does agree.
+
+!!! info "New in v1.20.3 — a receiver that has a fix beats a radio that only claims one"
+
+    Three things changed here, after a QMX+ on the bench ran **3 h 17 m** behind
+    for a whole day without the Tab5 correcting it.
+
+    - **A GPS that is fitted but never locks no longer blocks the correction.**
+      The radio reports a permanently fitted GPS from its own menu, and that
+      report used to stop the Tab5 setting its clock — correctly, because an
+      inference of ours once corrupted a good radio's clock. It now asks the
+      radio what time it thinks it is, and if that disagrees with ours by more
+      than **60 seconds on two readings five minutes apart**, it sets the clock
+      anyway and says so. Sixty seconds is far enough above the one-second
+      write resolution that the disagreement cannot be our own correction
+      coming back.
+    - **If your Tab5 has its own GPS and it is locked, the radio's clock is not
+      used at all.** Two receivers were both writing the clock, and the one
+      with no fix was dragging the one with a fix — measured at 109 ms in a
+      single step. The locked receiver wins.
+    - **A clock the Tab5 set can no longer make a radio look GPS-disciplined.**
+      It never could when the radio stayed silent about its GPS; it could when
+      the radio claimed one.
+
+    None of this makes an unlocked GPS work. A QMX+ whose GPS never gets a fix
+    is usually an antenna matter, and the firmware was only failing to paper
+    over it.
 
 !!! note "Why the time still comes from `TM;` when `GP;` is the receiver"
 

@@ -4,8 +4,32 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.20.2** - 2026-10-20
+**v1.20.3** - 2026-10-21
 
+**A patch release, and one of its items is a correction you may need to act on: WSPR on 60 metres transmitted outside the band.**
+
+- ⛔ **WSPR's 60 metre dial transmitted out of band — in every IARU region** *(Wolfgang DF1KZ)*. The entry was 5.287200 MHz. WSPR puts its signal 1400–1600 Hz above the dial, so that emitted around **5.2886–5.2888 MHz — about 63 kHz below the bottom of 60 metres everywhere in the world**. If you have run WSPR on 60 m on any earlier version, those transmissions were outside the band. The entry is now 5.364700 MHz, and **a stored 5.287200 is moved for you when the firmware starts** — changing the list alone would have fixed nobody who had already selected 60 m, because the choice is stored rather than read from the list each time. The other ten bands were checked the same way and are inside the allocation everywhere. Wolfgang reported it as a Region 1 problem; checking our own band plan showed it was worse than that.
+- **The Tab5 now refuses to key the radio outside your region's band plan.** Every path that can put RF out is checked immediately before key-down — the FT8 burst, the WSPR burst, Antenna Tune on both screens, and power calibration — and it checks the **frequency actually emitted**, not the dial. If it refuses, it says why and nothing is transmitted. **It needs to know your IARU region**: set it in Settings, or let a GPS supply your grid. With neither it refuses, for the same reason both transmit paths already refuse without a callsign and grid. There is a switch to turn the check off if your licence gives you access the built-in table does not know about — it is a coarse table and has been wrong at a band edge before.
+- ⛔ **A QMX+ whose GPS never gets a fix no longer keeps a wrong clock.** The radio reports a permanently fitted GPS from its own menu, and that report stopped the Tab5 correcting its clock — deliberately, because an inference of ours once corrupted a good radio's clock. A QMX+ here free-ran **3 hours 17 minutes** behind for a whole day under that rule. The Tab5 now asks the radio what time it thinks it is and sets it anyway if the answer is more than a minute out on two readings five minutes apart.
+- **If your Tab5 has its own GPS and it is locked, the radio's clock is no longer used.** Both receivers were writing the clock and the one with no fix was dragging the one with a fix. The locked receiver wins.
+- **The hourly internet time sync no longer throws away the fraction of a second.** It set the clock to the whole second *below* the real time, leaving it up to a second slow until the next sync. With a GPS on the Tab5 this was invisible — the satellite corrected it within the second. **Without one there was nothing to correct it**, and that error went into FT8 and WSPR slot timing.
+- **Skip this exchange, and keep answering** *(Randy N4OPI)*. A Skip button ends the exchange in progress and leaves the robot running, instead of standing it down the way Cancel does. The station you skipped is not called again this session.
+- **The robot declines a CQ that was aimed at somebody else** *(Randy N4OPI)*. `CQ DX` from a station in your own country, and a US state call when you are not in the USA, are no longer answered automatically.
+- **Double-click a different caller to switch to them mid-exchange** *(Randy N4OPI)*.
+- **"Show only CQ callers" hid the people answering you** *(Serhiy AA1SL)*. The filter was meant to hide stations already in a QSO with someone else; it also hid anyone calling *you*.
+- **AM can be stored in a memory channel** *(Gyula HA3HZ)*. There was no reason for it missing — the slot could always hold it — the editor simply had no AM button. On a QMX running firmware 1.04 or later.
+- **The on-screen keyboard painted the wrong keys gold.** `_` `-` `.` `,` `:` and the arrow keys lit up as soon as you typed. Only the shift key is highlighted now, and only while it reads `Abc`. The memory-channel keyboard also looked different from every other keyboard in the firmware; it does not any more.
+- **The spot map's zoom list said "Me centred" and clipped it.** It says "Centred".
+- **Three settings that were Tab5-only are on the web page**: the SelfSpotter switch, and the audio source and line-in gain. The audio pair had always been writable over the interface — the page simply had no value to show, so there was no control to set them with.
+- **The diagnostic log was filling the SD card, and the SD card was stalling the browser.** Two log lines were being written continuously; the mirror that copies the log to the card then ran every half minute, and those writes held up the spectrum stream — 110 of them cost 40 seconds in one session, the worst single pause 3.3 seconds. The lines are gone and the copy is capped on time.
+- **Downloading your configuration now says it contains secrets, at the moment you download it** — including your LoTW private key. It said so only in the manual.
+- **When resetting the audio does not help, the Tab5 says the radio may not be receiving** rather than reporting success. A wedged QMX can stream perfect-looking audio containing nothing; every indicator stays green, and six hours of empty FT8 slots look like a dead band.
+- **Every CAT command now leaves the firmware through one place** *(asked for by Jim, jpwatters)*. No behaviour changes; it closes a race where a command could be sent to a radio that had just been unplugged, and it is the seam a networked radio would need.
+- **Documentation.** The manual now says in one place where to find the date (*Greg ZL4GW* — the main screen deliberately has none), stops confusing the Tab5's own GPS with the radio's, and the memory-channel mode colours it listed were wrong for two of the four.
+
+## Previous Releases
+
+### v1.20.2 - 2026-10-20
 **A patch release. Everything reported in the two days after v1.20.1, one thing v1.20.1 shipped broken, and a correction that matters to anybody who uploads WSPR spots.**
 
 - ⛔ **WSPR spots were uploaded to wsprnet on the wrong frequency, if you changed band from the browser** *(found while fixing John W5JSS's report)*. The browser's WSPR band change wrote the page's dial figure but never retuned the radio, so the page and the radio disagreed — and every spot decoded after that went to wsprnet under the frequency the page was showing, not the one you were listening on. John's own log caught it: *"dial MISMATCH: the radio is tuned to 21.094600 MHz but this page is set to 14.095600 MHz"*. **This is data already in a public database, under your own callsign, with nothing to mark it wrong.** If you have changed WSPR band from the browser on v1.20.0 or v1.20.1, treat those spots as suspect. Changing band on the Tab5 itself was never affected. Fixed.
@@ -27,9 +51,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **RX audio's switch and volume are on the web page**, not just in the API.
 - **The remote relay can be told to drive only the pin you selected** *(Randy N4OPI)*. Until now both GPIO53 and GPIO54 were held as driven outputs whichever one was set to pulse — which is right when both are wired to relays, and wrong if you share the connector with a Unit GPS, because entering relay mode then drives a pin the GPS is transmitting on. Off by default. ⚠ Only turn it on when the unused pin is unconnected or biased by its own circuit: an undriven pin's level is decided by whatever is on it.
 - **Documentation.** Five diagrams were added to the manual and are on the device as well as the website — the audio chain, the FT8 slot with DT and DTR marked, the WSPR cycle, the clock-source ladder, and what plugs into what. The clock-source list gained the radio's own clock, which it had been missing. The gesture tables now say which one is authoritative. And three pages now say not to install with the M5Launcher.
-
-
-## Previous Releases
 
 ### v1.20.1 - 2026-10-18
 **A patch release. Nine field reports from one week, fixed — and the Tab5 can now be powered off from the drawer and from the browser.**
@@ -1129,7 +1150,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.3.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
