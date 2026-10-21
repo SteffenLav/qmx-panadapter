@@ -875,6 +875,47 @@ function Cmd-Flash {
     Cmd-Verify $reg $b $preLen 45
 }
 
+function Read-CaptureTail {
+    <#
+      ⛔ NEVER Get-Content -Raw ON THE CAPTURE. It is append-only and runs to
+      hundreds of megabytes, and at that size the read is UNRELIABLE RATHER
+      THAN SLOW. Measured three times on the same 669 MB file, 2026-10-21: it
+      returned the full 701,245,027-character string once and a TWO-CHARACTER
+      string the other two times, with no error either way - the decode needs
+      a ~1.4 GB UTF-16 allocation and -ErrorAction SilentlyContinue swallows
+      the failure. Cmd-Verify was matching its MAC regex against two
+      characters and printing NOT VERIFIED after a perfectly good flash.
+
+      ⚠ TWO WRONG DIAGNOSES BEFORE THIS ONE, both committed. First: "the 10 s
+      sleep is too short" - polling for 45 s changed nothing, because the wait
+      was never the problem. Second: "Get-Content -Raw always returns 2
+      characters" - it does not, it is intermittent, and a single measurement
+      that happened to succeed is what sent me back round the loop. Measure a
+      flaky thing more than once.
+
+      Seek instead, and compare BYTES to BYTES. $fromByte is a byte offset
+      (Cmd-Flash passes the file length taken before the flash) - the old code
+      compared it against a decoded CHARACTER count, which is a second way the
+      same check could silently read nothing. The cap keeps a stale offset
+      from ever pulling the whole file into memory.
+    #>
+    param([string] $path, [long] $fromByte = 0, [int] $capBytes = 4MB)
+    if (-not (Test-Path $path)) { return "" }
+    try {
+        $fs = [System.IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+        try {
+            $len = $fs.Length
+            $start = [Math]::Max($fromByte, $len - $capBytes)
+            if ($start -lt 0) { $start = 0 }
+            if ($start -ge $len) { return "" }
+            [void]$fs.Seek($start, 'Begin')
+            $buf = New-Object byte[] ($len - $start)
+            $read = $fs.Read($buf, 0, $buf.Length)
+            return [System.Text.Encoding]::ASCII.GetString($buf, 0, $read)
+        } finally { $fs.Dispose() }
+    } catch { return "" }
+}
+
 function Cmd-Verify {
     param($reg, $b, [long] $sinceBytes = 0, [int] $waitSeconds = 0)
     if (-not (Test-Path $b.capture)) { Write-Host "No capture file to verify against."; return }
@@ -883,11 +924,8 @@ function Cmd-Verify {
     if ($waitSeconds -gt 0) {
         $deadline = (Get-Date).AddSeconds($waitSeconds)
         while ((Get-Date) -lt $deadline) {
-            $probe = Get-Content $b.capture -Raw -ErrorAction SilentlyContinue
-            if ($probe -and $probe.Length -gt $sinceBytes) {
-                $tail = $probe.Substring([int]$sinceBytes)
-                if ([regex]::IsMatch($tail, 'serial\(MAC\)=([0-9A-Fa-f:]{17})')) { break }
-            }
+            $probe = Read-CaptureTail $b.capture $sinceBytes
+            if ($probe -and [regex]::IsMatch($probe, 'serial\(MAC\)=([0-9A-Fa-f:]{17})')) { break }
             Start-Sleep -Seconds 2
         }
     }
@@ -896,9 +934,7 @@ function Cmd-Verify {
     # reported "Identity OK" when nothing had been captured at all - a check
     # that cannot fail is not a check, and this one is the last line of defence
     # against flashing the wrong board.
-    $text = Get-Content $b.capture -Raw -ErrorAction SilentlyContinue
-    if ($sinceBytes -gt 0 -and $text.Length -gt $sinceBytes) { $text = $text.Substring([int]$sinceBytes) }
-    elseif ($sinceBytes -gt 0) { $text = "" }
+    $text = Read-CaptureTail $b.capture $sinceBytes
     $line = [regex]::Matches($text, 'serial\(MAC\)=([0-9A-Fa-f:]{17})') | Select-Object -Last 1
     if (-not $line) {
         Write-Host "NOT VERIFIED: no fresh 'serial(MAC)=' boot header since the flash. It is printed at boot only, and a stale one from an earlier boot proves nothing." -ForegroundColor DarkYellow
