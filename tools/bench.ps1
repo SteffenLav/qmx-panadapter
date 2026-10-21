@@ -864,13 +864,33 @@ function Cmd-Flash {
     # WILL see a boot header within a few seconds - that is what makes the
     # identity check possible at all after a flash, whose own reset happens
     # while the port is closed.
-    Start-Sleep -Seconds 10
-    Cmd-Verify $reg $b $preLen
+    #
+    # ⛔ A FIXED 10 s SLEEP WAS TOO SHORT AND CRIED WOLF. Measured on two
+    # flashes 2026-10-21: both printed "NOT VERIFIED", and both had a correct
+    # serial(MAC)= in the capture moments later. The scheduled capture task has
+    # to start, open the port, reset the board, and the board then takes ~5 s of
+    # its own uptime to reach the diag line. A check that fails on a good flash
+    # teaches the operator to ignore it, which costs exactly the protection the
+    # comment in Cmd-Verify is about. Poll instead, and only give up after 45 s.
+    Cmd-Verify $reg $b $preLen 45
 }
 
 function Cmd-Verify {
-    param($reg, $b, [long] $sinceBytes = 0)
+    param($reg, $b, [long] $sinceBytes = 0, [int] $waitSeconds = 0)
     if (-not (Test-Path $b.capture)) { Write-Host "No capture file to verify against."; return }
+    # Wait for the header rather than assuming it has already been written.
+    # $waitSeconds 0 keeps 'bench verify' an instant read of what is there now.
+    if ($waitSeconds -gt 0) {
+        $deadline = (Get-Date).AddSeconds($waitSeconds)
+        while ((Get-Date) -lt $deadline) {
+            $probe = Get-Content $b.capture -Raw -ErrorAction SilentlyContinue
+            if ($probe -and $probe.Length -gt $sinceBytes) {
+                $tail = $probe.Substring([int]$sinceBytes)
+                if ([regex]::IsMatch($tail, 'serial\(MAC\)=([0-9A-Fa-f:]{17})')) { break }
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
     # ⚠ Only trust a boot header written AFTER the flash. Searching the whole
     # file matched a serial(MAC)= line from a PREVIOUS boot and cheerfully
     # reported "Identity OK" when nothing had been captured at all - a check
