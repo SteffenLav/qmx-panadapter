@@ -4592,6 +4592,11 @@ const SET_FIELDS = [
      operate, and one switch cannot serve both. */
   ["FT8 filters", "filters.hide_worked_before", "bool", "Hide stations worked before",
    "Removes them from the decode list on both screens, instead of only dimming them. Per band, from your log, so the same call on another band still shows. The station you are mid-exchange with is never hidden"],
+  /* Randy N4OPI, 2026-10-21. Deliberately worded as what it SKIPS rather than
+     "answer only CQs for me": the judgement is narrow, and a label that
+     promised the broad thing would be wrong about continents. */
+  ["FT8 filters", "filters.robot_skip_directed_cq", "bool", "Auto-answer: skip CQs not aimed at me",
+   "While Auto-answer CQ (robot) is running, pass over a CQ that was clearly meant for someone else: CQ DX from a station in your own country, and a US state call when you are not in the USA. Continent calls (CQ EU, CQ NA) and contest or activity calls are always answered - deciding those needs data the Tab5 does not carry, and a wrong skip costs you a contact. Needs your callsign set"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",

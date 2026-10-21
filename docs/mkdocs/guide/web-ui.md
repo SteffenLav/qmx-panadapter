@@ -212,6 +212,34 @@ answer the same station's very next CQ and you would be back where you started.
 The grey-list is shown in the decode view and lives in memory only — it is
 cleared by a reboot, or you can clear it yourself.
 
+### Skipping a CQ before you answer it
+
+**Skip** ends an exchange you are already in. The other half of Randy's request
+is the robot not starting one: **FT8 filters → Auto-answer: skip CQs not aimed
+at me** (off by default, on both screens — "Skip CQs not for me" in the Tab5's
+Options panel).
+
+With it on, while auto-answer is running the Tab5 passes over:
+
+- **CQ DX** from a station in your own country — you cannot be their DX;
+- a **US state call** (`CQ FL`, `CQ TX`) when you are not in the USA.
+
+It is deliberately cautious, and these are the limits:
+
+- **Continent calls are always answered.** `CQ EU`, `CQ NA` — deciding those
+  needs a continent for every DXCC entity, which the Tab5 does not carry.
+- **Contest and activity calls are always answered** — `CQ POTA`, `CQ TEST`,
+  `CQ WW`. Anyone may answer those.
+- **A state call is never skipped if you are in the USA**, because the Tab5
+  knows your country, not your state. A Florida station still answers `CQ FL`.
+- Several state codes are also callsign prefixes elsewhere — `OK` is Oklahoma
+  *and* Czechia, `CA` California *and* Chile, `DE` Delaware *and* Germany. If
+  the code matches your own country as a prefix, the call is answered.
+- It needs **your callsign set**. Without it nothing is judged.
+
+A skipped caller is written to the log with the reason, so a station missing
+from the robot's choices can be explained afterwards rather than guessed at.
+
 !!! note "Skip is in the browser only, for now"
     The Tab5's own Mid-QSO row is four buttons wide to the pixel, and a fifth
     needs the row re-measured on the glass rather than re-guessed. Randy asked

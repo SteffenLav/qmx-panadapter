@@ -241,6 +241,23 @@ typedef struct {
      * with this off, a worked-before station is still dimmed, which is what
      * everyone has today. */
     bool    hide_worked_before;
+    /* --- Decline a CQ aimed at a group we are not in - appended, so old NVS
+     * blobs read back 0 (=off) and nothing changes for anyone who does not ask.
+     *
+     * Randy N4OPI, 2026-10-21: "someone calling 'CQ DX <theirUScall>' or
+     * 'CQ <some state I don't live in> <theircall>' is looking for a specific
+     * group of stations that I do not belong to."
+     *
+     * ⛔ A DIFFERENT FEATURE from the Skip button, and the sent reply says so:
+     * this is the robot deciding not to answer at all, where Skip ends an
+     * exchange already running.
+     *
+     * The judgement lives in ft8_directed_cq.c and is deliberately
+     * under-confident - only "CQ DX" from our own entity and US state calls
+     * when we are not in the USA are declined. Continent calls are not judged
+     * at all. Declining wrongly costs a contact; answering a CQ that was not
+     * for us costs one slot. */
+    bool    robot_skip_directed_cq;
 } ft8_filters_t;
 
 // Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/

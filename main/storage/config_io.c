@@ -236,6 +236,7 @@ char *config_io_export(size_t *out_len)
     APP("only_cq               = %s\n", yn(c.ft8_filters.incl_cq_only));
     APP("cq_show_others        = %s\n", yn(c.ft8_filters.cq_show_others));
     APP("hide_worked_before    = %s\n", yn(c.ft8_filters.hide_worked_before));
+    APP("robot_skip_directed_cq = %s\n", yn(c.ft8_filters.robot_skip_directed_cq));
 
     /* ⭐ THE POWER CALIBRATION - the reason this whole audit happened.
      *
@@ -595,6 +596,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "only_cq"))               { filt.incl_cq_only = b; filt_touched = true; }
             else if (!strcasecmp(key, "cq_show_others"))        { filt.cq_show_others = b; filt_touched = true; }
             else if (!strcasecmp(key, "hide_worked_before"))    { filt.hide_worked_before = b; filt_touched = true; }
+            else if (!strcasecmp(key, "robot_skip_directed_cq")) { filt.robot_skip_directed_cq = b; filt_touched = true; }
             else if (!strcasecmp(key, "include1")) { strncpy(filt.incl_text[0], val, FT8_FILTER_TEXT_LEN - 1); filt.incl_text[0][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }
             else if (!strcasecmp(key, "include2")) { strncpy(filt.incl_text[1], val, FT8_FILTER_TEXT_LEN - 1); filt.incl_text[1][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }
             else if (!strcasecmp(key, "exclude1")) { strncpy(filt.excl_text[0], val, FT8_FILTER_TEXT_LEN - 1); filt.excl_text[0][FT8_FILTER_TEXT_LEN-1]='\0'; filt_touched = true; }

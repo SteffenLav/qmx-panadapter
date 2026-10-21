@@ -33,6 +33,7 @@ static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_cq_show_others = NULL;
 static lv_obj_t *s_cb_hide_worked   = NULL;  // hide worked-before rows outright (Randy N4OPI)
+static lv_obj_t *s_cb_skip_directed = NULL;  // robot: pass over a CQ aimed elsewhere (Randy N4OPI)
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
@@ -128,6 +129,7 @@ static void save_btn_cb(lv_event_t *e)
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
     f.cq_show_others     = lv_obj_has_state(s_cb_cq_show_others, LV_STATE_CHECKED);
     f.hide_worked_before = lv_obj_has_state(s_cb_hide_worked, LV_STATE_CHECKED);
+    f.robot_skip_directed_cq = lv_obj_has_state(s_cb_skip_directed, LV_STATE_CHECKED);
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
@@ -162,11 +164,11 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d hide_wb=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d hide_wb=%d skip_directed=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
              f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup,
-             f.cq_show_others, f.hide_worked_before);
+             f.cq_show_others, f.hide_worked_before, f.robot_skip_directed_cq);
     modal_close();
 }
 
@@ -551,6 +553,24 @@ static void modal_build(void)
     s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", RIGHT_COL_X, 570, &lbl_manual_pick);
     lv_obj_set_style_text_color(lbl_manual_pick, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
+    /* Randy N4OPI, 2026-10-21: pass over a CQ that was aimed at somebody else.
+     * Right column, y=635 - the only free cell in the grid, and the row below
+     * "Pick callers myself", which is the other switch about WHO the robot
+     * works.
+     *
+     * ⭐ 243.2 px at montserrat_24, tools/measure_label.py - under the
+     * 247.7 px of "Show CQs in my run", which renders unclipped in this
+     * column. MEASURED, and it changed the label: "Skip CQs not aimed at me"
+     * reads better and is 317.9 px, which would have shipped clipped exactly
+     * as "Show CQs during my run" did.
+     *
+     * ⚠ The label says SKIP rather than promising "only CQs for me":
+     * ft8_directed_cq.c judges "CQ DX" and US state calls only, and does not
+     * judge continents at all. */
+    lv_obj_t *lbl_skip_directed;
+    s_cb_skip_directed = make_labeled_checkbox(panel, "Skip CQs not for me", RIGHT_COL_X, 635, &lbl_skip_directed);
+    lv_obj_set_style_text_color(lbl_skip_directed, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -740,6 +760,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
     apply_checkbox_state(s_cb_cq_show_others, f->cq_show_others);
     apply_checkbox_state(s_cb_hide_worked, f->hide_worked_before);
+    apply_checkbox_state(s_cb_skip_directed, f->robot_skip_directed_cq);
     apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,

@@ -5,6 +5,7 @@
 #include "ft8_robot.h"
 #include "ft8_greylist.h"
 #include "ft8_hound.h"   // Fox/Hound: a Fox is never a robot target
+#include "ft8_directed_cq.h"   // decline a CQ aimed at a group we are not in
 #include "ft8_qso.h"
 #include "ft8_tx.h"
 #include "ft8_status.h"
@@ -233,6 +234,20 @@ void ft8_robot_tick(int64_t slot_sec)
         if (ft8_greylist_skipped_by_hand(snap[i].call)) continue;
         if (qs.greylist_en && ft8_greylist_contains(snap[i].call)) continue;
         if (!ft8_filter_match(snap[i].last_text, f)) continue;   // include/exclude terms
+        /* A CQ aimed at a group we are demonstrably not in (Randy N4OPI).
+         * Off by default; the classifier reports MAYBE whenever it cannot be
+         * sure, so this only ever drops a caller a human would also pass over.
+         * Logged with the reason - a caller silently missing from the robot's
+         * choices is exactly the kind of thing that is undiagnosable later. */
+        if (f->robot_skip_directed_cq) {
+            char why[96];
+            if (ft8_cq_direction(snap[i].last_text, snap[i].call,
+                                 qs.my_callsign, why, sizeof why)
+                    == FT8_CQ_NOT_FOR_US) {
+                ESP_LOGI(TAG, "passing over %s: %s", snap[i].call, why);
+                continue;
+            }
+        }
         // A Fox belongs to the Hound path, never to the robot. A Fox calls CQ, so
         // it passes every test above - but an ordinary pounce at one cannot
         // complete: it never QSYs onto the Fox's frequency, so our R-report is

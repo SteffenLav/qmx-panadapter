@@ -141,6 +141,7 @@ idf_component_register(
         "util/geo_coords.c"
         "util/world_map_data.c"
         "ft8_robot.c"
+        "ft8_directed_cq.c"
         "ft8_sim.c"
         "wspr_proto.c"
         "wspr_fano.c"
