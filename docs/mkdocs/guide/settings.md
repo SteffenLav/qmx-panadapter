@@ -291,6 +291,22 @@ an experimental or special allocation, for instance. The table is coarse by
 design, and it has been wrong at a band edge before: until v1.20.3 its 60 m
 upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
 
+!!! info "60 m in the United States changed on 13 February 2026"
+    The Tab5's band plan follows the current FCC rules (order 25-60): the
+    contiguous **5351.5–5366.5 kHz** band at 9.15 W ERP, plus the four legacy
+    channels centred on **5332, 5348, 5373 and 5405 kHz** at 100 W ERP. The old
+    5358.5 kHz channel is gone — it now falls inside the new band. All 60 m
+    emissions are limited to 2.8 kHz.
+
+    The WSPR dial of **5.364700 MHz** transmits at 5366.1–5366.3 kHz, which is
+    inside the new band, so it is the right choice in Region 2 as well as
+    Region 1.
+
+    The power limits are **not** enforced by the Tab5 — it checks frequencies.
+    A QMX at 5 W is inside the 9.15 W figure anyway. Whether an unattended
+    beacon such as WSPR may be run on 60 m in the US is a question for Part 97
+    and your own licence, not something this firmware decides.
+
 !!! warning "What it does not cover"
     CW keying and SWR Tune are not checked. They are things you start yourself,
     where the dial is the transmitted frequency and what you see is what goes

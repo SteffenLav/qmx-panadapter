@@ -44,7 +44,39 @@ static const bp_seg_t R1_6[]   = {{50000000,50100000,BP_CW},{50100000,50300000,B
 // ---- Region 2 (Americas, US-centric coarse) ------------------------------
 static const bp_seg_t R2_160[] = {{1800000,1843000,BP_CW},{1843000,2000000,BP_PHONE}};
 static const bp_seg_t R2_80[]  = {{3500000,3570000,BP_CW},{3570000,3600000,BP_DIGI},{3600000,4000000,BP_PHONE}};
-static const bp_seg_t R2_60[]  = {{5330500,5366500,BP_PHONE}};
+/* ⛔ REWRITTEN 2026-10-21 FROM THE FCC ORDER, NOT FROM A USER'S VIEW.
+ *
+ * I had this as one continuous 5330.5-5366.5 block and was going to ASK a US
+ * operator what the right WSPR frequency was. Wrong on both counts - his
+ * correction: "WE need to be the ones that know the rules - its not up for
+ * viewpoints." A regulation is a fact to look up.
+ *
+ * ⭐ AND THE RULES HAD CHANGED EIGHT MONTHS AGO. FCC 25-60 (adopted
+ * 2025-09-23, released 2025-12-09) took effect 13 FEBRUARY 2026: the US now
+ * has the WRC-15 contiguous band 5351.5-5366.5 kHz at 9.15 W ERP, max 2.8 kHz
+ * bandwidth, General and above - PLUS four of the five legacy channels, kept
+ * at 100 W ERP. The old 5358.5 kHz channel is gone because it falls inside the
+ * new segment. So "the US has five discrete channels" was stale, and the
+ * channel list I was about to defend no longer existed.
+ *
+ * Legacy channel CENTRES 5332 / 5348 / 5373 / 5405 kHz. In USB the suppressed
+ * carrier sits 1.5 kHz below the centre and the emission may be 2.8 kHz wide,
+ * so each channel occupies centre-1500 .. centre+1300.
+ *
+ * ⚠ REGION 2 IS NOT THE USA. Canada, Mexico and South America have the
+ * WRC-15 segment and NOT the four US channels, so this table is permissive for
+ * them by four narrow slices. Deliberate while the band plan is keyed by
+ * REGION and 60 m is granted by COUNTRY: with the TX guard refusing what falls
+ * outside, over-permission on four channels is the safer error than refusing a
+ * US operator on a channel they are licensed for.
+ *
+ * ⚠ The 9.15 W ERP limit in the new segment is NOT enforced here - this
+ * table is frequencies. A QMX at 5 W is inside it anyway. */
+static const bp_seg_t R2_60_CH1[] = {{5330500,5333300,BP_PHONE}};   /* ch 5332 */
+static const bp_seg_t R2_60_CH2[] = {{5346500,5349300,BP_PHONE}};   /* ch 5348 */
+static const bp_seg_t R2_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE},{5366000,5366500,BP_DIGI}};
+static const bp_seg_t R2_60_CH4[] = {{5371500,5374300,BP_PHONE}};   /* ch 5373 */
+static const bp_seg_t R2_60_CH5[] = {{5403500,5406300,BP_PHONE}};   /* ch 5405 */
 static const bp_seg_t R2_40[]  = {{7000000,7070000,BP_CW},{7070000,7125000,BP_DIGI},{7125000,7300000,BP_PHONE}};
 static const bp_seg_t R2_30[]  = {{10100000,10130000,BP_CW},{10130000,10150000,BP_DIGI}};
 static const bp_seg_t R2_20[]  = {{14000000,14070000,BP_CW},{14070000,14150000,BP_DIGI},{14150000,14350000,BP_PHONE}};
@@ -81,7 +113,17 @@ static const bp_band_t R1_BANDS[] = {
 };
 static const bp_band_t R2_BANDS[] = {
     {1800000,2000000, BAND(R2_160)}, {3500000,4000000, BAND(R2_80)},
-    {5330500,5366500, BAND(R2_60)},  {7000000,7300000, BAND(R2_40)},
+    /* 60 m is FIVE disjoint entries in Region 2 - see R2_60 above. The gaps
+     * between them (5333.3-5346.5, 5349.3-5351.5, 5366.5-5371.5,
+     * 5374.3-5403.5) carry no amateur allocation, and the old single block
+     * wrongly allowed two of them while omitting the 5373 and 5405 channels
+     * altogether. */
+    {5330500,5333300, BAND(R2_60_CH1)},
+    {5346500,5349300, BAND(R2_60_CH2)},
+    {5351500,5366500, BAND(R2_60)},
+    {5371500,5374300, BAND(R2_60_CH4)},
+    {5403500,5406300, BAND(R2_60_CH5)},
+    {7000000,7300000, BAND(R2_40)},
     {10100000,10150000,BAND(R2_30)}, {14000000,14350000,BAND(R2_20)},
     {18068000,18168000,BAND(R2_17)}, {21000000,21450000,BAND(R2_15)},
     {24890000,24990000,BAND(R2_12)}, {26900000,27500000,BAND(R2_11)}, {28000000,29700000,BAND(R2_10)},
