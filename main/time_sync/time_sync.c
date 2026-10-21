@@ -203,6 +203,39 @@ static const char *trusted_source_name(void)
 // resolution over CAT, so a couple of seconds of disagreement is just rounding.
 #define QMX_PUSH_THRESHOLD_SEC 3
 
+/* ---- Overriding the radio's own "I have a GPS" claim (T49) ---------------
+ *
+ * MEASURED 2026-10-21 on the bench. Two of our own lines, 8 ms apart:
+ *
+ *   W QMX tick 11:47:53 off SNTP by 11839762ms - not GPS-disciplined
+ *   I QMX reports a permanent GPS - NOT pushing our time to it, whatever our
+ *     own detection currently thinks
+ *
+ * His QMX+ HAS a GPS and it was NOT LOCKED - GP; answered "no fix" on every
+ * poll - so the radio free-ran on its own software clock, 3 h 17 m behind and
+ * drifting, while we politely declined to correct it. The claim-based gate
+ * below has no exception for a GPS that is FITTED BUT UNLOCKED.
+ *
+ * ⛔ THE GATE ITSELF STAYS, AND THE ERROR MAGNITUDE IS WHAT OVERRIDES IT -
+ * NOT GP;'s answer. Two reasons, and the second is the one that matters:
+ *
+ *   1. The 2026-10-07 trap this gate was built to stop is a SUB-TWO-SECOND
+ *      effect (cat_set_qmx_time() writes whole seconds, the radio reports to
+ *      1 s). 60 s is thirty times clear of it, so a disagreement this large
+ *      cannot be our own push coming back at us, and cannot be rounding.
+ *   2. GP;'s "no fix" is AMBIGUOUS and our own log says so - "no fix, OR THIS
+ *      RADIO ANSWERS GP DIFFERENTLY". Gating on it would mean a GPS-locked
+ *      radio that merely answers GP in an unexpected way gets its clock
+ *      overwritten, which is exactly the 10-07 failure rebuilt. The clock
+ *      error is unambiguous where GP's silence is not.
+ *
+ * TWO CONSECUTIVE observations, because a radio whose GPS has just acquired
+ * can step its clock, and one sample during that step is not a free-running
+ * clock. GP;'s state is logged alongside as corroboration - never as the gate.
+ */
+#define QMX_GPS_CLAIM_OVERRIDE_SEC  60
+#define QMX_GPS_CLAIM_OVERRIDE_HITS 2
+
 // Push UTC time-of-day to the QMX's onboard RTC so it stays in sync for
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
 // better time than anything the Tab5 carries). Never called when the QMX is
@@ -244,9 +277,49 @@ static void push_to_qmx(time_t utc)
         return;
     }
     if (cat_qmx_gps_source_internal()) {
-        ESP_LOGI(TAG, "QMX reports a permanent GPS - NOT pushing our time to it, "
-                      "whatever our own detection currently thinks");
-        return;
+        /* Ask the radio what time IT thinks it is, and believe the number over
+         * the claim when the two cannot be reconciled. One TM; every 5 minutes
+         * (this function's own cadence) - see QMX_GPS_CLAIM_OVERRIDE_SEC. */
+        static int s_claim_override_hits = 0;
+        int qh = 0, qm = 0, qs = 0;
+        if (cat_query_qmx_time(&qh, &qm, &qs) != ESP_OK) {
+            ESP_LOGI(TAG, "QMX reports a permanent GPS and would not tell us its "
+                          "clock - NOT pushing our time to it");
+            s_claim_override_hits = 0;
+            return;
+        }
+        struct tm ours;
+        gmtime_r(&utc, &ours);
+        int d = (qh * 3600 + qm * 60 + qs) - (ours.tm_hour * 3600 + ours.tm_min * 60 + ours.tm_sec);
+        if (d < 0) d = -d;
+        if (d > 43200) d = 86400 - d;          /* midnight-wrap safe, as apply_gps_tick is */
+
+        if (d <= QMX_GPS_CLAIM_OVERRIDE_SEC) {
+            /* Within reach of rounding and of our own truncation - the claim
+             * stands, and this is the case the gate exists for. */
+            s_claim_override_hits = 0;
+            ESP_LOGD(TAG, "QMX reports a permanent GPS and its clock agrees to %d s "
+                          "- not pushing", d);
+            return;
+        }
+        if (++s_claim_override_hits < QMX_GPS_CLAIM_OVERRIDE_HITS) {
+            ESP_LOGW(TAG, "QMX claims a permanent GPS but its clock is %d s out "
+                          "(%02d:%02d:%02d vs %02d:%02d:%02d) - waiting for a second "
+                          "reading before overriding the claim",
+                     d, qh, qm, qs, ours.tm_hour, ours.tm_min, ours.tm_sec);
+            return;
+        }
+        s_claim_override_hits = 0;
+        /* ⚠ No GP; state in this line, deliberately. There is no cheap
+         * accessor for it - cat_gps_gp_sync() is another blocking round
+         * trip - and GP;'s answer is the AMBIGUOUS signal this design
+         * chose not to rely on. The clock error is the evidence; adding a
+         * second, weaker one to the log would only invite someone to gate
+         * on it later. */
+        ESP_LOGW(TAG, "QMX claims a permanent GPS but its clock is %d s out on two "
+                      "readings - its GPS is fitted and NOT disciplining the clock, "
+                      "so setting it from ours", d);
+        /* Deliberately falls through to the push below. */
     }
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
