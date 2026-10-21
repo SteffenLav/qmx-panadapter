@@ -5724,6 +5724,12 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "spotmap_en",        c.spotmap_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
+    /* T27/T09: the settings POST has accepted these two since #221, but the
+     * GET never returned them, so the web page had no value to show and no
+     * control could be built. Audio source and its gain were Tab5-only for
+     * that reason alone - the write path was already there. */
+    cJSON_AddStringToObject(root, "rx_source",       rx_source_str(c.rx_source));
+    cJSON_AddNumberToObject(root, "line_in_gain_db", c.line_in_gain_db);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
     cJSON_AddBoolToObject(root, "wspr_net_en",       c.wspr_net_en);

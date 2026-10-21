@@ -4644,6 +4644,17 @@ const SET_FIELDS = [
   ["Spots & reporting", "spots_mode_filter", "bool", "Mode filter the spots",
      "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
+  /* T27/T09, 2026-10-21. Audited every field the settings POST accepts against
+     what this page names, the same sweep that added the three below in
+     September. These were Tab5-only for no reason anyone could name: the write
+     path already existed, and for the audio pair the GET simply never returned
+     the value so no control could be built.
+
+     ⛔ NOT added, and both deliberate: tx_tone_hz / tx_tone_hold KEY THE
+     RADIO - a test tone belongs nowhere a stray click can reach it - and
+     resmon_en is a diagnostic overlay rather than an operator switch. */
+  ["Spots & reporting", "spotmap_en", "bool", "SelfSpotter (spot map)",
+     "The map of who has heard you. The Tab5 has had this switch since the map was added"],
   /* T48. Worded as turning the CHECK OFF, not the guard on, so the default
      reads correctly: unchecked = the Tab5 refuses out-of-band transmissions. */
   ["Station", "tx_band_guard_off", "bool", "Allow transmitting outside the band plan",
@@ -4652,6 +4663,12 @@ const SET_FIELDS = [
   /* Added 2026-09-18 by auditing every field of qmx_settings_t against what
      this page can reach. All three were Tab5-only for no reason anyone could
      name - the rest of their own group was already here. */
+  ["Radio & display", "rx_source", "sel", "Audio source",
+     "Where the receiver takes its signal from. ⚠ A change is STORED but does not take effect until the Tab5 restarts - unlike the Tab5's own Audio Settings window, which restarts for you",
+     [["qmx_usb","QMX over USB"],["line_in","Line-in (3.5 mm jack)"]]],
+  ["Radio & display", "line_in_gain_db", "sel", "Line-in gain",
+     "Analogue gain on the 3.5 mm input, in the 3 dB steps the ES7210 actually has. Takes effect immediately when line-in is running. 0 dB is the deliberate default - 30 dB on all channels is what made the first mic build unusable",
+     [["0","0 dB"],["3","3 dB"],["6","6 dB"],["9","9 dB"],["12","12 dB"],["15","15 dB"],["18","18 dB"],["21","21 dB"],["24","24 dB"],["27","27 dB"],["30","30 dB"]]],
   ["Radio & display", "display.wf_rows_per_s", "sel", "Waterfall rate",
      "Waterfall rows per second. Faster spreads a signal out in time; slower fits more history on screen and costs the Tab5 less to draw. The spectrum and S-meter are unaffected",
      [["1","1 row/s"],["2","2 rows/s"],["3","3 rows/s"],["4","4 rows/s"],["5","5 rows/s"],["6","6 rows/s"],["7","7 rows/s"],["8","8 rows/s"],["9","9 rows/s"],["10","10 rows/s (normal)"],["20","20 rows/s"],["30","30 rows/s"],["40","40 rows/s"]]],
