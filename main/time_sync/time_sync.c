@@ -298,8 +298,31 @@ static void push_to_qmx(time_t utc)
             /* Within reach of rounding and of our own truncation - the claim
              * stands, and this is the case the gate exists for. */
             s_claim_override_hits = 0;
-            ESP_LOGD(TAG, "QMX reports a permanent GPS and its clock agrees to %d s "
-                          "- not pushing", d);
+            /* ⛔ THIS WAS ESP_LOGD AND THAT LEFT NO INSTRUMENT AT ALL.
+             * The radio's clock error used to be visible in apply_gps_tick()'s
+             * "QMX tick HH:MM:SS off SNTP by Nms" line, but with a locked Unit
+             * GPS that path is no longer taken (T50), so this became the only
+             * place that knows the number - and it was not printing it. Half an
+             * hour of capture after the T50 flash read as "nothing happening",
+             * which is exactly the trap of a silent instrument: a radio whose
+             * clock is right and one we never managed to ask look identical.
+             *
+             * Throttled rather than silent: a 2 s change or 30 minutes. The
+             * QMX free-runs at about 1.7 s/hour (measured 2026-10-21: 7 ms at
+             * 15:18:56 to 2096 ms at 16:34:26), so a healthy radio prints this
+             * roughly hourly and the drift rate is readable straight off the
+             * capture. */
+            static int     s_last_logged_d = -1000;
+            static int64_t s_last_logged_us;
+            int64_t now_us = esp_timer_get_time();
+            if (abs(d - s_last_logged_d) >= 2 ||
+                (now_us - s_last_logged_us) >= 1800LL * 1000000LL) {
+                s_last_logged_d  = d;
+                s_last_logged_us = now_us;
+                ESP_LOGI(TAG, "QMX clock %02d:%02d:%02d is %d s from ours - inside the "
+                              "%d s claim-override window, not pushing",
+                         qh, qm, qs, d, QMX_GPS_CLAIM_OVERRIDE_SEC);
+            }
             return;
         }
         if (++s_claim_override_hits < QMX_GPS_CLAIM_OVERRIDE_HITS) {
