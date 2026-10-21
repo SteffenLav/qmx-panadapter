@@ -18,7 +18,19 @@ typedef struct {
 // ---- Region 1 (Europe / Africa / Middle East) ----------------------------
 static const bp_seg_t R1_160[] = {{1810000,1838000,BP_CW},{1838000,1843000,BP_DIGI},{1843000,2000000,BP_PHONE}};
 static const bp_seg_t R1_80[]  = {{3500000,3580000,BP_CW},{3580000,3600000,BP_DIGI},{3600000,3800000,BP_PHONE}};
-static const bp_seg_t R1_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE}};
+/* ⛔ THE TOP 500 Hz WAS MISSING, AND IT IS WHERE WSPR LIVES.
+ *
+ * The WRC-15 secondary allocation is 5351.5-5366.5 kHz. This table stopped at
+ * 5366.0, which is where the IARU R1 BAND PLAN's all-modes segment ends - a
+ * usage convention, not the licence edge. 5366.0-5366.5 is the narrowband /
+ * weak-signal part, and WSPR at the conventional 5364.7 dial emits at
+ * 5366.1-5366.3 kHz, i.e. inside the allocation but outside this table.
+ *
+ * Found 2026-10-21 checking Wolfgang DF1KZ's report: his suggested frequency
+ * read as out of band against our own plan, which would have made the correct
+ * number look illegal. Two defects, and fixing only the WSPR dial would have
+ * left this one to contradict it. */
+static const bp_seg_t R1_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE},{5366000,5366500,BP_DIGI}};
 static const bp_seg_t R1_40[]  = {{7000000,7040000,BP_CW},{7040000,7050000,BP_DIGI},{7050000,7200000,BP_PHONE}};
 static const bp_seg_t R1_30[]  = {{10100000,10130000,BP_CW},{10130000,10150000,BP_DIGI}};
 static const bp_seg_t R1_20[]  = {{14000000,14070000,BP_CW},{14070000,14100000,BP_DIGI},{14100000,14350000,BP_PHONE}};
@@ -46,7 +58,7 @@ static const bp_seg_t R2_6[]   = {{50000000,50100000,BP_CW},{50100000,50300000,B
 // ---- Region 3 (Asia-Pacific) — close to R1 with minor edge differences ---
 static const bp_seg_t R3_160[] = {{1800000,1838000,BP_CW},{1838000,1843000,BP_DIGI},{1843000,2000000,BP_PHONE}};
 static const bp_seg_t R3_80[]  = {{3500000,3535000,BP_CW},{3535000,3580000,BP_DIGI},{3580000,3900000,BP_PHONE}};
-static const bp_seg_t R3_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE}};
+static const bp_seg_t R3_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE},{5366000,5366500,BP_DIGI}};  /* see R1_60 */
 static const bp_seg_t R3_40[]  = {{7000000,7040000,BP_CW},{7040000,7050000,BP_DIGI},{7050000,7300000,BP_PHONE}};
 static const bp_seg_t R3_30[]  = {{10100000,10130000,BP_CW},{10130000,10150000,BP_DIGI}};
 static const bp_seg_t R3_20[]  = {{14000000,14070000,BP_CW},{14070000,14112000,BP_DIGI},{14112000,14350000,BP_PHONE}};
@@ -61,7 +73,7 @@ static const bp_seg_t R3_6[]   = {{50000000,50100000,BP_CW},{50100000,50300000,B
 
 static const bp_band_t R1_BANDS[] = {
     {1810000,2000000, BAND(R1_160)}, {3500000,3800000, BAND(R1_80)},
-    {5351500,5366000, BAND(R1_60)},  {7000000,7200000, BAND(R1_40)},
+    {5351500,5366500, BAND(R1_60)},  {7000000,7200000, BAND(R1_40)},
     {10100000,10150000,BAND(R1_30)}, {14000000,14350000,BAND(R1_20)},
     {18068000,18168000,BAND(R1_17)}, {21000000,21450000,BAND(R1_15)},
     {24890000,24990000,BAND(R1_12)}, {26900000,27500000,BAND(R1_11)}, {28000000,29700000,BAND(R1_10)},
@@ -77,7 +89,7 @@ static const bp_band_t R2_BANDS[] = {
 };
 static const bp_band_t R3_BANDS[] = {
     {1800000,2000000, BAND(R3_160)}, {3500000,3900000, BAND(R3_80)},
-    {5351500,5366000, BAND(R3_60)},  {7000000,7300000, BAND(R3_40)},
+    {5351500,5366500, BAND(R3_60)},  {7000000,7300000, BAND(R3_40)},
     {10100000,10150000,BAND(R3_30)}, {14000000,14350000,BAND(R3_20)},
     {18068000,18168000,BAND(R3_17)}, {21000000,21450000,BAND(R3_15)},
     {24890000,24990000,BAND(R3_12)}, {26900000,27500000,BAND(R3_11)}, {28000000,29700000,BAND(R3_10)},

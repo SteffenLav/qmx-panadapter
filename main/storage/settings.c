@@ -1307,7 +1307,28 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_FD_SECTION, out->fd_section, &sz);
 
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
-    { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
+    { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v;
+      /* ⛔ ONE-TIME MIGRATION: the old 60 m WSPR dial transmitted OUT OF BAND.
+       *
+       * 5287200 emits at 5288600-5288800, about 63 kHz below the bottom of 60 m
+       * in every IARU region (Wolfgang DF1KZ, 2026-10-21 - checked against our
+       * own bandplan.c, see main/ui/wspr_screen_view.c's kBands). Correcting
+       * the table alone fixes NOBODY who has already chosen 60 m: their
+       * selection is this stored u32, and WSPR is one of the six sites that
+       * can key the radio with nobody deciding.
+       *
+       * So the stored value is moved, not just the menu. Narrow on purpose -
+       * it matches that one wrong number and nothing else, so an operator who
+       * has deliberately tuned somewhere unusual is untouched.
+       *
+       * ⚠ It is NOT written back here; load must not write. The next save
+       * carries it, and until then the corrected value is what the radio is
+       * tuned to, which is the part that matters. */
+      if (out->wspr_dial_hz == 5287200u) {
+          out->wspr_dial_hz = 5364700u;
+          ESP_LOGW(TAG, "WSPR 60 m dial 5.287200 was out of band in every region "
+                        "- moved to 5.364700 MHz");
+      } }
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
     /* ---- WSPR schedule: two cycle counts, migrated from "1 in N" + bursts ----
      *

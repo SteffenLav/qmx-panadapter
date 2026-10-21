@@ -4768,7 +4768,11 @@ const SET_FIELDS = [
      [["1","1"],["2","2"],["3","3"],["4","4"],["5","5"],["6","6"],["7","7"],["8","8"],["9","9"],["10","10"],["12","12"],["15","15"],["20","20"]]],
   ["WSPR", "wspr_dial_hz", "sel", "Band (dial frequency)", "",
      [["1836600","160 m  1.836600"],["3568600","80 m   3.568600"],
-      ["5287200","60 m   5.287200"],["7038600","40 m   7.038600"],
+      /* 5.364700, not 5.287200 - the old value emitted at 5.2887 MHz, about
+         63 kHz below the bottom of 60 m in every IARU region (Wolfgang DF1KZ).
+         ⛔ THIS LIST IS A DUPLICATE of kBands[] in main/ui/wspr_screen_view.c
+         and that is how the wrong number survived here: fix one, check both. */
+      ["5364700","60 m   5.364700"],["7038600","40 m   7.038600"],
       ["10138700","30 m  10.138700"],["14095600","20 m  14.095600"],
       ["18104600","17 m  18.104600"],["21094600","15 m  21.094600"],
       ["24924600","12 m  24.924600"],["28124600","10 m  28.124600"],
