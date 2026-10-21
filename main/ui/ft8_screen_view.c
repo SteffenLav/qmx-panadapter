@@ -1391,6 +1391,7 @@ static void update_parity_btns(void);   // defined with the button, used by the 
 // s_web_reply_result carries the outcome back to the browser via /api/status -
 // a toast on the Tab5 is invisible from another room.
 static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
+static volatile bool s_web_reply_retarget;   // this pick may abandon a live exchange (T43)
 static volatile bool s_web_reply_pending;
 /* How long a pick may sit waiting for the closing 73 to finish (Randy N4OPI,
  * 2026-09-25). 0 = nothing queued.
@@ -1531,7 +1532,16 @@ void ft8_screen_view_request_reply(const char *call)
 {
     if (!call || !call[0]) return;
     snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
-    s_web_reply_pending = true;
+    s_web_reply_pending  = true;
+    s_web_reply_retarget = false;
+}
+
+void ft8_screen_view_request_reply_retarget(const char *call)
+{
+    if (!call || !call[0]) return;
+    snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
+    s_web_reply_pending  = true;
+    s_web_reply_retarget = true;
 }
 
 // #221: ask for a sub-mode preset from the API. freq_hz of 0 means "keep the
@@ -1571,8 +1581,18 @@ static void web_reply_drain(void)
 {
     char call[FT8_CALL_MAX_LEN];
     snprintf(call, sizeof(call), "%s", s_web_reply_call);
-    s_web_reply_pending = false;
-    s_web_reply_call[0] = '\0';
+    const bool retarget = s_web_reply_retarget;
+    s_web_reply_pending  = false;
+    s_web_reply_call[0]  = '\0';
+    /* ⛔ Consumed here with the pick, not left standing. The flag is the
+     * licence to abandon a live exchange, and an ordinary single click
+     * inheriting it from an earlier double click would throw away a contact
+     * nobody meant to drop.
+     *
+     * The WAIT_DONE queue below re-arms s_web_reply_pending without it, which
+     * is correct: by the time that pick fires the exchange has closed, so
+     * there is nothing left to abandon. */
+    s_web_reply_retarget = false;
 
     ft8_call_t *snap = table_snapshot();
     if (!snap) { web_result_set("Internal: no snapshot buffer"); return; }
@@ -1584,6 +1604,54 @@ static void web_reply_drain(void)
 
     char busy_target[24];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        /* ⭐ RE-TARGET: abandon what is running and take this station instead
+         * (Randy N4OPI - the third piece of T43, after Skip and the
+         * directed-CQ filter). Only on a DOUBLE click, and only for a
+         * DIFFERENT station.
+         *
+         * ⛔ NOT when the exchange is already settled. FT8_QSO_WAIT_DONE
+         * means our closing 73/RR73 is armed and the contact is made;
+         * abandoning there would grey-list a station we have just WORKED, and
+         * the queue below already does the right thing - it waits the moment
+         * out and then calls the new one. So WAIT_DONE falls through
+         * deliberately.
+         *
+         * ⛔ Re-targeting the SAME station is not a re-target. Double-clicking
+         * the row you are already working must not abandon and restart it, so
+         * it falls through to the ordinary busy handling.
+         *
+         * The burst is stopped the way Cancel and Skip stop it:
+         * ft8_tx_disarm() clears only an ARMED request, and
+         * ft8_tx_request_abort() is what breaks a live symbol-send loop.
+         * Without both, the old message keeps going out at the new station. */
+        if (retarget && busy_target[0] &&
+            strcmp(call, busy_target) != 0 &&
+            ft8_qso_get_state() != FT8_QSO_WAIT_DONE) {
+            char serr[64] = "", who[FT8_CALL_MAX_LEN] = "";
+            ft8_tx_disarm();
+            ft8_tx_request_abort();
+            if (ft8_qso_skip_exchange(who, sizeof who, serr, sizeof serr)) {
+                ft8_qso_final_watch_clear();
+                ESP_LOGI(TAG, "web re-target: dropped %s for %s, auto-answer left ON",
+                         who, call);
+                busy_target[0] = ' ';   /* fall through and work the new one */
+            } else {
+                web_result_set("%s", serr[0] ? serr : "Could not drop the exchange");
+                return;
+            }
+        } else if (retarget && !busy_target[0] &&
+                   ft8_qso_get_state() == FT8_QSO_CQ) {
+            /* Calling CQ with nobody answering yet. There is no partner to
+             * give up on, so ft8_qso_skip_exchange() rightly refuses - a plain
+             * abort is what "work that station instead" means here, and it
+             * grey-lists nobody. */
+            ft8_tx_disarm();
+            ft8_tx_request_abort();
+            ft8_qso_abort();
+            ESP_LOGI(TAG, "web re-target: dropped the CQ run for %s", call);
+        }
+    }
+    if (busy_target[0] || ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
         /* WAIT_DONE = the closing 73/RR73 is armed and the exchange's outcome
          * is settled. Hold the pick instead of dropping it, and let the next
          * 1 Hz tick try again - see WEB_REPLY_QUEUE_MAX_MS. Every OTHER busy

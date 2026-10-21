@@ -81,6 +81,24 @@ int  ft8_screen_view_get_cq_parity(void);
 // surfaced through /api/status - a Tab5 toast is invisible from another room.
 void ft8_screen_view_request_reply(const char *call);
 
+/* The same pick, but allowed to ABANDON an exchange already running in order
+ * to take this station instead (Randy N4OPI, 2026-10-21: "enable the ability
+ * to double click a different CQ caller of your choice which would abandon the
+ * one you have determined to be inappropriate or a lost cause and pick someone
+ * specific without exiting the Auto-answer mode. I can already pick a specific
+ * station to respond to in Auto-answer mode, but not if I am already in an
+ * exchange.").
+ *
+ * ⛔ A SEPARATE ENTRY POINT, not a flag on the ordinary pick, because the
+ * ordinary pick MUST keep refusing: starting a second exchange over a live one
+ * is what ft8_qso_start()'s own guard exists to prevent, and a single stray
+ * click should never cost a contact in progress. The browser sends this only
+ * on a DOUBLE click, which is Randy's own suggestion and the right one - it
+ * makes abandoning an exchange deliberate.
+ *
+ * Auto-answer is left running, exactly as the Skip button leaves it. */
+void ft8_screen_view_request_reply_retarget(const char *call);
+
 // Mid-QSO override from the browser (#205): 1=resend 2=RR73 3=73 4=cancel.
 // Deferred to the LVGL task and consumed even when FT8 is not up, so a stale
 // request cannot key the radio minutes later.

@@ -1967,7 +1967,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
                 js8_target_set(call);
             } else {
-                ft8_screen_view_request_reply(call);
+                /* "retarget": true is the browser's DOUBLE click - it may
+                 * abandon a live exchange to take this station instead
+                 * (Randy N4OPI). A single click still sends the ordinary
+                 * pick, which keeps refusing while busy. */
+                cJSON *rt = cJSON_GetObjectItem(root, "retarget");
+                if (cJSON_IsTrue(rt)) ft8_screen_view_request_reply_retarget(call);
+                else                  ft8_screen_view_request_reply(call);
             }
         }
     } else if (action && strcmp(action, "js8_select") == 0) {

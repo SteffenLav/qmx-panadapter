@@ -6315,7 +6315,7 @@ setInterval(pollDecodes, 2000);
  * ⚠ The DEVICE enforces this too (webserver.c's "reply" action), because a
  * browser tab left open across an update would otherwise keep transmitting on
  * a click. This is the surface, not the guard. */
-async function ft8RowClicked(call) {
+async function ft8RowClicked(call, retarget) {
   if (!call) return;
   const wr = document.getElementById("ft8-webr");
   if (ft8Proto() === "JS8") {
@@ -6327,8 +6327,10 @@ async function ft8RowClicked(call) {
     js8Poll();
     return;
   }
-  if (wr) wr.textContent = "Asking the Tab5 to reply to " + call + "...";
-  await sendCmd({ action: "reply", call: call });
+  if (wr) wr.textContent = retarget
+    ? ("Dropping this exchange for " + call + "...")
+    : ("Asking the Tab5 to reply to " + call + "...");
+  await sendCmd({ action: "reply", call: call, retarget: !!retarget });
 }
 
 /* Click a decode row to WORK that station - the same intelligent Transmit a
@@ -6344,7 +6346,33 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
   /* No confirm - clicking a station in the decode list to work it is the
      primary gesture of this page. See the note on the mid-QSO Cancel.
      In JS8 it selects instead of transmitting - see ft8RowClicked. */
-  await ft8RowClicked(call);
+  await ft8RowClicked(call, false);
+})
+
+/* ⭐ DOUBLE-CLICK A DIFFERENT CALLER TO SWITCH TO THEM MID-EXCHANGE.
+ *
+ * Randy N4OPI, 2026-10-21: "enable the ability to double click a different CQ
+ * caller of your choice which would abandon the one you have determined to be
+ * inappropriate or a lost cause and pick someone specific without exiting the
+ * Auto-answer mode. I can already pick a specific station to respond to in
+ * Auto-answer mode, but not if I am already in an exchange."
+ *
+ * ⛔ DOUBLE, not single, and that was his suggestion rather than mine. A
+ * single click must keep refusing while busy: abandoning a contact in progress
+ * is destructive, and one stray click on a crowded list should not cost it.
+ *
+ * ⚠ The single-click handler above ALSO fires on a double click - the browser
+ * sends click, click, dblclick - so the first click has already been sent and
+ * refused with "Busy: working X" by the time this runs. Harmless, because the
+ * ordinary pick changes nothing while busy, and the re-target that follows
+ * overwrites the banner. Not worth a timer to suppress: a delay on the primary
+ * gesture of this page to serve the rarer one is the wrong trade. */
+document.getElementById("dec-body").addEventListener("dblclick", async (e) => {
+  const tr = e.target.closest("tr[data-call]");
+  if (!tr) return;
+  const call = tr.getAttribute("data-call");
+  if (!call) return;
+  await ft8RowClicked(call, true);
 })
 
 /* ───────────────────────── JS8 conversation pane ───────────────────────────

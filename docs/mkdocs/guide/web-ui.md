@@ -212,6 +212,33 @@ answer the same station's very next CQ and you would be back where you started.
 The grey-list is shown in the decode view and lives in memory only — it is
 cleared by a reboot, or you can clear it yourself.
 
+### Switching to a different caller mid-exchange
+
+**Double-click** another station in the decode list and the Tab5 drops the
+exchange it is in and calls that one instead. Auto-answer stays on, and the
+station you dropped is grey-listed so the robot does not go straight back to
+it.
+
+A **single** click still refuses while an exchange is running — it says
+"Busy: working ..." as before. That is deliberate: abandoning a contact in
+progress is destructive, and one stray click on a busy list should not cost
+you one. Double-clicking makes it a decision.
+
+Two cases behave differently on purpose:
+
+- **Double-clicking the station you are already working** does nothing. It is
+  not a re-target, and restarting the exchange you are in is never what was
+  meant.
+- **If the contact is already finished** — your 73 or RR73 is sent and waiting
+  to go out — the pick is queued rather than used to abandon anything. The
+  station is worked; grey-listing them then would be wrong.
+
+If you are calling CQ with nobody answering yet, a double-click simply ends the
+CQ run and calls that station. Nothing is grey-listed, because there was no
+partner to give up on.
+
+*Randy N4OPI asked for this, 21 October 2026.*
+
 ### Skipping a CQ before you answer it
 
 **Skip** ends an exchange you are already in. The other half of Randy's request
