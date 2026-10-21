@@ -543,7 +543,7 @@ static int gather_self_spots(self_spot_t *out, int max)
 #define MAP_FIT_MAX_ZOOM 12.0f     /* a single nearby spot must not fill the world */
 
 /* Fit the view to the self-spots. `centre_me` = our own station in the MIDDLE
- * rather than merely inside the box - the "Me centred" dropdown entry.
+ * rather than merely inside the box - the "Centred" dropdown entry.
  *
  * ⛔ FIT'S OWN BEHAVIOUR IS NOT TOUCHED BY THAT FLAG. The first version of
  * this change made the box symmetric for every caller, which silently
@@ -2890,9 +2890,9 @@ static void zoom_dropdown_cb(lv_event_t *e)
     lv_obj_t *dd = lv_event_get_target(e);
     uint32_t idx = lv_dropdown_get_selected(dd);
     /* Indices 0 and 1 are the two COMPUTED views; the rest are fixed factors.
-     * The sentinel for "Me centred" keeps this array index-aligned with the
+     * The sentinel for "Centred" keeps this array index-aligned with the
      * options string, so inserting an entry cannot silently shift x1..x50. */
-    static const float kZoom[] = { 0.0f /* Fit */, 0.0f /* Me centred */,
+    static const float kZoom[] = { 0.0f /* Fit */, 0.0f /* Centred */,
                                    1, 2, 3, 4, 5, 10, 20, 50 };
     if (idx >= sizeof(kZoom) / sizeof(kZoom[0])) return;
     if (idx == 0) {
@@ -3105,7 +3105,17 @@ void spot_map_view_init(lv_obj_t *parent)
     lv_obj_align(zoom_lbl, LV_ALIGN_LEFT_MID, ZOOM_X, 0);
 
     lv_obj_t *zoom_dd = lv_dropdown_create(hdr);
-    lv_dropdown_set_options(zoom_dd, "Fit\nMe centred\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
+    /* ⛔ "Me centred" DID NOT FIT and was clipped on the glass (operator,
+     * 2026-10-21). Measured from LVGL's own adv_w tables in montserrat_24:
+     * "Me centred" is 139.6 px of text inside a ZOOM_DD_W of 160, before
+     * the dropdown's left/right padding and the ▼ symbol take their ~40.
+     * "Centred" is 99.2 px and fits with room.
+     *
+     * Selection is by INDEX (zoom_dropdown_cb reads
+     * lv_dropdown_get_selected), so RENAMING an entry is safe - but the
+     * kZoom[] array is index-aligned with this string, so do not reorder
+     * or insert without changing it too. */
+    lv_dropdown_set_options(zoom_dd, "Fit\nCentred\nx1\nx2\nx3\nx4\nx5\nx10\nx20\nx50");
     lv_obj_set_size(zoom_dd, ZOOM_DD_W, 46);
     lv_obj_align(zoom_dd, LV_ALIGN_TOP_LEFT, ZOOM_X + ZOOM_LBL_W + ZOOM_GAP, (HEADER_H - 46) / 2);
     lv_obj_set_style_text_font(zoom_dd, &lv_font_montserrat_24, 0);
