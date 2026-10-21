@@ -226,6 +226,11 @@ void ft8_robot_tick(int64_t slot_sec)
         // Grey-listed after repeated failed pounces - stop re-calling them
         // every time their CQ reappears (gated by the same greylist_en the
         // timeout tracker uses).
+        /* A HAND skip is not gated on greylist_en. The operator pressed Skip
+         * on this station; re-answering its next CQ because "Allow
+         * grey-listing" happens to be off is the complaint, not the fix
+         * (Randy N4OPI). ft8_greylist_skip_now() marks these forced. */
+        if (ft8_greylist_skipped_by_hand(snap[i].call)) continue;
         if (qs.greylist_en && ft8_greylist_contains(snap[i].call)) continue;
         if (!ft8_filter_match(snap[i].last_text, f)) continue;   // include/exclude terms
         // A Fox belongs to the Hound path, never to the robot. A Fox calls CQ, so

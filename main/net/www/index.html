@@ -1241,7 +1241,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-countdown" class="ft8-stat" hidden><div class="k">TX in</div><div class="v" id="ft8-countdown-v">--</div></div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="visibility:hidden;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-pause" title="Skip the next transmission without ending the exchange - use the listening slot to check the frequency">Pause</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-topline"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-countdown" class="ft8-stat" hidden><div class="k">TX in</div><div class="v" id="ft8-countdown-v">--</div></div><div id="ft8-stats"></div><div id="ft8-webr"></div></div></div><div id="ft8-body"><div id="ft8-slotrow"><canvas id="ft8-eo" width="1000" height="72"></canvas><div id="ft8-slot"><div id="slot-sec"><b id="slot-n">--</b><i>sec</i></div><div id="slot-meter"><div id="slot-track"><div id="slot-fill"></div></div></div></div></div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><select id="ft8-preset" title="Conventional FT8/FT4 calling frequencies - the same list the Tab5 offers"><option value="">Band…</option></select><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button><button id="ft8opts-btn" title="FT8-specific settings: filters, robot, pileup, Field Day - the same panel the Tab5's own Options button opens">Options<span id="ft8opts-badge" class="badge-count"></span></button></div><div id="ft8-override" style="visibility:hidden;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-pause" title="Skip the next transmission without ending the exchange - use the listening slot to check the frequency">Pause</button><button id="ovr-skip" title="Give up on this station and go back to answering CQs - auto-answer stays ON, and this station will not be called again until you clear it">Skip</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -2553,7 +2553,7 @@ document.getElementById("ft8-status").addEventListener("click", async (e) => {
 /* Mid-QSO override (#205, Randy N4OPI). Deliberately only visible while an
    exchange is actually running - these key the radio, and four always-on buttons
    next to Call CQ would be four ways to transmit by accident. */
-[["ovr-resend","resend"],["ovr-rr73","rr73"],["ovr-73","73"],["ovr-pause","pause"],["ovr-cancel","cancel"]]
+[["ovr-resend","resend"],["ovr-rr73","rr73"],["ovr-73","73"],["ovr-pause","pause"],["ovr-skip","skip"],["ovr-cancel","cancel"]]
   .forEach(([id, what]) => {
     const b = document.getElementById(id);
     if (!b) return;
@@ -8015,7 +8015,11 @@ async function tick() {
           const lbl = ov.querySelector(".ovr-label");
           if (lbl) lbl.textContent = (!live && fw)
             ? (fw.call + " has not acknowledged:") : "Mid-QSO:";
-          [["ovr-rr73", live], ["ovr-73", live], ["ovr-pause", live]]
+          /* Skip needs a live exchange for the same reason RR73 and 73 do:
+             there is no station to give up on once it has closed, and the
+             final-watch case is a station we are still TRYING to finish
+             with - Re-send and Cancel are the two that make sense there. */
+          [["ovr-rr73", live], ["ovr-73", live], ["ovr-pause", live], ["ovr-skip", live]]
             .forEach(([id, on]) => {
               const b = document.getElementById(id);
               if (b) b.style.display = on ? "" : "none";

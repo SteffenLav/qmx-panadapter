@@ -2266,6 +2266,12 @@ static pile_skip_t pileup_candidate_skip(const char *call, const qmx_settings_t 
     if (ft8_qso_worked_recently(call, cat_get_frequency()))
         return PILE_SKIP_WORKED_RECENTLY;
     // Grey-listed (repeated failed pounces) - don't auto-drain into them.
+    // A HAND skip is checked first and is NOT gated on greylist_en: the
+    // pileup drain is the other unattended picker, so skipping a station in
+    // robot mode and then having the drain call it anyway would be the same
+    // defect in a second place (Randy N4OPI, 2026-10-21).
+    if (ft8_greylist_skipped_by_hand(call))
+        return PILE_SKIP_GREYLIST;
     if (qs->greylist_en && ft8_greylist_contains(call))
         return PILE_SKIP_GREYLIST;
     return PILE_OK;
@@ -4220,6 +4226,53 @@ void ft8_qso_abort(void)
     ft8_tx_disarm();
     if (target[0]) ft8_status_set("QSO %s: aborted", target);
     ESP_LOGI(TAG, "QSO aborted");
+}
+
+bool ft8_qso_skip_exchange(char *skipped, size_t skipped_len,
+                           char *err, size_t err_len)
+{
+    if (skipped && skipped_len) skipped[0] = '\0';
+
+    lock();
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_target, sizeof(target));
+    target[sizeof(target) - 1] = '\0';
+    ft8_qso_state_t st = s_state;
+    unlock();
+
+    /* Only an EXCHANGE can be skipped. Calling CQ with nobody answering has no
+     * station to give up on, and FT8_QSO_CQ is reported with an empty target,
+     * so the target test alone would read as "nothing running" there too -
+     * both are refused here with a message that says which it was. */
+    if (st == FT8_QSO_IDLE || st == FT8_QSO_DONE || st == FT8_QSO_TIMEOUT) {
+        if (err && err_len) snprintf(err, err_len, "No exchange to skip");
+        return false;
+    }
+    if (!target[0]) {
+        if (err && err_len)
+            snprintf(err, err_len, "Calling CQ - nobody to skip yet");
+        return false;
+    }
+
+    /* Order matters. abort() takes the lock itself and saves a resume record,
+     * so the record has to be dropped AFTER it, not before. */
+    ft8_qso_abort();
+
+    lock();
+    if (strcmp(s_resume_call, target) == 0) {
+        s_resume_call[0]  = '\0';
+        s_resume_have_req = false;
+    }
+    unlock();
+
+    /* ⛔ The grey-list entry is what stops the robot answering this station's
+     * very next CQ. Without it the abort above buys exactly one slot. */
+    ft8_greylist_skip_now(target);
+
+    if (skipped && skipped_len) snprintf(skipped, skipped_len, "%s", target);
+    ft8_status_set("Skipped %s - still answering", target);
+    ESP_LOGI(TAG, "operator skipped %s; exchange ended, auto-answer left ON", target);
+    return true;
 }
 
 ft8_qso_state_t ft8_qso_get_state(void)

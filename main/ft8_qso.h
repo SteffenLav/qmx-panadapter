@@ -91,6 +91,35 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+/* Give up on the station being worked and go back to answering - WITHOUT
+ * standing the robot down (Randy N4OPI, 2026-10-21).
+ *
+ * Two cases he named, and one button covers both: a CQ that was never for us
+ * ("CQ DX", "CQ <a state I am not in>"), and a station that keeps calling CQ
+ * while we call it, because QRP it cannot hear us. Both waste whole slots.
+ *
+ * ⛔ IT IS NOT ft8_qso_abort(). Every UI cancel path pairs abort with
+ * ft8_robot_stand_down("you cancelled a transmission"), which is right for a
+ * cancel - the operator is stopping to do something else - and is exactly why
+ * Randy could not skip a caller without leaving Auto-answer mode. This
+ * deliberately leaves robot_en alone.
+ *
+ * ⛔ IT IS NOT ft8_qso_pause_next_tx() either. That skips ONE transmission and
+ * keeps the exchange; this ends the exchange and keeps the MODE.
+ *
+ * Three things have to happen together or the button does nothing useful:
+ *   1. the exchange ends and TX is disarmed (ft8_qso_abort's job);
+ *   2. the station is grey-listed BY HAND (ft8_greylist_skip_now), or the
+ *      robot answers its very next CQ a slot later;
+ *   3. the resume record for that call is dropped, or the "resume?" offer
+ *      invites the operator straight back into what they just abandoned.
+ *
+ * On success *skipped (if non-NULL) gets the callsign, for the toast.
+ * Returns false + err when there is no exchange to skip - calling CQ with
+ * nobody answering yet is not a skippable exchange. */
+bool ft8_qso_skip_exchange(char *skipped, size_t skipped_len,
+                           char *err, size_t err_len);
+
 /* ---- the sticky timeout expires by itself ---------------------------------
  *
  * FT8_QSO_TIMEOUT is deliberately sticky so an unanswered call is noticed, but

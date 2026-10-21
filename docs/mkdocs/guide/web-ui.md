@@ -188,7 +188,36 @@ While an exchange is running, a **Mid-QSO** row appears under the FT8 controls:
 - **Re-send** — send the current message again
 - **RR73** / **73** — jump straight to either
 - **Pause** — skip exactly one transmission and keep the exchange
+- **Skip** — give up on *this station* and go back to answering
 - **Cancel** — stop transmitting and end the exchange
+
+**Skip** and **Cancel** are not the same thing, and the difference is
+auto-answer. **Cancel** stops everything, auto-answer included: you are
+cancelling in order to go and do something else, so the Tab5 does not start
+calling again a cycle later. **Skip** means "not this station, carry on" —
+it ends the exchange and leaves **Auto-answer CQ (robot)** running, so the next
+CQ caller is answered as normal.
+
+Two things make it worth having rather than just pressing Cancel and turning
+the robot back on:
+
+- a station calling **CQ DX**, or **CQ** for a state you are not in, was never
+  looking for you, and neither of you wants to spend slots on it;
+- a station that keeps calling CQ while you are calling *it* cannot hear you —
+  which happens to everybody running QRP.
+
+The station you skip is added to the **grey-list** at once, so the automatic
+pickers will not call it again. That is deliberate: without it, the robot would
+answer the same station's very next CQ and you would be back where you started.
+The grey-list is shown in the decode view and lives in memory only — it is
+cleared by a reboot, or you can clear it yourself.
+
+!!! note "Skip is in the browser only, for now"
+    The Tab5's own Mid-QSO row is four buttons wide to the pixel, and a fifth
+    needs the row re-measured on the glass rather than re-guessed. Randy asked
+    for the web page, so that is where it is.
+
+*Randy N4OPI asked for Skip, 21 October 2026.*
 
 **Pause** is the one to reach for when you want to listen on your own slot: to
 check the frequency is still clear, or to hear whether the station is really

@@ -689,7 +689,11 @@ static void row_activate_ex(int idx, bool direct)
     {
         qmx_settings_t gq;
         settings_load_all(&gq);
-        if (gq.greylist_en && ft8_greylist_contains(call)) {
+        /* ft8_greylist_skipped_by_hand() is deliberately ungated: without it
+         * a station skipped while "Allow grey-listing" is off would have no
+         * way back - the clear lives behind this modal. */
+        if (ft8_greylist_skipped_by_hand(call) ||
+            (gq.greylist_en && ft8_greylist_contains(call))) {
             grey_modal_show(call);
             return;
         }
@@ -1091,8 +1095,13 @@ static void update_row(int i, const ft8_call_t *src)
             col = 4; /* the one station we're mid-exchange with -> amber (highest priority) */
         } else if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
             col = 2; /* own call in message -> red */
-        } else if (s_greylist_en && ft8_greylist_contains(src->call)) {
-            col = 5; /* grey-listed (repeated failed pounces) -> violet */
+        } else if (ft8_greylist_skipped_by_hand(src->call) ||
+                   (s_greylist_en && ft8_greylist_contains(src->call))) {
+            /* violet. The hand-skip arm is ungated on purpose: with
+             * greylist_en off the row would redraw unchanged and the Skip
+             * button would look like it had done nothing - the same way the
+             * Pause button first read before it lit up. */
+            col = 5;
         } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
             col = 3; /* worked before on THIS band -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
@@ -1539,7 +1548,7 @@ void ft8_screen_view_request_preset(uint32_t freq_hz, ft8_op_mode_t mode)
 
 void ft8_screen_view_request_override(int what)
 {
-    if (what < 1 || what > 5) return;
+    if (what < 1 || what > 6) return;   /* 6 = skip exchange (T43) */
     s_web_override_pending = what;
 }
 
@@ -1920,6 +1929,34 @@ static void t_clock_cb(lv_timer_t *t)
                 web_result_set("Next transmission paused");
             else
                 web_result_set("%s", err[0] ? err : "Cannot pause now");
+        } else if (what == 6) {
+            /* Skip this exchange (Randy N4OPI, 2026-10-21). Cancel's
+             * mechanics, minus the stand-down, plus the grey-list.
+             *
+             * ⛔ THE ONE LINE THAT MUST NOT BE COPIED FROM CANCEL IS
+             * ft8_robot_stand_down(). That line is correct for Cancel - the
+             * operator is stopping in order to do something else - and it is
+             * precisely why Randy could not pass over a caller without leaving
+             * Auto-answer mode. Skip means "not this station, carry on".
+             *
+             * The burst is stopped the same way Cancel stops it:
+             * ft8_tx_disarm() only clears an ARMED request, so
+             * ft8_tx_request_abort() is what actually breaks a live
+             * symbol-send loop. Skipping while we are mid-transmission has to
+             * stop transmitting, or the slot is wasted anyway. */
+            ft8_tx_disarm();
+            ft8_tx_request_abort();
+            char who[FT8_CALL_MAX_LEN] = "";
+            if (ft8_qso_skip_exchange(who, sizeof(who), err, sizeof(err))) {
+                /* Same as Cancel: the unacknowledged-final watch has to end
+                 * with the exchange, or the row stays up re-sending to a
+                 * station we have just given up on. */
+                ft8_qso_final_watch_clear();
+                web_result_set("Skipped %s - still answering", who);
+                ESP_LOGI(TAG, "web override: skip %s - auto-answer left ON", who);
+            } else {
+                web_result_set("%s", err[0] ? err : "Nothing to skip");
+            }
         } else if (what == 4) {
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
@@ -4926,6 +4963,16 @@ void ft8_screen_view_init(lv_obj_t *parent)
         // where the old row ran 4 px past the pane's content box.
         //
         // 76*4 + 4*3 = 316, exactly.
+        //
+        // ⛔ SKIP (T43, Randy N4OPI) IS IN THE BROWSER ONLY, AND THIS ROW IS
+        // WHY. A fifth button here means bw = (316 - 4*4)/5 = 60 px, and the
+        // history above is three failed attempts to make a label fit by
+        // changing the size instead of the word - "Re-send" at 76 px, then
+        // "Resend", then font 18 which shrank the other three for one
+        // button's problem. "Again" fits 76 px with room to spare; whether it
+        // fits 60 is a PIXEL question and has to be measured on the glass, not
+        // counted in characters. Randy asked for the web UI and that is what
+        // shipped. Do not resize this row from a guess.
         //
         // ⛔ THE LABEL, NOT THE FONT, IS WHAT HAD TO GIVE. "Re-send" did not fit
         // 76 px, so I shortened it to "Resend" - still too wide - then dropped

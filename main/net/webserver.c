@@ -2037,11 +2037,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             else if (!strcmp(w, "73"))     what = 3;
             else if (!strcmp(w, "cancel")) what = 4;
             else if (!strcmp(w, "pause"))  what = 5;   /* Randy N4OPI: he works remote */
+            else if (!strcmp(w, "skip"))   what = 6;   /* Randy N4OPI: give up on THIS caller, keep answering */
         }
         if (!what) {
             cJSON_Delete(root);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                "what must be resend, rr73, 73, cancel or pause");
+                "what must be resend, rr73, 73, cancel, pause or skip");
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
@@ -2192,7 +2193,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
     } else if (action && strcmp(action, "greylist_clear") == 0) {
         // Un-skip everyone - band conditions change, and a station that timed
         // out an hour ago may be perfectly workable now.
-        ft8_greylist_clear_all();
+        //
+        // ⭐ An optional "call" clears just that one. Added with the Skip
+        // button (T43): skipping is now a deliberate operator action, so
+        // undoing one of three hand-skipped stations should not cost the other
+        // two. The Tab5 has had a per-call clear since the grey-list existed
+        // (grey_modal_show); the browser only had clear-all.
+        const char *gcall = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        if (gcall && gcall[0]) ft8_greylist_clear(gcall);
+        else                   ft8_greylist_clear_all();
     } else if (action && strcmp(action, "help") == 0) {
         // Open the Tab5's own manual at a page (and optionally a heading), the
         // same call the context-help buttons make. Sending someone to the right
