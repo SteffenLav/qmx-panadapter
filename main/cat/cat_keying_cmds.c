@@ -46,6 +46,50 @@ void cat_keying_classify(const char *text, cat_keying_t *out)
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
         if (!*p) break;
 
+        /* ⛔ KY IS MATCHED BY PREFIX, BEFORE THE VERB SCANNER BELOW, AND THAT
+         * IS THE WHOLE POINT OF PUTTING IT HERE.
+         *
+         * `KY<text>;` hands a message to the radio's OWN keyer, which then
+         * transmits it: RF out, on the dial, for as long as the text takes to
+         * send. It is in the QMX's documented set ("KY (both variants)",
+         * docs/qmx-1_04-cat-comparison.md §1.3) and it was NOT classified
+         * until 2026-10-22, so `/api/cmd {"action":"cat_raw","cmd":"KY TEST;"}`
+         * went through the T64 door and keyed with no band check at all.
+         * Exactly T64's class, in a verb nobody had listed.
+         *
+         * ⚠ THE FIRST FIX FOR IT WAS WRONG, and the harness caught it: added
+         * as another `else if` in the chain below, `KYCQ CQ DE OZ1LAV;`
+         * classified as harmless. The scanner takes the whole LETTER RUN as
+         * the verb, so the message's first word is eaten into it ("KYC") and
+         * nothing matches. Every other keying verb takes a DIGIT argument, so
+         * greedy letter-scanning was safe until a verb arrived whose argument
+         * is free text. Any future one needs this treatment too.
+         *
+         * ⚠ FOUND BY A QUESTION, NOT BY THE CHECKER, which is the real lesson:
+         * this classifier was written against the six keying sites THIS
+         * FIRMWARE uses, while a pass-through (T63) can send anything the
+         * radio understands. The rest of the QMX's command set has NOT been
+         * swept against it - see docs/cat-passthrough-design.md.
+         *
+         * `KY;` alone is the buffer-space read and emits nothing; anything
+         * with non-blank content keys, per this file's over-eager rule. */
+        if ((p[0] == 'K' || p[0] == 'k') && (p[1] == 'Y' || p[1] == 'y')) {
+            const char *a = p + 2;
+            const char *e = a;
+            while (*e && *e != ';') e++;
+            for (const char *q = a; q < e; q++) {
+                if (!isspace((unsigned char)*q)) {
+                    if (!out->keys) {
+                        out->keys = true;
+                        memcpy(out->verb, "KY", 3);
+                    }
+                    break;
+                }
+            }
+            p = (*e == ';') ? e + 1 : e;
+            continue;
+        }
+
         char verb[4] = {0};
         size_t vn = 0;
         while (*p && isalpha((unsigned char)*p)) {

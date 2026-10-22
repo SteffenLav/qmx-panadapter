@@ -332,6 +332,70 @@ New file `main/net/cat_passthrough.c` plus a small core in `cat.c`:
    10 Hz raw poller cannot halve the poll rate. Tier C is the escape hatch;
    Tiers A and B are the road.
 
+## 4a. CW — the one case where the network genuinely bites
+
+Asked by the operator, 2026-10-22, pushing back on a draft that said a network
+hop "costs milliseconds, nothing for PTT and frequency". **He is right, and the
+sentence was imprecise in the way that matters.**
+
+⛔ **The quantity is JITTER, not latency.** A constant delay is harmless for CW:
+the whole transmission starts 20 ms late and no listener can tell. CW element
+timing is made of **differences** between edge arrival times, so what breaks it
+is the spread, not the mean. A dot at 25 WPM is 48 ms. Shared WiFi routinely
+jitters tens of ms and occasionally hundreds — retries, power save, a beacon
+interval, a roam — and none of that is bounded. **Element-by-element keying
+over WiFi cannot be made reliable, and it is not a software problem to engineer
+around.**
+
+So CW splits in two, and only one half has the problem:
+
+| | Who makes the timing | Over WiFi |
+| --- | --- | --- |
+| `KD1;` / `KD0;` per element | the PC | ⛔ dead on arrival — jitter is the dot length |
+| `KY<text>;` buffered text | **the radio's own keyer** | ⭐ fine — one packet, jitter only shifts the start |
+
+⭐ **`KY` is in the QMX's documented set** ("KY (both variants)",
+`docs/qmx-1_04-cat-comparison.md` §1.3), so buffered CW works through a
+transparent pipe with no timing exposure at all. That is also what a contest
+logger normally uses for its F-key messages, and an N1MM+ operator driving a
+**WinKeyer on a separate PC serial port** never touches us either.
+
+⛔ So the promise is: **CW as text, yes. CW as keying, no — and say so rather
+than letting someone find out on the air.**
+
+### ⛔⛔ THIS QUESTION FOUND A LIVE KEYING HOLE (fixed 2026-10-22)
+
+`cat_keying_classify()` knew `TX`, `KD`, `MD8` and `TA`. **It did not know
+`KY`.** So `/api/cmd {"action":"cat_raw","cmd":"KY TEST;"}` passed the T64 door
+and keyed the radio with **no band check at all** — T64's exact class, in a verb
+nobody had listed. Fixed, with 5 new harness cases; 31 cases, 0 wrong.
+
+⚠ **The first fix was wrong and the harness caught it.** Added as another
+`else if`, `KYCQ CQ DE OZ1LAV;` classified as harmless: the scanner takes the
+whole **letter run** as the verb, so the message's first word is eaten into it
+("KYC") and nothing matches. Every other keying verb takes a **digit**
+argument, which is why greedy letter-scanning was safe until a verb arrived
+whose argument is free text. `KY` is now matched by prefix, ahead of the
+scanner.
+
+### ⛔ THE REMAINING WORK THIS EXPOSES, AND IT IS A BLOCKER FOR TIER C
+
+**The classifier was written against the six keying sites *this firmware* uses.
+A transparent pipe can send anything the radio understands.** `KY` was found by
+a question, not by a checker, and `check_tx_guard.py` cannot find the next one:
+it greps our source for literals, and a pass-through's strings arrive at
+runtime.
+
+The QMX's documented set (§1.3 plus the 1_04 additions) includes commands whose
+function is not recorded anywhere in this tree — `QJ`, `TQ`, `SA`, `SS`, `C2`,
+`ML`, `PL`, `LC`, `OM`, `Q0`–`Q8`, `RC`, `RD`, `RT`, `RU`, `TR`, `RR`, `PS`.
+⛔ **Guessing which of those can emit is exactly the wrong move.** The CAT
+manual has to be read against the classifier, verb by verb, and every verdict
+written into the harness.
+
+⛔ **Do not open a transparent pipe before that sweep is done.** Until then the
+pipe is only as safe as a classifier that has already been caught missing one.
+
 ## 5. Keying — a decision, not code
 
 A LAN socket with no authentication that can carry `TX;` is **T64 repeating in

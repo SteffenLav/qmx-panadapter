@@ -49,6 +49,13 @@ int main(void)
       {"KD0;",             false, false, 0,    "key UP emits nothing"},
       {"KD;",              false, false, 0,    "a read"},
 
+      /* --- buffered CW text: the RADIO's keyer transmits it (added 10-22) -- */
+      {"KY TEST;",         true,  false, 0,    "went through the T64 door unguarded until 10-22"},
+      {"KYCQ CQ DE OZ1LAV;", true, false, 0,   "no space before the text either"},
+      {"KY;",              false, false, 0,    "buffer-space read, emits nothing"},
+      {"KY ;",             false, false, 0,    "whitespace only is not a message"},
+      {"FA7074000;KY TEST;", true, false, 0,   "hidden behind a dial move"},
+
       /* --- the tone sets the frequency actually EMITTED ------------------- */
       {"TA1234.56;",       true,  true,  1234, "dial + audio is what the 60 m fault got wrong"},
       {"TA1500;",          true,  true,  1500, ""},
