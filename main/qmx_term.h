@@ -52,7 +52,28 @@ bool qmx_term_is_open(void);
  *
  * ⚠ The model is backspace-and-retype, not arrow-adjust, and the arrows moving
  * between columns in a TABLE is correct behaviour - do not "fix" that. */
-bool qmx_term_key(const char *name);
+/* ⛔ THERE IS NO UNCHECKED qmx_term_key() ANY MORE (T65).
+ * It was a thin wrapper that passed no reason buffer, and it read as the
+ * plain way to send a key - which is how a refusal would quietly become
+ * optional again. check_tx_guard.py refuses the build if the name comes
+ * back anywhere but this file. */
+
+/* ⛔ T65: THE SAME KEY, WITH THE REFUSAL TEXT.
+ *
+ * Several rows of the radio’s Hardware tests menu key the transmitter, and
+ * on the Diagnostics screen a single `t` keys at FULL PA VOLTAGE WITH NO SWR
+ * PROTECTION (operating manual 1_04_001 §8.6.10). Keystrokes arrive here from
+ * the browser and from the Tab5, and nothing checked them - the same class as
+ * T64 on the CAT port, one port over.
+ *
+ * Both entry points refuse those keys. This one also hands back WHY, so the
+ * operator is told which tool was refused instead of watching a keypress do
+ * nothing. See qmx_term_tx_rows.h for the list and its limits.
+ *
+ * err/err_len: optional; set to the reason on a refusal.
+ * Returns false both when there is no session and when the key was refused -
+ * err[0] tells them apart. */
+bool qmx_term_key_checked(const char *name, char *err, size_t err_len);
 
 /* Walk to a menu item by its TEXT and select it.
  *

@@ -1,4 +1,5 @@
 #include "qmx_term.h"
+#include "qmx_term_tx_rows.h"
 
 #include "usb/cdc_acm_host.h"
 #include "esp_log.h"
@@ -522,6 +523,36 @@ void qmx_term_close(void)
     xSemaphoreGive(s_lock);
 }
 
+/* ⛔ T65: WOULD PRESSING ENTER HERE KEY THE TRANSMITTER?
+ *
+ * Caller holds s_lock. Reads the selected row's text and asks
+ * qmx_term_row_transmits(); see qmx_term_tx_rows.h for the list, where it came
+ * from, and why this REFUSES instead of consulting the band guard.
+ *
+ * ⚠ A row this cannot read is ALLOWED. Refusing on an unreadable screen
+ * would break every legitimate keypress whenever a repaint is mid-flight, and
+ * the screen is read again on the next key. The gap is named in
+ * check_tx_guard.py's output rather than left to be discovered.
+ */
+static bool enter_would_transmit(const char **why)
+{
+    if (why) *why = NULL;
+    int sel = find_selected_row();
+    if (sel < 0) return false;
+    char line[ANSI_COLS + 1];
+    if (!s_scr || xSemaphoreTake(s_scr_lock, pdMS_TO_TICKS(300)) != pdTRUE) return false;
+    ansi_term_row_text(s_scr, sel, line);
+    xSemaphoreGive(s_scr_lock);
+    return qmx_term_row_transmits(line, why);
+}
+
+/* Is the Diagnostics screen up? Its "Transmitter" block is the heading the
+ * manual names, and `t`/`p` there key the radio. */
+static bool on_diagnostics_screen(void)
+{
+    return find_row("Transmitter") >= 0;
+}
+
 bool qmx_term_select(const char *label)
 {
     if (!s_lock || !label || !label[0]) return false;
@@ -538,6 +569,17 @@ bool qmx_term_select(const char *label)
                 break;
             }
             if (sel == target) {
+                /* ⛔ T65: the walk aims at a label WE chose, but the row
+                 * under the selection is what the radio acts on - and this
+                 * menu's siblings key the transmitter. Both are checked: the
+                 * label because it is what we asked for, the screen because
+                 * it is what the radio agrees with. */
+                const char *why = NULL;
+                if (qmx_term_row_transmits(label, &why) || enter_would_transmit(&why)) {
+                    ESP_LOGW(TAG, "select: REFUSED '%s' - %s", label,
+                             why ? why : "it can key the transmitter");
+                    break;
+                }
                 tx("\r", 1);
                 vTaskDelay(pdMS_TO_TICKS(400));   /* the radio repaints */
                 ESP_LOGI(TAG, "select: '%s' entered", label);
@@ -555,14 +597,46 @@ bool qmx_term_select(const char *label)
     return ok;
 }
 
-bool qmx_term_key(const char *name)
+bool qmx_term_key_checked(const char *name, char *err, size_t err_len)
 {
+    if (err && err_len) err[0] = '\0';
     if (!s_lock || !name || !name[0]) return false;
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(3000)) != pdTRUE) return false;
 
     bool ok = false;
     if (s_open) {
         s_last_activity_us = esp_timer_get_time();
+        /* ⛔ T65 - THE TWO WAYS A FORWARDED KEYSTROKE PUTS RF OUT.
+         *
+         * Enter on a Hardware-tests row (the sweeps, SSB Calibration, Test
+         * ADC I/Q, PA mod. test, Diagnostics, Beacon), and `t`/`p` once the
+         * Diagnostics screen is up - where the manual says the transmit is
+         * "at the full PA voltage and there is no SWR protection". Both
+         * arrive here from the browser and from the Tab5, and nothing
+         * checked either of them. */
+        const char *tx_why = NULL;
+        if (!strcmp(name, "enter") && enter_would_transmit(&tx_why)) {
+            ESP_LOGW(TAG, "key REFUSED: Enter on a row that transmits - %s",
+                     tx_why ? tx_why : "");
+            if (err && err_len) {
+                snprintf(err, err_len, "Refused: %s",
+                         tx_why ? tx_why : "that row can key the transmitter");
+            }
+            xSemaphoreGive(s_lock);
+            return false;
+        }
+        if (name[1] == '\0' && on_diagnostics_screen() &&
+            qmx_term_key_transmits_on_diagnostics(name[0], &tx_why)) {
+            ESP_LOGW(TAG, "key REFUSED: '%s' on the Diagnostics screen - %s",
+                     name, tx_why ? tx_why : "");
+            if (err && err_len) {
+                snprintf(err, err_len, "Refused: %s",
+                         tx_why ? tx_why : "that key transmits");
+            }
+            xSemaphoreGive(s_lock);
+            return false;
+        }
+
         if      (!strcmp(name, "up"))     ok = tx("\x1b[A", 3);
         else if (!strcmp(name, "down"))   ok = tx("\x1b[B", 3);
         else if (!strcmp(name, "right"))  ok = tx("\x1b[C", 3);

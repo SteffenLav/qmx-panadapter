@@ -77,9 +77,51 @@ EXTERNAL_INPUT_DIRS = ("main/net/",)
 # off-device can become a CAT command unchecked.
 RAW_SENDERS = re.compile(r"\bcat_send_raw_cmd\s*\(")
 
-# The one guarded door, and where it lives.
-DOOR_NAME = "cat_send_external_cmd"
-DOOR_FILE = "main/cat/cat.c"
+# The guarded doors runtime input has to pass, and where each lives.
+#
+#   CAT port (T64)      - text from the web API or a future PC pass-through.
+#   terminal port (T65) - keystrokes forwarded to the radio's OWN menus, where
+#                         the sweeps, SSB Calibration, Test ADC I/Q, PA mod.
+#                         test, Diagnostics and Beacon all key the transmitter,
+#                         and `t` on the Diagnostics screen does it at full PA
+#                         voltage with no SWR protection.
+#
+# Each door must consult its classifier. The CAT door also calls the band
+# guard; the terminal door REFUSES instead, because a sweep emits across a
+# whole filter passband - there is no single frequency to hand the guard, and
+# most of what it emits is outside every allocation by design. See
+# main/qmx_term_tx_rows.h.
+DOORS = [
+    {
+        "name": "cat_send_external_cmd",
+        "file": "main/cat/cat.c",
+        "classifier": ["cat_keying_classify"],
+        "classifier_in_file": "cat_keying_classify",
+        "needs_band_guard": True,
+        "sinks": re.compile(r"\bcat_send_raw_cmd\s*\("),
+        "sink_dirs": ("main/net/",),
+        "sink_what": "a raw CAT send",
+    },
+    {
+        "name": "qmx_term_key_checked",
+        "file": "main/qmx_term.c",
+        # The door asks two helpers next door in the same file; they are what
+        # hold the screen lock. The real classifier has to be in the file.
+        "classifier": ["enter_would_transmit",
+                       "qmx_term_key_transmits_on_diagnostics"],
+        "classifier_in_file": "qmx_term_row_transmits",
+        "needs_band_guard": False,
+        # The unchecked wrapper is GONE, so the rule is absolute: this name
+        # must not appear in any .c but the door's own file.
+        "sinks": re.compile(r"\bqmx_term_key\s*\("),
+        "sink_dirs": ("main/",),
+        "sink_what": "a terminal keystroke that skips the transmit check",
+    },
+]
+
+# Kept for the message text below.
+DOOR_NAME = DOORS[0]["name"]
+DOOR_FILE = DOORS[0]["file"]
 
 # Sites that are allowed to key WITHOUT the guard. Each needs a reason, and the
 # reason is the point: anyone adding a line here is making a decision, not
@@ -141,7 +183,7 @@ def main():
                     % (rel, i + 1, what))
 
     # ---- the runtime rule ------------------------------------------------
-    door_src = ""
+    door_src = {}
     for path in c_sources():
         rel = os.path.relpath(path, ROOT).replace("\\", "/")
         try:
@@ -149,63 +191,76 @@ def main():
                 lines = fh.readlines()
         except OSError:
             continue
-        if rel == DOOR_FILE:
-            door_src = "".join(lines)
-        if not rel.startswith(EXTERNAL_INPUT_DIRS):
-            continue
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith(("*", "//", "/*")):
+        for d in DOORS:
+            if rel == d["file"]:
+                door_src[rel] = "".join(lines)
+        for d in DOORS:
+            if not d["sink_dirs"] or not rel.startswith(d["sink_dirs"]):
                 continue
-            if RAW_SENDERS.search(line):
-                problems.append(
-                    "%s:%d  a raw CAT send in a file that takes input from "
-                    "OUTSIDE the device. A command arriving over the\n"
-                    "    network can carry TX; and the grep above cannot see "
-                    "it - that is exactly how cat_raw shipped able to\n"
-                    "    transmit out of band. Route it through %s(), which "
-                    "classifies the text and consults the\n"
-                    "    guard with the RF it would EMIT."
-                    % (rel, i + 1, DOOR_NAME))
+            if rel == d["file"]:
+                continue
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith(("*", "//", "/*")):
+                    continue
+                if d["sinks"].search(line):
+                    problems.append(
+                        "%s:%d  %s in a file that takes input from OUTSIDE the "
+                        "device. Input arriving over the\n"
+                        "    network can carry a transmit command and the grep "
+                        "above cannot see it - that is exactly how\n"
+                        "    cat_raw shipped able to transmit out of band. "
+                        "Route it through %s()."
+                        % (rel, i + 1, d["sink_what"], d["name"]))
 
-    # ---- and the door itself has to be guarded ---------------------------
+    # ---- and each door itself has to check -------------------------------
     doors = 0
-    if door_src:
-        m = re.search(r"esp_err_t\s+%s\s*\([^)]*\)\s*\{" % DOOR_NAME, door_src)
-        if m:
-            doors = 1
-            body = door_src[m.end():m.end() + 4000]
-            if not GUARD.search(body):
-                problems.append(
-                    "%s  %s() does not call tx_band_guard_allows(). It is the "
-                    "ONE door runtime CAT text passes\n"
-                    "    through; unguarded, every other check here is "
-                    "decoration." % (DOOR_FILE, DOOR_NAME))
-            if "cat_keying_classify" not in body:
-                problems.append(
-                    "%s  %s() does not classify the text with "
-                    "cat_keying_classify(). Without that it cannot know\n"
-                    "    whether the command keys, so it guards either "
-                    "everything or nothing." % (DOOR_FILE, DOOR_NAME))
-        else:
+    for d in DOORS:
+        src = door_src.get(d["file"], "")
+        if not src:
+            problems.append("%s  cannot read; %s() is unverified"
+                            % (d["file"], d["name"]))
+            continue
+        m = re.search(r"\b(?:esp_err_t|bool)\s+%s\s*\([^)]*\)\s*\{" % d["name"], src)
+        if not m:
             problems.append(
-                "%s  %s() is missing. Runtime CAT text has no guarded door."
-                % (DOOR_FILE, DOOR_NAME))
+                "%s  %s() is missing. Runtime input has no guarded door there."
+                % (d["file"], d["name"]))
+            continue
+        doors += 1
+        body = src[m.end():m.end() + 4000]
+        missing = [c for c in d["classifier"] if c not in body]
+        if missing:
+            problems.append(
+                "%s  %s() does not consult %s.\n"
+                "    Without that it cannot know whether the input keys, so it "
+                "refuses either everything or nothing."
+                % (d["file"], d["name"], ", ".join(m + "()" for m in missing)))
+        if d["classifier_in_file"] not in src:
+            problems.append(
+                "%s  does not use %s(), so the door has no classifier to ask."
+                % (d["file"], d["classifier_in_file"]))
+        if d["needs_band_guard"] and not GUARD.search(body):
+            problems.append(
+                "%s  %s() does not call tx_band_guard_allows(). It is a door "
+                "runtime input passes through;\n"
+                "    unguarded, every other check here is decoration."
+                % (d["file"], d["name"]))
 
     print("check_tx_guard: %d keying site(s) found, %d exempt, "
-          "%d guarded door for runtime CAT" % (found, len(EXEMPT), doors))
+          "%d guarded door(s) for runtime input" % (found, len(EXEMPT), doors))
     # ⛔ SAY WHAT IS NOT COVERED, IN THE SAME BREATH AS THE PASS.
     #
     # Reporting "every transmit path is guarded" while a path exists that this
     # script does not examine is the same over-claim that let cat_raw ship: the
     # checker answered its own question honestly and the summary read as a
-    # guarantee. So the gap is printed on every run, pass or fail.
-    print("check_tx_guard: NOT COVERED - /api/term (T65). It sends "
-          "browser-supplied keystrokes to the radio's own")
-    print("                menu on CDC port 2, where SWR Tune keys a carrier. "
-          "A keystroke's meaning depends on")
-    print("                which menu row is selected, so it cannot be "
-          "classified the way a CAT verb can.")
+    # guarantee. So the limits are printed on every run, pass or fail.
+    print("check_tx_guard: LIMITS - the terminal door (T65) matches menu rows "
+          "by LABEL, from the 1_04_001")
+    print("                manual, not from a radio. A reworded row is "
+          "unguarded, and a row it cannot read")
+    print("                while the screen repaints is ALLOWED. The radio's "
+          "own front panel is never gated.")
     if problems:
         print("\n" + "=" * 78)
         print("check_tx_guard: UNGUARDED TRANSMIT PATH - REFUSING THE BUILD")

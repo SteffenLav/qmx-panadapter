@@ -8153,6 +8153,9 @@ static esp_err_t term_post_handler(httpd_req_t *req)
     const char *action = cJSON_IsString(ja) ? ja->valuestring : "";
     bool ok = false;
     const char *err = NULL;
+    /* T65: a key the transmit guard refused comes back with its reason here,
+     * and `err` points at it rather than at "no session". */
+    char term_err[128] = {0};
 
     if (!strcmp(action, "open")) {
         ok = qmx_term_open();
@@ -8163,9 +8166,12 @@ static esp_err_t term_post_handler(httpd_req_t *req)
         qmx_term_close();
         ok = true;
     } else if (!strcmp(action, "key")) {
+        /* ⛔ T65: a refused key is NOT "no session". Saying so would send the
+         * operator power-cycling the radio over a guard doing its job. */
         const cJSON *jk = cJSON_GetObjectItem(root, "key");
-        ok = cJSON_IsString(jk) && qmx_term_key(jk->valuestring);
-        if (!ok) err = "no session";
+        ok = cJSON_IsString(jk) &&
+             qmx_term_key_checked(jk->valuestring, term_err, sizeof(term_err));
+        if (!ok) err = term_err[0] ? term_err : "no session";
     } else if (!strcmp(action, "text")) {
         // Typing a value into a menu field. One character at a time through the
         // same path as a key, so there is a single place that writes to the port.
@@ -8174,10 +8180,10 @@ static esp_err_t term_post_handler(httpd_req_t *req)
             ok = true;
             for (const char *p = jt->valuestring; *p && ok; p++) {
                 char one[2] = { *p, 0 };
-                ok = qmx_term_key(one);
+                ok = qmx_term_key_checked(one, term_err, sizeof(term_err));
             }
         }
-        if (!ok) err = "no session";
+        if (!ok) err = term_err[0] ? term_err : "no session";
     } else {
         err = "unknown action";
     }
