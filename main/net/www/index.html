@@ -4677,8 +4677,8 @@ const SET_FIELDS = [
      "Analogue gain on the 3.5 mm input, in the 3 dB steps the ES7210 actually has. Takes effect immediately when line-in is running. 0 dB is the deliberate default - 30 dB on all channels is what made the first mic build unusable",
      [["0","0 dB"],["3","3 dB"],["6","6 dB"],["9","9 dB"],["12","12 dB"],["15","15 dB"],["18","18 dB"],["21","21 dB"],["24","24 dB"],["27","27 dB"],["30","30 dB"]]],
   ["Radio & display", "display.wf_rows_per_s", "sel", "Waterfall rate",
-     "Waterfall rows per second. Faster spreads a signal out in time; slower fits more history on screen and costs the Tab5 less to draw. The spectrum and S-meter are unaffected",
-     [["1","1 row/s"],["2","2 rows/s"],["3","3 rows/s"],["4","4 rows/s"],["5","5 rows/s"],["6","6 rows/s"],["7","7 rows/s"],["8","8 rows/s"],["9","9 rows/s"],["10","10 rows/s (normal)"],["20","20 rows/s"],["30","30 rows/s"],["40","40 rows/s"]]],
+     "Waterfall rows per second. Faster spreads a signal out in time; slower fits more history on screen and costs the Tab5 less to draw. Off freezes the waterfall on both the Tab5 and this page, which is the way to see what the spectrum does with the whole frame to itself. The spectrum and S-meter are unaffected. ⚠ 1-40 rows/s still only moves the TAB5 waterfall - this page always draws one row per received frame (T74)",
+     [["0","Off (frozen)"],["1","1 row/s"],["2","2 rows/s"],["3","3 rows/s"],["4","4 rows/s"],["5","5 rows/s"],["6","6 rows/s"],["7","7 rows/s"],["8","8 rows/s"],["9","9 rows/s"],["10","10 rows/s (normal)"],["20","20 rows/s"],["30","30 rows/s"],["40","40 rows/s"]]],
   /* ⛔ "My QMX has GPS" IS NOT HERE, AND MUST NOT COME BACK. GPS is DETECTED,
      not declared - time_sync.c compares the radio's own second tick against
      SNTP - and the Tab5's drawer dropped this checkbox on 2026-07-19 when that
@@ -8226,6 +8226,7 @@ async function tick() {
     // PORT.A mode + Unit GPS pipeline: always sent (mode is never absent), so
     // the radios and the relay row's grey-out follow the DEVICE, not the page.
     if (s.port && window.applyPortStatus) window.applyPortStatus(s.port);
+    if (typeof s.wf_rows_per_s === "number") wfRowsPerS = s.wf_rows_per_s;
     /* #302. ⛔ A CHANGED STYLE MUST INVALIDATE ANYTHING BUILT ONCE. fmtHz()
        reads freqSepStyle at call time, so live text follows by itself - but the
        WSPR band picker and the FT8 preset list are composed once behind a
@@ -10082,6 +10083,11 @@ function getZoomWindow() {
    the trace, so a signal sitting on the boundary is never hidden by it.
    Shared by both spectrum modes; the waterfall draws its own per row. */
 let wfRowParity = 0;
+/* 0 = the operator asked for the waterfall off so the spectrum has the
+   frame to itself. Fed by the 1 Hz status tick, so it follows a change
+   made in the Tab5 drawer as well as one made here. Defaults to 10 so a
+   page loaded before the first status arrives still draws. */
+let wfRowsPerS = 10;
 function drawNoDataHatch(ctx, W, H) {
   if (!lastView) return;
   ctx.strokeStyle = "#3a4450"; ctx.lineWidth = 1;
@@ -11632,7 +11638,9 @@ function connectWs() {
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
        built from the RAW frame, exactly as render.c does it. */
     (specFlatten?drawSpectrumFlat:drawSpectrumRaw)(applyDeviceEma(payload));
-    drawWaterfall(payload);
+    /* Off: skip the row entirely. Not a decimator - 1..40 still only move
+       the Tab5's waterfall, which is T74 and deliberately untouched here. */
+    if (wfRowsPerS !== 0) drawWaterfall(payload);
     overlayTuneCursor();
     frameCount++;
     const now=performance.now();

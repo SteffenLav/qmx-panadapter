@@ -826,6 +826,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(ws, "closes",    ws_close);
         cJSON_AddNumberToObject(ws, "partial",   ws_part);
     }
+    /* The waterfall rate, so the BROWSER can honour 0 = off.
+     * It lives here rather than in a cached copy of /api/settings
+     * because the page already polls this once a second, which means
+     * there is one source of truth and no stale client-side value if
+     * the setting is changed from the Tab5 drawer instead. */
+    cJSON_AddNumberToObject(root, "wf_rows_per_s",
+                            (double)settings_get_wf_rows_per_s());
     // TX/QSO banner data, only while the FT8/FT4 screen is live (the FT8
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
@@ -6792,7 +6799,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             wf_rows = m * 10;
         }
         if (wf_rows >= 0) {
-            if (wf_rows < 1)  wf_rows = 1;
+            /* 0 = off. See render_set_waterfall_rows_per_s() for why the floor
+             * of 1 was removed: 1 row/s still redraws the whole carpet when it
+             * shifts, so it could not answer "does the spectrum run free
+             * without the waterfall". */
             if (wf_rows > 40) wf_rows = 40;
             /* Apply AND store, same as every slider in this block - storing
                alone leaves the live waterfall on the old value until reboot. */

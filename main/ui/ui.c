@@ -6472,7 +6472,11 @@ static void update_freq_axis_labels(uint32_t center_hz)
  * copy and the two must be changed together. The dropdown's option order IS
  * this order, so its selected index is the index here and there is no second
  * mapping to drift. */
-static const uint8_t WF_RATE_STEPS[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40 };
+/* ⛔ 0 = OFF is FIRST, and index.html's copy must match it step for step -
+ * see the note above. Added 2026-10-22 so the waterfall can be taken out of
+ * the frame entirely while chasing the spectrum stutter; 1 row/s could not
+ * answer it, because the carpet still redraws whole when it shifts. */
+static const uint8_t WF_RATE_STEPS[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40 };
 #define WF_RATE_NSTEPS  (sizeof(WF_RATE_STEPS) / sizeof(WF_RATE_STEPS[0]))
 
 static uint8_t wf_rate_step_index(uint8_t rows)
@@ -14904,6 +14908,7 @@ static void drawer_build(void)
         lv_obj_align(speed_lbl, LV_ALIGN_TOP_LEFT, 0, 280);
         s_dropdown_wf_speed = lv_dropdown_create(sec);
         lv_dropdown_set_options(s_dropdown_wf_speed,
+                                "Off (frozen)\n"
                                 "1 row/s\n2 rows/s\n3 rows/s\n4 rows/s\n5 rows/s\n"
                                 "6 rows/s\n7 rows/s\n8 rows/s\n9 rows/s\n10 rows/s (normal)\n"
                                 "20 rows/s\n30 rows/s\n40 rows/s");

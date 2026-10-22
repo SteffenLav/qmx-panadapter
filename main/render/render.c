@@ -57,9 +57,25 @@ void render_set_ema_alpha(float alpha)
 static volatile uint8_t s_wf_rows = WF_ROWS_NOMINAL;
 static uint16_t s_wf_acc;   /* render_task only - no other task touches it */
 
+/* ⛔ 0 IS "OFF", AND IT IS A MEASURING INSTRUMENT, NOT A FEATURE.
+ *
+ * The floor used to be 1. The operator asked for the waterfall to be switched
+ * off completely "so the scope can work freely", chasing the Tab5 spectrum
+ * stutter Sam W7STF reported - and 1 row/s was not enough to answer it,
+ * because a carpet that shifts once a second STILL redraws its whole
+ * 1280x370 = 474 kpx when it does.
+ *
+ * ⚠ At 0 the carpet FREEZES on screen rather than disappearing - nothing
+ * ticks it, so nothing invalidates it, which is the whole point: `wf` in
+ * cpu_stats' per-panel line should fall to ~0 and the spectrum gets the
+ * budget. The object is deliberately NOT hidden; hiding it would change the
+ * layout and make the comparison a different screen.
+ *
+ * ⛔ NO OTHER CHANGE IS NEEDED HERE. The accumulator below already does the
+ * right thing: `s_wf_acc += 0` never reaches WF_ROWS_NOMINAL, so the tick
+ * simply never fires. Do not add a branch for it. */
 void render_set_waterfall_rows_per_s(uint8_t rows)
 {
-    if (rows < 1)  rows = 1;
     if (rows > 40) rows = 40;
     s_wf_rows = rows;
     ESP_LOGI("render", "waterfall rate: %u rows/s", rows);
