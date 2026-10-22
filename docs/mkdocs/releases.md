@@ -4,7 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.20.3** - 2026-10-21
+**v1.20.4** - 2026-10-22
+
+**A patch release. Two of its items are corrections you should know about: the web interface could transmit without the band check that v1.20.3 added.**
+
+- ⛔ **The raw CAT command in the web interface could key the radio, with no band check.** `/api/cmd` carries a developer command that passes a CAT string straight to the radio; sending `TX;` transmitted on whatever frequency the dial was on. The band check added in v1.20.3 never saw it — that check finds transmit paths by reading the firmware's own source, and a command typed into a browser is not in the source. Anyone who could reach your web page could transmit. Every command arriving from outside the firmware now passes one place that reads what it would emit — the dial, plus the tone offset where one is given — and refuses it when the band plan does not allow it. Found here; nobody reported it.
+- ⛔ **Radio Menus could start a transmitting test from a browser keystroke.** The radio's own Hardware tests menu holds the filter and SWR sweeps, SSB calibration and a diagnostics screen, and those key the transmitter — the diagnostics one at full PA voltage with the SWR protection off, by the radio's own manual. Pressing Enter on such a row, or `t` on the diagnostics screen, went through unchecked from the browser and from the Tab5. They are refused now, and the refusal says which tool it was. Your radio's own front panel still reaches all of them — that is where they belong, with a dummy load on.
+- **An AM listening frequency can be stored in a memory channel** *(Gyula HA3HZ)*. v1.20.3 gave the editor its AM button; the frequency itself was still refused if it fell outside an amateur band, which is exactly where AM listening is. A memory is a receive target and receiving is not restricted — your QMX has its own **System config → RX outside band** for tuning there. So it stores now, and says it is a receive-only channel. Transmitting there is refused by the band check, which is the right place for that decision.
+- **Messages that appeared behind the frequency keypad are visible again** *(Gyula HA3HZ)*. He reported it as "the response message appears behind the frequency table", and that is precisely what it was: notices were drawn on the screen while the keypad and the band popup are drawn on a layer above it. **Every** notice raised while one of those was open went unseen, not just the one that made him look — which is why the refusal above never gave him a reason.
+- **Receiver audio on the Tab5 wandered in pitch** *(Samuel W7STF, on WWV's one-second tone)*. The playback rate is measured from the audio the radio sends, and it was re-measured every second — but the radio delivers in 40 ms bursts, so a one-second count of a *perfect* stream reads up to 4 % wrong, and the pitch followed that. It is measured over ten seconds now. On the bench the wander dropped from about 0.6 % to 0.03 %, roughly a thirtieth. ⚠ Measured on the bench, not yet confirmed by ear: 10 MHz was dead here, so there was no steady tone to listen to.
+
+## Previous Releases
+
+### v1.20.3 - 2026-10-21
 
 **A patch release, and one of its items is a correction you may need to act on: WSPR on 60 metres transmitted outside the band.**
 
@@ -26,8 +38,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **When resetting the audio does not help, the Tab5 says the radio may not be receiving** rather than reporting success. A wedged QMX can stream perfect-looking audio containing nothing; every indicator stays green, and six hours of empty FT8 slots look like a dead band.
 - **Every CAT command now leaves the firmware through one place** *(asked for by Jim, jpwatters)*. No behaviour changes; it closes a race where a command could be sent to a radio that had just been unplugged, and it is the seam a networked radio would need.
 - **Documentation.** The manual now says in one place where to find the date (*Greg ZL4GW* — the main screen deliberately has none), stops confusing the Tab5's own GPS with the radio's, and the memory-channel mode colours it listed were wrong for two of the four.
-
-## Previous Releases
 
 ### v1.20.2 - 2026-10-20
 **A patch release. Everything reported in the two days after v1.20.1, one thing v1.20.1 shipped broken, and a correction that matters to anybody who uploads WSPR spots.**
@@ -1150,7 +1160,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.3.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.4.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
