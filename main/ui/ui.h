@@ -249,6 +249,7 @@ typedef struct {
     unsigned repeat[4];     /* gens shown 1, 2, 3, >=4 times in a row     */
     unsigned skipped;       /* pushes no refresh ever drew                */
     unsigned lock_fail;     /* ui_push_spectrum() could not get the lock  */
+    unsigned wf_lock_fail;  /* waterfall rows lost the same way           */
     unsigned age_mean_us;   /* push -> first refresh showing it           */
     unsigned age_max_us;
 } ui_spec_frame_stats_t;

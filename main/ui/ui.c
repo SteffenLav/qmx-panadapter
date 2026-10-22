@@ -9650,6 +9650,45 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
     lv_obj_invalidate(s_label_canvas);
 }
 
+/* ⛔⛔ MEASURED 2026-10-22: 14 OF EVERY 100 SPECTRUM FRAMES WERE THROWN AWAY
+ * HERE, AND THE TIMEOUT WAS THE REASON.
+ *
+ * The render path asks for the LVGL lock every 100 ms and used to give up
+ * after 20. taskLVGL holds that same lock for the whole of a refresh. From the
+ * bench, 42 consecutive 10 s windows with the waterfall off:
+ *
+ *     draw ms   mean 37   max 101-180      <- how long taskLVGL holds it
+ *     fps       18.6                       <- so it holds it 69% of the time
+ *     push ms   mean 99   late 0/100       <- the ASK is metronomic
+ *     lockfail  14 per 100 pushes          <- and 14 of them got nothing
+ *
+ *     spectra shown 87  +  lockfail 14  =  101 ~= the 100 pushes. The
+ *     accounting closes: nothing else was losing frames (skip 0, pubfail 0,
+ *     getfail 0).
+ *
+ * A 20 ms patience against a holder that keeps it for up to 180 ms is not a
+ * timeout, it is a coin toss. Each loss freezes the trace for 200 ms instead
+ * of 100 - which is exactly the "micro-stall" Sam W7STF reported, and it was
+ * invisible until ui_spec_frame_stats() counted it.
+ *
+ * ⭐ 90 ms, NOT 20 AND NOT portMAX_DELAY. The push period is 100 ms under
+ * vTaskDelayUntil, so a wait of up to 90 ms still leaves the next push on its
+ * own schedule - a late frame instead of no frame, and the cadence
+ * self-corrects. An unbounded wait would hand the render task's liveness to
+ * the UI thread, and this file has already paid for that mistake once.
+ *
+ * ⛔ SAFE ONLY BECAUSE render_task IS PRIORITY 3. CLAUDE.md's rule from the
+ * priority-inversion fix (1f374a0) is that NOTHING ABOVE PRIORITY 4 MAY BLOCK
+ * ON display_lock - a pri-10 USB-CDC task did exactly that and starved the
+ * audio pump. render_task sits BELOW taskLVGL's 4, so inheritance cannot raise
+ * the holder at all. Do not copy this constant to a call site on a higher
+ * priority task. See [[project_display_lock_priority_inversion]].
+ *
+ * ⚠ NOT YET PROVEN TO FIX THE SYMPTOM. It removes a measured frame loss; it
+ * is not established that the frame loss is what the eye is reacting to. The
+ * instrument that found it will say - lockfail should fall to ~0. */
+#define RENDER_PATH_LOCK_MS  90
+
 /* ⭐ SPECTRUM FRESHNESS - see ui_spec_frame_stats() in ui.h for why.
  *
  * Two writers, two cores, no lock between them. render_task (core 1) bumps
@@ -9667,6 +9706,7 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
 static volatile uint32_t s_spec_gen;         /* completed pushes, ever      */
 static volatile uint32_t s_spec_gen_us;      /* when that push finished     */
 static volatile uint32_t s_spec_lock_fail;   /* pushes the lock threw away  */
+static volatile uint32_t s_wf_row_lock_fail; /* waterfall rows, same cause  */
 
 /* Window accumulators. Written only by the hook (taskLVGL) except where
  * ui_spec_frame_stats() clears them. */
@@ -9731,6 +9771,7 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     for (int i = 0; i < 4; i++) out->repeat[i] = s_sf_repeat[i];
     out->skipped     = s_sf_skipped;
     out->lock_fail   = s_spec_lock_fail;
+    out->wf_lock_fail = s_wf_row_lock_fail;
     out->age_mean_us = gens ? (unsigned)(s_sf_age_sum_us / gens) : 0;
     out->age_max_us  = s_sf_age_max_us;
 
@@ -9738,7 +9779,8 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     s_sf_gens   = 0;
     for (int i = 0; i < 4; i++) s_sf_repeat[i] = 0;
     s_sf_skipped     = 0;
-    s_spec_lock_fail = 0;
+    s_spec_lock_fail  = 0;
+    s_wf_row_lock_fail = 0;
     s_sf_age_sum_us  = 0;
     s_sf_age_max_us  = 0;
     /* s_sf_last_gen / s_sf_cur_repeat deliberately survive: the run in
@@ -9751,7 +9793,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
     /* ⛔ A FAILED TAKE IS A DROPPED FRAME, AND IT USED TO BE SILENT.
      * It also costs the full 20 ms, so it lands in
      * render_push_spacing()'s push_max_us looking like a slow draw. */
-    if (!display_lock(20)) { s_spec_lock_fail++; return; }
+    if (!display_lock(RENDER_PATH_LOCK_MS)) { s_spec_lock_fail++; return; }
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
@@ -10487,7 +10529,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     const size_t row_bytes = (size_t)WF_CANVAS_W * 2;   // RGB565 = 2 B/px
     const size_t vis_bytes = (size_t)DISPLAY_H_RES * 2; // the row we were handed
 
-    if (!display_lock(20)) return;
+    /* Same call, same task, same 10 Hz tick as the spectrum push - and the
+     * same silent drop. A lost row here is a missing line of history, not a
+     * repeated one, so it is if anything more visible than a lost trace.
+     * Swept with its sibling rather than left for the next report. */
+    if (!display_lock(RENDER_PATH_LOCK_MS)) { s_wf_row_lock_fail++; return; }
 
     /* FIRST: move the existing history if the viewport has moved since the last
      * tick, so this row lands beside the right history rather than on top of

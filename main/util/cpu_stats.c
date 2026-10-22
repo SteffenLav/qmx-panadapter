@@ -113,11 +113,11 @@ static void cpu_stats_task(void *arg)
                 dsp_spectrum_mtx_fails(&pubfail, &getfail);
                 ESP_LOGI(TAG, "spec frames: %u frames showed %u spectra"
                               " | shown 1x %u 2x %u 3x %u 4x+ %u"
-                              " | skip %u lockfail %u pubfail %u getfail %u"
+                              " | skip %u lockfail %u wflockfail %u pubfail %u getfail %u"
                               " | age ms mean %u max %u",
                          sfs.frames, sfs.gens,
                          sfs.repeat[0], sfs.repeat[1], sfs.repeat[2], sfs.repeat[3],
-                         sfs.skipped, sfs.lock_fail,
+                         sfs.skipped, sfs.lock_fail, sfs.wf_lock_fail,
                          (unsigned)pubfail, (unsigned)getfail,
                          sfs.age_mean_us / 1000, sfs.age_max_us / 1000);
 
