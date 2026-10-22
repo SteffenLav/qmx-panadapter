@@ -7,6 +7,81 @@ Desk assessment, 2026-10-22. Nothing here has been built or flashed.
 
 ---
 
+## 0. The use case — not stated by the requesters, but determinable
+
+⚠ **Neither Ralph nor Gyula described a use case.** What we have is one request
+and one second. "Over the same USB-C that powers it" has been in T63's row since
+the day it was written, but it is **not marked as a quote** the way Gyula's
+sentence is, so treat it as our paraphrase and not as his words. Nothing else
+survives in this tree.
+
+So it has to be settled by elimination. Two scenarios are possible:
+
+**A. The Tab5 is the operating position; the PC only logs.** The operator
+watches the spectrum, clicks spots and tunes on the glass. N1MM+ on the PC
+follows frequency and mode so each QSO is logged on the right band, and in a
+contest also sets frequency.
+
+**B. The Tab5 is a protocol adapter.** The PC wants the radio; the Tab5 is
+merely in the path, and its screen is irrelevant.
+
+⭐ **B is eliminated, and by a fact rather than a preference: the QMX has its own
+USB CDC-ACM CAT port.** Plug the radio straight into the PC and N1MM+ has CAT
+directly — one cable, no Tab5, no network, no pass-through. Nobody writes to a
+mailing list asking for a worse version of a direct cable.
+
+**So the use case is A, and the reason the request exists at all is that the
+panadapter has taken the radio's only USB port.** Ralph is not asking for a
+bridge. He is asking to get his logger back without giving up the panadapter.
+That is the sentence to design against.
+
+### ⛔ Therefore the screen is ON and the firmware is fully running
+
+The question was asked directly (operator, 2026-10-22): in the CAT-server case,
+could the Tab5 just show a black screen? **No — and not for display reasons.**
+The pass-through is a *second consumer* of a link the panadapter owns, and it
+depends on the panadapter running:
+
+- the 50 ms poll loop is what produces the cached state that makes reads free
+  (§4 Tier A) and what gives the band guard a dial to judge;
+- IQ mode (`Q9`) has to stay asserted or the radio streams non-IQ audio;
+- the reply tap lives in `cat_rx_task()` (§4 Tier C);
+- the hold and pause arbitration (§4 Tier B, `cat_poll_hold()`,
+  `cat_user_pause_active()`) exists because FT8/WSPR bursts and the operator's
+  own front-panel pause exist.
+
+Blank the screen and none of that goes away — but the reason the Tab5 is in the
+path does. ⚠ The display is, separately, the heaviest consumer on the box (the
+`display_lock` priority-inversion history), so a screen-off mode is not
+technically absurd; it is simply a different feature from this one, and the
+headless-QMX+ operators are its audience, not Ralph.
+
+### ⛔ THE GAP THIS OPENS, AND IT IS NOT SMALL
+
+The request as recorded says **USB-C**. We are answering with **TCP over WiFi**.
+In most setups that is better — no cable at all — but it is **not what was
+asked**, and `main/wifi/wifi.c:1189` sets `WIFI_MODE_STA` and nothing else:
+**the Tab5 has no SoftAP.**
+
+So the pass-through needs a network that both the PC and the Tab5 join. N1MM+
+is contest software, and a field or portable contest often has no
+infrastructure. **In that case this design delivers nothing at all.** It would
+be the first *radio-control* feature to require a network — the panadapter
+itself does not.
+
+Two ways out, and only one costs us anything:
+
+1. ⭐ **The PC hosts the network.** Windows Mobile Hotspot, or a phone hotspot
+   both join. **Zero firmware work**, and it is the answer to give Ralph today.
+2. **SoftAP on the Tab5** (`WIFI_MODE_AP` / `APSTA`). Real work, and it lands in
+   the WiFi stack that already carries the double `STA_START`, the roam-back and
+   the DMA-pool-collapse-after-WiFi history. Not to be started casually.
+
+⛔ **Ask Ralph whether his PC and the Tab5 are on a common network, and whether
+he means to use this in the field.** That question decides whether TCP alone is
+the whole feature or only half of it — and it matters far more than which radio
+model he has selected.
+
 ## 1. What already exists
 
 `main/net/rigctld_server.c` is a Hamlib NET-rigctl server on **tcp/4532**,
