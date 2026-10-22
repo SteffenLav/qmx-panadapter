@@ -679,6 +679,60 @@ static volatile int32_t s_resample_ppm_max = INT32_MIN;
 static float    s_up_target    = 0.0f;   /* smoothed increment from the measured source rate */
 static uint32_t s_in_pairs_win = 0;      /* input pairs seen in the current measuring window */
 static int64_t  s_in_win_us    = 0;      /* when that window started */
+/* T36 - THE MEASURING WINDOW IS THE PITCH STABILITY. MEASURED, 2026-10-22.
+ *
+ * Sam W7STF heard the WWV 1 s tone change pitch over time on the Tab5 itself.
+ * s_up_inc IS the playback rate, and it is recomputed from a count of delivered
+ * pairs over this window - so the window's measurement noise is pitch noise,
+ * one-for-one.
+ *
+ * The radio does not deliver smoothly. audio.c's own comment has had the
+ * number for a year: one USB transfer is 40 packets = 1920 pairs (40 ms), and
+ * a window catches a whole number of them depending on where its edges fall.
+ * A 1 s window therefore reads 46080 / 48000 / 49920 for a PERFECT 48 kHz
+ * stream - +/-4 %.
+ *
+ * From 113,839 healthy seconds in the bench capture (2026-10-22):
+ *
+ *   window   sd of the rate estimate   full range
+ *   1 s      745 pairs = 1.55 %        -4.16 % .. +4.16 %
+ *   10 s      73 pairs = 0.15 %        -1.02 % .. +0.66 %
+ *
+ * The offset being corrected is 0.24 %. At a 1 s window the instrument was
+ * SIX TIMES noisier than the quantity it measures, and its extremes were twice
+ * the +/-2 % clamp - which is why the rail counter grows in every mode, AM and
+ * USB alike, and why the T21 "AM rails, USB does not" split did not survive a
+ * matched window: the noise was never about the mode.
+ *
+ * Replaying those same 113,833 real seconds through this filter:
+ *
+ *   1 s,  alpha 0.25 (shipped to v1.20.3)  sd 5884 ppm (0.59 %), -2.2 %..+2.5 %
+ *   10 s, alpha 0.25                       sd 1875 ppm
+ *   10 s, alpha 0.10 (this)                sd 1129 ppm (0.11 %), -0.45%..+0.44%
+ *   30 s, alpha 0.10                       sd  639 ppm
+ *
+ * 0.59 % re-rolled every second is +/-6 Hz on WWV's 1000 Hz tone, about 10
+ * cents, moving on a 1 s cadence. That is the report. 0.11 % on a ~100 s
+ * cadence is under 2 cents and drifts rather than wobbles.
+ *
+ * ⚠ The replay is a LOWER BOUND on the shipped figure. It used audio.c's
+ * delivered-pairs counter, which is a different counter over the same stream;
+ * this window counts pairs CONSUMED by this task, so the consumer's own
+ * scheduling adds noise on top. It also used only the 46000..50000 healthy
+ * band, discarding the tails that rail hardest.
+ *
+ * ⛔ Not 30 s, though it measures better: s_up_target is reset to 0 by
+ * set_decim_factor(), and until the first window closes there is NO correction
+ * at all - the 0.24 % deficit feeds zeros into the I2S descriptors, which is
+ * the chirp this corrector exists to remove. 10 s of that after a mode change
+ * is tolerable; 30 s is not. If 10 s still wobbles audibly, the next move is a
+ * 30 s window with a SHORT first window to acquire, not a wider clamp.
+ *
+ * ⛔ The clamp is not the lever. Widening it lets a wrong rate through
+ * quietly instead of pinning it; it makes the symptom less sharp and the audio
+ * no more correct. */
+#define RATE_WIN_US     10000000   /* 10 s - see above */
+#define RATE_SMOOTH_A   0.10f      /* one pole on the window estimate, ~100 s */
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -2129,11 +2183,11 @@ static void rx_audio_task(void *arg)
             s_in_pairs_win += (uint32_t)in_pairs;
             int64_t win_us = now_rm - s_in_win_us;
             if (s_in_win_us == 0) { s_in_win_us = now_rm; s_in_pairs_win = 0; }
-            else if (win_us >= 1000000) {                /* 1 s of measurement */
+            else if (win_us >= RATE_WIN_US) {            /* see RATE_WIN_US - T36 */
                 float src_rate = (float)s_in_pairs_win * 1000000.0f / (float)win_us;
                 float target   = src_rate / ((float)s_decim_d * (float)DSP_SAMPLE_RATE_HZ);
                 s_up_target = (s_up_target <= 0.0f) ? target
-                                                    : s_up_target + (target - s_up_target) * 0.25f;
+                                                    : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
