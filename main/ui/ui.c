@@ -6506,7 +6506,10 @@ void ui_sync_wf_rate_controls(void)
 {
     if (!s_dropdown_wf_speed) return;
     uint8_t rows = settings_get_wf_rows_per_s();
-    if (rows < 1 || rows > 40) rows = 10;
+    /* 0 = off is a real stored value; it used to be snapped to 10 here, which
+     * would have left the drawer showing "10 rows/s" over a frozen waterfall.
+     * Fifth and last of the clamps that had to go - see settings.c's setter. */
+    if (rows > 40) rows = 10;
     if (!display_lock(500)) return;
     lv_dropdown_set_selected(s_dropdown_wf_speed, (uint32_t)wf_rate_step_index(rows));
     display_unlock();

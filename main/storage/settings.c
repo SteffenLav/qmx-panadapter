@@ -1190,7 +1190,10 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
-    if (out->wf_rows_per_s < 1 || out->wf_rows_per_s > 40) out->wf_rows_per_s = DEF_WF_ROWS;
+    /* 0 = off is a legal STORED value too, or the setting would not survive
+     * a reboot - and the waterfall rate already has history there. Only a
+     * value above the range is nonsense worth replacing. */
+    if (out->wf_rows_per_s > 40) out->wf_rows_per_s = DEF_WF_ROWS;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     {
@@ -2349,7 +2352,14 @@ uint8_t settings_get_wf_rows_per_s(void)
 void settings_set_wf_rows_per_s(uint8_t rows)
 {
     if (!s_ready) return;
-    if (rows < 1 || rows > 40) rows = DEF_WF_ROWS;
+    /* ⛔ 0 = OFF IS VALID. This clamp used to read `rows < 1 || rows > 40`
+     * and silently substituted DEF_WF_ROWS, which is how a POST of 0 came
+     * back `{"ok":true}` with the stored value still 10 - measured on the
+     * bench 2026-10-22, after the clamps in render.c and webserver.c had
+     * already been lifted. Two of four were fixed and the API reported
+     * success for the other two, which is the worst shape a guard can take.
+     * An out-of-range value still falls back rather than being stored. */
+    if (rows > 40) rows = DEF_WF_ROWS;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_pending.wf_rows_per_s == rows) { xSemaphoreGive(s_mutex); return; }
     s_pending.wf_rows_per_s = rows;
