@@ -19,6 +19,7 @@ void render_set_ema_alpha(float alpha);
 // and a skipped push is a whole canvas invalidation that core 0 never has to
 // blit. Was a 1..4x multiplier; one axis, one setting, both directions.
 void render_set_waterfall_rows_per_s(uint8_t rows);
+uint8_t render_get_waterfall_rows_per_s(void);
 
 /* ⭐ THE EXPERIMENT THAT SEPARATES "THE DATA IS UNEVEN" FROM "THE PICTURE IS
  * UNEVEN", WITHOUT EITHER OF US JUDGING IT BY EYE FIRST.

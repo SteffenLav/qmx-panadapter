@@ -3131,6 +3131,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "wfbatch") == 0) {
+        /* Dev action: how many waterfall rows accumulate before the VIEW
+         * moves. Moving it costs the whole 474 kpx carpet whether it moves
+         * 1 px or N, so this caps the carpet redraw rate without dropping a
+         * single row of history. n=1 is the old behaviour exactly, n=0 is
+         * auto (sized from rows/s). A/B needs no reflash.
+         * {"action":"wfbatch","n":1} */
+        cJSON *jn = cJSON_GetObjectItem(root, "n");
+        if (cJSON_IsNumber(jn)) ui_wf_set_shift_batch(jn->valueint);
+        cJSON_Delete(root);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":true,\"wfbatch\":%d}",
+                 ui_wf_get_shift_batch());
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_guards") == 0) {
         /* Dev action: choose which false-decode guard ACTS. Both are measured
          * regardless, so this exists to compare them on real signals without

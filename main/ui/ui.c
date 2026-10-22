@@ -10594,6 +10594,79 @@ static void wf_track_viewport(void)
 // head DECREMENTS each tick, so the just-written row is at the TOP of the
 // WATERFALL_H window that starts at s_wf_head. We point the canvas's buffer at
 // that window. No memmove needed; ~100 us/tick instead of ~92 ms.
+/* ⭐⭐ THE CARPET COSTS 474 kpx TO MOVE ONE PIXEL, SO MOVE IT LESS OFTEN -
+ * WITHOUT LOSING A SINGLE ROW.
+ *
+ * ⛔ MEASURED 2026-10-22, same build, same minute, toggled over the API:
+ *
+ *                      waterfall OFF   waterfall ON (10 rows/s)
+ *   appear mean           100 ms          149 ms
+ *   appear SD              20 ms           54 ms
+ *   spectra shown/10 s      101              68
+ *   skip (never drawn)        0              17
+ *   fps                    21.5            12.3
+ *   draw ms mean             28              66
+ *   inval kpx/s            3330            8800   of which wf 6000
+ *
+ * "appear" is how long each picture stands still before the next replaces it
+ * (ui_spec_frame_stats). With the carpet off it lands on exactly the data rate;
+ * with it on, a third of all spectra NEVER REACH A FRAME. The carpet is 67% of
+ * every pixel invalidated on this screen and 2.6x the spectrum's own cost.
+ *
+ * ⭐ WHY, AND WHY THE RATE SETTING COULD NOT FIX IT. Scrolling by moving the
+ * image offset moves EVERY pixel, so LVGL must redraw the whole 1280x370 =
+ * 474 kpx carpet for a ONE PIXEL shift. `max 474kpx` in the per-panel inval
+ * line is that request. rows_per_s only changes how OFTEN that is paid, and
+ * paying it less often by dropping rows costs history - which is the only
+ * thing the waterfall is for. The operator asked for 0 rows/s precisely
+ * because nothing cheaper existed.
+ *
+ * ⭐ THE SPLIT THAT MAKES IT FREE. Writing a row into the buffer is a 2 x
+ * 2560 B memcpy, about 100 us. MOVING THE VIEW is what costs 474 kpx. They do
+ * not have to happen at the same rate. Every row is still written on its own
+ * tick, so no history is lost and the scroll SPEED is unchanged; the view
+ * jumps N rows at a time, N times less often. The rows written since the last
+ * jump sit above the visible window and are simply not shown yet - the carpet
+ * on screen stays internally consistent, it is just one step behind.
+ *
+ * The cost is granularity: the carpet advances N px in a step instead of 1 px.
+ * N is chosen to cap the SHIFT rate rather than fixed, so a fast setting does
+ * not re-flood what a slow one fixed:
+ *
+ *     N = round(rows_per_s / WF_TARGET_SHIFTS_PER_S), at least 1
+ *
+ * At 10 rows/s that is N=3 - 3.3 carpet redraws a second instead of 10, so
+ * ~1.6 Mpx/s instead of 6. At 40 rows/s, N=12. At 1 or 2 rows/s, N=1 and the
+ * behaviour is bit-for-bit what it is today.
+ *
+ * ⚠ NOT YET MEASURED. The prediction is that appear mean returns toward 100 ms
+ * and SD toward the ~20 ms floor the carpet-off arm showed, with the waterfall
+ * still running at its full row rate. If appear barely moves, the carpet's
+ * pixel cost was not the binding term and this should be reverted rather than
+ * tuned.
+ *
+ * ⛔ The override exists so the A/B needs no reflash:
+ * {"action":"wfbatch","n":1} forces today's behaviour, n=0 restores auto. */
+#define WF_TARGET_SHIFTS_PER_S  3
+static uint8_t s_wf_batch_override;   /* 0 = auto */
+static int     s_wf_pending_rows;
+
+void ui_wf_set_shift_batch(int n)
+{
+    if (n < 0) n = 0;
+    if (n > 40) n = 40;
+    s_wf_batch_override = (uint8_t)n;
+    s_wf_pending_rows   = 0;          /* do not strand a part-filled batch */
+}
+
+int ui_wf_get_shift_batch(void)
+{
+    if (s_wf_batch_override) return s_wf_batch_override;
+    int rows = render_get_waterfall_rows_per_s();
+    int n = (rows + WF_TARGET_SHIFTS_PER_S / 2) / WF_TARGET_SHIFTS_PER_S;
+    return (n < 1) ? 1 : n;
+}
+
 void ui_push_waterfall_row(const uint8_t *rgb565_row)
 {
     if (!s_wf_canvas_buf || !rgb565_row) return;
@@ -10627,7 +10700,13 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
      *
      * This replaces a per-row lv_canvas_set_buffer(); see the long comment at
      * the build site for why that was costing a black frame. */
-    lv_image_set_offset_y(s_wf_canvas, -(int32_t)s_wf_head);
+    /* The row is in the buffer either way. Only the VIEW waits - see the long
+     * comment above ui_push_waterfall_row() for the measurement behind this. */
+    bool shift_now = (++s_wf_pending_rows >= ui_wf_get_shift_batch());
+    if (shift_now) {
+        s_wf_pending_rows = 0;
+        lv_image_set_offset_y(s_wf_canvas, -(int32_t)s_wf_head);
+    }
 
     // FT8-sync-vs-SNTP-only slot-boundary overlay - panadapter-mode-only
     // diagnostic, gated on the "FT8 sync lines" drawer checkbox
@@ -10689,7 +10768,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     // is slower than the spectrum's 30 Hz redraw, which made the waterfall line
     // visibly lag the spectrum line. Both cyan overlays are now driven together
     // from ui_push_spectrum() off the same s_target_x so they stay glued.
-    lv_obj_invalidate(s_wf_canvas);
+    /* ⛔ THE INVALIDATE IS THE 474 kpx, NOT THE memcpy. Skipping it on a
+     * non-shift tick is the whole saving; leaving it in would make the batch
+     * pointless. The carpet on screen is unchanged on those ticks, so there is
+     * nothing to repaint. */
+    if (shift_now) lv_obj_invalidate(s_wf_canvas);
     display_unlock();
 }
 

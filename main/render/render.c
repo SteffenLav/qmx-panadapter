@@ -82,6 +82,11 @@ void render_set_waterfall_rows_per_s(uint8_t rows)
     ESP_LOGI("render", "waterfall rate: %u rows/s", rows);
 }
 
+/* The live rate, for ui.c's shift batching - it sizes the batch from the row
+ * rate so a fast setting cannot re-flood what a slow one fixed. Reading the
+ * one owner beats a second copy of the value drifting from it. */
+uint8_t render_get_waterfall_rows_per_s(void) { return s_wf_rows; }
+
 
 
 /* ⭐ PUSH SPACING - see render.h for why this exists and what it rules out.

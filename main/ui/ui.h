@@ -265,6 +265,14 @@ typedef struct {
 
 void ui_spec_frame_stats(ui_spec_frame_stats_t *out);
 
+/* Waterfall viewport-shift batching. Every row is still written on its own
+ * tick; the VIEW moves N rows at a time, because moving it costs the whole
+ * 474 kpx carpet whether it moves 1 px or N. 0 = auto (sized from the row
+ * rate), >=1 forces a value - 1 is the pre-2026-10-22 behaviour exactly.
+ * See the measurement above ui_push_waterfall_row(). */
+void ui_wf_set_shift_batch(int n);
+int  ui_wf_get_shift_batch(void);
+
 void ui_set_resource_monitor_text(const char *text);
 
 // Dev-only: toggle the resource-monitor overlay's visibility. Not a user
