@@ -84,22 +84,44 @@ in the 7.15 MB `ota_1` slot.
 Looked up 2026-10-22, from the N1MM+ Configurer documentation and the flrig
 threads. **The two differ, and the difference sets the phasing.**
 
-### N1MM+ — a raw Kenwood-CAT socket, no PC software
+### ⛔ IT IS A TRANSPARENT PIPE. IT IS NOT A RADIO EMULATOR.
 
-The Configurer's Hardware tab offers **TCP** in the Port column, with an
-`IP Addr:Port` field. The documentation describes it as "used for radios that
-support radio control via TCP (Ethernet)" and names "a TCP-to-serial adapter"
-as a case where it applies — i.e. N1MM+ puts the **selected radio model's own
-CAT bytes** on the socket, exactly as it would on a COM port. It does **not**
-speak rigctld: a community answer on the N1MM+ group says N1MM+ does not use
-Hamlib, and a Linux tutorial that tried rigctld on 4532 gave up and bridged a
-virtual serial port with `socat` instead, selecting model TS-2000 over TCP.
+Operator's call, 2026-10-22, and it is right: **this cannot be tailored to a
+brand or a model, and it must not try.**
 
-So **N1MM+ needs §5 Phase 2, not Phase 1**, and with Phase 2 it needs nothing
-installed on the PC. Phase 1 does not help it at all.
+The reason is that **what appears on the socket is not ours to choose.** N1MM+'s
+Configurer offers **TCP** in the Port column with an `IP Addr:Port` field — the
+documentation calls it "used for radios that support radio control via TCP
+(Ethernet)" and names "a TCP-to-serial adapter" as a case where it applies.
+N1MM+ runs its **own driver for whatever model the user picked** and tunnels
+those bytes to the socket. Pick a Kenwood, Kenwood CAT arrives. Pick an Icom,
+binary CI-V arrives, not even `;`-terminated. It does **not** speak rigctld: a
+community answer on the N1MM+ group says N1MM+ does not use Hamlib, and a Linux
+tutorial that tried rigctld on 4532 gave up and bridged a virtual serial port
+with `socat`, selecting model TS-2000 over TCP.
 
-⚠ Open, and the one thing the repo cannot answer: **which radio model Ralph has
-selected in N1MM+.** That decides which verbs to answer first. Ask him.
+So the dialect on the wire is **a dropdown on the operator's PC**, and there are
+dozens of entries in it. Guessing it is not a design.
+
+**Carry bytes both ways and decide nothing.** Then the compatibility question
+becomes "does the model the user selected overlap what the QMX answers" — which
+is **exactly** the question they already face with a direct USB cable to the
+radio. We neither add nor subtract compatibility. Three consequences, all good:
+
+1. ⭐ **The promise is testable and worth making:** anything that works on a
+   direct cable to the QMX works through the Tab5. Nothing else needs claiming.
+2. ⭐ **The compatibility surface is the QMX's, not ours.** When QRP Labs add a
+   command it works through this the day they ship it, with no change here, and
+   no table in this tree to go stale.
+3. ⭐ **It is not "the N1MM+ feature".** It is the radio's CAT port, over the
+   network — so it also serves flrig (through a PC virtual COM port), Log4OM's
+   native Kenwood driver, DXLab Commander, Omnirig, and anything not yet
+   written. `rigctld` on 4532 stays as the convenience layer for Hamlib
+   clients. Two sockets, two audiences, **neither model-specific**.
+
+⚠ So "which radio model have you selected?" is **not a design input.** It is
+only useful as a test case to reproduce, and the reply to Ralph should not ask
+it as though the answer gates the work. It does not.
 
 ### flrig — not reachable from here at all
 
@@ -112,24 +134,59 @@ plainly rather than implying a future release will cover it.
 ⚠ The 2026-10-22 draft reply claimed "flrig and N1MM+ can both talk over TCP".
 Half right, and the wrong half. It was never sent.
 
-### ⭐ The refinement this produced: answer `IF;` from cache
+### ⛔ RETRACTED: "answer `IF;` from cache"
 
-`IF` is in the QMX's own supported command set (`docs/qmx-1_04-cat-comparison.md`
-§1.1 documents its fixed format), so a pass-through does not have to synthesise
-it — the radio answers. But a Kenwood-model logger polls `IF;` several times a
-second, and through Tier C every one of those is a serialized round trip against
-a 300 ms budget. That is the contention point, and it is avoidable: frequency,
-mode, split, RIT and TX state are **all already cached** in `cat.c`, and the
-frame format is documented.
+An earlier version of this document (commit `9ed99c12`) proposed synthesising
+the `IF;` reply from cached state, to spare the link a logger's poll rate.
+**Transparency beats it, and the proposal is withdrawn.**
 
-⛔ So `IF;` is a **Tier A** verb, built from cache, costing no link traffic —
-the same trick that makes rigctld's `f` and `m` free today. That single verb is
-most of what a logger ever asks for. Tier C stays the escape hatch.
+Synthesising `IF;` is emulation, and it buys a contention saving at three costs
+this tree has already paid once:
 
-⚠ `process_cat_message()` has no `IF` handler, which is recorded in the CAT
-comparison doc as a risk for the `AI` auto-info modes. Serving `IF;` from cache
-does not need one; carrying it through Tier C does not either, because the tap
-(§4 Tier C item 5) matches the verb and returns the radio's own bytes.
+- `IF` is a **fixed-format frame** carrying fields we do not track — RIT/XIT
+  offset, memory channel, scan status and more. One wrong field breaks a logger
+  in a way that looks random, and nothing on the bench would show it.
+- It would answer for firmware whose `IF` we have not read. The QMX's CAT
+  surface has already changed under us twice (six new commands at 1_04_003/004,
+  the `GP` longitude sign at 1_04_005).
+- ⛔ It invents a reply the radio never sent. That is the class the PA-voltage
+  cache comment already rules on: **a label that can be stale is worse than one
+  that admits it does not know.**
+
+**What replaces it, and is general:** cache the radio's **own reply bytes**, per
+verb, with a staleness bound of one poll interval. If the client asks `FA;` and
+the poller's `FA` answer landed 40 ms ago, return **that answer, verbatim** —
+the radio's bytes, not ours. No round trip, no synthesis, and the bound is
+explicit (~150 ms, the poll rotation).
+
+That is dialect-agnostic: it works for any verb we happen to poll, needs no
+knowledge of any frame's internals, and degrades to a real round trip for
+everything else — including `IF;`, which the QMX answers itself (it is in the
+supported set, `docs/qmx-1_04-cat-comparison.md` §1.1).
+
+⚠ `process_cat_message()` has no `IF` handler, recorded in the CAT comparison
+doc as a risk for the `AI` auto-info modes. Carrying `IF;` through Tier C does
+not need one: the tap (§4 Tier C item 5) matches on the verb and hands back the
+radio's own bytes without parsing them.
+
+### ⚠ What a transparent pipe lets a PC program do to us
+
+Stated so it is not discovered in the field. A pipe that carries any byte
+sequence carries these too:
+
+- `Q9` — IQ mode off. The spectrum goes flat while USB audio keeps streaming at
+  full rate.
+- `MU` — discards session state, with the same effect (measured on 1_04_004 and
+  recorded in the CAT comparison doc).
+- `MM` menu writes — can change the radio's stored configuration.
+
+⛔ The answer is **re-assert, not forbid.** Forbidding verbs is the emulator
+trap again, and `cat_request_iq_reassert()` already exists for exactly this —
+it is what the resume-from-pause and dead-stream paths use. A pass-through
+session ends with the same re-assert, and the dead-stream watchdog covers the
+rest. A PC program that reconfigures the operator's radio over their own CAT
+port is doing something the operator asked it to do; a panadapter that stays
+flat afterwards is our defect, not theirs.
 
 ## 4. Design: three tiers, one arbitration mechanism
 
@@ -214,6 +271,13 @@ it authorized, and there is no HTTP auth on this device today.
 - ⛔ Turning it on **adds an arming site**. `tools/check_unattended_tx.py` and
   `docs/unattended-tx-inventory.md` are updated in the same change (today 12
   sites, 6 unattended), and the release notes say so.
+- ⛔ **Gate the SOCKET, not the verbs.** A transparent pipe (§3) cannot carry a
+  verb whitelist without ceasing to be transparent, so the switch governs
+  everything the classifier flags, for the whole session. That is simpler and
+  safer than a list, and `cat_keying_cmds.h` already says the classifier is
+  deliberately over-eager: "a false refusal on a developer escape hatch costs
+  one log line; a false pass is the operator's licence." A transparent pipe is
+  precisely the case that was written for.
 - ⛔ **A dead-man release is mandatory and has no existing equivalent.** If the
   socket closes, or the client goes quiet, while the radio is keyed, send
   `TA0;RX;`. Nothing in the tree covers a TCP peer vanishing mid-transmission,
@@ -240,7 +304,8 @@ Hamlib clients can do; it does nothing for N1MM+.
 
 | Piece | Effort | Notes |
 | --- | --- | --- |
-| **Phase 2: raw Kenwood-CAT TCP port**, `IF;` and the common verbs served from cache | Small | ⭐ **Start here.** Copies `rigctld_server.c`'s task pattern. This is what N1MM+'s Configurer TCP option talks to, with nothing installed on the PC |
+| **Phase 2: the transparent CAT socket** — bytes both ways, no dialect knowledge | Small | ⭐ **Start here.** Copies `rigctld_server.c`'s task pattern. This is what N1MM+'s Configurer TCP option talks to, with nothing installed on the PC — and it is the general tool (§3), not an N1MM+ feature |
+| Verbatim reply cache, one poll interval, per verb | Small | The radio's own bytes, not a synthesised frame (§3). Cuts a logger's poll traffic to nothing without emulating anything |
 | Tier C core: poll-task slot, RX tap, verb match, timeout | Moderate | The only genuinely new mechanism; shared by both transports. Everything Phase 2 does not serve from cache falls through here |
 | Dead-man `TA0;RX;` on socket close | Small | Mandatory before any keying |
 | Phase 1: extend rigctld — `l`/`L` levels, `w`/`W`, `T`/`t` behind the switch | Small | All the state is already cached in `cat.c`. Benefits WSJT-X/fldigi/Log4OM, not N1MM+ |
