@@ -167,9 +167,11 @@ static float        s_synth_pos;     /* render_task only */
 void render_set_synthetic(int mode)
 {
     if (mode < 0) mode = 0;
-    if (mode > 1) mode = 1;
+    if (mode > 2) mode = 2;
     s_synth_mode = mode;
-    ESP_LOGW(TAG, "synthetic trace: %s", mode ? "ON (gliding peak)" : "off");
+    ESP_LOGW(TAG, "synthetic trace: %s",
+             (mode == 2) ? "ON (noise-like floor)"
+                         : (mode ? "ON (gliding peak)" : "off"));
 }
 
 int render_get_synthetic(void) { return s_synth_mode; }
@@ -177,6 +179,47 @@ int render_get_synthetic(void) { return s_synth_mode; }
 /* Writes DSP_FFT_SIZE dB values in the same layout dsp_get_spectrum() uses -
  * raw, non-fftshifted, index 0 = DC - so the display's bin mapping, pan and
  * zoom all behave exactly as they do on real data. */
+/* ⭐ MODE 2: WHAT A REAL NOISE FLOOR LOOKS LIKE TO THE BAND LOGIC.
+ *
+ * ⛔ MODE 1 CANNOT TEST THE PARTIAL INVALIDATE, AND I TRIED. Its peak runs
+ * from -125 to -55 dBm, i.e. 70 dB, which on a 200 px canvas spanning 100 dB
+ * is ~140 px. Every column at the peak's leading and trailing edge swings
+ * y_top across most of the canvas, the changed band covers two thirds, and
+ * ui_push_spectrum()'s guard correctly falls back to a full invalidate.
+ * Measured 2362 kpx/s that way - indistinguishable from no optimisation at
+ * all, and it proved nothing except that the test was wrong.
+ *
+ * A real noise floor is the opposite shape: flat, with every bin jittering a
+ * few dB frame to frame. That is a NARROW band, which is where the partial
+ * path is supposed to pay. So mode 2 is a flat floor plus bounded per-bin
+ * noise - no signal, no motion, just the jitter - and it exercises exactly
+ * the case mode 1 cannot.
+ *
+ * ⚠ This is a TEST SHAPE, not a simulation. Its only job is to put the band
+ * width in the right range so the mechanism can be measured without a radio.
+ * The real number still has to come from real audio; a mechanism that works
+ * here and not on the air is still broken.
+ *
+ * xorshift32 rather than rand(): no lock, no shared state, and it runs on the
+ * render task every push. */
+#define SYNTH_NOISE_DB  8.0f     /* peak-to-peak, ~16 px of a 200 px canvas */
+
+static uint32_t synth_rng(void)
+{
+    static uint32_t st = 0x2545F491u;
+    st ^= st << 13; st ^= st >> 17; st ^= st << 5;
+    return st;
+}
+
+static void synth_fill_noise(float *dst)
+{
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        /* [-0.5, 0.5) scaled to the peak-to-peak width. */
+        float u = (float)(synth_rng() >> 8) / 16777216.0f - 0.5f;
+        dst[i] = SYNTH_FLOOR_DBM + u * SYNTH_NOISE_DB;
+    }
+}
+
 static void synth_fill(float *dst)
 {
     s_synth_pos += SYNTH_STEP_BINS;
@@ -249,7 +292,8 @@ static void render_task(void *arg)
             if (s_synth_mode) {
                 /* Substituted here and nowhere else: every stage after this
                  * line is the production path, unchanged. */
-                synth_fill(s_scratch);
+                if (s_synth_mode == 2) synth_fill_noise(s_scratch);
+                else                   synth_fill(s_scratch);
                 have_spectrum = true;
             } else {
                 have_spectrum = (dsp_get_spectrum(s_scratch) == ESP_OK);
