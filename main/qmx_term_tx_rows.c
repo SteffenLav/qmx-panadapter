@@ -38,7 +38,16 @@ static const struct { const char *needle; const char *why; } TX_ROWS[] = {
     { "SSB Cal",    "SSB Calibration transmits and needs a dummy load" },
     { "PA mod",     "the PA modulator test drives the PA" },
     { "Diagnostics","the Diagnostics screen can key at full PA voltage with no SWR protection" },
-    { "Beacon",     "the radio's own beacon (Virtual U3S) transmits unattended" },
+    /* ⛔ BOTH SPELLINGS, AND THE SECOND ONE IS THE REAL MENU.
+     *
+     * "Beacon" came from the operating manual's LCD main-menu list. On
+     * 2026-10-22 I opened the terminal on a 1_04_010 QMX+ and the row is
+     * "Virtual U3S" - so the list I had just shipped would have let Enter
+     * through on the radio's own unattended beacon. Exactly the limitation
+     * this file's header warns about, found the first time a real menu was
+     * read. Keep both: the LCD and the terminal word it differently. */
+    { "Beacon",     "the radio's own beacon transmits unattended" },
+    { "U3S",        "Virtual U3S is the radio's own beacon - it transmits unattended" },
 };
 
 bool qmx_term_row_transmits(const char *row_text, const char **why)

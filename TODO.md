@@ -106,6 +106,8 @@ T37 kept being skipped before 10-20. Verification-only leftovers (#60, #131,
 
 | **T66** | **The browser cannot tell "RX audio stored, waiting for a restart" from "RX audio running"** - and `webserver.c`'s own comment says it can. MEASURED 2026-10-22: a POST of `{"rxaudio":{"en":true}}` read back `en: true` while `frame_count` stayed 0 and the codec was not open. The GET reports `rx_audio_is_enabled()`, which is `return s_enabled` - the stored FLAG, not the path - while `rx_audio_restart_pending()` (`s_enabled && !s_codec_ready`) exists for exactly this question and is called **only** by `resource_mgmt_modal.c`, never by the web API. So the Tab5 toasts the restart and the browser cannot see it. Two lines: add `restart_pending` to the rxaudio GET and correct the comment that claims `en` reports the live path | — |
 
+| **T67** | **`/api/cmd {"action":"set_freq"}` answers `ok:true` when the payload carries no `hz` field, and does nothing.** Measured 2026-10-22: `{"action":"set_freq","freq":10000000}` returned `{"ok":true}` and the dial never moved; with `"hz"` it moved at once. `cJSON_IsNumber(item)` is false, the whole block is skipped, and the handler falls through to the success reply. A silent no-op reported as success is the class CLAUDE.md already records costing an evening - and `set_screen` in the same file was deliberately made LOUDER for exactly this reason (*"a gate that declines has to be louder than the typo it resembles"*). Sweep the file: every action that reads a required field should refuse with 400 when it is absent, not report success | — |
+
 ⚠ **T03 is the only one with a date**: the drafts are written 2026-10-18,
 when he is back on groups.io.
 
