@@ -79,22 +79,57 @@ Two smaller costs, recorded so they are not re-derived:
 and zero new dependencies. Flash is not the constraint either way: 5.32 MB app
 in the 7.15 MB `ota_1` slot.
 
-## 3. The open external fact
+## 3. What the two named programs actually need
 
-**N1MM+ and flrig want a COM port, not a socket.** flrig has no network-rig
-backend; N1MM+'s radio configuration is a serial port. Neither can dial 4532 as
-it stands.
+Looked up 2026-10-22, from the N1MM+ Configurer documentation and the flrig
+threads. **The two differ, and the difference sets the phasing.**
 
-Whether current versions have a Hamlib or network option is **not confirmed
-here**, and it is the one thing that changes the work:
+### N1MM+ — a raw Kenwood-CAT socket, no PC software
 
-- if they can speak rigctld → §5 Phase 1 alone finishes T63;
-- if they cannot → the PC needs a **virtual COM bridge** (com0com plus a TCP
-  shim, or HW VSP) mapping COM*n* to our socket. That is software on the
-  operator's PC, not on ours, and it has to be in the answer to Ralph.
+The Configurer's Hardware tab offers **TCP** in the Port column, with an
+`IP Addr:Port` field. The documentation describes it as "used for radios that
+support radio control via TCP (Ethernet)" and names "a TCP-to-serial adapter"
+as a case where it applies — i.e. N1MM+ puts the **selected radio model's own
+CAT bytes** on the socket, exactly as it would on a COM port. It does **not**
+speak rigctld: a community answer on the N1MM+ group says N1MM+ does not use
+Hamlib, and a Linux tutorial that tried rigctld on 4532 gave up and bridged a
+virtual serial port with `socat` instead, selecting model TS-2000 over TCP.
 
-⛔ Settle it by asking Ralph which setting in N1MM+ he intends to point at the
-Tab5. The repo cannot answer it.
+So **N1MM+ needs §5 Phase 2, not Phase 1**, and with Phase 2 it needs nothing
+installed on the PC. Phase 1 does not help it at all.
+
+⚠ Open, and the one thing the repo cannot answer: **which radio model Ralph has
+selected in N1MM+.** That decides which verbs to answer first. Ask him.
+
+### flrig — not reachable from here at all
+
+flrig has **no network-rig option**. It wants a real serial port on the machine
+it runs on; its own networking is the other direction (an XML-RPC *server* on
+port 12345 that other programs connect to). So flrig needs a virtual COM port
+on the operator's PC, and no amount of work on the Tab5 changes that. Say so
+plainly rather than implying a future release will cover it.
+
+⚠ The 2026-10-22 draft reply claimed "flrig and N1MM+ can both talk over TCP".
+Half right, and the wrong half. It was never sent.
+
+### ⭐ The refinement this produced: answer `IF;` from cache
+
+`IF` is in the QMX's own supported command set (`docs/qmx-1_04-cat-comparison.md`
+§1.1 documents its fixed format), so a pass-through does not have to synthesise
+it — the radio answers. But a Kenwood-model logger polls `IF;` several times a
+second, and through Tier C every one of those is a serialized round trip against
+a 300 ms budget. That is the contention point, and it is avoidable: frequency,
+mode, split, RIT and TX state are **all already cached** in `cat.c`, and the
+frame format is documented.
+
+⛔ So `IF;` is a **Tier A** verb, built from cache, costing no link traffic —
+the same trick that makes rigctld's `f` and `m` free today. That single verb is
+most of what a logger ever asks for. Tier C stays the escape hatch.
+
+⚠ `process_cat_message()` has no `IF` handler, which is recorded in the CAT
+comparison doc as a risk for the `AI` auto-info modes. Serving `IF;` from cache
+does not need one; carrying it through Tier C does not either, because the tap
+(§4 Tier C item 5) matches the verb and returns the radio's own bytes.
 
 ## 4. Design: three tiers, one arbitration mechanism
 
@@ -200,12 +235,16 @@ thing that was declined, and it is not.
 
 ## 7. Phasing and effort
 
+⚠ **Phase 2 is the one Ralph needs, not Phase 1** (§3). Phase 1 widens what the
+Hamlib clients can do; it does nothing for N1MM+.
+
 | Piece | Effort | Notes |
 | --- | --- | --- |
-| Phase 1: extend rigctld — `l`/`L` levels, `w`/`W`, `T`/`t` behind the switch | Small | All the state is already cached in `cat.c` |
-| Tier C core: poll-task slot, RX tap, verb match, timeout | Moderate | The only genuinely new mechanism; shared by both transports |
+| **Phase 2: raw Kenwood-CAT TCP port**, `IF;` and the common verbs served from cache | Small | ⭐ **Start here.** Copies `rigctld_server.c`'s task pattern. This is what N1MM+'s Configurer TCP option talks to, with nothing installed on the PC |
+| Tier C core: poll-task slot, RX tap, verb match, timeout | Moderate | The only genuinely new mechanism; shared by both transports. Everything Phase 2 does not serve from cache falls through here |
 | Dead-man `TA0;RX;` on socket close | Small | Mandatory before any keying |
-| Phase 2: raw Kenwood-CAT TCP port for a PC virtual-COM bridge | Small | Copies `rigctld_server.c`'s task pattern. Needed only if N1MM+/flrig cannot speak rigctld (§3) |
+| Phase 1: extend rigctld — `l`/`L` levels, `w`/`W`, `T`/`t` behind the switch | Small | All the state is already cached in `cat.c`. Benefits WSJT-X/fldigi/Log4OM, not N1MM+ |
+| flrig | — | Not reachable from the Tab5 (§3). Needs a virtual COM port on the operator's PC |
 | USB-CDC device | — | Not taken. Breaks the field flashing path (§2) |
 
 Nothing here needs the radio. The Tier C core and the dead-man release are both
