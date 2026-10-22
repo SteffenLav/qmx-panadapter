@@ -9717,6 +9717,40 @@ static volatile uint32_t s_sf_skipped;
 static volatile uint64_t s_sf_age_sum_us;
 static volatile uint32_t s_sf_age_max_us;
 
+/* ⭐ THE INTERVAL THE EYE ACTUALLY INTEGRATES - FIRST APPEARANCE TO FIRST
+ * APPEARANCE.
+ *
+ * ⛔ WHY EVERY EARLIER COUNTER MISSED THE SYMPTOM. render_push_spacing()
+ * measures when a spectrum LEAVES render_task: metronomic, late 0/100.
+ * display_frame_spacing() measures when LVGL FRAMES land: uneven, but most of
+ * those frames carry no new spectrum at all. The repeat histogram says how
+ * many frames drew each spectrum but throws the timing away. None of the three
+ * answers the only question that matters to a moving trace: HOW LONG WAS THE
+ * PICTURE UNCHANGED, each time, before it changed again.
+ *
+ * That is this. The first frame to draw generation N is when the operator sees
+ * N; the gap to the first frame drawing N+1 is how long that picture stood
+ * still. Perfectly smooth motion is a constant gap. The data arrives every
+ * 100 ms, so a constant 100 would mean the display is transparent - and any
+ * spread is the stutter, in milliseconds, with no eye required.
+ *
+ * ⚠ PREDICTED BEFORE MEASURING, so the prediction can be wrong on the record:
+ * frames average ~45 ms and data arrives every 100 ms, so each spectrum should
+ * wait 2 or 3 frames, giving gaps near 90 and 135 ms in an irregular mix - an
+ * sd of roughly 20 ms on a 100 ms mean. The browser cannot do this: it repaints
+ * at 60 Hz, so its worst quantisation is 16.7 ms.
+ *
+ * sumsq is for the standard deviation, which is the number that says "uneven"
+ * without reference to any particular frame. At 150 ms worst case a sample is
+ * 2.25e10, and a 10 s window holds ~100 of them - nowhere near uint64. */
+static volatile uint32_t s_ap_n;
+static volatile uint32_t s_ap_min_us = UINT32_MAX;
+static volatile uint32_t s_ap_max_us;
+static volatile uint64_t s_ap_sum_us;
+static volatile uint64_t s_ap_sumsq;
+static uint32_t s_ap_last_us;      /* hook-private */
+static bool     s_ap_have_last;
+
 /* Hook-private carry-over between frames. */
 static uint32_t s_sf_last_gen;
 static uint32_t s_sf_cur_repeat;
@@ -9753,9 +9787,24 @@ static void spec_refr_ready_hook(void)
         s_sf_skipped += g - s_sf_last_gen - 1u;
     }
 
-    uint32_t age = (uint32_t)esp_timer_get_time() - s_spec_gen_us;
+    uint32_t now32 = (uint32_t)esp_timer_get_time();
+    uint32_t age = now32 - s_spec_gen_us;
     s_sf_age_sum_us += age;
     if (age > s_sf_age_max_us) s_sf_age_max_us = age;
+
+    /* This frame is the FIRST to carry generation g, so this instant is when
+     * the picture changed. The gap from the previous change is how long the
+     * last one stood still. */
+    if (s_ap_have_last) {
+        uint32_t dt = now32 - s_ap_last_us;
+        if (dt < s_ap_min_us) s_ap_min_us = dt;
+        if (dt > s_ap_max_us) s_ap_max_us = dt;
+        s_ap_sum_us += dt;
+        s_ap_sumsq  += (uint64_t)dt * (uint64_t)dt;
+        s_ap_n++;
+    }
+    s_ap_last_us   = now32;
+    s_ap_have_last = true;
 
     s_sf_last_gen   = g;
     s_sf_cur_repeat = 1;
@@ -9775,6 +9824,22 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     out->age_mean_us = gens ? (unsigned)(s_sf_age_sum_us / gens) : 0;
     out->age_max_us  = s_sf_age_max_us;
 
+    /* Standard deviation of the appearance gap - the single number that says
+     * how uneven the motion is. Computed here, not per sample: the hook stays
+     * O(1) with no division and no sqrt on the LVGL task. */
+    unsigned an = s_ap_n;
+    out->appear_n       = an;
+    out->appear_min_us  = (an && s_ap_min_us != UINT32_MAX) ? s_ap_min_us : 0;
+    out->appear_max_us  = s_ap_max_us;
+    out->appear_mean_us = an ? (unsigned)(s_ap_sum_us / an) : 0;
+    if (an > 1) {
+        double mean = (double)s_ap_sum_us / (double)an;
+        double var  = (double)s_ap_sumsq / (double)an - mean * mean;
+        out->appear_sd_us = (var > 0.0) ? (unsigned)(sqrt(var) + 0.5) : 0;
+    } else {
+        out->appear_sd_us = 0;
+    }
+
     s_sf_frames = 0;
     s_sf_gens   = 0;
     for (int i = 0; i < 4; i++) s_sf_repeat[i] = 0;
@@ -9783,6 +9848,13 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     s_wf_row_lock_fail = 0;
     s_sf_age_sum_us  = 0;
     s_sf_age_max_us  = 0;
+    s_ap_n      = 0;
+    s_ap_min_us = UINT32_MAX;
+    s_ap_max_us = 0;
+    s_ap_sum_us = 0;
+    s_ap_sumsq  = 0;
+    /* s_ap_last_us / s_ap_have_last survive: the gap spanning the window
+     * boundary belongs to the next window, not to neither. */
     /* s_sf_last_gen / s_sf_cur_repeat deliberately survive: the run in
      * progress belongs to the next window, not to this one. */
 }

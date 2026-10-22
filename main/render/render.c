@@ -138,11 +138,20 @@ void render_push_spacing(render_push_spacing_t *out)
  * same constant rate with a fixed lag - it cannot introduce stepping, so it
  * costs the experiment nothing and keeps it honest.
  *
- * The step is 0.15 bin per push: at 10 Hz and 1.25 bins per screen pixel at
- * zoom 1 that is ~1.2 px per frame, slow enough that any stepping is obvious
- * and fast enough to read as motion. Phase is kept in a float and wrapped, so
- * it never quantises to the push index. */
-#define SYNTH_STEP_BINS   0.15f
+ * ⛔ THE FIRST VALUE WAS WRONG BY 6x AND THE COMMENT HID IT. It said 0.15 bin
+ * per push was "~1.2 px per frame". Do the arithmetic the other way: a bin is
+ * 1280/1024 = 1.25 SCREEN PIXELS (not 1.25 bins per pixel, which is what the
+ * old wording inverted), so 0.15 bin is 0.19 px per push = 1.9 px/s. The peak
+ * would have taken ELEVEN MINUTES to cross the screen - an experiment that
+ * looks like a stationary blob and proves nothing about motion. Flashed and
+ * switched on in that state; caught by doing the sum instead of re-reading the
+ * sentence. [[feedback_measure_the_thing_not_the_word]]
+ *
+ * 2.0 bins per push = 2.5 px per push = 25 px/s, crossing the 1280 px screen
+ * in ~51 s. Slow enough that stepping is obvious - which is the point - and
+ * fast enough to read as motion. Phase is kept in a float and wrapped, so it
+ * never quantises to the push index. */
+#define SYNTH_STEP_BINS   2.0f
 #define SYNTH_WIDTH_BINS  6.0f      /* Gaussian sigma - a few px wide        */
 #define SYNTH_FLOOR_DBM   -125.0f
 #define SYNTH_PEAK_DBM    -55.0f

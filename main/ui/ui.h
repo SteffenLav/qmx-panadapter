@@ -252,6 +252,15 @@ typedef struct {
     unsigned wf_lock_fail;  /* waterfall rows lost the same way           */
     unsigned age_mean_us;   /* push -> first refresh showing it           */
     unsigned age_max_us;
+    /* ⭐ The gap between one spectrum APPEARING and the next appearing -
+     * i.e. how long each picture stood still. This, not the push interval and
+     * not the frame interval, is what a moving trace is made of. Nominal is
+     * 100 ms (the data rate); the SD is the stutter, in milliseconds. */
+    unsigned appear_n;
+    unsigned appear_min_us;
+    unsigned appear_mean_us;
+    unsigned appear_max_us;
+    unsigned appear_sd_us;
 } ui_spec_frame_stats_t;
 
 void ui_spec_frame_stats(ui_spec_frame_stats_t *out);

@@ -121,6 +121,15 @@ static void cpu_stats_task(void *arg)
                          (unsigned)pubfail, (unsigned)getfail,
                          sfs.age_mean_us / 1000, sfs.age_max_us / 1000);
 
+                /* ⭐ THE ONE LINE THAT DESCRIBES THE MOTION. Every other
+                 * counter here measures a stage; this measures the result -
+                 * how long each picture stood still before the next replaced
+                 * it. Nominal 100 ms, and the SD is the stutter in ms. */
+                ESP_LOGI(TAG, "appear ms: n %u min %u mean %u max %u SD %u",
+                         sfs.appear_n, sfs.appear_min_us / 1000,
+                         sfs.appear_mean_us / 1000, sfs.appear_max_us / 1000,
+                         sfs.appear_sd_us / 1000);
+
                 display_inval_bands_t ib;
                 display_inval_bands(&ib);
                 ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"
