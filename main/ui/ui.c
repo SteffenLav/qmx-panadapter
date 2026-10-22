@@ -12931,7 +12931,25 @@ void ui_toast_ms(const char *msg, uint32_t ms)
     if (!display_lock(100)) return;
 
     if (!s_toast) {
-        s_toast = lv_label_create(lv_screen_active());
+        /* ⛔ T69: ON lv_layer_top(), NOT THE SCREEN - the toast was INVISIBLE
+         * behind every overlay that matters.
+         *
+         * Gyula HA3HZ, 2026-10-22: "the response message appears behind the
+         * frequency table". He is describing the keypad, and he is right about
+         * the mechanism: freq_popup_build(), band_popup_open() and the other
+         * popups here create their overlay on lv_layer_top(), which LVGL draws
+         * ABOVE lv_screen_active() entirely. A toast created on the screen can
+         * never reach the front of that, however often it is raised -
+         * move_foreground() only reorders siblings.
+         *
+         * So every toast raised while any of those popups was open went
+         * unseen, not just the memory refusal that made him report it. On
+         * layer_top the same move_foreground() now puts it above them.
+         *
+         * ⚠ It stays non-clickable and 70%% wide: any_modal_open() counts only
+         * FULL-SCREEN children of either layer, so this cannot start reading as
+         * a modal and suppress the QMX-wait prompt. */
+        s_toast = lv_label_create(lv_layer_top());
         lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
         lv_obj_set_style_bg_opa(s_toast, LV_OPA_80, 0);
         lv_obj_set_style_text_color(s_toast, lv_color_hex(0xFFFFFF), 0);
@@ -12954,7 +12972,7 @@ void ui_toast_ms(const char *msg, uint32_t ms)
     }
     lv_label_set_text(s_toast, msg);
     lv_obj_align(s_toast, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_move_foreground(s_toast);   // above the open drawer
+    lv_obj_move_foreground(s_toast);   // above the drawer AND the layer_top popups (T69)
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     if (s_toast_timer) {
         lv_timer_set_period(s_toast_timer, ms);

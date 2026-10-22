@@ -467,8 +467,11 @@ static void action_save_cb(lv_event_t *e)
         ESP_LOGW(TAG, "save: no freq");
         return;
     }
-    // Band validation already happened in mem_freq_picker_cb, right when the
-    // freq pad was confirmed - s_pending_freq_hz can't reach here out of band.
+    /* ⚠ s_pending_freq_hz MAY BE OUTSIDE THE AMATEUR BANDS, deliberately
+     * since T68 - a memory is a receive target and receive is unrestricted.
+     * The operator was told so when the keypad was confirmed. Out-of-band
+     * TRANSMISSION is refused by T48's guard at the key-down itself, which is
+     * the only place that knows the RF actually emitted. */
     slot.freq_hz = s_pending_freq_hz;
     slot.occupied = 1;
     strncpy(slot.mode, s_pending_mode[0] ? s_pending_mode : "???", sizeof(slot.mode) - 1);
@@ -574,14 +577,34 @@ static bool mem_freq_picker_cb(uint32_t freq_hz, const char *mode, bool accepted
         s_action_idx = -1;
         return true;  // Cancel always closes regardless of this return value
     }
-    // Validate right here, as soon as the freq pad is confirmed - not after
-    // the user has also typed a label and tapped Save.
+    /* ⛔ T68: THIS USED TO REFUSE ANY FREQUENCY OUTSIDE AN AMATEUR BAND, AND
+     * A MEMORY IS A RECEIVE TARGET.
+     *
+     * Gyula HA3HZ, 2026-10-22: "It seems I cannot store an AM reception
+     * frequency in the memory, likely because the frequency falls outside the
+     * allowed band." He had it exactly right.
+     *
+     * The refusal rested on a false premise - that an out-of-band channel
+     * "cannot legally be tuned". RECEIVE IS UNRESTRICTED. The QMX has its own
+     * `System config -> RX outside band` for tuning there (ON on the bench
+     * radio), `Band limits` gates only TRANSMIT, and the Tab5 has never
+     * clamped tuning - legal_band_edges() validates a RECALLED PER-BAND
+     * frequency, which is a different job.
+     *
+     * What stops an out-of-band transmission is T48's band guard, which every
+     * keying site calls immediately before key-down, plus the two runtime
+     * doors (T64, T65). That is the right place for it: it knows the RF that
+     * will actually be emitted, where this check only knew what someone typed
+     * into a keypad.
+     *
+     * So: store it, and say what it is for. Telling the operator is the point -
+     * the alternative, storing it silently, would leave someone to discover at
+     * the moment of transmitting that the channel is receive-only. */
     if (!ui_validate_band_freq_hz(freq_hz, NULL, NULL)) {
-        ESP_LOGW(TAG, "freq pad: %lu Hz is out of band, refusing", (unsigned long)freq_hz);
-        ui_toast("Out of band - not saved");
-        // Keep s_action_idx armed (don't reset to -1) so the next Enter
-        // attempt, once corrected, still targets the same slot.
-        return false;
+        ESP_LOGI(TAG, "freq pad: %lu Hz is outside the amateur bands - storing for RECEIVE",
+                 (unsigned long)freq_hz);
+        ui_toast_ms("Outside the ham bands - stored for receive. "
+                    "Transmitting there is refused.", 6000);
     }
     s_pending_freq_hz = freq_hz;
     strncpy(s_pending_mode, mode && mode[0] ? mode : "???", sizeof(s_pending_mode) - 1);

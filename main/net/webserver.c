@@ -5666,18 +5666,33 @@ static esp_err_t memory_post_handler(httpd_req_t *req)
     const char *l = cJSON_GetStringValue(cJSON_GetObjectItem(root, "label"));
     if (l) snprintf(s.label, sizeof(s.label), "%s", l);
 
-    // The Tab5 refuses to store an out-of-band memory (ui_validate_band_freq_hz);
-    // the browser must not be a way around that - a channel that cannot legally
-    // be tuned is worse than no channel.
-    if (!s.freq_hz || !ui_validate_band_freq_hz(s.freq_hz, NULL, NULL)) {
+    /* ⛔ T68: THE REASON THIS USED TO GIVE WAS FACTUALLY WRONG. It read "a
+     * channel that cannot legally be tuned is worse than no channel" - but
+     * RECEIVE IS UNRESTRICTED, and a memory is a receive target. Gyula HA3HZ
+     * could not store an AM listening frequency on either surface.
+     * Out-of-band TRANSMISSION is refused by T48's band guard at the key-down,
+     * where the RF actually emitted is known. See mem_freq_picker_cb().
+     *
+     * A missing frequency is still a refusal: that is no channel at all, not
+     * a receive-only one. */
+    if (!s.freq_hz) {
         cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "frequency is not inside an amateur band");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no frequency");
         return ESP_FAIL;
     }
+    bool rx_only = !ui_validate_band_freq_hz(s.freq_hz, NULL, NULL);
     s.occupied = 1;
     mem_channels_set(idx, &s);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
+    /* Tell the browser the same thing the Tab5 toasts, so neither surface
+     * leaves it to be discovered at the moment of transmitting. */
+    if (rx_only) {
+        return httpd_resp_send(req,
+            "{\"ok\":true,\"rx_only\":true,\"note\":\"outside the ham bands - "
+            "stored for receive; transmitting there is refused\"}",
+            HTTPD_RESP_USE_STRLEN);
+    }
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 

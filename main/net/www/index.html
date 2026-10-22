@@ -4143,9 +4143,12 @@ async function toneApply() {
 
    Recall is set_freq + set_mode, which the browser already has - so there is no
    recall endpoint and no second copy of that decision on the device. Storing a
-   channel goes through /api/memory, which refuses an out-of-band frequency
-   exactly as the Tab5 does: the browser must not be a way round a rule the
-   device enforces.
+   channel goes through /api/memory, which since T68 STORES a frequency outside
+   the amateur bands and marks the reply rx_only: a memory is a receive target
+   and receive is unrestricted. Out-of-band TRANSMISSION is refused by the band
+   guard at the key-down itself, which is the only place that knows the RF
+   actually emitted. Reported by Gyula HA3HZ, who could not store an AM
+   listening frequency on either surface.
    ===================================================================== */
 async function memOpen() {
   document.getElementById("mem-modal").style.display = "";
@@ -4220,8 +4223,9 @@ async function memOpen() {
 }
 
 /* Move a channel to another slot: write the target, then clear the source. In
-   that order on purpose - if the write is refused (an out-of-band frequency),
-   the original is still there rather than lost. */
+   that order on purpose - if the write is refused for any reason, the original
+   is still there rather than lost. (An out-of-band frequency is no longer one
+   of those reasons - see T68 above.) */
 async function memMove(d, from, to) {
   const src = (d.slots || []).find(x => x.idx === from);
   if (!src || !src.occupied) return;
@@ -4258,7 +4262,10 @@ async function memEdit(d, idx) {
       if (label === null) return;
       const r = await fetch("/api/memory", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idx, freq_hz: Math.round(parseFloat(mhz) * 1e6), mode, label }) });
-      st.textContent = r.ok ? "Saved" : "Refused: that frequency is not inside an amateur band";
+      const j = r.ok ? await r.json().catch(() => ({})) : {};
+      st.textContent = !r.ok ? "Refused (" + r.status + ")"
+                     : j.rx_only ? "Saved - outside the ham bands, so receive only"
+                     : "Saved";
     }
   } catch (e) { st.textContent = "Failed (" + e.message + ")"; }
   await memOpen();
