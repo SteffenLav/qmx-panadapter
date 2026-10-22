@@ -10771,8 +10771,32 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     /* ⛔ THE INVALIDATE IS THE 474 kpx, NOT THE memcpy. Skipping it on a
      * non-shift tick is the whole saving; leaving it in would make the batch
      * pointless. The carpet on screen is unchanged on those ticks, so there is
-     * nothing to repaint. */
-    if (shift_now) lv_obj_invalidate(s_wf_canvas);
+     * nothing to repaint.
+     *
+     * ⛔⛔ AND ON A SHIFT TICK THERE IS NOTHING TO DO EITHER - THE CARPET WAS
+     * BEING INVALIDATED TWICE.
+     *
+     * lv_image_set_offset_y() ends with lv_obj_invalidate(obj) of its own
+     * (lv_image.c:267). The explicit call here was a second full-carpet
+     * request for the same shift, and it has been there as long as the
+     * moving-pointer scroll has.
+     *
+     * Caught by arithmetic, not by reading: batching to N=3 should have given
+     * 3.3 carpet requests a second = ~1.6 Mpx/s, and the bench measured 3.0 -
+     * almost exactly 6.3/s, i.e. two per shift. The prediction being wrong by
+     * a clean factor of two is what pointed at the duplicate.
+     *
+     * ⚠ display.c's inval counter counts REQUESTS and says so ("over-counts
+     * where LVGL later merges overlapping areas"), so it is possible LVGL was
+     * already merging these two and the drawn cost never doubled - in which
+     * case removing this changes the counter and not the frame time. That is
+     * exactly what the next measurement decides, and either answer is worth
+     * having: a duplicate request is wrong on its own merits.
+     *
+     * ⚠ Anything that writes into the canvas BUFFER (the FT8 sync-line
+     * overlay) now becomes visible on the next shift rather than at once. It
+     * is a dev diagnostic and the carpet it sits on only moves on shift ticks
+     * anyway, so a sub-second lag changes nothing a reader could use. */
     display_unlock();
 }
 
