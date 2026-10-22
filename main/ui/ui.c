@@ -4174,6 +4174,12 @@ static void update_db_scale(void);   // positions/labels the gridline values
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
+/* Partial-invalidate state for ui_push_spectrum - declared here, beside the
+ * buffer it describes, because build_spectrum() allocates it. The reasoning
+ * is at the invalidate itself. */
+static int16_t *s_frame_ytop;         /* y_top per column, PREVIOUS push   */
+static bool     s_frame_ytop_valid;
+static uint64_t s_frame_overlay_sig;  /* everything that is not the trace  */
 
 // "Breathing" opacity animation for edge-swipe grip handles: fades between
 // near-invisible and the normal resting opacity so the user notices the
@@ -5627,6 +5633,13 @@ static void build_spectrum(lv_obj_t *parent)
         return;
     }
     memset(s_spec_canvas_buf, 0, buf_size);
+
+    /* 2.5 KB in INTERNAL RAM: touched once per column per push on core 1, and
+     * the whole point of it is to keep work off core 0. A failure here is not
+     * fatal - the partial-invalidate path simply never arms. */
+    s_frame_ytop = heap_caps_malloc(DISPLAY_H_RES * sizeof(int16_t),
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_frame_ytop_valid = false;
 
     s_spec_canvas = lv_canvas_create(s_spectrum_obj);
     lv_obj_add_flag(s_spectrum_obj, LV_OBJ_FLAG_CLICKABLE);
@@ -9706,6 +9719,47 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
 static volatile uint32_t s_spec_gen;         /* completed pushes, ever      */
 static volatile uint32_t s_spec_gen_us;      /* when that push finished     */
 static volatile uint32_t s_spec_lock_fail;   /* pushes the lock threw away  */
+
+/* ⭐⭐ INVALIDATE THE ROWS THAT CHANGED, NOT THE WHOLE 255 kpx CANVAS.
+ *
+ * ⛔ THE BINDING RESOURCE IS taskLVGL ON CORE 0, NOT THE FILL ON CORE 1.
+ * Measured 2026-10-22: with the carpet off, draw mean 28 ms and inval
+ * 3256 kpx/s; with it on, draw 48 ms and 4400 kpx/s. The 1150 kpx/s the
+ * carpet added bought 20 ms of extra draw at 15.7 fps = 314 ms/s, i.e. the
+ * blit + 90-degree rotate + flush pipeline runs at roughly 5 Mpx/s. We ask it
+ * for 4.4. At 88% utilisation there is no headroom, and no headroom IS the
+ * jitter.
+ *
+ * Of that 4.4 Mpx/s the spectrum canvas is now the LARGEST term at 2.4 - one
+ * full 1280x200 = 255 kpx invalidation per push, ten times a second, because
+ * ui_push_spectrum() repaints the whole canvas and invalidates all of it.
+ *
+ * ⭐ BUT THE FILL IS NOT THE EXPENSIVE HALF. Filling the canvas is PSRAM
+ * writes on render_task, core 1, which idles at 23%. The INVALIDATION is what
+ * drags core 0 through the rotation. So keep filling the whole canvas - it is
+ * cheap where it runs - and tell LVGL only about the rows that actually
+ * differ from last frame.
+ *
+ * A noise trace moves within a narrow band. Per column the only rows that can
+ * change are between the old y_top and the new one, so the union over all
+ * 1280 columns is the band to invalidate. Everything above is still black or
+ * overlay, everything below is still the dim fill - identical bytes, nothing
+ * to repaint.
+ *
+ * ⛔ OVERLAY GEOMETRY BREAKS THAT ARGUMENT, so it is tracked explicitly. The
+ * passband tint, its edges, the VFO line, the dB grid, the no-data hatch and
+ * the flat-mode axis all sit OUTSIDE the trace band, and when any of them
+ * moves - a tune, a zoom, a pan, RIT, a fade step, a scale change - rows the
+ * trace never touched change too. Any difference in that signature forces a
+ * full invalidate for that frame. Getting this wrong leaves stale pixels on
+ * the glass, which is worse than being slow, so the signature is deliberately
+ * coarse and errs toward repainting everything.
+ *
+ * ⚠ s_prev_ytop lives in INTERNAL RAM: 2.5 KB, read and written once per
+ * column per push, and the whole point is to not spend core 0 on it. */
+static int16_t *s_frame_ytop;         /* y_top per column, PREVIOUS push   */
+static bool     s_frame_ytop_valid;
+static uint64_t s_frame_overlay_sig;  /* everything that is not the trace  */
 static volatile uint32_t s_wf_row_lock_fail; /* waterfall rows, same cause  */
 
 /* Window accumulators. Written only by the hook (taskLVGL) except where
@@ -9869,6 +9923,15 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
+
+    /* Overlay signature and changed-row band - see the note at s_frame_ytop.
+     * FNV-1a over every value that places a pixel the TRACE does not. Coarse
+     * on purpose: a false "changed" costs one full repaint, a false
+     * "unchanged" leaves a stale pixel on the glass. */
+    uint64_t sig = 1469598103934665603ULL;
+#define SPEC_SIG(v) do { sig = (sig ^ (uint64_t)(int64_t)(v)) * 1099511628211ULL; } while (0)
+    int band_lo = SPECTRUM_H;    /* empty: lo > hi */
+    int band_hi = -1;
     const uint16_t fg = 0x07E0;  // green in RGB565
     const uint16_t grid_color = 0x4208;  // dim grey grid lines
 
@@ -9971,6 +10034,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
         if (edge_x_lo < 0) edge_x_lo = 0;
         if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        SPEC_SIG(pb_low_hz); SPEC_SIG(pb_high_hz); SPEC_SIG(rit_pb_hz);
+        SPEC_SIG(pan_hz_pb); SPEC_SIG(span_hz_pb); SPEC_SIG(pb_res);
+        SPEC_SIG(edge_x_lo); SPEC_SIG(edge_x_hi);
+        SPEC_SIG((int)(fade_opacity * 1000.0f));
         uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
         // Apply fade opacity to band fill
         if (fade_opacity < 1.0f) {
@@ -10007,6 +10074,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
             // first build there is nothing to draw, which is right rather than wrong.
             for (int g = 0; g < s_grid_dbm_n; g++) gys[gn++] = db_to_y(s_grid_dbm[g]);
         }
+        SPEC_SIG(gn); SPEC_SIG(s_flat_mode);
+        for (int g = 0; g < gn; g++) SPEC_SIG(gys[g]);
         for (int g = 0; g < gn; g++) {
             int gy = gys[g];
             if (gy >= 0 && gy < SPECTRUM_H) {
@@ -10134,6 +10203,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
                                         / (double)DSP_SAMPLE_RATE_HZ);
     }
 
+    SPEC_SIG(pv_ok); SPEC_SIG(zoom_res_bins); SPEC_SIG(center_bin);
+    SPEC_SIG(window_bins); SPEC_SIG(bin_start);
+    SPEC_SIG((int)(eff_zoom * 1000.0f)); SPEC_SIG(zoom_spec != NULL);
+    if (pv_ok) { SPEC_SIG(pvc.dial_hz); SPEC_SIG(pvc.if_offset_hz); }
+
     for (int x = 0; x < DISPLAY_H_RES; x++) {
         int bin;
         if (pv_ok) {
@@ -10142,6 +10216,9 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 if (nodata_from < 0) nodata_from = x;
                 nodata_to = x;
                 s_prev_y_top = SPECTRUM_H - 1;   /* don't drag the curve across */
+                /* The hatch is static for a given run, and the run itself is
+                 * in the signature - so this column contributes no band. */
+                if (s_frame_ytop) s_frame_ytop[x] = -1;
                 continue;
             }
         } else {
@@ -10197,8 +10274,25 @@ void ui_push_spectrum(const float *bins, int n_bins)
         for (int y = y_hi + 1; y < SPECTRUM_H; y++) {
             px[y * DISPLAY_H_RES + x] = fg_dim;
         }
+        /* The rows that can differ from last push are exactly those between
+         * the old y_top and the new one. Above both: still black or overlay.
+         * Below both: still the dim fill. The +/-1 covers the connecting line
+         * drawn to the neighbouring column. */
+        if (s_frame_ytop) {
+            int prev = s_frame_ytop_valid ? s_frame_ytop[x] : -1;
+            if (prev != y_top) {
+                int lo2, hi2;
+                if (prev < 0) { lo2 = 0; hi2 = SPECTRUM_H - 1; }
+                else { lo2 = (prev < y_top) ? prev : y_top;
+                       hi2 = (prev > y_top) ? prev : y_top; }
+                if (lo2 - 1 < band_lo) band_lo = lo2 - 1;
+                if (hi2 + 1 > band_hi) band_hi = hi2 + 1;
+            }
+            s_frame_ytop[x] = (int16_t)y_top;
+        }
         s_prev_y_top = y_top;
     }
+    SPEC_SIG(nodata_from); SPEC_SIG(nodata_to);
 
     /* The part of the screen the radio cannot hear, drawn as visibly EMPTY.
      *
@@ -10430,7 +10524,55 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
         if (s_wf_cursor) lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_invalidate(s_spec_canvas);
+    /* ⭐ TELL LVGL ABOUT THE ROWS THAT CHANGED, NOT ALL 255 kpx.
+     *
+     * Full invalidate when anything but the trace moved, when the previous
+     * frame's trace is not known, or when the band ended up covering most of
+     * the canvas anyway - below about two thirds the partial path stops paying
+     * for the extra area bookkeeping, and a near-full band is a sign the scale
+     * changed under us.
+     *
+     * ⛔ The area is in SCREEN coordinates, not canvas-local, so it is built
+     * from the object's own coords. Getting that wrong would invalidate a band
+     * of the waterfall instead and leave the spectrum stale - the exact
+     * failure this guard exists to avoid. */
+    bool overlay_moved = (sig != s_frame_overlay_sig);
+    s_frame_overlay_sig = sig;
+
+    /* ⛔ A GAP MEANS THE CANVAS MAY HAVE BEEN LEFT OR OVERWRITTEN BY SOMEONE
+     * ELSE. render_task stops pushing under any full-screen overlay, during an
+     * FT8/WSPR capture, and in FT8 mode; the Reader and the terminal cover the
+     * screen entirely. In all of those the previous y_top array describes a
+     * picture that is no longer on the glass. Rather than enumerate the cases
+     * and miss one, treat any gap longer than five push periods as a fresh
+     * start - the cost is a single full repaint on return. */
+    {
+        static uint32_t s_last_push32;
+        uint32_t now32 = (uint32_t)esp_timer_get_time();
+        if (s_last_push32 && (now32 - s_last_push32) > 500000u) {
+            s_frame_ytop_valid = false;
+        }
+        s_last_push32 = now32;
+    }
+    bool have_band = s_frame_ytop && s_frame_ytop_valid && !overlay_moved
+                     && band_hi >= band_lo;
+    if (have_band) {
+        if (band_lo < 0) band_lo = 0;
+        if (band_hi > SPECTRUM_H - 1) band_hi = SPECTRUM_H - 1;
+        if ((band_hi - band_lo + 1) * 3 >= SPECTRUM_H * 2) have_band = false;
+    }
+    if (have_band) {
+        lv_area_t a;
+        lv_obj_get_coords(s_spec_canvas, &a);
+        a.y2 = a.y1 + band_hi;
+        a.y1 = a.y1 + band_lo;
+        lv_obj_invalidate_area(s_spec_canvas, &a);
+    } else {
+        lv_obj_invalidate(s_spec_canvas);
+    }
+    if (s_frame_ytop) s_frame_ytop_valid = true;
+#undef SPEC_SIG
+
     // Update freq axis labels every frame so zoom/pan changes are reflected.
     update_freq_axis_labels(s_last_qmx_freq_hz);
 
