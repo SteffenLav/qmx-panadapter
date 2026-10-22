@@ -6414,6 +6414,53 @@ static void update_freq_axis_labels(uint32_t center_hz)
     int32_t step = 0;
     int n = freq_gridlines_build(lo, hi, 5, tick, &step);
 
+    /* ⛔ THIS RUNS AT 10 Hz FOREVER, AND NOTHING BELOW CHANGES BETWEEN TICKS
+     * UNLESS THE WINDOW MOVED.
+     *
+     * ui_push_spectrum() calls this every push. The tick canvas below is then
+     * cleared and redrawn and INVALIDATED, and all five labels get
+     * lv_label_set_text(), which in LVGL does not compare the old text - it
+     * reallocates and invalidates unconditionally. Measured on the bench
+     * 2026-10-22, waterfall off: the label bar accounted for 844 kpx/s of
+     * 3,893 kpx/s total - 22% of everything invalidated on this screen, for a
+     * row of frequencies that only changes when the operator tunes.
+     *
+     * ⭐ THIS IS THE SIBLING OF A FIX ALREADY MADE AND NOT SWEPT. The opacity
+     * set a hundred lines up in ui_push_spectrum() carries the same comment
+     * for the same reason ("LVGL invalidates/redraws on every set, not just on
+     * real changes") and was guarded; spots_lane_set_view() guards itself on
+     * an unchanged view. These two did not, and they are the expensive ones.
+     *
+     * The gate is the drawn result, not the inputs: the tick VALUES and their
+     * pixel positions. Deriving it from lo/hi would repaint on every 1 Hz of
+     * dial movement even when no tick moved a pixel, which is exactly what
+     * freq_gridlines_build() exists to prevent. */
+    {
+        static int64_t s_last_tick[5];
+        static int     s_last_n   = -1;
+        static int32_t s_last_step;
+        static int64_t s_last_lo;
+        static int32_t s_last_span;
+        static uint8_t s_last_style = 0xFF;
+        bool same = (n == s_last_n) && (step == s_last_step)
+                 && (s_last_style == (uint8_t)g_freq_style);
+        /* The x of a tick depends on lo and span as well as the value, so a
+         * window that slid without changing which ticks survive still moves
+         * them. Compare the mapping, not just the list. */
+        if (same && (lo != s_last_lo || span_hz != s_last_span)) same = false;
+        if (same) {
+            for (int i = 0; i < n; i++)
+                if (tick[i] != s_last_tick[i]) { same = false; break; }
+        }
+        if (same) return;          /* nothing on this bar would change */
+        for (int i = 0; i < n && i < 5; i++) s_last_tick[i] = tick[i];
+        s_last_n     = n;
+        s_last_step  = step;
+        s_last_lo    = lo;
+        s_last_span  = span_hz;
+        s_last_style = (uint8_t)g_freq_style;
+    }
+
     /* Redraw the tick marks at the gridlines. They used to be painted once at
      * build time every 3 kHz assuming a x1 span, so at any other zoom they bore
      * no relation to the labels beneath them. */
