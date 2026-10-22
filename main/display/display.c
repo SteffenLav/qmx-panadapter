@@ -78,10 +78,25 @@ static volatile uint32_t s_fr_n;
 static volatile uint32_t s_fr_late;    /* intervals over FRAME_LATE_US */
 #define FRAME_LATE_US 150000u          /* ~2x the nominal 83 ms at 12 fps */
 
+/* ⭐ WHO ELSE NEEDS TO KNOW A FRAME LANDED.
+ *
+ * ui.c has to age the spectrum canvas against the refreshes that actually drew
+ * it - "this is the third frame showing the same spectrum" is the stutter
+ * itself, and only this callback knows when a frame completed. A hook rather
+ * than an #include: display.c sits BELOW the UI (see the band-edge note), and
+ * calling ui_* from here would invert that. One pointer, called on taskLVGL. */
+static void (*s_refr_ready_hook)(void);
+
+void display_set_refr_ready_hook(void (*fn)(void))
+{
+    s_refr_ready_hook = fn;
+}
+
 static void disp_refr_ready_cb(lv_event_t *e)
 {
     (void)e;
     s_frames++;
+    if (s_refr_ready_hook) s_refr_ready_hook();
 
     static int64_t last_us;
     int64_t now = esp_timer_get_time();

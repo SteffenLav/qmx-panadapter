@@ -7713,6 +7713,9 @@ void ui_mouse_init(void)
     display_unlock();
 }
 
+/* Defined with the rest of the spectrum-freshness instrument, far below. */
+static void spec_refr_ready_hook(void);
+
 void ui_init(lv_display_t *disp)
 {
     display_lock(portMAX_DELAY);
@@ -7735,6 +7738,11 @@ void ui_init(lv_display_t *disp)
     build_waterfall(scr);
     build_bottom_bar(scr);
     build_bandplan_strip(scr);  // Build last so it floats on top, visible above waterfall
+
+    /* The spectrum canvas now exists, so frames drawing it can be counted.
+     * Registered here rather than in display_init() because the hook belongs
+     * to this file's state - see ui_spec_frame_stats(). */
+    display_set_refr_ready_hook(spec_refr_ready_hook);
 
     // Pre-build modals at boot, when internal heap is at maximum (~199 KB free).
     // This avoids the fragmentation cliff that breaks modal_build() at runtime
@@ -9595,10 +9603,108 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
     lv_obj_invalidate(s_label_canvas);
 }
 
+/* ⭐ SPECTRUM FRESHNESS - see ui_spec_frame_stats() in ui.h for why.
+ *
+ * Two writers, two cores, no lock between them. render_task (core 1) bumps
+ * s_spec_gen at the end of every push it completed; the REFR_READY hook (core
+ * 0, taskLVGL) reads it once per frame. Both halves are O(1).
+ *
+ * ⛔ THE TIMESTAMP IS 32-BIT ON PURPOSE. esp_timer_get_time() is int64, and a
+ * 64-bit store is two instructions on this core - the reader can catch half of
+ * one and compute an age of hours. Truncated to uint32 microseconds the store
+ * is a single aligned word, and uint32 subtraction stays correct across the
+ * 71-minute wrap, which is all the age arithmetic below needs.
+ *
+ * The timestamp is written BEFORE the generation, with a barrier between, so a
+ * reader that sees generation N cannot still be looking at N-1's time. */
+static volatile uint32_t s_spec_gen;         /* completed pushes, ever      */
+static volatile uint32_t s_spec_gen_us;      /* when that push finished     */
+static volatile uint32_t s_spec_lock_fail;   /* pushes the lock threw away  */
+
+/* Window accumulators. Written only by the hook (taskLVGL) except where
+ * ui_spec_frame_stats() clears them. */
+static volatile uint32_t s_sf_frames;
+static volatile uint32_t s_sf_gens;
+static volatile uint32_t s_sf_repeat[4];
+static volatile uint32_t s_sf_skipped;
+static volatile uint64_t s_sf_age_sum_us;
+static volatile uint32_t s_sf_age_max_us;
+
+/* Hook-private carry-over between frames. */
+static uint32_t s_sf_last_gen;
+static uint32_t s_sf_cur_repeat;
+
+static void sf_bin_repeat(uint32_t n)
+{
+    if (n == 0) return;
+    if (n > 4) n = 4;
+    s_sf_repeat[n - 1]++;
+}
+
+/* Runs on taskLVGL, inside LV_EVENT_REFR_READY, with the LVGL lock held.
+ * No allocation, no lock, no division. */
+static void spec_refr_ready_hook(void)
+{
+    s_sf_frames++;
+
+    uint32_t g = s_spec_gen;
+    if (g == s_sf_last_gen) {
+        /* Same numbers on the glass again - this is the repeat the eye reads
+         * as a step. Binned when the run ENDS, not here, so a run still in
+         * progress is never counted twice. */
+        if (s_sf_cur_repeat < UINT32_MAX) s_sf_cur_repeat++;
+        return;
+    }
+
+    /* A new spectrum. Close the previous run out first. */
+    sf_bin_repeat(s_sf_cur_repeat);
+
+    /* Everything between the last one drawn and this one was pushed and never
+     * reached a frame. g - last - 1 is exact because the generation only ever
+     * increases by one, and only inside a completed push. */
+    if (s_sf_last_gen != 0 || s_sf_gens != 0) {
+        s_sf_skipped += g - s_sf_last_gen - 1u;
+    }
+
+    uint32_t age = (uint32_t)esp_timer_get_time() - s_spec_gen_us;
+    s_sf_age_sum_us += age;
+    if (age > s_sf_age_max_us) s_sf_age_max_us = age;
+
+    s_sf_last_gen   = g;
+    s_sf_cur_repeat = 1;
+    s_sf_gens++;
+}
+
+void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
+{
+    if (!out) return;
+    uint32_t gens = s_sf_gens;
+    out->frames      = s_sf_frames;
+    out->gens        = gens;
+    for (int i = 0; i < 4; i++) out->repeat[i] = s_sf_repeat[i];
+    out->skipped     = s_sf_skipped;
+    out->lock_fail   = s_spec_lock_fail;
+    out->age_mean_us = gens ? (unsigned)(s_sf_age_sum_us / gens) : 0;
+    out->age_max_us  = s_sf_age_max_us;
+
+    s_sf_frames = 0;
+    s_sf_gens   = 0;
+    for (int i = 0; i < 4; i++) s_sf_repeat[i] = 0;
+    s_sf_skipped     = 0;
+    s_spec_lock_fail = 0;
+    s_sf_age_sum_us  = 0;
+    s_sf_age_max_us  = 0;
+    /* s_sf_last_gen / s_sf_cur_repeat deliberately survive: the run in
+     * progress belongs to the next window, not to this one. */
+}
+
 void ui_push_spectrum(const float *bins, int n_bins)
 {
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
-    if (!display_lock(20)) return;
+    /* ⛔ A FAILED TAKE IS A DROPPED FRAME, AND IT USED TO BE SILENT.
+     * It also costs the full 20 ms, so it lands in
+     * render_push_spacing()'s push_max_us looking like a slow draw. */
+    if (!display_lock(20)) { s_spec_lock_fail++; return; }
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
@@ -10166,6 +10272,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
     lv_obj_invalidate(s_spec_canvas);
     // Update freq axis labels every frame so zoom/pan changes are reflected.
     update_freq_axis_labels(s_last_qmx_freq_hz);
+
+    /* The canvas now holds a spectrum no frame has drawn yet. Time first,
+     * then the generation - see the note at s_spec_gen. */
+    s_spec_gen_us = (uint32_t)esp_timer_get_time();
+    __sync_synchronize();
+    s_spec_gen++;
+
     display_unlock();
 }
 

@@ -5,7 +5,8 @@
 #include "esp_log.h"
 #include "display.h"
 #include "render.h"   /* render_push_spacing - the DATA cadence beside the FRAME cadence */
-#include "ui.h"          // ui_bandplan_call_counts
+#include "ui.h"          // ui_bandplan_call_counts, ui_spec_frame_stats
+#include "dsp.h"         // dsp_spectrum_mtx_fails - the drops under the cadence
 #include "esp_timer.h"
 
 #include "psram_task.h"
@@ -92,6 +93,33 @@ static void cpu_stats_task(void *arg)
                          ps.min_us / 1000, ps.mean_us / 1000, ps.max_us / 1000,
                          ps.late, ps.n,
                          ps.push_mean_us / 1000, ps.push_max_us / 1000);
+
+                /* ⭐ THE LAST STAGE: how many FRAMES drew the SAME spectrum.
+                 *
+                 * The two lines above measure the two cadences separately and
+                 * both can read clean while the trace still steps, because
+                 * neither can see the relationship between them. The data
+                 * changes at exactly 10 Hz and LVGL refreshes at an uneven
+                 * ~12 fps, so a spectrum is shown once or twice in an
+                 * irregular pattern. That pattern is this line.
+                 *
+                 * Read it as: 1x steady or 2x steady = smooth; 1x and 2x
+                 * mixed = the stutter. `skip` and `lockfail` are frames that
+                 * were computed or pushed and never reached the glass - both
+                 * were silent until now. */
+                ui_spec_frame_stats_t sfs;
+                ui_spec_frame_stats(&sfs);
+                uint32_t pubfail = 0, getfail = 0;
+                dsp_spectrum_mtx_fails(&pubfail, &getfail);
+                ESP_LOGI(TAG, "spec frames: %u frames showed %u spectra"
+                              " | shown 1x %u 2x %u 3x %u 4x+ %u"
+                              " | skip %u lockfail %u pubfail %u getfail %u"
+                              " | age ms mean %u max %u",
+                         sfs.frames, sfs.gens,
+                         sfs.repeat[0], sfs.repeat[1], sfs.repeat[2], sfs.repeat[3],
+                         sfs.skipped, sfs.lock_fail,
+                         (unsigned)pubfail, (unsigned)getfail,
+                         sfs.age_mean_us / 1000, sfs.age_max_us / 1000);
 
                 display_inval_bands_t ib;
                 display_inval_bands(&ib);

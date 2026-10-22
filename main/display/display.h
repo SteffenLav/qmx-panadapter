@@ -46,6 +46,12 @@ bool display_is_flipped(void);
 // by eye, which is not something eyes can do.
 unsigned display_fps_x10(void);
 
+/* Called once per completed LVGL refresh, on taskLVGL, from inside the
+ * LV_EVENT_REFR_READY callback. Must be O(1) and must not take any lock - it
+ * runs with the LVGL lock already held. Pass NULL to remove. ui.c uses it to
+ * count how many frames drew the same spectrum; see ui_spec_frame_stats(). */
+void display_set_refr_ready_hook(void (*fn)(void));
+
 /* Frame-INTERVAL spread, which is what "jaggy" actually means - see the long
  * comment at disp_refr_ready_cb(). fps alone cannot show it: a 10 s average
  * hides the millisecond spacing. Reading it resets the window. */

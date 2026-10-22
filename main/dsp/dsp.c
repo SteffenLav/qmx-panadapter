@@ -641,10 +641,30 @@ esp_err_t dsp_init(void)
     return ESP_OK;
 }
 
+/* ⭐ THE TWO SILENT DROPS ON THE SPECTRUM MUTEX.
+ *
+ * Both sides of s_spectrum_mtx give up after 10 ms and return, and neither
+ * recorded it. A failed PUBLISH means an FFT frame computed and thrown away;
+ * a failed GET means render_task drew nothing that tick, which
+ * render_push_spacing() cannot see because it times the push, not its result.
+ * Counted so "the data arrives unevenly" can be told from "the data arrives
+ * evenly and sometimes is not there". Reads and resets. */
+static volatile uint32_t s_spec_pub_fail;
+static volatile uint32_t s_spec_get_fail;
+
+void dsp_spectrum_mtx_fails(uint32_t *pub, uint32_t *get)
+{
+    if (pub) *pub = s_spec_pub_fail;
+    if (get) *get = s_spec_get_fail;
+    s_spec_pub_fail = 0;
+    s_spec_get_fail = 0;
+}
+
 esp_err_t dsp_get_spectrum(float *dst)
 {
     if (!s_spectrum_mtx || !dst) return ESP_ERR_INVALID_ARG;
     if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
+        s_spec_get_fail++;
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -771,6 +791,8 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
         memcpy(s_spectrum, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
         s_have_spectrum = true;
         xSemaphoreGive(s_spectrum_mtx);
+    } else {
+        s_spec_pub_fail++;   /* computed, then thrown away - see above */
     }
 
     s_frames_this_period++;

@@ -91,6 +91,12 @@ bool dsp_transfer_quiet_settled(void);
  */
 esp_err_t dsp_get_spectrum(float *dst);
 
+/* Spectrum-mutex take failures since the previous call, then reset. `pub` is
+ * FFT frames computed and dropped because the publish could not get the lock;
+ * `get` is ticks where render_task asked for a spectrum and was refused. Both
+ * are frames the operator never saw, and neither showed up anywhere before. */
+void dsp_spectrum_mtx_fails(uint32_t *pub, uint32_t *get);
+
 // Average LINEAR power over the next `frames` FFT frames, then convert to dB.
 // A single frame is Rayleigh-noisy (+/-13 dB bin to bin), so anything that has
 // to compare two spectra - spur_map.c's dial-nudge detector - needs averaging
