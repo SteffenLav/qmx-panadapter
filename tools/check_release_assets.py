@@ -107,6 +107,31 @@ def main():
         print("    Fix:  gh release upload %s build/%s --repo %s" % (tag, want, REPO))
         return 1
 
+    # ⛔ NO MERGED IMAGE MAY BE PUBLISHED. v0.18.6 shipped one and it bricked
+    # a unit on every use of flash.bat; v1.20.4 shipped another, measured
+    # 2026-10-22 as spanning 0x0..0x922000 with user_nvs (0x810000) and storage
+    # (0x820000) ALL 0xFF - so flashing it erases WiFi credentials, callsign,
+    # memory channels, the ADIF log and the LoTW private key. Nothing ships it:
+    # flash.bat writes the four component files at their own offsets and the
+    # flasher zip contains no merged file.
+    #
+    # ⚠ REMOVING `qmx merge` WAS NOT ENOUGH, which is why this is here. The
+    # v1.20.4 asset was never built by that verb - it was a hand-typed 4-way
+    # esptool command, while the verb was 3-way and named its output without a
+    # version. The build step was never the control; the PUBLISH step is.
+    merged = sorted(n for n in assets if "merged" in n.lower())
+    if merged:
+        print()
+        for n in merged:
+            print("check_release_assets: FORBIDDEN -- %s (%d bytes)"
+                  % (n, assets[n]["size"]))
+        print("    A merged image is a whole-chip file written at 0x0. Its")
+        print("    user_nvs and storage regions are blank padding, so flashing it")
+        print("    erases WiFi, callsign, memory channels, the log and the LoTW key.")
+        print("    Nothing ships it - flash.bat writes the four files separately.")
+        print("    Fix:  gh release delete-asset %s %s --repo %s" % (tag, merged[0], REPO))
+        return 1
+
     got = assets[want]
     if got["size"] <= 0 or got["state"] != "uploaded":
         print("check_release_assets: BAD -- %s is %d bytes, state=%s"
