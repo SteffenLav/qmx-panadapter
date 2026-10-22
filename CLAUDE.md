@@ -55,6 +55,27 @@ Get-ChildItem tools/patches/apply_*.ps1 | ForEach-Object { powershell -File $_.F
 python tools/check_patches.py     # the authority - refuses the build if any is missing
 ```
 
+## ⛔ A release is not published until the OTA asset answers 200
+
+```powershell
+python tools/check_release_assets.py vX.Y.Z   # exits non-zero if OTA cannot reach it
+```
+
+The device builds its download URL by hand (`main/net/update_check.c`) and never
+reads the release's asset list, so an upload under any other name is a 404 — and
+a 404 is `esp_https_ota_begin()` → `ESP_FAIL` → **"could not reach the download
+(0xffffffff)"** on every Tab5 in the field.
+
+⛔ **The written warning has failed twice**: v1.12.4 (2026-09-10) and again
+**v1.20.4 (2026-10-22)**, which shipped with no `qmx_panadapter.bin` *and* with
+the merged binary the process explicitly forbids. Both times a user found it,
+not us. Run the checker; do not re-read the prose. See
+[release process](../../../memory/release_process.md) Phase 3.4 and
+[the v1.20.4 fault](../../../memory/project_v1204_ota_asset_was_never_uploaded.md).
+
+⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
+the served bytes with `cmp`, not the upload's exit code.
+
 ## ⛔ Every transmit path must pass the band guard
 
 `python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
