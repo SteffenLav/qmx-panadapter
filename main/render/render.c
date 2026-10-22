@@ -125,6 +125,62 @@ void render_push_spacing(render_push_spacing_t *out)
     s_push_dur_n      = 0;
 }
 
+/* ⭐ SYNTHETIC TRACE - see render.h for what it decides and why counters
+ * cannot. A Gaussian peak gliding at a known, constant rate on a flat floor.
+ *
+ * Substituted where the real spectrum would land, so EVERYTHING downstream is
+ * the untouched production path: the same EMA, the same ui_push_spectrum(),
+ * the same lock, the same canvas, the same LVGL refresh. Only the numbers
+ * differ, and their motion is exactly known.
+ *
+ * ⛔ THE EMA IS LEFT IN, deliberately. Taking it out would test a pipeline we
+ * do not ship. A first-order filter on a constant-rate ramp settles to the
+ * same constant rate with a fixed lag - it cannot introduce stepping, so it
+ * costs the experiment nothing and keeps it honest.
+ *
+ * The step is 0.15 bin per push: at 10 Hz and 1.25 bins per screen pixel at
+ * zoom 1 that is ~1.2 px per frame, slow enough that any stepping is obvious
+ * and fast enough to read as motion. Phase is kept in a float and wrapped, so
+ * it never quantises to the push index. */
+#define SYNTH_STEP_BINS   0.15f
+#define SYNTH_WIDTH_BINS  6.0f      /* Gaussian sigma - a few px wide        */
+#define SYNTH_FLOOR_DBM   -125.0f
+#define SYNTH_PEAK_DBM    -55.0f
+
+static volatile int s_synth_mode;
+static float        s_synth_pos;     /* render_task only */
+
+void render_set_synthetic(int mode)
+{
+    if (mode < 0) mode = 0;
+    if (mode > 1) mode = 1;
+    s_synth_mode = mode;
+    ESP_LOGW(TAG, "synthetic trace: %s", mode ? "ON (gliding peak)" : "off");
+}
+
+int render_get_synthetic(void) { return s_synth_mode; }
+
+/* Writes DSP_FFT_SIZE dB values in the same layout dsp_get_spectrum() uses -
+ * raw, non-fftshifted, index 0 = DC - so the display's bin mapping, pan and
+ * zoom all behave exactly as they do on real data. */
+static void synth_fill(float *dst)
+{
+    s_synth_pos += SYNTH_STEP_BINS;
+    if (s_synth_pos >= (float)DSP_FFT_SIZE) s_synth_pos -= (float)DSP_FFT_SIZE;
+
+    const float inv2s2 = 1.0f / (2.0f * SYNTH_WIDTH_BINS * SYNTH_WIDTH_BINS);
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        /* Shortest distance on the circle, so the peak crosses the wrap
+         * without a discontinuity - a jump there would look like the very
+         * stepping this is meant to detect. */
+        float d = (float)i - s_synth_pos;
+        if (d >  (float)(DSP_FFT_SIZE / 2)) d -= (float)DSP_FFT_SIZE;
+        if (d < -(float)(DSP_FFT_SIZE / 2)) d += (float)DSP_FFT_SIZE;
+        float g = expf(-(d * d) * inv2s2);
+        dst[i] = SYNTH_FLOOR_DBM + (SYNTH_PEAK_DBM - SYNTH_FLOOR_DBM) * g;
+    }
+}
+
 // Phase 5.5: autoscale removed — static Ref/Range, manual control
 
 
@@ -176,8 +232,15 @@ static void render_task(void *arg)
         bool have_spectrum = false;
 
         if (pan_visible) {
-            have_spectrum = (dsp_get_spectrum(s_scratch) == ESP_OK);
-            // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio).
+            if (s_synth_mode) {
+                /* Substituted here and nowhere else: every stage after this
+                 * line is the production path, unchanged. */
+                synth_fill(s_scratch);
+                have_spectrum = true;
+            } else {
+                have_spectrum = (dsp_get_spectrum(s_scratch) == ESP_OK);
+                // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio).
+            }
         } else {
             // Restart both EMAs from fresh data when the panadapter returns,
             // instead of blending new frames into a minutes-old picture.

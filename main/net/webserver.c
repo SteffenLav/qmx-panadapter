@@ -3115,6 +3115,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "spectest") == 0) {
+        /* Dev action: replace the spectrum CONTENT with a peak gliding at a
+         * known constant rate, leaving every stage after it untouched. It
+         * separates "the data is uneven" from "the picture is uneven" - see
+         * the long comment at render_set_synthetic() in render.h for why no
+         * further counter on the transport could do that.
+         * {"action":"spectest","mode":1} on, {"mode":0} off. */
+        cJSON *jm = cJSON_GetObjectItem(root, "mode");
+        if (cJSON_IsNumber(jm)) render_set_synthetic(jm->valueint);
+        cJSON_Delete(root);
+        char body[64];
+        snprintf(body, sizeof(body), "{\"ok\":true,\"spectest\":%d}",
+                 render_get_synthetic());
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_guards") == 0) {
         /* Dev action: choose which false-decode guard ACTS. Both are measured
          * regardless, so this exists to compare them on real signals without

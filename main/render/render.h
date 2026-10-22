@@ -20,6 +20,46 @@ void render_set_ema_alpha(float alpha);
 // blit. Was a 1..4x multiplier; one axis, one setting, both directions.
 void render_set_waterfall_rows_per_s(uint8_t rows);
 
+/* ⭐ THE EXPERIMENT THAT SEPARATES "THE DATA IS UNEVEN" FROM "THE PICTURE IS
+ * UNEVEN", WITHOUT EITHER OF US JUDGING IT BY EYE FIRST.
+ *
+ * ⛔ WHY IT EXISTS (2026-10-22). The lock-timeout fix removed a MEASURED loss
+ * of 14 spectrum frames in every 100 - lockfail 14 -> 0 over 40 windows, every
+ * push now reaching the glass - and the operator looked at the screen and said
+ * it still stutters. So the dropped frames were real and were not the symptom.
+ *
+ * Everything measured so far describes the TRANSPORT: how evenly pushes leave
+ * render_task (metronomic, late 0/100), how many are lost (now none), how many
+ * frames draw each one (2x 70, 3x 24), how stale they are (58 ms). None of it
+ * says whether the PICTURE those numbers carry moves smoothly, because the
+ * picture is a spectrum of real noise - it jumps about by its nature, and no
+ * counter can tell a jumpy signal from a jumpy renderer.
+ *
+ * So: replace the content with something whose motion is known exactly. A
+ * single Gaussian peak that advances a fixed fraction of a bin per push, on a
+ * flat floor. Everything downstream is untouched - the same EMA, the same
+ * canvas fill, the same lock, the same LVGL path.
+ *
+ *   The peak GLIDES smoothly  -> the pipeline presents evenly. The unevenness
+ *                                is in the DATA (the FFT content itself, its
+ *                                windowing, or the dial/bin mapping), not in
+ *                                the drawing.
+ *   The peak JERKS or stalls  -> the presentation is at fault and the FFT is
+ *                                innocent. Look at the draw, the beat between
+ *                                22 fps and 10 Hz, or num_fbs = 1.
+ *
+ * Either answer kills half the remaining search space, which is more than any
+ * further counter on the transport can do.
+ *
+ * ⚠ The step is deliberately SLOW - a fraction of a bin per push, about 1.5 px
+ * a frame at zoom 1. Fast motion hides stepping; slow motion is where the eye
+ * is most sensitive to it, which is the whole point.
+ *
+ * mode 0 = off (real spectrum), 1 = gliding peak. Dev only, not persisted:
+ * {"action":"spectest","mode":1}. */
+void render_set_synthetic(int mode);
+int  render_get_synthetic(void);
+
 /* ⭐ HOW EVENLY DOES THE SPECTRUM DATA ACTUALLY ARRIVE?
  *
  * Deliberately the same shape as display_frame_spacing() in display/display.h,
