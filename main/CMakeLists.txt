@@ -82,6 +82,7 @@ idf_component_register(
         "adif/adif_check.c"   # #263 "check my log" - portable, host-tested
         "util/format_freq.c"  # #302 one frequency format, portable
         "cat/cat.c"
+        "cat/cat_keying_cmds.c"  # T64 does runtime CAT text key? host-tested
         "audio/audio.c"
         "audio/rx_audio.c"
         "audio/line_in.c"

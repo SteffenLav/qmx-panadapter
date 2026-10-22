@@ -317,6 +317,35 @@ bool cat_get_vox_disabled(void);
 esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 
 /**
+ * @brief The ONE door for CAT text that did not come from our own code (T64).
+ *
+ * ⛔ EVERY path that accepts a CAT string from outside the firmware - the
+ * web API's cat_raw today, a PC pass-through (T63) tomorrow - MUST come
+ * through here, and `tools/check_tx_guard.py` refuses the build if anything
+ * under main/net/ calls cat_send_raw_cmd() directly instead.
+ *
+ * WHY: the band guard's other six sites are found by grepping our source for
+ * the literal "TX;". A command that arrives at runtime is invisible to that,
+ * so from v1.0 to v1.20.3 `/api/cmd {"action":"cat_raw","cmd":"TX;"}` keyed the
+ * radio on any frequency, with no guard and no authentication.
+ *
+ * It classifies the text (cat_keying_cmds.h), and when anything in it can
+ * cause RF it consults tx_band_guard_allows() with the frequency that would
+ * actually be EMITTED - the dial, plus a TA audio offset when one is given.
+ *
+ * ⛔ STRICTER THAN THE INTERNAL PATHS IN ONE WAY: those are documented to pass
+ * unchecked when the dial reads 0, because refusing every transmission on a
+ * flaky CAT link would be worse. Here an unknown dial REFUSES - a raw command
+ * is never the only way to get a signal out, so the safe answer is free.
+ *
+ * @param cmd      the text, which may hold several commands ("FA7074000;TX;")
+ * @param err      optional buffer for the reason on a refusal
+ * @param err_len  its size
+ * @return ESP_OK when sent, ESP_ERR_NOT_ALLOWED when the guard refused.
+ */
+esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len);
+
+/**
  * @brief Query the QMX's instantaneous power output and SWR (PC; and SW;).
  *
  * Both readings are only valid while the radio is keyed (transmitting) - SW;

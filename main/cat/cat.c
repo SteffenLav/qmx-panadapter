@@ -1,4 +1,6 @@
 #include "cat.h"
+#include "cat_keying_cmds.h"
+#include "tx_band_guard.h"
 #include "util/cat_restore.h"   // what the band scan sends to undo itself
 
 #include <string.h>
@@ -642,6 +644,64 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
      * can be stale is worse than one that admits it does not know. */
     if (strstr(buf, "Max. PA voltage")) s_pa_voltage_x10 = -1;
     return cat_tx(buf, len, 200);
+}
+
+/* ⛔ THE ONE DOOR FOR CAT TEXT FROM OUTSIDE THE FIRMWARE - T64.
+ *
+ * `/api/cmd {"action":"cat_raw","cmd":"TX;"}` keyed the radio in every release
+ * up to v1.20.3: cat_send_raw_cmd() has no guard, and the action has no gate,
+ * so any browser that could reach the web UI could transmit on any frequency.
+ * The band guard's six other sites are found by grepping our source for the
+ * literal "TX;" (tools/check_tx_guard.py), and a command that arrives at
+ * RUNTIME is invisible to that - the checker passed the build that shipped it.
+ * Proven reachable on the released build 2026-10-22 with a harmless `FA;`.
+ *
+ * So the fix is not another call site, it is a DOOR: one place that runtime
+ * text has to pass, which classifies it and consults the guard with the RF that
+ * would actually be emitted. The checker now refuses any direct
+ * cat_send_raw_cmd() under main/net/, which is what keeps the next pass-through
+ * (T63) honest.
+ */
+esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len)
+{
+    if (err && err_len) err[0] = ' ';
+    if (!cmd || !cmd[0]) return ESP_ERR_INVALID_ARG;
+    if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
+
+    cat_keying_t k;
+    cat_keying_classify(cmd, &k);
+    if (k.keys) {
+        /* ⛔ The dial is the only thing we know about what this will emit, so
+         * not knowing it is a refusal here. The internal paths are documented
+         * to pass in that case - a guard that blocks every burst on a flaky
+         * link is worse than one gap - but a raw command is never the only way
+         * to get a signal out, so refusing costs the operator nothing. */
+        uint32_t dial = cat_get_frequency();
+        if (dial == 0) {
+            ESP_LOGW("cat", "external cmd REFUSED (%s keys, dial unknown): %s", k.verb, cmd);
+            if (err && err_len) {
+                snprintf(err, err_len,
+                         "%s would key the radio and the dial is not known yet", k.verb);
+            }
+            return ESP_ERR_NOT_ALLOWED;
+        }
+        /* dial + audio is what goes on the air, which is the whole lesson of
+         * the 60 m fault. With no TA in the text the carrier is at the dial. */
+        uint32_t lo = dial, hi = dial;
+        if (k.audio_known) {
+            lo = dial + k.audio_hz;
+            hi = lo;
+        }
+        char why[96];
+        if (!tx_band_guard_allows(lo, hi, "raw CAT", why, sizeof(why))) {
+            ESP_LOGW("cat", "external cmd REFUSED (%s): %s - %s", k.verb, cmd, why);
+            if (err && err_len) snprintf(err, err_len, "%s", why);
+            return ESP_ERR_NOT_ALLOWED;
+        }
+        ESP_LOGW("cat", "external cmd KEYS (%s) and the guard allowed it at %lu Hz: %s",
+                 k.verb, (unsigned long)lo, cmd);
+    }
+    return cat_send_raw_cmd("%s", cmd);
 }
 
 esp_err_t cat_query_power_swr(float *power_w, float *swr)

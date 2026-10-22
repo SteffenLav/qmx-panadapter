@@ -2948,8 +2948,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, "{\"error\":\"needs cmd\"}");
             return ESP_OK;
         }
-        esp_err_t e = cat_send_raw_cmd("%s", c);
+        /* ⛔ T64: THIS USED TO CALL cat_send_raw_cmd() AND IT COULD KEY THE
+         * RADIO. {"cmd":"TX;"} transmitted on whatever frequency the dial
+         * happened to be on, with no band guard and no authentication, in
+         * every release up to v1.20.3 - and check_tx_guard.py passed the build
+         * because it greps our source for the literal "TX;", which a command
+         * arriving over HTTP never is. Discovery is still the point of this
+         * action; keying never was. cat_send_external_cmd() is the guarded
+         * door, and the checker now refuses a direct raw send from this file. */
+        char why[96];
+        esp_err_t e = cat_send_external_cmd(c, why, sizeof(why));
         cJSON_Delete(root);
+        if (e == ESP_ERR_NOT_ALLOWED) {
+            cJSON *rj = cJSON_CreateObject();
+            cJSON_AddBoolToObject(rj, "ok", false);
+            cJSON_AddStringToObject(rj, "error", why[0] ? why : "refused by the band guard");
+            char *rs = cJSON_PrintUnformatted(rj);
+            cJSON_Delete(rj);
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, rs ? rs : "{\"ok\":false}");
+            if (rs) free(rs);
+            return ESP_OK;
+        }
         char out[64];
         snprintf(out, sizeof(out), "{\"ok\":%s}", e == ESP_OK ? "true" : "false");
         httpd_resp_set_type(req, "application/json");

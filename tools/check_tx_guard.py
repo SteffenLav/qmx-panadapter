@@ -52,6 +52,35 @@ WINDOW = 60
 
 GUARD = re.compile(r"tx_band_guard_allows\s*\(")
 
+# ⛔ A COMMAND THAT ARRIVES AT RUNTIME IS INVISIBLE TO THE GREP ABOVE.
+#
+# KEYING finds the literal "TX;" in OUR source. That is the right instrument
+# for the six sites the firmware decides on its own, and it is blind to text
+# that comes in over the network - which is how
+# /api/cmd {"action":"cat_raw","cmd":"TX;"} shipped from v1.0 to v1.20.3 with
+# no band guard and no authentication, while this checker reported every path
+# guarded. It was telling the truth about the question it was asking.
+#
+# The invariant that closes it is structural rather than textual: externally
+# supplied CAT text may reach the radio through exactly ONE door,
+# cat_send_external_cmd(), which classifies it and consults the guard with the
+# RF that would be emitted. So:
+#
+#   * no file that takes input from outside may call the raw senders directly,
+#   * and that door must itself be guarded.
+#
+# A new pass-through (T63 - Ralph DL1HR's N1MM+ request) therefore cannot
+# reach the radio without going past the guard, whatever strings it carries.
+EXTERNAL_INPUT_DIRS = ("main/net/",)
+
+# Reaching this from a file in EXTERNAL_INPUT_DIRS means a string from
+# off-device can become a CAT command unchecked.
+RAW_SENDERS = re.compile(r"\bcat_send_raw_cmd\s*\(")
+
+# The one guarded door, and where it lives.
+DOOR_NAME = "cat_send_external_cmd"
+DOOR_FILE = "main/cat/cat.c"
+
 # Sites that are allowed to key WITHOUT the guard. Each needs a reason, and the
 # reason is the point: anyone adding a line here is making a decision, not
 # silencing a warning.
@@ -111,8 +140,72 @@ def main():
                     "    it to EXEMPT in this file WITH THE REASON."
                     % (rel, i + 1, what))
 
-    print("check_tx_guard: %d keying site(s) found, %d exempt"
-          % (found, len(EXEMPT)))
+    # ---- the runtime rule ------------------------------------------------
+    door_src = ""
+    for path in c_sources():
+        rel = os.path.relpath(path, ROOT).replace("\\", "/")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        if rel == DOOR_FILE:
+            door_src = "".join(lines)
+        if not rel.startswith(EXTERNAL_INPUT_DIRS):
+            continue
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith(("*", "//", "/*")):
+                continue
+            if RAW_SENDERS.search(line):
+                problems.append(
+                    "%s:%d  a raw CAT send in a file that takes input from "
+                    "OUTSIDE the device. A command arriving over the\n"
+                    "    network can carry TX; and the grep above cannot see "
+                    "it - that is exactly how cat_raw shipped able to\n"
+                    "    transmit out of band. Route it through %s(), which "
+                    "classifies the text and consults the\n"
+                    "    guard with the RF it would EMIT."
+                    % (rel, i + 1, DOOR_NAME))
+
+    # ---- and the door itself has to be guarded ---------------------------
+    doors = 0
+    if door_src:
+        m = re.search(r"esp_err_t\s+%s\s*\([^)]*\)\s*\{" % DOOR_NAME, door_src)
+        if m:
+            doors = 1
+            body = door_src[m.end():m.end() + 4000]
+            if not GUARD.search(body):
+                problems.append(
+                    "%s  %s() does not call tx_band_guard_allows(). It is the "
+                    "ONE door runtime CAT text passes\n"
+                    "    through; unguarded, every other check here is "
+                    "decoration." % (DOOR_FILE, DOOR_NAME))
+            if "cat_keying_classify" not in body:
+                problems.append(
+                    "%s  %s() does not classify the text with "
+                    "cat_keying_classify(). Without that it cannot know\n"
+                    "    whether the command keys, so it guards either "
+                    "everything or nothing." % (DOOR_FILE, DOOR_NAME))
+        else:
+            problems.append(
+                "%s  %s() is missing. Runtime CAT text has no guarded door."
+                % (DOOR_FILE, DOOR_NAME))
+
+    print("check_tx_guard: %d keying site(s) found, %d exempt, "
+          "%d guarded door for runtime CAT" % (found, len(EXEMPT), doors))
+    # ⛔ SAY WHAT IS NOT COVERED, IN THE SAME BREATH AS THE PASS.
+    #
+    # Reporting "every transmit path is guarded" while a path exists that this
+    # script does not examine is the same over-claim that let cat_raw ship: the
+    # checker answered its own question honestly and the summary read as a
+    # guarantee. So the gap is printed on every run, pass or fail.
+    print("check_tx_guard: NOT COVERED - /api/term (T65). It sends "
+          "browser-supplied keystrokes to the radio's own")
+    print("                menu on CDC port 2, where SWR Tune keys a carrier. "
+          "A keystroke's meaning depends on")
+    print("                which menu row is selected, so it cannot be "
+          "classified the way a CAT verb can.")
     if problems:
         print("\n" + "=" * 78)
         print("check_tx_guard: UNGUARDED TRANSMIT PATH - REFUSING THE BUILD")
