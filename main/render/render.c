@@ -11,6 +11,7 @@
 #include "dsp.h"
 #include "ui.h"
 #include "ui_mode.h"
+#include <limits.h>        /* UINT_MAX, for the push-spacing min */
 #include "render_waterfall.h"
 #include <string.h>
 
@@ -82,6 +83,47 @@ void render_set_waterfall_rows_per_s(uint8_t rows)
 }
 
 
+
+/* ⭐ PUSH SPACING - see render.h for why this exists and what it rules out.
+ *
+ * Nominal interval is RENDER_PERIOD_MS = 100 ms. "Late" is 150 ms, i.e. 1.5x,
+ * matching the spirit of display.c's FRAME_LATE_US (~2x its own nominal): far
+ * enough out that it cannot be ordinary tick rounding, close enough that a
+ * real hitch is counted.
+ *
+ * ⚠ O(1): a subtract and a few compares per push, no division and no walk,
+ * which is the same rule the display counters follow. The mean is divided only
+ * when the window is read. */
+#define RENDER_PUSH_LATE_US 150000u
+static volatile unsigned s_push_min_us = UINT_MAX;
+static volatile unsigned s_push_max_us;
+static volatile uint64_t s_push_sum_us;
+static volatile unsigned s_push_n;
+static volatile unsigned s_push_late;
+static volatile uint64_t s_push_dur_sum_us;
+static volatile unsigned s_push_dur_max_us;
+static volatile unsigned s_push_dur_n;
+
+void render_push_spacing(render_push_spacing_t *out)
+{
+    if (!out) return;
+    unsigned n = s_push_n;
+    out->n       = n;
+    out->min_us  = (n && s_push_min_us != UINT_MAX) ? s_push_min_us : 0;
+    out->max_us  = s_push_max_us;
+    out->mean_us = n ? (unsigned)(s_push_sum_us / n) : 0;
+    out->late    = s_push_late;
+    out->push_mean_us = s_push_dur_n ? (unsigned)(s_push_dur_sum_us / s_push_dur_n) : 0;
+    out->push_max_us  = s_push_dur_max_us;
+    s_push_min_us = UINT_MAX;
+    s_push_max_us = 0;
+    s_push_sum_us = 0;
+    s_push_n      = 0;
+    s_push_late   = 0;
+    s_push_dur_sum_us = 0;
+    s_push_dur_max_us = 0;
+    s_push_dur_n      = 0;
+}
 
 // Phase 5.5: autoscale removed — static Ref/Range, manual control
 
@@ -161,7 +203,29 @@ static void render_task(void *arg)
 
 
             // Push smoothed spectrum to UI
-            ui_push_spectrum(s_smoothed, DSP_FFT_SIZE);
+            /* Instrumented - see render_push_spacing(). The interval is taken
+             * around the push rather than at the top of the loop, so it is the
+             * cadence the GLASS sees, not the cadence the timer intended. */
+            {
+                static int64_t s_last_push_us;
+                int64_t t0 = esp_timer_get_time();
+                if (s_last_push_us) {
+                    unsigned dt = (unsigned)(t0 - s_last_push_us);
+                    if (dt < s_push_min_us) s_push_min_us = dt;
+                    if (dt > s_push_max_us) s_push_max_us = dt;
+                    if (dt > RENDER_PUSH_LATE_US) s_push_late++;
+                    s_push_sum_us += dt;
+                    s_push_n++;
+                }
+                s_last_push_us = t0;
+
+                ui_push_spectrum(s_smoothed, DSP_FFT_SIZE);
+
+                unsigned dur = (unsigned)(esp_timer_get_time() - t0);
+                if (dur > s_push_dur_max_us) s_push_dur_max_us = dur;
+                s_push_dur_sum_us += dur;
+                s_push_dur_n++;
+            }
 
             // Separate, more heavily smoothed spectrum for the waterfall only
             if (!s_wf_smoothed_init) {

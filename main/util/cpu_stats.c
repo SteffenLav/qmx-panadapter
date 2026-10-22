@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "display.h"
+#include "render.h"   /* render_push_spacing - the DATA cadence beside the FRAME cadence */
 #include "ui.h"          // ui_bandplan_call_counts
 #include "esp_timer.h"
 
@@ -78,6 +79,20 @@ static void cpu_stats_task(void *arg)
                  * The total on the line above swings 6-20 Mpx/s on an
                  * unchanged screen, and the two big canvases cannot account
                  * for the high end - so this names the panel. */
+                /* ⭐ THE DATA's cadence, beside the FRAME's. display_frame_spacing
+                 * above says how evenly LVGL refreshes land; this says how evenly
+                 * the spectrum the operator is watching actually CHANGES. The two
+                 * are different questions and the Tab5-vs-web stutter needs both:
+                 * 17.6 fps drawing a trace that only moves unevenly still looks
+                 * stepped. Nominal is 100 ms. */
+                render_push_spacing_t ps;
+                render_push_spacing(&ps);
+                ESP_LOGI(TAG, "push ms: min %u mean %u max %u late %u/%u"
+                              " | in-push ms mean %u max %u",
+                         ps.min_us / 1000, ps.mean_us / 1000, ps.max_us / 1000,
+                         ps.late, ps.n,
+                         ps.push_mean_us / 1000, ps.push_max_us / 1000);
+
                 display_inval_bands_t ib;
                 display_inval_bands(&ib);
                 ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"
