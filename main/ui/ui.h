@@ -261,6 +261,10 @@ typedef struct {
     unsigned appear_mean_us;
     unsigned appear_max_us;
     unsigned appear_sd_us;
+    /* Partial-invalidate decision, per window: which branch rejected the
+     * band path, and how tall the band was when it was computed. */
+    unsigned pi_partial, pi_no_array, pi_stale, pi_overlay, pi_wide;
+    unsigned pi_band_mean_px;
 } ui_spec_frame_stats_t;
 
 void ui_spec_frame_stats(ui_spec_frame_stats_t *out);

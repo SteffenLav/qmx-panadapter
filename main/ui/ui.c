@@ -4180,6 +4180,21 @@ static uint8_t *s_spec_canvas_buf = NULL;
 static int16_t *s_frame_ytop;         /* y_top per column, PREVIOUS push   */
 static bool     s_frame_ytop_valid;
 static uint64_t s_frame_overlay_sig;  /* everything that is not the trace  */
+/* ⛔ WHY THE PARTIAL PATH DID NOT ENGAGE - measured, not guessed.
+ *
+ * On a noise-like trace (spectest mode 2: 8 dB p-p = ~16 px of 200) the band
+ * should be ~18 px and the partial invalidate should fire on nearly every
+ * push. The bench read spec 2620 kpx/s = 262 kpx per push against a 256 kpx
+ * full canvas - it never fired once. Four things can reject it; this says
+ * which. Reading the code again had already failed once tonight (the double
+ * carpet invalidate was found by arithmetic, not by re-reading). */
+static volatile uint32_t s_pi_partial;    /* took the band path            */
+static volatile uint32_t s_pi_no_array;   /* allocation failed             */
+static volatile uint32_t s_pi_stale;      /* previous frame not usable     */
+static volatile uint32_t s_pi_overlay;    /* signature differed            */
+static volatile uint32_t s_pi_wide;       /* band covered >= 2/3           */
+static volatile uint64_t s_pi_band_sum;   /* band height, for the mean     */
+static volatile uint32_t s_pi_band_n;
 
 // "Breathing" opacity animation for edge-swipe grip handles: fades between
 // near-invisible and the normal resting opacity so the user notices the
@@ -9755,11 +9770,8 @@ static volatile uint32_t s_spec_lock_fail;   /* pushes the lock threw away  */
  * the glass, which is worse than being slow, so the signature is deliberately
  * coarse and errs toward repainting everything.
  *
- * ⚠ s_prev_ytop lives in INTERNAL RAM: 2.5 KB, read and written once per
+ * ⚠ s_frame_ytop lives in INTERNAL RAM: 2.5 KB, read and written once per
  * column per push, and the whole point is to not spend core 0 on it. */
-static int16_t *s_frame_ytop;         /* y_top per column, PREVIOUS push   */
-static bool     s_frame_ytop_valid;
-static uint64_t s_frame_overlay_sig;  /* everything that is not the trace  */
 static volatile uint32_t s_wf_row_lock_fail; /* waterfall rows, same cause  */
 
 /* Window accumulators. Written only by the hook (taskLVGL) except where
@@ -9902,6 +9914,16 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     s_wf_row_lock_fail = 0;
     s_sf_age_sum_us  = 0;
     s_sf_age_max_us  = 0;
+    out->pi_partial  = s_pi_partial;
+    out->pi_no_array = s_pi_no_array;
+    out->pi_stale    = s_pi_stale;
+    out->pi_overlay  = s_pi_overlay;
+    out->pi_wide     = s_pi_wide;
+    out->pi_band_mean_px = s_pi_band_n ? (unsigned)(s_pi_band_sum / s_pi_band_n) : 0;
+    s_pi_partial = 0; s_pi_no_array = 0; s_pi_stale = 0;
+    s_pi_overlay = 0; s_pi_wide = 0;
+    s_pi_band_sum = 0; s_pi_band_n = 0;
+
     s_ap_n      = 0;
     s_ap_min_us = UINT32_MAX;
     s_ap_max_us = 0;
@@ -10554,12 +10576,28 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
         s_last_push32 = now32;
     }
-    bool have_band = s_frame_ytop && s_frame_ytop_valid && !overlay_moved
-                     && band_hi >= band_lo;
+    bool have_band = true;
+    if (!s_frame_ytop)            { have_band = false; s_pi_no_array++; }
+    else if (!s_frame_ytop_valid) { have_band = false; s_pi_stale++;    }
+    else if (overlay_moved)       { have_band = false; s_pi_overlay++;  }
+    if (have_band && band_hi < band_lo) {
+        /* Not one column moved. Nothing to repaint at all - but the canvas
+         * content is identical, so a zero-height band is CORRECT, not a bug.
+         * Treated as a 1 px invalidate rather than special-cased out, so the
+         * push still ends the same way for every caller. */
+        band_lo = 0; band_hi = 0;
+    }
     if (have_band) {
         if (band_lo < 0) band_lo = 0;
         if (band_hi > SPECTRUM_H - 1) band_hi = SPECTRUM_H - 1;
-        if ((band_hi - band_lo + 1) * 3 >= SPECTRUM_H * 2) have_band = false;
+        s_pi_band_sum += (unsigned)(band_hi - band_lo + 1);
+        s_pi_band_n++;
+        if ((band_hi - band_lo + 1) * 3 >= SPECTRUM_H * 2) {
+            have_band = false;
+            s_pi_wide++;
+        } else {
+            s_pi_partial++;
+        }
     }
     if (have_band) {
         lv_area_t a;
