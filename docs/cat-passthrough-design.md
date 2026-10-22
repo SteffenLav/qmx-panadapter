@@ -355,13 +355,92 @@ So CW splits in two, and only one half has the problem:
 | `KY<text>;` buffered text | **the radio's own keyer** | ⭐ fine — one packet, jitter only shifts the start |
 
 ⭐ **`KY` is in the QMX's documented set** ("KY (both variants)",
-`docs/qmx-1_04-cat-comparison.md` §1.3), so buffered CW works through a
-transparent pipe with no timing exposure at all. That is also what a contest
-logger normally uses for its F-key messages, and an N1MM+ operator driving a
-**WinKeyer on a separate PC serial port** never touches us either.
+`docs/qmx-1_04-cat-comparison.md` §1.3), so buffered CW crosses a transparent
+pipe with no timing exposure at all. A **WinKeyer on a separate PC serial
+port** never touches us either.
 
-⛔ So the promise is: **CW as text, yes. CW as keying, no — and say so rather
-than letting someone find out on the air.**
+### ⛔⛔ RETRACTED 2026-10-22: "KY is what N1MM+ normally uses"
+
+An earlier version of this section said `KY` is what a contest logger normally
+uses for F-key messages. **A QMX group thread the operator supplied says
+otherwise, and it is primary evidence from people running this exact radio.**
+
+**Stan KC7XE** (a correspondent already known to this project — the split/VFO
+report, and the `MD8` Tune confirmation of 2026-08-09) describes his working
+N1MM+ ↔ QMX+ setup, and **Dan NM3A** confirms it on 1_04_010:
+
+- N1MM+ opens **one** COM port — the QMX's first virtual serial port.
+- CAT runs on that port's **data** lines (radio model **TS-480**).
+- ⛔ **CW is keyed by toggling DTR on that same port, element by element.**
+  N1MM+ does the on/off timing itself. The radio side is
+  `CW → CW Keyer → Key from USB DTR`, pointed at that same virtual port, and in
+  N1MM+'s Configurer the port has **CW/Other** ticked with **DTR (pin 4) = CW**.
+- ⛔ **`KY` is deliberately not supported by N1MM+.** Stan, verbatim: *"for
+  various reasons, N1MM+ authors have decided to not support such keyer
+  commands"*. It can be forced with `{CAT1ASC KY ...}` macros, but he moved to
+  DTR because it is better integrated.
+- Dan adds that on 1_04_010 the `{CAT1ASC KS0;}` / `{CAT1ASC KS16;}` wrapper is
+  unnecessary: USB-DTR keying always keys as straight key whatever the paddle
+  mode says, which also frees the paddle speed from the macro's `KS`.
+
+⚠ **Ralph was not in that thread.** This is Stan's and Dan's setup, not
+evidence of Ralph's. It establishes what the popular QMX+N1MM+ method *is*, not
+what Ralph uses.
+
+### ⛔⛔ DTR CANNOT CROSS THIS DESIGN, AND THAT IS STRUCTURAL
+
+| | Crosses a TCP pipe? | Timing made by | Verdict |
+| --- | --- | --- | --- |
+| CAT data (`FA`, `MD`, `KS`, `KY`…) | yes — it is bytes | — / radio's keyer | ⭐ fine |
+| **DTR keying** | ⛔ **no — DTR is not data** | **the PC, per element** | ⛔ impossible, twice over |
+| Paddle | n/a | operator | ⭐ untouched |
+| WinKeyer | n/a (own port, keys by wire) | WinKeyer hardware | ⭐ untouched |
+
+**DTR fails for two independent reasons, and either alone is fatal:**
+
+1. **It is not in the stream.** DTR is a USB CDC control-line state
+   (`SET_CONTROL_LINE_STATE`), not a byte. A TCP socket has no DTR, and N1MM+'s
+   plain TCP option tunnels data only — it does not speak RFC 2217.
+2. **It is element-by-element.** Even if some protocol carried it, this is
+   exactly the case §4a rules out: a 48 ms dot against unbounded WiFi jitter.
+
+⚠ **And it would fail halfway, which is worse than failing cleanly.** Stan's
+macros interleave `{CAT1ASC KS…;}` with the keying on the **same port**. A pipe
+that carries the CAT half and drops the DTR half would set the keyer speed on a
+radio that nothing is keying.
+
+⭐ **We do have the mechanism, for what it is worth:**
+`cdc_acm_host_set_control_line_state(hdl, dtr, rts)` is in the CDC-ACM host
+driver, so the Tab5 **can** assert DTR on the QMX. What is missing is a way for
+the PC to ask for it with usable timing — and over WiFi there is none.
+
+⛔ **The fundamental constraint underneath all of this: two USB hosts cannot
+share one USB device.** The QMX presents several CDC interfaces (we already use
+#0 for CAT and the function at #5 for the terminal), but the Tab5 enumerates the
+whole device as host. The PC cannot reach *any* of those ports while the Tab5
+holds the radio. There is no "split the ports" arrangement.
+
+### What survives, and what to promise
+
+- ⭐ **Paddle:** untouched, no computer in the path.
+- ⭐ **WinKeyer:** untouched — own PC port, keys the radio by wire.
+- ⭐ **`{CAT1ASC KY …}` macros:** pure CAT data, so they cross the pipe and the
+  radio's own keyer makes the timing. Usable, but the operator must write their
+  F-key macros that way, and it is a user workaround rather than a supported
+  N1MM+ feature.
+- ⛔ **USB-DTR keying — the method Stan recommends and Dan confirmed: NOT
+  deliverable over a network, at any effort.**
+
+⛔ **So the question for Ralph is now specific and answerable: how does he key
+CW from N1MM+ today — USB DTR, a WinKeyer, or the paddle?** If he answers DTR,
+TCP cannot serve him and he should be told so plainly rather than waiting for a
+release that cannot help.
+
+⚠ The only design that could serve a DTR user is USB-C CDC device mode on the
+Tab5 (§2 — costs the log console) **plus** a hard-real-time DTR relay into
+`cdc_acm_host_set_control_line_state()`, on a box where core 0 is already the
+wall and LVGL has caused priority inversions before. Possible; expensive;
+entirely unproven. Do not offer it.
 
 ### ⛔⛔ THIS QUESTION FOUND A LIVE KEYING HOLE (fixed 2026-10-22)
 
