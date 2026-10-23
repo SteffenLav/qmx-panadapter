@@ -1213,7 +1213,28 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
      * peak is supposed to sit on, and a biquad carrying state from the old
      * centre would ring it into the new one. */
     cw_peak_rebuild(center_hz, fs_dec, mode);
-    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
+    /* ⛔ THE CW TRIM BELONGS IN THIS MIX, AND LEAVING IT OUT PUT THE WHOLE
+     * CHAIN 60 Hz OFF THE DISPLAY. MEASURED, not reasoned:
+     *
+     * The display maps the dial to baseband 12000 + cw_offset + cw_cal
+     * (ui_get_if_offset_hz()), and this line mixed 12000 + cw_offset. With
+     * the bench unit's cw_cal of -60, a signal the spectrum showed exactly on
+     * the dial - zero-beat said it was on the peak to within 7 Hz - came out
+     * of the speaker at 564 Hz instead of the 625 Hz CW centre. Recorded off
+     * the device with {"action":"rxcap"} and FFT'd: 569.7 Hz before a 7 Hz
+     * zero-beat nudge, 564.1 Hz after, against a predicted 625 - 60 = 565.
+     *
+     * The operator found it as "the peak filter is not tuned correctly": the
+     * peak is built on the CW centre, the tone was 60 Hz below it, and a
+     * 100 Hz filter is already past -3 dB there. But the filter was only the
+     * messenger - the AUDIO ITSELF was tuned 60 Hz off what the screen said,
+     * on every CW signal, since the trim existed.
+     *
+     * ⚠ ONLY the first mix. w2 below shifts the result back up by center_hz
+     * and that is what sets the PITCH you hear, which must stay the CW centre
+     * the operator chose. RIT is deliberately still absent from both: the
+     * radio moves its own LO for RIT, so the tone is supposed to change. */
+    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz + (int)ui_get_if_cal_hz()) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
     float half_split = panoramic ? (float)half_bw_hz / 2.0f : 0.0f;
@@ -1570,6 +1591,13 @@ static void rx_audio_task(void *arg)
         int want_center, want_half_bw;
         filter_params_for_mode(mode, &want_center, &want_half_bw);
         bool want_binaural = s_binaural_en;
+        /* The CW trim is part of the first mix now (see retune()), so it has
+         * to be part of what triggers one - the same class of bug as the peak
+         * filter's "rebuilt on the next retune()" that never came. Without
+         * this, moving the trim in the drawer would change the display and
+         * leave the audio where it was until the mode or the width happened
+         * to change. */
+        int want_cal = (int)ui_get_if_cal_hz();
         float want_overlap = s_pan_overlap;
         bool half_bw_changed = (want_half_bw != s_half_bw_hz);
         bool overlap_changed = (want_overlap != overlap_prev);
@@ -1581,8 +1609,12 @@ static void rx_audio_task(void *arg)
          * break the first time they did not. Taken BEFORE retune(), because
          * retune() is what applies the new D. */
         bool decim_changed = (decim_for_mode(mode, want_half_bw) != s_decim_d);
+        static int cal_prev = INT32_MIN;
+        bool cal_changed = (want_cal != cal_prev);
         if (mode != mode_prev || want_center != s_center_hz ||
-            want_binaural != binaural_prev || half_bw_changed || decim_changed) {
+            want_binaural != binaural_prev || half_bw_changed || decim_changed ||
+            cal_changed) {
+            cal_prev = want_cal;
             retune(want_center, want_half_bw, mode);
             mode_prev = mode;
             binaural_prev = want_binaural;
