@@ -1492,6 +1492,53 @@ static int  s_dial_push_left;
 static bool s_cat_was_ready;
 static bool s_sim_was_on;
 
+/* ⛔ THE PAGE PUSHED THE DIAL AND NEVER THE MODE, AND THAT MADE IT DEAF.
+ *
+ * Found on the bench 2026-10-23 by the operator, in one line: "Claude - the
+ * Mode is CW!!" The page was on 7.038600 with the radio still in CW from the
+ * previous job, so the radio's 300 Hz CW filter sat across a search window at
+ * 1360-1650 Hz. Two cycles ran: 20 candidates (the cap, i.e. noise) and 0
+ * decodes, with a -98 dBm floor that looked like a dead band.
+ *
+ * It was never reachable by accident before because the swipe into WSPR
+ * usually came from a digital mode; the API door this session added makes it
+ * trivial, and the Mode control is REFUSED on this page ("the WSPR page owns
+ * the dial"), so an operator who lands here in CW cannot even fix it from the
+ * UI - they have to leave, change mode, and come back.
+ *
+ * The TX path has done this correctly all along: wspr_tx.c switches to DiGi
+ * for a burst and hands the mode back afterwards, with the empty-string
+ * one-shot that keeps it from fighting a mode the operator chose. This is the
+ * same thing for RX, with the same restore, because WSPR RX needs the wide
+ * filter for exactly as long as the page is up. */
+#define WSPR_RX_MODE "FT8"   /* cat_request_mode() maps it to DiGi, digit 6 -
+                              * the same string wspr_tx.c uses for a burst */
+static char s_rx_mode_before[12] = { 0 };
+
+static void wspr_claim_mode(void)
+{
+    const char *now = cat_get_mode_str();
+    if (!now || !now[0]) return;                  /* CAT has not answered yet */
+    if (strstr(now, "DiGi") || strstr(now, "DIG")) return;   /* already there */
+    snprintf(s_rx_mode_before, sizeof(s_rx_mode_before), "%s", now);
+    ESP_LOGW(TAG, "mode: %s cannot hear WSPR (its filter is narrower than the "
+                  "1360-1650 Hz window) - switching to DiGi, will hand %s back",
+             now, now);
+    cat_request_mode(WSPR_RX_MODE);
+}
+
+static void wspr_release_mode(void)
+{
+    if (!s_rx_mode_before[0]) return;
+    char want[sizeof(s_rx_mode_before)];
+    snprintf(want, sizeof(want), "%s", s_rx_mode_before);
+    s_rx_mode_before[0] = ' ';          /* one shot, like the TX path's */
+    const char *now = cat_get_mode_str();
+    if (now && strcmp(now, want) == 0) return;
+    ESP_LOGI(TAG, "leaving WSPR - handing the radio back to %s", want);
+    cat_request_mode(want);
+}
+
 static void arm_dial_push(const char *why)
 {
     s_dial_push_left = DIAL_PUSH_TRIES;
@@ -2153,6 +2200,11 @@ void wspr_screen_view_show(void)
 void wspr_screen_view_hide(void)
 {
     if (!s_container) return;
+    /* Hand the mode back, exactly as the TX path does after a burst. Leaving
+     * the operator in DiGi after a look at the WSPR page is the complaint
+     * wspr_tx.c already records: "the CW (or mode in general) is always waking
+     * up in DiGi mode". */
+    wspr_release_mode();
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -2662,6 +2714,12 @@ void wspr_screen_view_tick(void)
                 } else if (want) {
                     ESP_LOGI(TAG, "dial: radio already on %lu Hz", (unsigned long)want);
                 }
+                /* The mode goes with the dial. Here rather than at page entry
+                 * because this is the branch that has already established CAT
+                 * is up - at entry the radio may not have answered yet, and a
+                 * mode write into a dead link is how the dial push itself used
+                 * to fail. */
+                wspr_claim_mode();
                 s_dial_push_left = 0;    /* one shot - never fight manual tuning */
             }
         }
