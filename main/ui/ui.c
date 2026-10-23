@@ -9773,6 +9773,21 @@ static volatile uint32_t s_spec_lock_fail;   /* pushes the lock threw away  */
  * ⚠ s_frame_ytop lives in INTERNAL RAM: 2.5 KB, read and written once per
  * column per push, and the whole point is to not spend core 0 on it. */
 static volatile uint32_t s_wf_row_lock_fail; /* waterfall rows, same cause  */
+/* ⛔ HOW OFTEN THE CARPET ACTUALLY MOVES, because the arithmetic did not match.
+ *
+ * At 10 rows/s with batch N=3 the view should shift 3.3 times a second, i.e.
+ * 3.3 x 474 kpx = ~1.6 Mpx/s. The bench read 4900 kpx/s = 10.3 shifts/s. Part
+ * of that gap was mine - the rate was 6, not the 10 I believed, because the
+ * operator had changed it on the device ([[feedback_the_unexpected_value_was_the_operator]]) -
+ * but 6 rows/s with N=2 predicts 1.4 Mpx/s, so it does NOT account for 4900
+ * either.
+ *
+ * So count the shifts rather than infer them from a pixel total that is
+ * already known to over-count merged areas. If shifts/s matches the batch and
+ * the pixels still do not, the extra is somebody else's object in the
+ * waterfall y-band and the per-panel attribution is what is lying. */
+static volatile uint32_t s_wf_shifts;
+static volatile uint32_t s_wf_rows_written;
 
 /* Window accumulators. Written only by the hook (taskLVGL) except where
  * ui_spec_frame_stats() clears them. */
@@ -9914,6 +9929,10 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     s_wf_row_lock_fail = 0;
     s_sf_age_sum_us  = 0;
     s_sf_age_max_us  = 0;
+    out->wf_shifts     = s_wf_shifts;
+    out->wf_rows_written = s_wf_rows_written;
+    s_wf_shifts = 0; s_wf_rows_written = 0;
+
     out->pi_partial  = s_pi_partial;
     out->pi_no_array = s_pi_no_array;
     out->pi_stale    = s_pi_stale;
@@ -10882,9 +10901,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
      * the build site for why that was costing a black frame. */
     /* The row is in the buffer either way. Only the VIEW waits - see the long
      * comment above ui_push_waterfall_row() for the measurement behind this. */
+    s_wf_rows_written++;
     bool shift_now = (++s_wf_pending_rows >= ui_wf_get_shift_batch());
     if (shift_now) {
         s_wf_pending_rows = 0;
+        s_wf_shifts++;
         lv_image_set_offset_y(s_wf_canvas, -(int32_t)s_wf_head);
     }
 

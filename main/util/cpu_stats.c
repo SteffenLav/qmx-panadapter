@@ -137,6 +137,10 @@ static void cpu_stats_task(void *arg)
                          sfs.pi_partial, sfs.pi_no_array, sfs.pi_stale,
                          sfs.pi_overlay, sfs.pi_wide, sfs.pi_band_mean_px);
 
+                ESP_LOGI(TAG, "carpet: %u rows -> %u shifts (batch %d)",
+                         sfs.wf_rows_written, sfs.wf_shifts,
+                         ui_wf_get_shift_batch());
+
                 display_inval_bands_t ib;
                 display_inval_bands(&ib);
                 ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"

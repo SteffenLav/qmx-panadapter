@@ -265,6 +265,9 @@ typedef struct {
      * band path, and how tall the band was when it was computed. */
     unsigned pi_partial, pi_no_array, pi_stale, pi_overlay, pi_wide;
     unsigned pi_band_mean_px;
+    /* Carpet: rows written into the buffer, and how many of those actually
+     * moved the view. rows/shifts should equal the shift batch. */
+    unsigned wf_shifts, wf_rows_written;
 } ui_spec_frame_stats_t;
 
 void ui_spec_frame_stats(ui_spec_frame_stats_t *out);
