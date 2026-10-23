@@ -3131,6 +3131,23 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;
+    } else if (action && strcmp(action, "legacy") == 0) {
+        /* The A/B the operator asked for: flip the whole 2026-10-22 stutter
+         * session off and on live, so "before" and "after" can be seen a
+         * second apart on the same band instead of across a reflash and a
+         * power cycle. {"action":"legacy","on":true} = as it was.
+         * See ui_set_legacy_mode() for exactly what moves. */
+        cJSON *jon = cJSON_GetObjectItem(root, "on");
+        if (cJSON_IsBool(jon)) ui_set_legacy_mode(cJSON_IsTrue(jon));
+        cJSON_Delete(root);
+        char body[96];
+        snprintf(body, sizeof(body),
+                 "{\"ok\":true,\"legacy\":%s,\"wfbatch\":%d}",
+                 ui_get_legacy_mode() ? "true" : "false",
+                 ui_wf_get_shift_batch());
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "wfbatch") == 0) {
         /* Dev action: how many waterfall rows accumulate before the VIEW
          * moves. Moving it costs the whole 474 kpx carpet whether it moves

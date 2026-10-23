@@ -4174,6 +4174,9 @@ static void update_db_scale(void);   // positions/labels the gridline values
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
+/* Declared here because the label-bar gate reads it far above its own
+ * accessors; the reasoning lives at ui_set_legacy_mode(). */
+static volatile bool s_legacy_mode;
 /* Partial-invalidate state for ui_push_spectrum - declared here, beside the
  * buffer it describes, because build_spectrum() allocates it. The reasoning
  * is at the invalidate itself. */
@@ -6480,6 +6483,7 @@ static void update_freq_axis_labels(uint32_t center_hz)
             for (int i = 0; i < n; i++)
                 if (tick[i] != s_last_tick[i]) { same = false; break; }
         }
+        if (s_legacy_mode) same = false;   /* repaint every push, as it was */
         if (same) return;          /* nothing on this bar would change */
         for (int i = 0; i < n && i < 5; i++) s_last_tick[i] = tick[i];
         s_last_n     = n;
@@ -9715,6 +9719,51 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
  * ⚠ NOT YET PROVEN TO FIX THE SYMPTOM. It removes a measured frame loss; it
  * is not established that the frame loss is what the eye is reacting to. The
  * instrument that found it will say - lockfail should fall to ~0. */
+/* ⭐⭐ ONE SWITCH THAT PUTS THE WHOLE NIGHT'S WORK BACK THE WAY IT WAS.
+ *
+ * ⛔ WHY: *"to really trust it I need to have a A/B view of it - pretty
+ * quickly after each other to compare visually.... But hey I need to see it
+ * compared to before we started this whole session"* (operator, 2026-10-23).
+ *
+ * He is being asked to judge a 30 ms change in a 120 ms interval from memory,
+ * across a night of reflashes - which is not something eyes can do, and is the
+ * same mistake as asking him to resolve two percentage points of core-0 idle
+ * back in August. The answer then was a frame counter. The answer now is to
+ * make the comparison SIMULTANEOUS: flip every change at runtime and let him
+ * watch the same band switch back and forth in a second.
+ *
+ * A reflash cannot do this. It costs 30 s, wedges the QMX, and puts a power
+ * cycle between the two things being compared - by which time the band has
+ * changed and the memory of "before" has faded. That is exactly why four
+ * explanations survived as long as they did.
+ *
+ * ON = tonight's behaviour. OFF = the build from before this session started,
+ * as far as these four levers go:
+ *
+ *   display_lock timeout   90 ms  ->  20 ms   (c02939c2: 14% of frames lost)
+ *   label bar repaint      gated  ->  every push (755ddbee: 844 kpx/s)
+ *   carpet shift batch     as set ->  1 row   (335243d3: already the default)
+ *   spectrum invalidate    band   ->  whole canvas (e68b711b: ~25%)
+ *
+ * ⚠ IT DOES NOT RESTORE THE DOUBLE CARPET INVALIDATE (7273046d). That one was
+ * measured to cost nothing - LVGL merged the two requests - so restoring it
+ * would add a difference that is known not to matter and muddy the comparison.
+ * Nor does it touch the instruments; they are read-only and must keep running,
+ * because the whole point is to put numbers beside what he sees.
+ *
+ * {"action":"legacy","on":true} = as it was. Not persisted - a reboot comes
+ * back with the fixes on, so this cannot be left set by accident. */
+void ui_set_legacy_mode(bool on)
+{
+    s_legacy_mode = on;
+    ESP_LOGW("ui", "LEGACY MODE %s - %s", on ? "ON" : "off",
+             on ? "pre-session behaviour: 20 ms lock, label bar every push, "
+                  "full-canvas spectrum invalidate"
+                : "tonight's fixes active");
+}
+
+bool ui_get_legacy_mode(void) { return s_legacy_mode; }
+
 #define RENDER_PATH_LOCK_MS  90
 
 /* ⭐ SPECTRUM FRESHNESS - see ui_spec_frame_stats() in ui.h for why.
@@ -9960,7 +10009,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
     /* ⛔ A FAILED TAKE IS A DROPPED FRAME, AND IT USED TO BE SILENT.
      * It also costs the full 20 ms, so it lands in
      * render_push_spacing()'s push_max_us looking like a slow draw. */
-    if (!display_lock(RENDER_PATH_LOCK_MS)) { s_spec_lock_fail++; return; }
+    if (!display_lock(s_legacy_mode ? 20 : RENDER_PATH_LOCK_MS)) { s_spec_lock_fail++; return; }
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
@@ -10596,7 +10645,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
         s_last_push32 = now32;
     }
     bool have_band = true;
-    if (!s_frame_ytop)            { have_band = false; s_pi_no_array++; }
+    if (s_legacy_mode)            { have_band = false; }
+    else if (!s_frame_ytop)       { have_band = false; s_pi_no_array++; }
     else if (!s_frame_ytop_valid) { have_band = false; s_pi_stale++;    }
     else if (overlay_moved)       { have_band = false; s_pi_overlay++;  }
     if (have_band && band_hi < band_lo) {
@@ -10847,7 +10897,29 @@ static void wf_track_viewport(void)
  * ⛔ The override exists so the A/B needs no reflash:
  * {"action":"wfbatch","n":1} forces today's behaviour, n=0 restores auto. */
 #define WF_TARGET_SHIFTS_PER_S  3
-static uint8_t s_wf_batch_override;   /* 0 = auto */
+
+/* ⛔⛔ DEFAULT IS 1 - FLOW WINS. THE OPERATOR LOOKED AND I WAS WRONG.
+ *
+ * The commit that added batching called the cost "granularity: the carpet
+ * advances N px in a step instead of 1 px", as if that were a detail. From
+ * the bench at 10 rows/s with N=3: *"the wf is jumping down like 3 times per
+ * sec - its not flowing. So like 3-4 rows jumping instantly..... thats not a
+ * flow"*.
+ *
+ * He is right and the trade is not mine to make silently. A waterfall's whole
+ * job is continuous motion; buying 3.3 Mpx/s of headroom by destroying it is
+ * paying in the only currency the feature has. The measurement stands - the
+ * batch really does cut the carpet from 4.7 to 1.4 Mpx/s and really did buy
+ * appear-interval - and it is still available. It is just not the default.
+ *
+ * ⚠ AND THERE IS NO CLEVER VERSION. A one-row scroll moves every pixel in the
+ * carpet, so the full 474 kpx genuinely must be redrawn; the cost per shift
+ * cannot be reduced, only the number of shifts. Flow and pixels are in direct
+ * opposition here as long as the compositing is in software.
+ *
+ * 1 = every row shifts the view (today's flow, the default). 0 = auto, sized
+ * from the row rate. >1 = that many rows per shift. */
+static uint8_t s_wf_batch_override = 1;
 static int     s_wf_pending_rows;
 
 void ui_wf_set_shift_batch(int n)
@@ -10860,6 +10932,7 @@ void ui_wf_set_shift_batch(int n)
 
 int ui_wf_get_shift_batch(void)
 {
+    if (s_legacy_mode) return 1;
     if (s_wf_batch_override) return s_wf_batch_override;
     int rows = render_get_waterfall_rows_per_s();
     int n = (rows + WF_TARGET_SHIFTS_PER_S / 2) / WF_TARGET_SHIFTS_PER_S;
@@ -10877,7 +10950,7 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
      * same silent drop. A lost row here is a missing line of history, not a
      * repeated one, so it is if anything more visible than a lost trace.
      * Swept with its sibling rather than left for the next report. */
-    if (!display_lock(RENDER_PATH_LOCK_MS)) { s_wf_row_lock_fail++; return; }
+    if (!display_lock(s_legacy_mode ? 20 : RENDER_PATH_LOCK_MS)) { s_wf_row_lock_fail++; return; }
 
     /* FIRST: move the existing history if the viewport has moved since the last
      * tick, so this row lands beside the right history rather than on top of
