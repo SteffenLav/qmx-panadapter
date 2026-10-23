@@ -9756,6 +9756,9 @@ static void spur_marks_update(int N, int bin_start, int window_bins)
 void ui_set_legacy_mode(bool on)
 {
     s_legacy_mode = on;
+    /* Frame sync belongs to the same before/after, so the A/B stays one
+     * switch rather than two the operator has to keep in step. */
+    render_set_frame_sync(!on);
     ESP_LOGW("ui", "LEGACY MODE %s - %s", on ? "ON" : "off",
              on ? "pre-session behaviour: 20 ms lock, label bar every push, "
                   "full-canvas spectrum invalidate"
@@ -9897,6 +9900,10 @@ static void sf_bin_repeat(uint32_t n)
 static void spec_refr_ready_hook(void)
 {
     s_sf_frames++;
+
+    /* A frame just landed - render_task draws the next one's content now,
+     * rather than on its own timer. See render.h. */
+    render_frame_done();
 
     uint32_t g = s_spec_gen;
     if (g == s_sf_last_gen) {

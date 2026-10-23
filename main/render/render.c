@@ -56,7 +56,9 @@ void render_set_ema_alpha(float alpha)
 // what it was actually asked for. See render.h.
 #define WF_ROWS_NOMINAL (1000 / RENDER_PERIOD_MS)   /* 10 rows/s at 1x */
 static volatile uint8_t s_wf_rows = WF_ROWS_NOMINAL;
-static uint16_t s_wf_acc;   /* render_task only - no other task touches it */
+/* Milliseconds-weighted since frame sync: rows * dt_ms, emitting per whole
+ * 1000. Widened from uint16 because 40 rows/s x a 500 ms clamp is 20,000. */
+static uint32_t s_wf_acc;   /* render_task only - no other task touches it */
 
 /* ⛔ 0 IS "OFF", AND IT IS A MEASURING INSTRUMENT, NOT A FEATURE.
  *
@@ -241,11 +243,100 @@ static void synth_fill(float *dst)
 // Phase 5.5: autoscale removed — static Ref/Range, manual control
 
 
+/* ⭐⭐ ONE SPECTRUM PER FRAME, INSTEAD OF TEN PER SECOND INTO WHATEVER THE
+ * DISPLAY HAPPENS TO BE DOING.
+ *
+ * ⛔ WHY NOT THE OBVIOUS FIX. The plan was to PHASE-LOCK the existing 10 Hz
+ * push to the frame boundary, and the arithmetic killed it before it was
+ * built: the push currently lands at a uniformly random point inside a frame
+ * interval, which at ~58 ms frames is 58/sqrt(12) = 17 ms of standard
+ * deviation. The measured appear SD is 47 ms. Removing 17 ms of independent
+ * jitter leaves sqrt(47^2 - 17^2) = 44. THREE MILLISECONDS, for a flash and a
+ * power cycle. Not worth doing.
+ *
+ * ⭐ WHAT THE OPERATOR ACTUALLY ASKED FOR is the trace updating more often -
+ * "the spectrum ... probably updates double (or less) as often as before.
+ * Still far far from what i see on the web spectrum". The web looks better for
+ * a structural reason: it repaints at 60 Hz against 10 Hz data, so every frame
+ * of the animation lands exactly 100 ms apart. The Tab5 repaints at ~17 fps,
+ * so a 10 Hz push means most frames carry NOTHING NEW - they redraw the same
+ * numbers.
+ *
+ * ⭐ AND THE PARTIAL INVALIDATE JUST MADE THE FIX AFFORDABLE. Each push used
+ * to invalidate the whole 256 kpx canvas; it now invalidates the rows the
+ * trace moved, measured at ~160 kpx. So 17 pushes/s costs ~2.7 Mpx/s against
+ * the 2.56 Mpx/s that 10 pushes/s cost this morning - the headroom e68b711b
+ * bought, spent on the thing he can see rather than banked.
+ *
+ * So the loop now waits for the DISPLAY to finish a frame and pushes then.
+ * Every frame carries fresh data; nothing is computed that no frame will show.
+ * It is self-limiting in exactly the right direction: if the display slows
+ * under load, the pushes slow with it instead of piling up behind a timer.
+ *
+ * ⛔ THREE THINGS THAT WERE PER-ITERATION AND ARE NOW PER-MILLISECOND. The old
+ * loop could assume 100 ms per pass. Nothing may assume that any more:
+ *   - the EMA alpha, or the trace's time constant would halve with the frame
+ *     rate and the smoothing would change every time the load did;
+ *   - the waterfall accumulator, or rows/s would silently become rows/frame;
+ *   - the S-meter divider, which counted iterations.
+ * Each is now driven by measured elapsed time. Missing one of these is how a
+ * rate change turns into a behaviour change nobody attributes to it.
+ *
+ * ⚠ FALLBACK AND FLOOR. The wait times out at RENDER_FALLBACK_MS so the loop
+ * still runs when no frame is coming (overlay up, FT8 mode, display idle), and
+ * a push closer than RENDER_MIN_PERIOD_MS to the last is skipped - a burst of
+ * cheap 2 ms frames must not drag the FFT path with it.
+ *
+ * A/B: {"action":"framesync","on":false} restores the 100 ms timer. */
+#define RENDER_FALLBACK_MS    100   /* no frames coming - keep the loop alive */
+#define RENDER_MIN_PERIOD_MS   45   /* ~22 Hz ceiling, so a 2 ms frame burst
+                                       cannot run the push at frame rate      */
+static volatile bool s_frame_sync = true;
+
+void render_set_frame_sync(bool on)
+{
+    s_frame_sync = on;
+    ESP_LOGW(TAG, "frame sync %s - spectrum pushed %s",
+             on ? "ON" : "off",
+             on ? "once per display frame" : "every 100 ms by timer");
+}
+
+bool render_get_frame_sync(void) { return s_frame_sync; }
+
+/* Called from ui.c's LV_EVENT_REFR_READY hook, on taskLVGL. O(1), no lock. */
+void render_frame_done(void)
+{
+    if (s_render_task) xTaskNotifyGive(s_render_task);
+}
+
 static void render_task(void *arg)
 {
     TickType_t last = xTaskGetTickCount();
+    int64_t last_push_us = 0;
     while (1) {
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(RENDER_PERIOD_MS));
+        if (s_frame_sync) {
+            /* Wait for the display to finish a frame, then draw the next one's
+             * content. The timeout is what keeps this alive when nothing is
+             * refreshing at all. */
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(RENDER_FALLBACK_MS));
+            int64_t nw = esp_timer_get_time();
+            if (last_push_us && (nw - last_push_us) < RENDER_MIN_PERIOD_MS * 1000) {
+                continue;                      /* too soon - let frames bunch */
+            }
+            last = xTaskGetTickCount();        /* keep the timer path coherent
+                                                  if frame sync is turned off */
+        } else {
+            vTaskDelayUntil(&last, pdMS_TO_TICKS(RENDER_PERIOD_MS));
+        }
+        /* Elapsed time since the previous pass drives the EMA, the waterfall
+         * and the S-meter - see the note above. First pass has no history, so
+         * it uses the nominal period. */
+        int64_t now_us = esp_timer_get_time();
+        uint32_t dt_ms = last_push_us ? (uint32_t)((now_us - last_push_us) / 1000)
+                                      : RENDER_PERIOD_MS;
+        if (dt_ms < 1)   dt_ms = 1;
+        if (dt_ms > 500) dt_ms = 500;          /* a gap is not a huge timestep */
+        last_push_us = now_us;
 
         // v0.19.3 (Tier 1): the spectrum + waterfall canvases are fully
         // covered by the FT8 screen, but this loop used to keep drawing them
@@ -316,9 +407,24 @@ static void render_task(void *arg)
                 memcpy(s_smoothed, s_scratch, DSP_FFT_SIZE * sizeof(float));
                 s_smoothed_init = true;
             } else {
+                /* ⛔ THE COEFFICIENT MUST FOLLOW THE INTERVAL, or the trace's
+                 * smoothing silently changes with the frame rate. alpha 0.4
+                 * per 100 ms is a time constant of
+                 *     tau = -100 / ln(1 - 0.4) = 196 ms
+                 * and the setting the operator adjusts is that feel, not the
+                 * coefficient. Re-derive it for the interval actually
+                 * measured: a = 1 - exp(-dt/tau). At 100 ms it returns 0.4
+                 * exactly, so the timer path is unchanged bit for bit. */
+                float a = s_ema_alpha;
+                if (dt_ms != RENDER_PERIOD_MS) {
+                    float tau = -(float)RENDER_PERIOD_MS / logf(1.0f - s_ema_alpha);
+                    a = 1.0f - expf(-(float)dt_ms / tau);
+                    if (a < 0.02f) a = 0.02f;
+                    if (a > 1.0f)  a = 1.0f;
+                }
                 for (int i = 0; i < DSP_FFT_SIZE; i++) {
-                    s_smoothed[i] = s_ema_alpha * s_scratch[i]
-                                  + (1.0f - s_ema_alpha) * s_smoothed[i];
+                    s_smoothed[i] = a * s_scratch[i]
+                                  + (1.0f - a) * s_smoothed[i];
                 }
             }
 
@@ -353,9 +459,17 @@ static void render_task(void *arg)
                 memcpy(s_wf_smoothed, s_scratch, DSP_FFT_SIZE * sizeof(float));
                 s_wf_smoothed_init = true;
             } else {
+                /* Same correction, same reason - see the spectrum EMA above. */
+                float wa = WF_EMA_ALPHA;
+                if (dt_ms != RENDER_PERIOD_MS) {
+                    float wtau = -(float)RENDER_PERIOD_MS / logf(1.0f - WF_EMA_ALPHA);
+                    wa = 1.0f - expf(-(float)dt_ms / wtau);
+                    if (wa < 0.01f) wa = 0.01f;
+                    if (wa > 1.0f)  wa = 1.0f;
+                }
                 for (int i = 0; i < DSP_FFT_SIZE; i++) {
-                    s_wf_smoothed[i] = WF_EMA_ALPHA * s_scratch[i]
-                                     + (1.0f - WF_EMA_ALPHA) * s_wf_smoothed[i];
+                    s_wf_smoothed[i] = wa * s_scratch[i]
+                                     + (1.0f - wa) * s_wf_smoothed[i];
                 }
             }
         }
@@ -372,10 +486,13 @@ static void render_task(void *arg)
         // pipeline either way, but there is no reason to pay it for a widget
         // nobody can see.
         if (!ui_any_overlay_active()) {
-            static int s_smeter_tick = 0;
-            s_smeter_tick++;
-            if (s_smeter_tick >= 6) {  // 10 Hz / 6 ≈ 1.7 Hz
-                s_smeter_tick = 0;
+            /* ⛔ WAS A COUNT OF ITERATIONS ("every 6th pass"), which only
+             * meant 1.7 Hz while a pass was 100 ms. Under frame sync a pass is
+             * a frame, so the S-meter would have sped up with the display.
+             * Milliseconds, not passes. */
+            static int64_t s_smeter_last_us = 0;
+            if (now_us - s_smeter_last_us >= 600000) {
+                s_smeter_last_us = now_us;
                 float peak_dbm;
                 int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
                 if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK) {
@@ -423,9 +540,17 @@ static void render_task(void *arg)
              * ⛔ The accumulator is reset when the panadapter is not visible
              * (see the else branch), so returning from an overlay cannot dump
              * a backlog of rows in one frame. */
-            s_wf_acc += s_wf_rows;
-            while (s_wf_acc >= WF_ROWS_NOMINAL) {
-                s_wf_acc -= WF_ROWS_NOMINAL;
+            /* ⛔ ROWS PER SECOND, AND IT USED TO MEAN ROWS PER PASS.
+             * The old accumulator added s_wf_rows once per 100 ms pass and
+             * emitted on every whole 10 - correct only while a pass WAS
+             * 100 ms. Under frame sync a pass is a frame, so 10 rows/s would
+             * have become ~17. Accumulate in milliseconds instead: add
+             * rows * dt_ms and emit per whole 1000. At dt_ms = 100 this is
+             * arithmetically the old expression, so the timer path is
+             * unchanged. */
+            s_wf_acc += (uint32_t)s_wf_rows * dt_ms;
+            while (s_wf_acc >= 1000) {
+                s_wf_acc -= 1000;
                 render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
             }
         }

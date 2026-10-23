@@ -18,6 +18,15 @@ void render_set_ema_alpha(float alpha);
 // ticks, which is the point - the waterfall is ~21 ms of a ~64 ms frame draw,
 // and a skipped push is a whole canvas invalidation that core 0 never has to
 // blit. Was a 1..4x multiplier; one axis, one setting, both directions.
+/* ⭐ Push one spectrum per DISPLAY FRAME instead of ten per second into
+ * whatever the display happens to be doing. See the long note above
+ * render_task() for why phase-locking the old 10 Hz push was measured to be
+ * worth 3 ms and dropped in favour of this. render_frame_done() is called from
+ * ui.c's LV_EVENT_REFR_READY hook, on taskLVGL - O(1), no lock. */
+void render_set_frame_sync(bool on);
+bool render_get_frame_sync(void);
+void render_frame_done(void);
+
 void render_set_waterfall_rows_per_s(uint8_t rows);
 uint8_t render_get_waterfall_rows_per_s(void);
 
