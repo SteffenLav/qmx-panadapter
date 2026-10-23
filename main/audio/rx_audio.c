@@ -1120,6 +1120,7 @@ static bool set_decim_factor(int d)
  * against peak/2 and reported every width 1.41x too wide - the cascade's
  * amplitude is |H|^2, so -3 dB is peak/sqrt(2), not peak/2. */
 static uint16_t s_cw_peak_hz;            /* 0 = off */
+static volatile bool s_cw_peak_dirty;    /* setter asked for a rebuild       */
 static bool     s_cw_peak_active;        /* built, and the mode is CW        */
 static float    s_cwp_b0, s_cwp_b1, s_cwp_b2, s_cwp_a1, s_cwp_a2;
 static float    s_cwp_z[2][2][2];        /* [ear][section][state]            */
@@ -1130,8 +1131,21 @@ void rx_audio_set_cw_peak_hz(uint16_t bw_hz)
     if (bw_hz > 1000)          bw_hz = 1000;
     s_cw_peak_hz = bw_hz;
     ESP_LOGI(TAG, "CW peak filter: %u Hz%s", (unsigned)bw_hz, bw_hz ? "" : " (off)");
-    /* Rebuilt on the next retune(), which the mode/width tracker runs within
-     * one frame - no filter state is touched from this task. */
+    /* ⛔ A FLAG, NOT A REBUILD, AND THE FLAG IS THE WHOLE FIX.
+     *
+     * The first version said "rebuilt on the next retune(), which the
+     * mode/width tracker runs within one frame". That was WRONG and the
+     * operator found it by ear: "no difference from off to 100 to 150 to
+     * 250". retune() runs when the MODE, the centre, the width, the
+     * decimation or the panoramic flag change - none of which this setting
+     * touches - so on a radio sitting still in CW it never ran at all. The
+     * capture settles it: seven "CW peak filter: N Hz" lines from the setter
+     * against ONE "built" line, and that one only because something else
+     * retuned at the time.
+     *
+     * Still no filter state touched from this task: the audio task owns the
+     * coefficients and clears the flag. */
+    s_cw_peak_dirty = true;
 }
 
 uint16_t rx_audio_get_cw_peak_hz(void) { return s_cw_peak_hz; }
@@ -1572,6 +1586,15 @@ static void rx_audio_task(void *arg)
             retune(want_center, want_half_bw, mode);
             mode_prev = mode;
             binaural_prev = want_binaural;
+            s_cw_peak_dirty = false;      /* retune() rebuilt it already */
+        } else if (s_cw_peak_dirty) {
+            /* The operator moved the peak-filter control and nothing else
+             * changed. Rebuild just that one filter - a full retune() here
+             * would also reset the AM tracker and both NCOs for a setting
+             * that does not move the passband. */
+            s_cw_peak_dirty = false;
+            cw_peak_rebuild(want_center,
+                            (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, mode);
         }
         if (half_bw_changed || decim_changed) {
             build_lpf(want_half_bw);
