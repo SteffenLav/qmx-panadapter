@@ -374,10 +374,12 @@ teal. You can always see what is being touched.
 
 ## Panadapter & Zoom
 
-**Peak hold** *(Smoothing & peak hold; off by default)* — draws a cyan line over
+**Peak hold** *(Smoothing & peak hold; off by default)* — draws a second line over
 the spectrum showing the highest each point of the band reached in the last
-**2, 5, 10 or 30 seconds**. The browser has the same control and the two screens
-run the same arithmetic.
+**1, 2, 3 or 5 seconds**. The browser has the same control and the two screens
+run the same arithmetic. It is dim green on the Tab5 and cyan in the browser:
+the line is context for the live trace and must not out-shout it, and the two
+screens have different backgrounds to sit against.
 
 It is a sliding window, not a latch. A latched maximum keeps the loudest thing
 that ever happened and never lets it go, so after a few minutes the line is a

@@ -3837,7 +3837,11 @@ static lv_obj_t *s_dropdown_peak = NULL;
  * option list is built from it, the callback indexes it, and the web page's
  * list is generated from the same numbers - a second copy is how the
  * waterfall rate's two surfaces drifted. 0 = off. */
-static const uint8_t PEAK_STEPS[] = { 0, 2, 5, 10, 30 };
+/* 1 to 5 seconds, on the operator's call after watching it on the glass:
+ * "most people will use 1-5 sec". 10 and 30 were in the first version and are
+ * gone - a 30 s window on a busy band fills the picture in and stops being a
+ * peak. The API still accepts up to 60 for anyone who wants one. */
+static const uint8_t PEAK_STEPS[] = { 0, 1, 2, 3, 5 };
 static lv_obj_t *s_dropdown_wf_speed = NULL;
 static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
@@ -10220,7 +10224,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
         SPEC_SIG(pan_hz_pb); SPEC_SIG(span_hz_pb); SPEC_SIG(pb_res);
         SPEC_SIG(edge_x_lo); SPEC_SIG(edge_x_hi);
         SPEC_SIG((int)(fade_opacity * 1000.0f));
-        uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        /* ~10 % of the BW-label colour (0xC0C0FF) over black, not 25 %.
+         *
+         * It was 0x3188 = RGB(49,49,66) and the operator's judgement on the
+         * glass is that it always competed for the eye: "darken the BW span
+         * background colour so it is closer to the background colour outside
+         * the BW - it is also too dominating and has actually always been -
+         * but now with the peak-hold too much is competing" (2026-10-23).
+         * The block still has to READ as a block, so it is darkened rather
+         * than removed: RGB(16,20,25) against black, with the passband EDGE
+         * lines unchanged - they are what state the width exactly, and the
+         * tint only has to say which side of them you are on. */
+        uint16_t band_color = 0x10A3;
         // Apply fade opacity to band fill
         if (fade_opacity < 1.0f) {
             uint16_t r = (band_color >> 11) & 0x1F;
@@ -10392,6 +10407,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     /* Peak hold: allocate, expire, rotate. See the note at s_peak_buk. */
     int16_t *peak_buk_cur = NULL;
+    /* The previous COLUMN's peak y within this frame - the peak line's
+     * equivalent of s_prev_y_top, and what makes it a line rather than dots.
+     * -1 = no neighbour to join (frame start, or across a no-data gap). */
+    int peak_prev_col = -1;
     {
         uint8_t secs = s_peak_secs;
         if (!secs) {
@@ -10485,6 +10504,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     peak_buk_cur[x] = (int16_t)SPECTRUM_H;
                     s_peak_show[x]  = (int16_t)SPECTRUM_H;
                     s_peak_prev[x]  = -1;
+                    peak_prev_col   = -1;   /* never join across the hatch */
                 }
                 continue;
             }
@@ -10543,24 +10563,54 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
         /* The peak line, one pixel, drawn AFTER the fill so the fill cannot
          * paint over it and BEFORE the overlays so the cursor and the passband
-         * edges still win. Cyan: the trace is green, the VFO gold, RIT
-         * magenta - cyan is the one unused colour on this canvas. */
+         * edges still win. Dim green - see the colour note below. */
         if (peak_buk_cur) {
             if (y_top < peak_buk_cur[x]) peak_buk_cur[x] = (int16_t)y_top;
             if (y_top < s_peak_show[x])  s_peak_show[x]  = (int16_t)y_top;
             int py = s_peak_show[x];
-            if (py < y_b) px[py * DISPLAY_H_RES + x] = 0x07FF;
+            /* CONNECTED to the previous column, exactly as the trace is.
+             *
+             * One pixel per column was the first version and the operator saw
+             * what that is: "on the Tab5 it is only slightly fainted cyan
+             * dots". Wherever the peak steps more than a pixel between
+             * neighbouring columns the dots stop touching, and a dotted line
+             * one pixel wide reads as speckle at arm's length. The browser
+             * looked right over the same data because a canvas stroke joins
+             * its points - the device had to be told to.
+             *
+             * y_b is this column's own trace top: the peak is drawn only
+             * where it is ABOVE the trace, so the two lines never fight over
+             * the same pixel.
+             *
+             * DIM GREEN, not cyan. Cyan was the first choice because it is
+             * the one colour this canvas was not using - but on the glass it
+             * won the picture: "it is more dominating than the green live
+             * graph" (operator, 2026-10-23). A peak line is context for the
+             * trace, so it has to sit BEHIND it in the eye. 0x0460 is the
+             * same green at about half brightness: above the 25 % fill below
+             * the trace, well under the full-brightness trace itself. The
+             * browser keeps its cyan - he judged that one fine as it is. */
+            int pa = (peak_prev_col >= 0) ? peak_prev_col : py;
+            int plo = (pa < py) ? pa : py;
+            int phi = (pa > py) ? pa : py;
+            for (int y = plo; y <= phi; y++) {
+                if (y < y_b && y >= 0 && y < SPECTRUM_H)
+                    px[y * DISPLAY_H_RES + x] = 0x0460;
+            }
+            peak_prev_col = py;
             /* The peak moves on its own clock, so the changed band has to
              * cover it as well as the trace - otherwise a peak that falls
              * inside an otherwise unchanged column leaves its old pixel on the
              * glass until something else repaints that row. */
             if (s_frame_ytop) {
                 int pprev = s_frame_ytop_valid ? s_peak_prev[x] : -1;
-                if (pprev != py) {
+                if (pprev != py || plo != phi) {
                     int lo3, hi3;
                     if (pprev < 0) { lo3 = 0; hi3 = SPECTRUM_H - 1; }
-                    else { lo3 = (pprev < py) ? pprev : py;
-                           hi3 = (pprev > py) ? pprev : py; }
+                    else { /* the whole span this column just painted, and
+                            * where it painted last time */
+                           lo3 = (pprev < plo) ? pprev : plo;
+                           hi3 = (pprev > phi) ? pprev : phi; }
                     if (lo3 - 1 < band_lo) band_lo = lo3 - 1;
                     if (hi3 + 1 > band_hi) band_hi = hi3 + 1;
                 }
@@ -15326,7 +15376,12 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(pk_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(pk_lbl, LV_ALIGN_TOP_LEFT, 0, 112);
         s_dropdown_peak = lv_dropdown_create(sec);
-        lv_dropdown_set_options(s_dropdown_peak, "Off\nlast 2 s\nlast 5 s\nlast 10 s\nlast 30 s");
+        /* One backslash-n per row, not two. The first version of this line
+         * was generated with the escape doubled, so LVGL was handed ONE
+         * option with the separators showing as text instead of five rows.
+         * Invisible from the API side, which is how it survived a flash. */
+        lv_dropdown_set_options(s_dropdown_peak,
+                                "Off\nlast 1 s\nlast 2 s\nlast 3 s\nlast 5 s");
         lv_obj_set_size(s_dropdown_peak, DRAWER_W - 32, 50);
         lv_obj_align(s_dropdown_peak, LV_ALIGN_TOP_LEFT, 0, 148);
         lv_obj_set_style_text_font(s_dropdown_peak, &lv_font_montserrat_28, 0);

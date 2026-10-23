@@ -122,8 +122,7 @@ that only tests the status code cannot tell success from a typo, and a mistyped
 action is then a silent no-op.
 
 `display.peak_hold_s` is the spectrum peak-hold window in **seconds**, 0 = off,
-maximum 60. The Tab5 drawer offers 2, 5, 10 and 30; the API accepts any value in
-range. It is also in `/api/status` as `peak_hold_s`, so a browser can follow a
+maximum 60. The Tab5 drawer offers 1, 2, 3 and 5; the API accepts any value in range. It is also in `/api/status` as `peak_hold_s`, so a browser can follow a
 change made on the Tab5 without re-reading the settings.
 
 **A missing required parameter is refused with HTTP 400.** `set_freq`,
