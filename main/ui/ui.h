@@ -373,6 +373,37 @@ void ui_help_overlay_changed(void);
 // way it already skips them in FT8 mode - see render.c's pan_visible.
 bool ui_any_overlay_active(void);
 
+/* ---- SERVER MODE (T19, Sam W7STF's A1) ------------------------------------
+ *
+ * "We just shut down any activity (including the screen) that do not serve
+ * the Web Socket."
+ *
+ * ⛔ THE SAVING IS NOT THE BACKLIGHT. A dark screen with taskLVGL still
+ * drawing leaves core 0 exactly where it was - measured 2026-10-23, taskLVGL
+ * 64.5-68.6 % of core 0 with the panadapter up. What costs is the DRAWING:
+ * the waterfall carpet alone was 4127 kpx/s of 4804 invalidated pixels in
+ * that same sample. So server mode gates the CANVASES, and the backlight
+ * goes off with them because nobody is looking.
+ *
+ * ⛔ IT DOES NOT SUSPEND taskLVGL. Timers, modals and the touch path all
+ * still expect to run, and stopping the task they live on is the risk this
+ * feature was re-sized around. render_task simply skips the canvas work, the
+ * same way it already does under a full-screen overlay - one predicate, not
+ * a second mechanism.
+ *
+ * The browser is unaffected: ws_push_task reads dsp_get_spectrum() itself,
+ * never this pipeline, so the web spectrum and waterfall keep running at
+ * full rate. That is the whole point - the Tab5 stops drawing for nobody and
+ * keeps feeding the screen someone is actually watching.
+ *
+ * ⚠ RAM ONLY, deliberately not persisted: a unit that boots with a dark
+ * screen and no trace is indistinguishable from a dead one. Switch it on
+ * when you want it; a reboot gives you the panadapter back.
+ *
+ * A touch wakes it, exactly like the idle sleep. */
+void ui_set_server_mode(bool on);
+bool ui_get_server_mode(void);
+
 // Opens the on-device docs Reader at its top level. Exported 2026-09-13 so
 // ui/spot_map_view.c's own settings drawer can offer the same "User Manual"
 // button the main drawer has, rather than duplicating reader_view.c's API.

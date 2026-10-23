@@ -838,6 +838,7 @@ static esp_err_t status_handler(httpd_req_t *req)
      * would go stale the moment the setting is changed on the Tab5. */
     cJSON_AddNumberToObject(root, "peak_hold_s",
                             (double)settings_get_spec_peak_s());
+    cJSON_AddBoolToObject(root, "server_mode", ui_get_server_mode());
     // TX/QSO banner data, only while the FT8/FT4 screen is live (the FT8
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
@@ -1772,6 +1773,19 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * v0.18.6, fixed there the same way and recorded in ui.c:2058 as "the
          * radio stayed in the previous mode. cat_request_mode is retried". */
         if (mode) cat_request_mode(mode);
+    } else if (action && strcmp(action, "server_mode") == 0) {
+        /* T19. {"action":"server_mode","on":true} - stop drawing, keep the
+         * WebSocket fed. Omit "on" to toggle. RAM only; see ui.h. */
+        cJSON *jo = cJSON_GetObjectItem(root, "on");
+        ui_set_server_mode(cJSON_IsBool(jo) ? cJSON_IsTrue(jo)
+                                            : !ui_get_server_mode());
+        cJSON_Delete(root);
+        char body[48];
+        snprintf(body, sizeof(body), "{\"ok\":true,\"server_mode\":%s}",
+                 ui_get_server_mode() ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "cw_tune") == 0) {
         /* CW-Tune (A4 step 2): put the dial on the CW signal nearest to it.
          * One shot per call - see the note in ui.h for why nothing here runs

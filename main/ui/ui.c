@@ -8463,6 +8463,9 @@ static void stroll_cancel(void)
 // can't collide with double-tap tuning).
 static const uint8_t k_sleep_min_opts[] = { 0, 1, 2, 5, 10, 30 };
 static bool     s_disp_asleep       = false;
+/* Server mode (T19) lives beside the sleep flag because it uses the same
+ * enter/wake pair - see ui.h for why it gates the canvases, not taskLVGL. */
+static bool     s_server_mode       = false;
 static bool     s_wake_pending      = false;  // touch seen while asleep; swallow until lift
 static uint64_t s_2f_down_us        = 0;      // two-finger session start (0 = none)
 static int      s_2f_dist0          = 0;      // finger spread at session start
@@ -8537,6 +8540,13 @@ static void display_sleep_wake(void)
     lv_display_trigger_activity(NULL);
     s_disp_asleep = false;
     s_wake_pending = false;
+    /* ⛔ A WAKE ENDS SERVER MODE. Without this the backlight comes up on a
+     * canvas nothing is drawing into - a frozen picture, which reads as a
+     * crashed device rather than as a mode. */
+    if (s_server_mode) {
+        s_server_mode = false;
+        ESP_LOGI(TAG, "server mode off - woken by touch");
+    }
     ESP_LOGI(TAG, "display sleep: woken by touch");
 }
 
@@ -9459,6 +9469,26 @@ static void top_bar_apply_mode(void)
  * full-screen and opaque, and none of them ever stood that pipeline down -
  * a pre-existing gap this request happened to surface, not something new to
  * SelfSpotter. See render.c's own widened pan_visible. */
+bool ui_get_server_mode(void) { return s_server_mode; }
+
+void ui_set_server_mode(bool on)
+{
+    if (s_server_mode == on) return;
+    s_server_mode = on;
+    if (on) {
+        /* Reuse the idle-sleep path: it already turns the backlight off and
+         * takes the input devices down so a blind tap cannot tune the radio,
+         * and its wake is already wired to a touch. A second way to darken
+         * the screen would be a second thing to get wrong. */
+        display_sleep_enter();
+        ESP_LOGW(TAG, "SERVER MODE on - the Tab5 stops drawing; the browser is "
+                      "unaffected (ws_push_task reads the DSP directly)");
+    } else {
+        display_sleep_wake();
+        ESP_LOGI(TAG, "server mode off - drawing resumed");
+    }
+}
+
 bool ui_any_overlay_active(void)
 {
     return reader_view_is_active() || help_triage_is_open()

@@ -376,7 +376,15 @@ static void render_task(void *arg)
         // sync_nav_affordances() already uses to hide the edge-swipe strips
         // for these same overlays - one predicate, not a second copy that
         // could drift from it.
-        bool pan_visible = (ui_mode_get() != UI_MODE_FT8) && !ui_any_overlay_active();
+        /* ⭐ SERVER MODE joins the same predicate (T19). Sam W7STF asked to
+         * "shut down any activity (including the screen) that do not serve
+         * the Web Socket", and this is where that activity is: every canvas
+         * write drags the flush plus the 90-degree software rotation over
+         * pixels nobody can see - which is exactly the reasoning the overlay
+         * gate beside it already states. The browser keeps its full rate
+         * because ws_push_task reads dsp_get_spectrum() on its own path. */
+        bool pan_visible = (ui_mode_get() != UI_MODE_FT8) && !ui_any_overlay_active()
+                           && !ui_get_server_mode();
         bool have_spectrum = false;
 
         if (pan_visible) {
