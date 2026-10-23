@@ -1772,6 +1772,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * v0.18.6, fixed there the same way and recorded in ui.c:2058 as "the
          * radio stayed in the previous mode. cat_request_mode is retried". */
         if (mode) cat_request_mode(mode);
+    } else if (action && strcmp(action, "cw_tune") == 0) {
+        /* CW-Tune (A4 step 2): put the dial on the CW signal nearest to it.
+         * One shot per call - see the note in ui.h for why nothing here runs
+         * on its own. RX only; it cannot key the radio. */
+        int32_t moved = 0;
+        ui_cw_tune_t r = ui_cw_tune_to_peak(&moved);
+        cJSON_Delete(root);
+        char body[96];
+        if (r == UI_CW_TUNE_OK)
+            snprintf(body, sizeof(body), "{\"ok\":true,\"moved_hz\":%d}", (int)moved);
+        else
+            snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"error\":\"%s\"}", ui_cw_tune_reason(r));
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "set_bw") == 0) {
         if (wspr_owns_the_dial(req, root, "BW")) return ESP_OK;
         double argv;

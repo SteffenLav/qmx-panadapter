@@ -431,6 +431,32 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 // Bottom-bar UTC clock (center). valid=false shows "--:--:--" with suffix.
 // suffix is the time-source indicator, e.g. " UTC(NTP)" or " UTC".
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix);
+/* CW-Tune (A4 step 2, Sam W7STF): put the dial exactly on the CW signal
+ * nearest to it, so the tone lands at the CW centre.
+ *
+ * ⛔ OPERATOR-INVOKED, NEVER AUTOMATIC. The device used to carry a
+ * snap-to-peak that fired on its own; it was removed in 2026-08, and #276 is
+ * still open with Sam reporting "tuning is set, then there are one or two
+ * automatic corrections" and no cause established. A tuning aid that moves
+ * the dial unasked is indistinguishable from that fault, so this runs once
+ * per press and does nothing in between.
+ *
+ * Accuracy is the FFT bin (46.9 Hz at 48 kHz / 1024) refined by parabolic
+ * interpolation on the three dB values around the peak - a few Hz on a clean
+ * carrier, which puts the tone inside a 300 Hz CW filter. It is not a
+ * frequency counter. */
+typedef enum {
+    UI_CW_TUNE_OK = 0,
+    UI_CW_TUNE_NOT_CW,        /* not in CW/CW-R                       */
+    UI_CW_TUNE_NO_FREQ,       /* the dial is not known yet (no CAT)   */
+    UI_CW_TUNE_NO_SPECTRUM,   /* nothing has been drawn yet           */
+    UI_CW_TUNE_NO_SIGNAL,     /* nothing stands above the noise       */
+} ui_cw_tune_t;
+
+/* Returns what happened; *moved_hz (may be NULL) is how far the dial went. */
+ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz);
+const char  *ui_cw_tune_reason(ui_cw_tune_t r);
+
 /* Spectrum peak hold: the window in SECONDS, 0 = off. A sliding window, not
  * a latch - what is drawn is the highest each column reached in the last N
  * seconds. Safe from any task: the setter only stores the number, and the

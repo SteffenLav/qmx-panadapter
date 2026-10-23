@@ -1272,6 +1272,35 @@ static void bw_preset_cb(lv_event_t *e)
     }
 }
 
+/* CW-Tune, reached from the BW popup's last row - see where it is built.
+ *
+ * ⛔ NOT a double-tap and NOT a long-press on the spectrum. The double-tap on
+ * that surface already resets zoom+pan, and the comment at it records why
+ * repurposing it was tried and reverted: the first tap of an attempted
+ * double-tap can be held long enough to RETUNE before a second tap can be
+ * compared against it. A long press has the same problem from the other end -
+ * a slow pan drag trips it. The BW popup is where CW filtering decisions are
+ * already made, it only exists in CW with CW widths in it, and it costs no
+ * permanent screen space on a display the operator has just said has too much
+ * competing for the eye. */
+static void cw_tune_row_cb(lv_event_t *e)
+{
+    (void)e;
+    bw_popup_close();
+    int32_t moved = 0;
+    ui_cw_tune_t r = ui_cw_tune_to_peak(&moved);
+    char msg[72];
+    if (r == UI_CW_TUNE_OK) {
+        if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
+        else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
+    } else {
+        snprintf(msg, sizeof(msg), "Zero-beat: %s", ui_cw_tune_reason(r));
+    }
+    /* Said out loud either way. A tuning aid that silently does nothing when
+     * there is no signal reads as a dead button. */
+    ui_toast_ms(msg, 2500);
+}
+
 static void bw_overlay_cb(lv_event_t *e)
 {
     (void)e;
@@ -1420,7 +1449,10 @@ static void bw_popup_open(void)
 
     int btn_h = 64;
     int panel_w = 140;
-    int panel_h = n_bw * btn_h + 4;
+    /* One more row in CW: the zero-beat action. The height and the row count
+     * must move together or the last row is clipped. */
+    const bool cw_row = (cur_mode && strstr(cur_mode, "CW") != NULL);
+    int panel_h = (n_bw + (cw_row ? 1 : 0)) * btn_h + 4;
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_set_style_pad_top(panel, 0, 0);
@@ -1457,6 +1489,28 @@ static void bw_popup_open(void)
         lv_label_set_text(lbl, lbl_list[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, active ? lv_color_hex(UI_COLOR_ACCENT_GOLD) : lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_center(lbl);
+    }
+
+    if (cw_row) {
+        /* An ACTION, not a width, so it is drawn as one: separated by a rule
+         * and in the accent colour rather than the list's grey. */
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_SURFACE), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_TOP, 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, cw_tune_row_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Zero-beat");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
         lv_obj_center(lbl);
     }
 }
@@ -4279,6 +4333,14 @@ static bool     s_frame_ytop_valid;
  * ONE task that touches these arrays. The setter only stores the number, so a
  * drawer tap or an /api/settings POST can never free a buffer out from under
  * a draw in progress. */
+/* The last spectrum pushed, kept so CW-Tune can search it from taskLVGL or
+ * the HTTP task. 4 KB of PSRAM. The alternative - calling dsp_get_spectrum()
+ * from the button handler - would read a DIFFERENT frame from the one the
+ * operator is looking at, and "it tuned to a peak I cannot see" is the
+ * complaint that would follow. */
+static float *s_last_spec;
+static int    s_last_spec_n;
+
 #define PEAK_BUCKETS 8
 static int16_t *s_peak_buk;        /* [PEAK_BUCKETS][DISPLAY_H_RES] min y    */
 static int16_t *s_peak_show;       /* min across the buckets = what is drawn */
@@ -10087,6 +10149,115 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
      * progress belongs to the next window, not to this one. */
 }
 
+/* ---- CW-Tune (A4 step 2) ------------------------------------------------
+ *
+ * Put the dial on the CW signal nearest to it. In CW the display is already
+ * built so that the signal you hear at the CW centre sits AT the dial -
+ * ui_get_if_offset_hz() carries the CW offset, and compute_passband_edges_hz()
+ * draws the CW filter as +/-w/2 around the dial - so "zero-beat it" and "move
+ * the dial onto that peak" are the same instruction.
+ *
+ * What it does NOT do: it does not run on its own, and it does not keep
+ * correcting. See the note in ui.h.
+ *
+ * The search window is +/-400 Hz. Wider would reach signals outside any CW
+ * filter the radio has, which cannot be what the operator meant by "tune this
+ * one"; narrower would miss a station you can hear but have not landed on. */
+#define CW_TUNE_SEARCH_HZ   400
+#define CW_TUNE_MIN_SNR_DB  6.0f
+
+const char *ui_cw_tune_reason(ui_cw_tune_t r)
+{
+    switch (r) {
+    case UI_CW_TUNE_OK:          return "tuned";
+    case UI_CW_TUNE_NOT_CW:      return "not in CW";
+    case UI_CW_TUNE_NO_FREQ:     return "no dial frequency yet";
+    case UI_CW_TUNE_NO_SPECTRUM: return "no spectrum yet";
+    case UI_CW_TUNE_NO_SIGNAL:   return "no signal within 400 Hz";
+    }
+    return "?";
+}
+
+ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
+{
+    if (moved_hz) *moved_hz = 0;
+    if (!strstr(s_current_mode, "CW"))  return UI_CW_TUNE_NOT_CW;
+    if (!s_last_qmx_freq_hz)            return UI_CW_TUNE_NO_FREQ;
+
+    const int N = DSP_FFT_SIZE;
+    /* Half-open window in bins each side. 400 Hz / 46.875 = 8.5 -> 9. */
+    const int span = (CW_TUNE_SEARCH_HZ * N + 24000) / 48000;
+    float win[64];
+    int   nwin = 2 * span + 1;
+    if (nwin > (int)(sizeof(win) / sizeof(win[0]))) return UI_CW_TUNE_NO_SPECTRUM;
+
+    if (!display_lock(50)) return UI_CW_TUNE_NO_SPECTRUM;
+    if (!s_last_spec || s_last_spec_n < N) { display_unlock(); return UI_CW_TUNE_NO_SPECTRUM; }
+
+    /* The dial's own position in bin space, to the same rounding the drawing
+     * uses: the whole-bin rotation plus the residual the rotation left over.
+     * Getting this wrong puts the answer up to 23 Hz out, which is exactly
+     * Roy KI0ER's tap-to-tune report in a different place. */
+    const int   shift    = ui_get_if_bin_shift(N);
+    const float residual = (float)ui_get_if_residual_hz();
+    const float hz_per_bin = 48000.0f / (float)N;
+
+    int   best_i = 0;
+    float best_v = -1e30f;
+    for (int i = 0; i < nwin; i++) {
+        int off = i - span;
+        int b = ((shift + off) % N + N) % N;
+        win[i] = s_last_spec[b];
+        if (win[i] > best_v) { best_v = win[i]; best_i = i; }
+    }
+
+    /* Noise reference: the MEDIAN of the window, not its mean. One strong
+     * carrier drags a mean of 19 bins up by several dB and the gate then
+     * passes on its own signal. */
+    float sorted[64];
+    memcpy(sorted, win, (size_t)nwin * sizeof(float));
+    for (int i = 1; i < nwin; i++) {
+        float k = sorted[i];
+        int j = i - 1;
+        while (j >= 0 && sorted[j] > k) { sorted[j + 1] = sorted[j]; j--; }
+        sorted[j + 1] = k;
+    }
+    float noise = sorted[nwin / 2];
+    if (best_v < noise + CW_TUNE_MIN_SNR_DB) { display_unlock(); return UI_CW_TUNE_NO_SIGNAL; }
+
+    /* Parabolic interpolation on the dB values, the standard refinement for a
+     * windowed FFT peak. Skipped at the window edge, where there is no
+     * neighbour on one side - a peak there is probably outside the window
+     * anyway and the bin centre is the honest answer. */
+    float delta = 0.0f;
+    if (best_i > 0 && best_i < nwin - 1) {
+        float a = win[best_i - 1], b = win[best_i], c = win[best_i + 1];
+        float den = a - 2.0f * b + c;
+        if (den != 0.0f) {
+            delta = 0.5f * (a - c) / den;
+            if (delta >  0.5f) delta =  0.5f;
+            if (delta < -0.5f) delta = -0.5f;
+        }
+    }
+    display_unlock();
+
+    float off_hz = ((float)(best_i - span) + delta) * hz_per_bin - residual;
+    int32_t move = (int32_t)lroundf(off_hz);
+    if (moved_hz) *moved_hz = move;
+    if (move == 0) return UI_CW_TUNE_OK;        /* already on it */
+
+    uint32_t target = (uint32_t)((int32_t)s_last_qmx_freq_hz + move);
+    /* FORCED and un-snapped. The 10 Hz tap grid exists so a finger lands
+     * tidily; this is the opposite request - the operator is asking for the
+     * exact frequency of a signal, and rounding it away would throw out the
+     * interpolation that is the whole point. */
+    cat_set_frequency_forced(target);
+    ui_update_frequency(target);
+    ESP_LOGI(TAG, "CW tune: %+d Hz -> %lu Hz (peak %.1f dB over %.1f)",
+             (int)move, (unsigned long)target, (double)best_v, (double)noise);
+    return UI_CW_TUNE_OK;
+}
+
 /* Peak-hold window in seconds; 0 switches it off. Stored only - the buffers
  * are allocated and freed inside ui_push_spectrum(), which is the one task
  * that reads them. See the note at s_peak_buk. */
@@ -10109,6 +10280,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     static int s_prev_y_top = 0;
+
+    /* Keep this frame for CW-Tune. Inside the display lock, which the search
+     * also takes, so it can never read a half-written copy. */
+    if (!s_last_spec) {
+        s_last_spec = heap_caps_malloc((size_t)DSP_FFT_SIZE * sizeof(float),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (s_last_spec) {
+        int ncopy = (n_bins < DSP_FFT_SIZE) ? n_bins : DSP_FFT_SIZE;
+        memcpy(s_last_spec, bins, (size_t)ncopy * sizeof(float));
+        s_last_spec_n = ncopy;
+    }
 
     /* Overlay signature and changed-row band - see the note at s_frame_ytop.
      * FNV-1a over every value that places a pixel the TRACE does not. Coarse

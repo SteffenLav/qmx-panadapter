@@ -81,6 +81,7 @@ action names its own parameter key (there is no generic `value`).
 | `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
 | `set_rit` | `hz` | RIT offset. Retuning clears it |
+| `cw_tune` | *(none)* | **CW-Tune**: move the dial onto the CW signal nearest to it, so the tone lands at the CW centre. CW/CW-R only; answers `{"ok":true,"moved_hz":N}`, or `ok:false` with a reason (`not in CW`, `no signal within 400 Hz`, `no spectrum yet`). One shot per call — nothing keeps correcting afterwards. Receive only |
 | `set_screen` | `screen: "pan"/"panadapter"/"ft8"/"ft4"/"js8"/"wspr"` | Switch the Tab5's own view. Applied within about a second (handed to the display task). `ft4` and `js8` open the FT8 page **and** select that sub-mode, so one call is enough to put the device into FT4. An unknown name is refused with HTTP 400, not treated as `panadapter` |
 | `set_ft8_mode` | `mode: "ft8"/"ft4"`, optional `freq_hz` | **Switch between FT8 and FT4**, optionally retuning. Omit `freq_hz` to keep the current frequency. This is an action rather than a setting because it also retunes the radio and clears stale decodes — read `ft8_op_mode` back from `/api/settings` to confirm |
 | `set_activation` | `ref` | Set the POTA/SOTA activation reference |
