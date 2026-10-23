@@ -10383,6 +10383,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         s_prev_y_top = y_top;
     }
     SPEC_SIG(nodata_from); SPEC_SIG(nodata_to);
+    SPEC_SIG(s_legacy_mode);   /* the badge below moves with it */
 
     /* The part of the screen the radio cannot hear, drawn as visibly EMPTY.
      *
@@ -10614,6 +10615,32 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
         if (s_wf_cursor) lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
     }
+    /* ⭐ WHICH HALF OF THE A/B IS ON THE GLASS, visible without looking away.
+     *
+     * ⛔ The operator asked "how can i see which one i am seeing?" while
+     * flipping legacy mode, and he was right to: an A/B you cannot label is
+     * not an A/B. He is watching the Tab5, so the answer has to be on the
+     * Tab5 - a pill in the browser means turning his head at the exact moment
+     * he is trying to judge 30 ms of motion.
+     *
+     * A block of pixels in the canvas we are already filling, NOT a new LVGL
+     * object: no layout change, no extra invalidation, no risk to the drawer
+     * geometry at this hour. Top-RIGHT, because the trace's own interesting
+     * region is the centre and the left carries the dB labels.
+     *
+     * ⚠ Amber only in LEGACY. The new path shows nothing at all, so the
+     * default screen is unmarked and this cannot be left looking like a fault.
+     * Deliberately NOT a colour change to the trace itself - that would alter
+     * the very thing being judged. */
+    if (s_legacy_mode) {
+        const uint16_t badge = 0xFEA0;   /* the accent gold used for the VFO */
+        for (int y = 4; y < 18 && y < SPECTRUM_H; y++) {
+            for (int x = DISPLAY_H_RES - 22; x < DISPLAY_H_RES - 4; x++) {
+                px[y * DISPLAY_H_RES + x] = badge;
+            }
+        }
+    }
+
     /* ⭐ TELL LVGL ABOUT THE ROWS THAT CHANGED, NOT ALL 255 kpx.
      *
      * Full invalidate when anything but the trace moved, when the previous
