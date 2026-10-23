@@ -147,6 +147,29 @@ void rx_audio_set_agc_off(bool off);
  * the audio path never hears until the next reboot. */
 void rx_audio_apply_settings(void);
 
+/* ---- CW peak filter (A4 step 3, Sam W7STF) --------------------------------
+ *
+ * A narrow audio peak ON the CW pitch, after the mode filter and BEFORE the
+ * AGC, so the AGC rides the wanted tone instead of the hiss either side of
+ * it. Width in Hz at -3 dB: 0 = off, else about 80..400.
+ *
+ * ⛔ IT IS NOT A SECOND IF FILTER AND MUST NOT BE SOLD AS ONE. The radio's
+ * own CW filter decides what reaches this chain; this shapes what is left,
+ * in the audio, where it costs two biquads and can be switched per ear
+ * instantly. A 100 Hz audio peak behind a 300 Hz IF filter does not give
+ * 100 Hz of IF selectivity - a strong signal 150 Hz away still drives the
+ * AGC in the radio. What it does give is the thing operators ask for: the
+ * wanted note pulled forward out of the band noise.
+ *
+ * Two cascaded identical biquads, not one: a single section wide enough not
+ * to ring has skirts too shallow to hear as a filter. The per-section Q is
+ * derived so the PAIR lands on the requested width - see cw_peak_rebuild().
+ *
+ * CW/CW-R only. Persisted, because it is a listening preference rather than
+ * a bench knob. */
+void     rx_audio_set_cw_peak_hz(uint16_t bw_hz);
+uint16_t rx_audio_get_cw_peak_hz(void);
+
 void rx_audio_set_binaural_enabled(bool en);
 bool rx_audio_get_binaural_enabled(void);
 

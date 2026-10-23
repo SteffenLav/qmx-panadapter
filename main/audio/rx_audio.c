@@ -1096,6 +1096,87 @@ static bool set_decim_factor(int d)
     return true;
 }
 
+/* ---- CW peak filter -------------------------------------------------------
+ *
+ * Two cascaded RBJ band-passes (constant 0 dB peak gain) at the CW pitch.
+ * Transposed direct form II, one state pair per section per ear.
+ *
+ * Why the Q is not simply f0/BW: for ONE section, |H| = 1/sqrt(1 + Q^2 x^2)
+ * with x = f/f0 - f0/f, so -3 dB is at x = 1/Q. Cascading two identical
+ * sections squares the response, so each must be only -1.5 dB at the
+ * requested edge: Q^2 x^2 = sqrt(2) - 1, i.e. x = 0.6436/Q. Designing both
+ * sections at f0/BW would therefore deliver a filter about 36 % narrower
+ * than the number on the label, which is exactly the kind of quiet lie a
+ * control like this must not tell.
+ *
+ * MEASURED against the design, at a 700 Hz pitch and fs 6000:
+ *     label 100 Hz -> -3 dB width  91 Hz, 500 Hz away -32 dB
+ *     label 150 Hz ->             137 Hz,             -25 dB
+ *     label 250 Hz ->             227 Hz,             -18 dB
+ * so the label is honest to about 9 %, the rest being the bilinear warping
+ * and the small-offset approximation in x = f/f0 - f0/f. Peak gain is 0 dB
+ * by construction, which matters: a peak filter that also made things louder
+ * would be judged on the loudness. ⚠ The first run of that check compared
+ * against peak/2 and reported every width 1.41x too wide - the cascade's
+ * amplitude is |H|^2, so -3 dB is peak/sqrt(2), not peak/2. */
+static uint16_t s_cw_peak_hz;            /* 0 = off */
+static bool     s_cw_peak_active;        /* built, and the mode is CW        */
+static float    s_cwp_b0, s_cwp_b1, s_cwp_b2, s_cwp_a1, s_cwp_a2;
+static float    s_cwp_z[2][2][2];        /* [ear][section][state]            */
+
+void rx_audio_set_cw_peak_hz(uint16_t bw_hz)
+{
+    if (bw_hz && bw_hz < 40)   bw_hz = 40;
+    if (bw_hz > 1000)          bw_hz = 1000;
+    s_cw_peak_hz = bw_hz;
+    ESP_LOGI(TAG, "CW peak filter: %u Hz%s", (unsigned)bw_hz, bw_hz ? "" : " (off)");
+    /* Rebuilt on the next retune(), which the mode/width tracker runs within
+     * one frame - no filter state is touched from this task. */
+}
+
+uint16_t rx_audio_get_cw_peak_hz(void) { return s_cw_peak_hz; }
+
+static void cw_peak_rebuild(int center_hz, float fs_dec, rxaud_mode_t mode)
+{
+    memset(s_cwp_z, 0, sizeof(s_cwp_z));
+    s_cw_peak_active = false;
+    if (mode != RXAUD_MODE_CW || !s_cw_peak_hz) return;
+    if (center_hz <= 0 || fs_dec <= 0.0f) return;
+    /* Nyquist sanity: the pitch has to be well inside the decimated rate, and
+     * it is (700 Hz against 6000). Belt and braces so a future D change
+     * cannot design a filter above Nyquist in silence. */
+    if ((float)center_hz > 0.45f * fs_dec) {
+        ESP_LOGW(TAG, "CW peak filter skipped - %d Hz is too close to fs/2 (%.0f)",
+                 center_hz, (double)fs_dec);
+        return;
+    }
+    const float q_total   = (float)center_hz / (float)s_cw_peak_hz;
+    const float q_section = 0.6436f * q_total;      /* see the note above */
+    const float w0    = 2.0f * (float)M_PI * (float)center_hz / fs_dec;
+    const float alpha = sinf(w0) / (2.0f * q_section);
+    const float a0    = 1.0f + alpha;
+    s_cwp_b0 =  alpha / a0;
+    s_cwp_b1 =  0.0f;
+    s_cwp_b2 = -alpha / a0;
+    s_cwp_a1 = (-2.0f * cosf(w0)) / a0;
+    s_cwp_a2 = ( 1.0f - alpha)    / a0;
+    s_cw_peak_active = true;
+    ESP_LOGI(TAG, "CW peak filter built: %u Hz at %d Hz (Q %.1f per section, fs %.0f)",
+             (unsigned)s_cw_peak_hz, center_hz, (double)q_section, (double)fs_dec);
+}
+
+static inline float cw_peak_step(int ear, float x)
+{
+    for (int sec = 0; sec < 2; sec++) {
+        float *z = s_cwp_z[ear][sec];
+        float y = s_cwp_b0 * x + z[0];
+        z[0] = s_cwp_b1 * x - s_cwp_a1 * y + z[1];
+        z[1] = s_cwp_b2 * x - s_cwp_a2 * y;
+        x = y;
+    }
+    return x;
+}
+
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     /* D FIRST: everything below is computed against fs/D, so the factor has to
@@ -1114,6 +1195,10 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
      * put a step through the AGC. */
     am_demod_reset(&s_am);
     s_am_alpha = am_demod_alpha(fs_dec);
+    /* Same reset rule as the AM tracker above: a retune changes the pitch the
+     * peak is supposed to sit on, and a biquad carrying state from the old
+     * centre would ring it into the new one. */
+    cw_peak_rebuild(center_hz, fs_dec, mode);
     float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
@@ -1778,6 +1863,16 @@ static void rx_audio_task(void *arg)
             } else {
                 re_l = s_narrow_re[i] * cl - s_narrow_im[i] * sl;
                 re_r = s_narrow_re[i] * cr - s_narrow_im[i] * sr;
+            }
+
+            /* ⭐ THE CW PEAK FILTER GOES HERE - after the mode filter and
+             * the final NCO, BEFORE the envelope below. Put it after the AGC
+             * and the AGC would still be riding the hiss the filter is about
+             * to remove, which is most of what makes a peak filter feel like
+             * it works. Both ears, so the panoramic split keeps its image. */
+            if (s_cw_peak_active) {
+                re_l = cw_peak_step(0, re_l);
+                re_r = cw_peak_step(1, re_r);
             }
 
             // AGC/squelch are driven from ONE shared envelope, not each

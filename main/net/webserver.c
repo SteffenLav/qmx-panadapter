@@ -6045,6 +6045,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
             cJSON_AddBoolToObject  (ra, "en",              rx_audio_is_enabled());
             cJSON_AddBoolToObject  (ra, "restart_pending", rx_audio_restart_pending());
             cJSON_AddNumberToObject(ra, "vol",            rx_audio_get_volume());
+            cJSON_AddNumberToObject(ra, "cw_peak_hz",     rx_audio_get_cw_peak_hz());
             cJSON_AddBoolToObject  (ra, "hp_mute_en",     settings_get_hp_mute_en());
             cJSON_AddItemToObject(root, "rxaudio", ra);
         }
@@ -6922,6 +6923,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
                 if (vol > 100) vol = 100;
                 settings_set_rx_audio_vol((uint8_t)vol);
                 rx_audio_set_volume((uint8_t)vol);
+            }
+            /* CW audio peak filter, Hz at -3 dB; 0 = off. Live - the audio
+             * chain rebuilds it on its next retune, within a frame. */
+            if (cJSON_IsNumber(v = cJSON_GetObjectItem(ra, "cw_peak_hz"))) {
+                int hz = v->valueint;
+                if (hz < 0)    hz = 0;
+                if (hz > 1000) hz = 1000;
+                settings_set_cw_peak_hz((uint16_t)hz);
+                rx_audio_set_cw_peak_hz((uint16_t)hz);
             }
             if (cJSON_IsBool(v = cJSON_GetObjectItem(ra, "hp_mute_en"))) {
                 settings_set_hp_mute_en(cJSON_IsTrue(v));

@@ -3870,6 +3870,11 @@ static lv_obj_t *s_slider_wf_contrast = NULL;
 static lv_obj_t *s_lbl_wf_contrast = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
 static lv_obj_t *s_dropdown_peak = NULL;
+static lv_obj_t *s_dropdown_cwpeak = NULL;
+/* CW audio peak-filter widths offered, in the dropdown's own order. ONE
+ * table, same rule as PEAK_STEPS above: the option list is built from it and
+ * the callback indexes it. 0 = off. */
+static const uint16_t CW_PEAK_STEPS[] = { 0, 250, 150, 100 };
 /* The peak-hold windows offered, in the dropdown's own order. ONE table: the
  * option list is built from it, the callback indexes it, and the web page's
  * list is generated from the same numbers - a second copy is how the
@@ -4110,6 +4115,7 @@ static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
 static void drawer_dropdown_peak_cb(lv_event_t *e);
+static void drawer_dropdown_cwpeak_cb(lv_event_t *e);
 static void drawer_dropdown_wf_speed_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
 static int  spur_mode_to_menu_idx(uint8_t mode);
@@ -15728,7 +15734,7 @@ static void drawer_build(void)
         // heading above already says Radio, and "CW center" names itself.
         /* 194 + nudge row + decode row + the lines/clear row (Bryan N0LUF).
            ⛔ Must stay equal to the `y +=` at the end of this block. */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244 + 60 + 60);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244 + 60 + 60 + 110);
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
@@ -15854,10 +15860,37 @@ static void drawer_build(void)
             lv_obj_center(cl);
         }
 
+        /* CW peak filter (A4 step 3). It belongs here, under CW centre: it
+         * is a peak ON that centre, and the two numbers are read together. */
+        {
+            lv_obj_t *pf = lv_label_create(sec);
+            lv_label_set_text(pf, "CW peak filter");
+            lv_obj_set_style_text_color(pf, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_font(pf, &lv_font_montserrat_28, 0);
+            lv_obj_align(pf, LV_ALIGN_TOP_LEFT, 0, 360);
+            s_dropdown_cwpeak = lv_dropdown_create(sec);
+            lv_dropdown_set_options(s_dropdown_cwpeak,
+                                    "Off\n250 Hz\n150 Hz\n100 Hz");
+            lv_obj_set_size(s_dropdown_cwpeak, DRAWER_W - 32, 50);
+            lv_obj_align(s_dropdown_cwpeak, LV_ALIGN_TOP_LEFT, 0, 396);
+            lv_obj_set_style_text_font(s_dropdown_cwpeak, &lv_font_montserrat_28, 0);
+            uint16_t cwp = settings_get_cw_peak_hz();
+            for (size_t i = 0; i < sizeof(CW_PEAK_STEPS) / sizeof(CW_PEAK_STEPS[0]); i++) {
+                if (CW_PEAK_STEPS[i] == cwp) {
+                    lv_dropdown_set_selected(s_dropdown_cwpeak, (uint32_t)i);
+                    break;
+                }
+            }
+            lv_obj_add_event_cb(s_dropdown_cwpeak, drawer_dropdown_cwpeak_cb,
+                                LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_add_event_cb(s_dropdown_cwpeak, drawer_dropdown_cmap_open_cb,
+                                LV_EVENT_CLICKED, NULL);
+        }
+
         /* ⛔ This MUST match the height passed to drawer_section() above. A
          * section whose height and advance disagree overlaps the next one -
          * the reflow bug this file has hit more than once. */
-        y += 244 + 60 + 60;
+        y += 244 + 60 + 60 + 110;
     }
 
     /* CW profiles (#359). Its own section directly under the CW controls: a
@@ -16710,7 +16743,7 @@ static void drawer_build(void)
     //    dark drawer), applied to the closed box AND the option list
     lv_obj_t *drawer_dropdowns[] = {
         s_dropdown_sleep, s_dropdown_bpregion, s_dropdown_cmap, s_dropdown_wf_window,
-        s_dropdown_wf_speed, s_dropdown_peak,
+        s_dropdown_wf_speed, s_dropdown_peak, s_dropdown_cwpeak,
     };
     for (size_t i = 0; i < sizeof(drawer_dropdowns) / sizeof(drawer_dropdowns[0]); i++) {
         lv_obj_t *dd = drawer_dropdowns[i];
@@ -18243,6 +18276,15 @@ static void drawer_dropdown_peak_cb(lv_event_t *e)
     uint8_t secs = PEAK_STEPS[idx];
     ui_set_peak_hold_s(secs);
     settings_set_spec_peak_s(secs);
+}
+
+static void drawer_dropdown_cwpeak_cb(lv_event_t *e)
+{
+    uint32_t idx = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx >= sizeof(CW_PEAK_STEPS) / sizeof(CW_PEAK_STEPS[0])) idx = 0;
+    uint16_t hz = CW_PEAK_STEPS[idx];
+    rx_audio_set_cw_peak_hz(hz);
+    settings_set_cw_peak_hz(hz);
 }
 
 static void drawer_dropdown_wf_speed_cb(lv_event_t *e)

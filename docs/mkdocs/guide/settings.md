@@ -374,6 +374,24 @@ teal. You can always see what is being touched.
 
 ## Panadapter & Zoom
 
+**CW peak filter** *(drawer: Radio > CW, under CW centre; off by default)* — a
+narrow audio peak **on** the CW pitch: **250, 150 or 100 Hz** wide at -3 dB. It
+sits in the Tab5's own audio, after the mode filter and **before the AGC**, so
+the AGC rides the wanted note instead of the hiss either side of it — which is
+most of what makes a peak filter feel like it works.
+
+⚠ **It is not a second IF filter.** The radio's own CW filter still decides what
+reaches the Tab5, so a strong signal 300 Hz away still works the QMX's AGC even
+when you cannot hear it. What this does is pull the wanted note forward out of
+the band noise.
+
+Measured against the design at a 700 Hz pitch: the 100 Hz setting is 91 Hz wide
+and 32 dB down 500 Hz away; 150 Hz is 137 Hz and -25 dB; 250 Hz is 227 Hz and
+-18 dB. Peak gain is 0 dB, so switching it on does not also change the volume.
+
+The same setting is in the browser as `rxaudio.cw_peak_hz`, where any width from
+40 to 1000 Hz is accepted.
+
 **Peak hold** *(Smoothing & peak hold; off by default)* — draws a second line over
 the spectrum showing the highest each point of the band reached in the last
 **1, 2, 3 or 5 seconds**. The browser has the same control and the two screens

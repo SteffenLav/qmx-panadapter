@@ -463,6 +463,11 @@ typedef struct {
      * way - "maybe it should not be an absolute peak-hold, but kind of skip
      * peaks older than xx seconds" (2026-10-23). Sam W7STF's A4. */
     uint8_t  spec_peak_s;
+    /* CW audio peak filter width in Hz at -3 dB; 0 = off (default).
+     * A narrow peak ON the CW pitch in the Tab5's own audio, after the mode
+     * filter and before the AGC. NOT a second IF filter - see rx_audio.h.
+     * Sam W7STF's A4, third of three. */
+    uint16_t cw_peak_hz;
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -1014,6 +1019,8 @@ void settings_set_wf_window(uint8_t idx);
 void settings_set_wf_rows_per_s(uint8_t rows);
 /* Spectrum peak-hold window in seconds, 0..60; 0 = off. */
 void settings_set_spec_peak_s(uint8_t secs);
+/* CW audio peak filter width in Hz, 0 = off, else 40..1000. */
+void settings_set_cw_peak_hz(uint16_t hz);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
@@ -1036,6 +1043,7 @@ uint8_t settings_get_wspr_rx_cycles(void);
 uint8_t settings_get_wf_rows_per_s(void);
 /* Narrow read, same reason as the rows/s one above it. */
 uint8_t settings_get_spec_peak_s(void);
+uint16_t settings_get_cw_peak_hz(void);
 uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may

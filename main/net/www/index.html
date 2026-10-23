@@ -4911,6 +4911,8 @@ const SET_FIELDS = [
      auto-mute after v1.16.4 and neither could be reproduced here. It is on
      the Tab5 so it can be reached there, and here so it can be reached from
      a phone when the Tab5 is across the room. */
+  ["RX audio", "rxaudio.cw_peak_hz", "num", "CW peak filter (Hz, 0 = off)",
+   "A narrow audio peak on the CW pitch, in the Tab5's own audio, ahead of the AGC so the AGC rides the note instead of the hiss. The Tab5 drawer offers 250, 150 and 100 Hz; 40 to 1000 is accepted here. It is NOT a second IF filter - the radio's own CW filter still decides what reaches the chain, and a strong signal just outside it still works the radio's AGC."],
   ["RX audio", "rxaudio.hp_mute_en", "bool", "Mute the speaker when headphones are plugged in",
    "Turn this OFF if you lose all audio - it is the headphone auto-mute"],
 

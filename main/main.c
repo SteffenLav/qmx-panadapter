@@ -739,6 +739,7 @@ void app_main(void)
     dsp_set_window(cfg->wf_window);
     render_set_waterfall_rows_per_s(cfg->wf_rows_per_s);
     ui_set_peak_hold_s(cfg->spec_peak_s);
+    rx_audio_set_cw_peak_hz(cfg->cw_peak_hz);
     if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
     cfg = NULL;
 

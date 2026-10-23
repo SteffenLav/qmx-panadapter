@@ -100,6 +100,7 @@ static const char *TAG = "settings";
 #define KEY_WF_SPEED     "wf_speed"   /* LEGACY 1..4x multiplier - read once, then never written again */
 #define KEY_WF_ROWS      "wf_rows"    /* waterfall rows per second, 1..40 */
 #define KEY_SPEC_PEAK    "spec_peak"  /* spectrum peak-hold window, seconds, 0 = off */
+#define KEY_CW_PEAK      "cw_peak"    /* CW audio peak filter width, Hz, 0 = off */
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_CW_TX_OFF    "cw_tx_off"
@@ -217,6 +218,7 @@ static const char *TAG = "settings";
 #define DEF_CW_ROWS       (4)    /* four since 2026-10-15 (Sam W7STF); Bryan N0LUF may pick 2 */
 #define DEF_WF_ROWS       (10)   /* rows/s - the rate the waterfall has always run at */
 #define DEF_SPEC_PEAK     (0)    /* peak hold OFF until asked for - it costs 25 KB of PSRAM */
+#define DEF_CW_PEAK       (0)    /* CW peak filter OFF - it changes how the radio SOUNDS */
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
 #define DEF_RELAY_PIN      (53)
@@ -464,6 +466,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
 #define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
+#define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -674,6 +677,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_test(&dirty_local, DIRTY_WF_SPEED))    nvs_set_u8(s_nvs, KEY_WF_ROWS,   snap.wf_rows_per_s);
         if (dirty_test(&dirty_local, DIRTY_SPEC_PEAK))   nvs_set_u8(s_nvs, KEY_SPEC_PEAK, snap.spec_peak_s);
+        if (dirty_test(&dirty_local, DIRTY_CW_PEAK))     nvs_set_u16(s_nvs, KEY_CW_PEAK,  snap.cw_peak_hz);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
@@ -955,6 +959,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_window      = DEF_WF_WINDOW;
     out->wf_rows_per_s  = DEF_WF_ROWS;
     out->spec_peak_s    = DEF_SPEC_PEAK;
+    out->cw_peak_hz     = DEF_CW_PEAK;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
@@ -1209,6 +1214,10 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPEC_PEAK, &out->spec_peak_s) != ESP_OK)
         out->spec_peak_s = DEF_SPEC_PEAK;
     if (out->spec_peak_s > 60) out->spec_peak_s = DEF_SPEC_PEAK;
+    if (nvs_get_u16(s_nvs, KEY_CW_PEAK, &out->cw_peak_hz) != ESP_OK)
+        out->cw_peak_hz = DEF_CW_PEAK;
+    if (out->cw_peak_hz && (out->cw_peak_hz < 40 || out->cw_peak_hz > 1000))
+        out->cw_peak_hz = DEF_CW_PEAK;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     {
@@ -2401,6 +2410,27 @@ void settings_set_spec_peak_s(uint8_t secs)
     s_pending.spec_peak_s = secs;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SPEC_PEAK);
+}
+
+uint16_t settings_get_cw_peak_hz(void)
+{
+    if (!s_ready) return DEF_CW_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.cw_peak_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_cw_peak_hz(uint16_t hz)
+{
+    if (!s_ready) return;
+    if (hz && hz < 40) hz = 40;
+    if (hz > 1000)     hz = DEF_CW_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_peak_hz == hz) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_peak_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PEAK);
 }
 
 void settings_set_wf_rows_per_s(uint8_t rows)
