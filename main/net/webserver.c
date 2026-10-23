@@ -1604,6 +1604,37 @@ static bool wspr_owns_the_dial(httpd_req_t *req, cJSON *root, const char *what)
     return true;
 }
 
+/* A required numeric argument, or a refusal the caller can see.
+ *
+ * T67: {"action":"set_freq"} with no "hz" answered {"ok":true} and did
+ * nothing. Every site of this class read the key with
+ *
+ *     cJSON *item = cJSON_GetObjectItem(root, "hz");
+ *     if (cJSON_IsNumber(item)) { ...act... }
+ *
+ * with no else, and cmd_handler's tail sends {"ok":true} unconditionally - so
+ * a caller that mistyped the key, or sent "7038600" as a string, got a success
+ * indistinguishable from a tune. Six sites had it, not only set_freq:
+ * set_freq, view_center, set_band, set_bw, set_zoom and set_rit. Swept
+ * together, because fixing only the reported one leaves the other five to be
+ * reported again.
+ *
+ * Answers 400 itself; the caller must free root and return ESP_FAIL. Actions
+ * whose argument is genuinely OPTIONAL keep their ternary default and are
+ * deliberately NOT routed through here. */
+static bool cmd_num_arg(httpd_req_t *req, cJSON *root, const char *key, double *out)
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    if (cJSON_IsNumber(item)) {
+        *out = item->valuedouble;
+        return true;
+    }
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%s required (number)", key);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, msg);
+    return false;
+}
+
 static esp_err_t cmd_handler(httpd_req_t *req)
 {
     char buf[256];
@@ -1623,9 +1654,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
     const char *action = cJSON_GetStringValue(cJSON_GetObjectItem(root, "action"));
 
     if (action && strcmp(action, "set_freq") == 0) {
-        cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) {
-            uint32_t hz = (uint32_t)item->valuedouble;
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        {
+            uint32_t hz = (uint32_t)argv;
             /* FORCED, because every caller of this action is a COMMIT.
              *
              * It used to be the rate-limited cat_set_frequency(), whose return
@@ -1682,16 +1714,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * gesture moves the WINDOW and must be allowed to leave the dial alone,
          * which a frequency write cannot express. Same entry point the Tab5's
          * own strip uses, so the two screens cannot drift. */
-        cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) {
-            /* QUEUED, never applied here - see ui_request_bandplan_view(). */
-            ui_request_bandplan_view((int64_t)item->valuedouble);
-        }
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        /* QUEUED, never applied here - see ui_request_bandplan_view(). */
+        ui_request_bandplan_view((int64_t)argv);
     } else if (action && strcmp(action, "set_band") == 0) {
         if (wspr_owns_the_dial(req, root, "Band")) return ESP_OK;
-        cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) {
-            uint32_t center_hz = (uint32_t)item->valuedouble;
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        {
+            uint32_t center_hz = (uint32_t)argv;
             uint32_t target    = ui_band_last_hz(center_hz);
             // Same rule as the Tab5's own band buttons: a band change stands
             // auto-answer down, because the antenna is probably not tuned for
@@ -1737,9 +1769,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (mode) cat_request_mode(mode);
     } else if (action && strcmp(action, "set_bw") == 0) {
         if (wspr_owns_the_dial(req, root, "BW")) return ESP_OK;
-        cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) {
-            uint32_t bw = (uint32_t)item->valuedouble;
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        {
+            uint32_t bw = (uint32_t)argv;
             /* ⛔ AM IS OUR FILTER, NOT THE RADIO'S - nothing is written
              * to the QMX here. Its AM bandwidth is fixed and is not in
              * the I/Q path at all. Decided on the DEVICE rather than by
@@ -1783,12 +1816,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         ESP_LOGI(TAG, "web: still display -> %s", v ? "on" : "off");
     } else if (action && strcmp(action, "set_zoom") == 0) {
         if (wspr_owns_the_dial(req, root, "Zoom")) return ESP_OK;
-        cJSON *item = cJSON_GetObjectItem(root, "zoom");
-        if (cJSON_IsNumber(item)) {
-            if (display_lock(50)) {
-                ui_set_zoom((float)item->valuedouble, 0);
-                display_unlock();
-            }
+        double argv;
+        if (!cmd_num_arg(req, root, "zoom", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        if (display_lock(50)) {
+            ui_set_zoom((float)argv, 0);
+            display_unlock();
         }
     } else if (action && strcmp(action, "set_rit") == 0) {
         // RIT offset in Hz; 0 clears it and switches RIT off at the radio. Same
@@ -1798,11 +1830,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         //
         // No "arm" here on purpose: arming is a property of the input surface, and
         // the browser owns its own. cat_request_rit_hz() clamps to CAT_RIT_MAX_HZ.
-        cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) {
-            cat_request_rit_hz((int)item->valuedouble);
-            ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)item->valuedouble);
-        }
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        cat_request_rit_hz((int)argv);
+        ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)argv);
     } else if (action && strcmp(action, "set_activation") == 0) {
         // Start or stop a POTA/SOTA activation. type 0 stops; 1 = POTA, 2 = SOTA
         // with a reference. Mirrors activation_modal.c's go button, including its
@@ -1931,9 +1962,47 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // Deferred to the LVGL task (see ui_request_base_mode) - the switch
         // spawns/stops ft8_task and moves widgets.
         const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
+        /* T75: the SUB-MODE is part of the door, and an unknown name is refused.
+         *
+         * Two defects, both measured on 2026-10-23 while v1.20.5's Phase 5.5 was
+         * run from the desk:
+         *
+         *  - "ft4" and "js8" were not names this action knew, and the final
+         *    `else` sent every unknown name to the PANADAPTER. Asking for FT4
+         *    therefore left the panadapter showing and answered {"ok":true} -
+         *    the T67 shape, in the one action whose whole job is to be louder
+         *    than a typo.
+         *  - set_ft8_mode alone cannot do it either: it only leaves
+         *    s_web_preset_hz for the FT8 screen's 1 Hz timer, which applies the
+         *    frequency and sub-mode with the FT8 page still hidden and
+         *    ft8_task not spawned. The dial moves, nothing decodes.
+         *
+         * So "ft4"/"js8" now raise the FT8 page AND ask for the sub-mode, which
+         * is one call and makes Phase 5.5 steps 20d/20e runnable without the
+         * operator. */
         if (scr) {
             /* Three pages now, so the bool form cannot express it. */
             if      (!strcmp(scr, "ft8"))  ui_request_base_mode_m(UI_MODE_FT8);
+            else if (!strcmp(scr, "ft4")) {
+                ui_request_base_mode_m(UI_MODE_FT8);
+                /* 0 = keep the dial, which the drain then moves to the FT4
+                 * calling frequency for the protocol asked for. */
+                ft8_screen_view_request_preset(0, FT8_OP_MODE_FT4);
+            }
+            else if (!strcmp(scr, "js8")) {
+                /* Refused here as well as in ft8_op_mode_set(), exactly as
+                 * set_ft8_mode does, so an unbuilt protocol never answers
+                 * {"ok":true}. */
+                if (!ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+                    cJSON_Delete(root);
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_sendstr(req,
+                        "{\"ok\":false,\"error\":\"JS8 is not implemented in this build\"}");
+                    return ESP_OK;
+                }
+                ui_request_base_mode_m(UI_MODE_FT8);
+                ft8_screen_view_request_preset(0, FT8_OP_MODE_JS8);
+            }
             else if (!strcmp(scr, "wspr")) {
                 /* Refused, and SAID SO. /api/cmd answers an action it does not
                  * know with "unknown action" and HTTP 200, and CLAUDE.md
@@ -1950,7 +2019,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 }
                 ui_request_base_mode_m(UI_MODE_WSPR);
             }
-            else                            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+            else if (!strcmp(scr, "pan") || !strcmp(scr, "panadapter")) {
+                ui_request_base_mode_m(UI_MODE_PANADAPTER);
+            }
+            else {
+                /* Was: anything unknown -> the panadapter. A mistyped name is
+                 * then indistinguishable from "go to the panadapter". */
+                cJSON_Delete(root);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_status(req, "400 Bad Request");
+                httpd_resp_sendstr(req,
+                    "{\"ok\":false,\"error\":\"screen must be pan, ft8, ft4, js8 or wspr\"}");
+                return ESP_OK;
+            }
+        } else {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"screen required (pan, ft8, ft4, js8 or wspr)\"}");
+            return ESP_OK;
         }
     } else if (action && strcmp(action, "reply") == 0) {
         // Reply to a decoded station from the browser - Phase 6 of web parity,
@@ -2160,14 +2248,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          *   {"action":"band_scan_restore_test","hz":14097000,"mode":"6"}
          *
          * No TX. Touches VFO A and the mode, nothing else. */
-        cJSON *hz_item = cJSON_GetObjectItem(root, "hz");
         const char *md = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
-        if (!cJSON_IsNumber(hz_item)) {
-            cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "hz required");
-            return ESP_FAIL;
-        }
-        cat_band_scan_restore_test((uint32_t)hz_item->valuedouble, md ? md[0] : 0);
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        cat_band_scan_restore_test((uint32_t)argv, md ? md[0] : 0);
     } else if (action && strcmp(action, "trip_swr") == 0) {
         /* Hidden dev action, same family as gp_probe and ta_probe: RAISE the
          * station SWR latch, so the refusal path can be exercised without a
@@ -5928,10 +6012,17 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
                bandwidth - but not the switch that decides whether any of it
                runs, nor the volume. Found by ticking the box and still
                reading frame_count=0 with no way to set it back from here.
-               "en" reports what the AUDIO PATH is actually doing
-               (rx_audio_is_enabled()), not merely what is stored, because
-               the two differ until the restart below happens. */
-            cJSON_AddBoolToObject  (ra, "en",             rx_audio_is_enabled());
+               ⛔ "en" IS THE STORED FLAG, and the comment here used to claim
+               it was the live path. It is not: rx_audio_is_enabled() returns
+               s_enabled, so a POST of {"rxaudio":{"en":true}} reads back
+               en:true while the codec is still closed and frame_count stays 0
+               (measured 2026-10-22, T66). The codec is opened at boot or not
+               at all - see rx_audio_restart_pending() in rx_audio.h - and the
+               Tab5 toasts that restart while the browser had no way to see
+               it. So the stored flag keeps its name and the pending restart
+               gets its own field. */
+            cJSON_AddBoolToObject  (ra, "en",              rx_audio_is_enabled());
+            cJSON_AddBoolToObject  (ra, "restart_pending", rx_audio_restart_pending());
             cJSON_AddNumberToObject(ra, "vol",            rx_audio_get_volume());
             cJSON_AddBoolToObject  (ra, "hp_mute_en",     settings_get_hp_mute_en());
             cJSON_AddItemToObject(root, "rxaudio", ra);

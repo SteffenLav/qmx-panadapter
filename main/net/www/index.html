@@ -4881,10 +4881,14 @@ const SET_FIELDS = [
      (the other is bt_mouse_en, which says so). The codec is opened at boot,
      before the USB host takes the DMA RAM, so a mid-session enable cannot
      open it safely. Switching OFF is immediate. The note says so, because the
-     web had no way of telling anyone - the Tab5 toasts it and the API leaves
-     you to notice that a POST of true reads back false. */
+     web had no way of telling anyone - the Tab5 toasts it and the API said
+     nothing at all. ⛔ The note here used to say the POST "reads back as
+     off". It does not: rx_audio_is_enabled() is the STORED flag, so it reads
+     back ON with the codec shut and frame_count 0 (measured 2026-10-22, T66).
+     The settings GET now carries rxaudio.restart_pending for the real
+     answer. */
   ["RX audio", "rxaudio.en", "bool", "Receiver audio on the Tab5 speaker",
-   "Turning it ON takes effect after a restart - the audio codec is opened at boot, before the USB host claims the memory it needs. Turning it OFF is immediate. Until you restart, this reads back as off: that means stored, waiting."],
+   "Turning it ON takes effect after a restart - the audio codec is opened at boot, before the USB host claims the memory it needs. Turning it OFF is immediate. Until you restart it reads back ON while no sound is produced; rxaudio.restart_pending in the settings GET is the field that says so."],
   ["RX audio", "rxaudio.vol", "num", "Speaker volume (0-100)",
    "Applies at once. This is the Tab5's own speaker, not the audio streamed to this browser - that one follows your computer's volume."],
   ["RX audio", "rxaudio.gain_d10", "num", "AGC ceiling (÷10)",

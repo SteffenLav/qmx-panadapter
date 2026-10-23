@@ -5112,8 +5112,11 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         ui_mode_t want = (ui_mode_t)s_web_base_mode_req;
         s_web_base_mode_req = -1;
         if (want != ui_mode_get()) {
+            /* Named, not guessed: this printed "Panadapter" for a WSPR
+             * request, so the log denied a switch that had just happened. */
             ESP_LOGI(TAG, "web requested view: %s",
-                     want == UI_MODE_FT8 ? "FT8" : "Panadapter");
+                     want == UI_MODE_FT8  ? "FT8" :
+                     want == UI_MODE_WSPR ? "WSPR" : "Panadapter");
             // No animation: nobody is looking at the Tab5 when the request came
             // from a browser in another room, and the slide costs frames.
             ui_set_base_mode(want, false);

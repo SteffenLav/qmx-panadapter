@@ -81,7 +81,7 @@ action names its own parameter key (there is no generic `value`).
 | `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
 | `set_rit` | `hz` | RIT offset. Retuning clears it |
-| `set_screen` | `screen: "panadapter"/"ft8"` | Switch the Tab5's own view. Applied within about a second (handed to the display task) |
+| `set_screen` | `screen: "pan"/"panadapter"/"ft8"/"ft4"/"js8"/"wspr"` | Switch the Tab5's own view. Applied within about a second (handed to the display task). `ft4` and `js8` open the FT8 page **and** select that sub-mode, so one call is enough to put the device into FT4. An unknown name is refused with HTTP 400, not treated as `panadapter` |
 | `set_ft8_mode` | `mode: "ft8"/"ft4"`, optional `freq_hz` | **Switch between FT8 and FT4**, optionally retuning. Omit `freq_hz` to keep the current frequency. This is an action rather than a setting because it also retunes the radio and clears stale decodes — read `ft8_op_mode` back from `/api/settings` to confirm |
 | `set_activation` | `ref` | Set the POTA/SOTA activation reference |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
@@ -120,6 +120,14 @@ on success — but an unrecognised action returns **HTTP 200** with the body
 transmitting) returns `{"ok":false,"error":"..."}`, also with HTTP 200. A caller
 that only tests the status code cannot tell success from a typo, and a mistyped
 action is then a silent no-op.
+
+**A missing required parameter is refused with HTTP 400.** `set_freq`,
+`set_band`, `set_bw`, `set_zoom`, `set_rit` and `view_center` answer
+`<key> required (number)` when the key is absent or is sent as a string. Until
+2026-10-23 they answered `{"ok":true}` and did nothing, so
+`{"action":"set_freq","freq":10000000}` looked like a successful tune.
+`set_screen` likewise refuses a name it does not know instead of falling back
+to the panadapter.
 
 Effects are applied asynchronously — mode and filter writes are queued onto the
 CAT poll task, and `cq_start`, `reply`, `qso_override` and `set_ft8_mode` onto
