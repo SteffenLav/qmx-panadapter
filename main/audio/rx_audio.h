@@ -47,6 +47,15 @@ void rx_audio_preopen(void);
 void rx_audio_set_enabled(bool en);
 bool rx_audio_is_enabled(void);
 
+/* ⭐ Instant speaker mute, RAM only. NOT rx_audio_set_enabled(): that one
+ * cannot be turned on mid-session (the codec is opened at boot or not at all),
+ * which is the "restart required" Samuel W7STF ran into. This gates the
+ * codec's output volume instead, so it takes effect at once and comes back at
+ * once. Deliberately not persisted - a mute surviving a reboot looks exactly
+ * like a broken speaker. */
+void rx_audio_set_muted(bool mute);
+bool rx_audio_is_muted(void);
+
 /* ⛔ TRUE WHEN THE SWITCH IS ON AND IS DOING NOTHING.
  *
  * The ES8388/I2S codec is opened once at boot, and only when the saved enable

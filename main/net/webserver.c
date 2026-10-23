@@ -2228,6 +2228,27 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         const char *gcall = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         if (gcall && gcall[0]) ft8_greylist_clear(gcall);
         else                   ft8_greylist_clear_all();
+    } else if (action && strcmp(action, "mute") == 0) {
+        /* Instant speaker mute (Samuel W7STF). {"action":"mute","on":true},
+         * or omit "on" to toggle - a single button needs one call, not two.
+         * Answers with the state it ended in, so a button can never show the
+         * opposite of what the speaker is doing. */
+        cJSON *jm = cJSON_GetObjectItem(root, "on");
+        rx_audio_set_muted(cJSON_IsBool(jm) ? cJSON_IsTrue(jm)
+                                            : !rx_audio_is_muted());
+        cJSON_Delete(root);
+        char body[48];
+        snprintf(body, sizeof(body), "{\"ok\":true,\"muted\":%s}",
+                 rx_audio_is_muted() ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "skip_clear") == 0) {
+        /* Clear the HAND-SKIP list only, leaving timeout entries in place -
+         * the Clear button beside Randy's list. Deliberately not
+         * greylist_clear with no call, which would also un-skip every station
+         * the software had set aside for not hearing us. */
+        ft8_greylist_clear_skipped();
     } else if (action && strcmp(action, "help") == 0) {
         // Open the Tab5's own manual at a page (and optionally a heading), the
         // same call the context-help buttons make. Sending someone to the right
@@ -7612,6 +7633,17 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         cJSON *garr = cJSON_AddArrayToObject(root, "greylist");
         for (int i = 0; i < ng; i++)
             cJSON_AddItemToArray(garr, cJSON_CreateString(gl[i]));
+
+        /* ⭐ The stations the OPERATOR skipped, separately from the ones the
+         * software set aside after timeouts. Randy N4OPI asked to see his own
+         * skips and be able to clear them; showing him entries he never made,
+         * under a Clear button that also undoes them, would be a different
+         * feature wearing the same label. Newest first. */
+        char sk[24][12];
+        int ns = ft8_greylist_get_skipped(sk, 24);
+        cJSON *sarr = cJSON_AddArrayToObject(root, "skipped");
+        for (int i = 0; i < ns; i++)
+            cJSON_AddItemToArray(sarr, cJSON_CreateString(sk[i]));
     }
 
     char *out = cJSON_PrintUnformatted(root);

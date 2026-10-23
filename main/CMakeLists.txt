@@ -15,6 +15,7 @@ idf_component_register(
         "net/net_quiet.c"
         "net/bg_feed_gate.c"
         "ui/activation_modal.c"
+        "ui/audio_modal.c"
         "ui/identity_config.c"
         "ui/onboarding.c"
         "ui/memory_modal.c"

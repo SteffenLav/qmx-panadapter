@@ -1329,6 +1329,11 @@
       </div>
       <div id="dec-pileup" style="margin-top:8px; font-size:13px;"></div>
       <div id="dec-grey" style="margin-top:4px; font-size:13px; color:var(--dim);"></div>
+      <!-- Randy N4OPI: the stations HE skipped, with a way to take it back.
+           A separate line from the grey-list above on purpose - that one is
+           the software setting a deaf station aside, this one is his own
+           decision, and one Clear must not quietly undo the other. -->
+      <div id="dec-skipped" style="margin-top:4px; font-size:13px; color:var(--dim);"></div>
     </div></div>
 
   <!-- =====================================================================
@@ -6320,6 +6325,28 @@ async function pollDecodes() {
       ev.preventDefault();
       sendCmd({ action: "greylist_clear" });
       document.getElementById("dec-grey").textContent = "";
+    });
+
+    /* The operator's OWN skips (Randy N4OPI), newest first. Each call clears
+       individually as well as the lot - skipping three stations and wanting
+       one of them back is the ordinary case, and the per-call clear already
+       existed for the grey-list. */
+    const sk = d.skipped || [];
+    document.getElementById("dec-skipped").innerHTML = !sk.length ? "" :
+      "Skipped by you: " +
+      sk.map(c => '<a href="#" class="skip-un" data-call="' + c +
+                  '" style="color:var(--dim)">' + c + '</a>').join(", ") +
+      ' &mdash; <a href="#" id="skip-clear" style="color:var(--dim)">clear all</a>';
+    document.querySelectorAll("#dec-skipped .skip-un").forEach(a =>
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        sendCmd({ action: "greylist_clear", call: a.getAttribute("data-call") });
+      }));
+    const sc = document.getElementById("skip-clear");
+    if (sc) sc.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      sendCmd({ action: "skip_clear" });
+      document.getElementById("dec-skipped").textContent = "";
     });
   } catch (e) { /* transient - the next tick retries */ }
   decPollInFlight = false;

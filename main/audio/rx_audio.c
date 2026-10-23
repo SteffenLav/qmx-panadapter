@@ -519,6 +519,9 @@ static volatile uint32_t s_loop_count = 0;   // every iteration, success or time
 // ---- Module state ----------------------------------------------------------
 static volatile bool s_enabled = false;
 static volatile uint8_t s_volume = 60;
+/* Instant speaker mute - declared here because rx_audio_set_volume() reads it.
+ * The reasoning is at rx_audio_set_muted(). */
+static volatile bool s_muted;
 
 static esp_codec_dev_handle_t s_codec = NULL;
 static i2s_chan_handle_t s_tx_chan = NULL;   // TX-only I2S channel (no RX/mic)
@@ -2743,11 +2746,45 @@ void rx_audio_set_volume(uint8_t vol)
 {
     if (vol > 100) vol = 100;
     s_volume = vol;
-    if (s_codec) esp_codec_dev_set_out_vol(s_codec, (int)vol);
+    /* While muted the codec stays at zero; the slider still moves and is still
+     * saved, so unmuting returns to whatever was set meanwhile. */
+    if (s_codec && !s_muted) esp_codec_dev_set_out_vol(s_codec, (int)vol);
     settings_set_rx_audio_vol(vol);
 }
 
 uint8_t rx_audio_get_volume(void) { return s_volume; }
+
+/* ⭐⭐ MUTE IS NOT THE ENABLE SWITCH, AND IT CANNOT BE.
+ *
+ * Samuel W7STF asked for "a 'mute/unmute' capability; a button or a 'hot' area
+ * are IMHO sooooo much better (direct and natural) than a swipe gesture,
+ * followed by a scroll gesture, followed by a gesture to adjust".
+ *
+ * ⛔ rx_audio_set_enabled() CANNOT serve as that button, and Sam is the one
+ * who found out why: the ES8388 is opened once at boot and only when the saved
+ * flag was already set, because it must claim DMA RAM before the USB host
+ * takes the pool. Turning the enable flag on mid-session sets a flag, logs
+ * "restart required" and produces no sound until the next boot - exactly his
+ * 2026-10-02 report, "I had to reboot the Tab5 and QMX/+ for audio to work".
+ * A mute built on that switch would be silent on the way back, which is the
+ * one thing a mute must never be.
+ *
+ * So this is a separate, instant gate on the codec's output volume. The chain
+ * keeps running, the decoders keep decoding, the browser keeps receiving - it
+ * is the SPEAKER that goes quiet, in the time one I2C write takes.
+ *
+ * ⚠ RAM only, never persisted. A mute that survived a reboot would be
+ * indistinguishable from a dead speaker, and the operator would have no reason
+ * to look for a setting he does not remember leaving on. */
+void rx_audio_set_muted(bool mute)
+{
+    if (s_muted == mute) return;
+    s_muted = mute;
+    if (s_codec) esp_codec_dev_set_out_vol(s_codec, mute ? 0 : (int)s_volume);
+    ESP_LOGI(TAG, "speaker %s", mute ? "MUTED" : "unmuted");
+}
+
+bool rx_audio_is_muted(void) { return s_muted; }
 
 // ---- Live tuning ------------------------------------------------------
 // RAM only, deliberately NOT persisted - these are for iterating on the AGC/

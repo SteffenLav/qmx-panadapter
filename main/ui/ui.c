@@ -59,6 +59,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "ft8_pileup_modal.h"
 #include "resource_mgmt_modal.h"
 #include "activation_modal.h"
+#include "audio_modal.h"
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
 #include "util/wf_shift.h"
@@ -825,10 +826,31 @@ static void freq_popup_build(void)
     // sizes. Every other geometry value (cell sizes, gaps, fonts) derives
     // from these few so the layout stays internally consistent at both sizes.
     bool small = s_freq_kp_small;
-    int panel_w  = small ? 332 : 504;
-    int gap      = small ? 6   : 8;
-    int cell_h   = small ? 46  : 64;   // also used for the unit/mode/cancel-enter rows
-    int disp_h   = small ? 36  : 48;   // freq-display label height
+    /* ⭐ THE LARGE SIZE GREW - Samuel W7STF, 2026-10-22: "As I get older, the
+     * steadiness in my hands continues to degrade (imagine my challenge
+     * building my QMX+). The direct frequency entry dialog could benefit from
+     * an increase in both horizontal and vertical extents, and an increase in
+     * button size, and inter-button spacing."
+     *
+     * Panel 504 -> 660 wide, keys 64 -> 76 tall, gaps 8 -> 14. That is a key
+     * of 204 x 76 px with 14 px between, against 163 x 64 with 8. The gap
+     * grew proportionally more than the key on purpose: a shaking finger
+     * misses by landing BETWEEN two targets, so the empty space between them
+     * is what stops a wrong digit, not the size of the target itself.
+     *
+     * ⛔ 720 px IS THE WALL and this sits just inside it: with the mode row
+     * shown the panel computes to 704 px, leaving 16. Raising cell_h to 84
+     * gives 764 and the pad is clipped off the bottom of the screen WITH THE
+     * ENTER KEY ON IT. Recompute panel_h before raising either number again -
+     * the arithmetic is grid_top + 4 rows + the unit, mode and button rows,
+     * plus 24 of padding.
+     *
+     * The SMALL size is untouched: it exists for people who want the spectrum
+     * visible around the pad, and making both big would remove the choice. */
+    int panel_w  = small ? 332 : 660;
+    int gap      = small ? 6   : 14;
+    int cell_h   = small ? 46  : 76;   // also used for the unit/mode/cancel-enter rows
+    int disp_h   = small ? 36  : 52;   // freq-display label height
     int top_pad  = small ? 8   : 12;   // gap between the display label and the digit grid
     const lv_font_t *font_disp = small ? &lv_font_montserrat_22 : &lv_font_montserrat_32;
     const lv_font_t *font_key  = small ? &lv_font_montserrat_24 : &lv_font_montserrat_32;
@@ -854,7 +876,15 @@ static void freq_popup_build(void)
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_align(panel, LV_ALIGN_CENTER, s_freq_kp_dx, s_freq_kp_dy);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_bg_opa(panel, kp_opa, 0);  // translucent - spectrum stays faintly visible through the pad (opaque in Memory mode)
+    /* ⭐ OPAQUE AT THE LARGE SIZE. It was translucent so the spectrum stayed
+     * faintly visible through the pad - which is right for the small pad and
+     * wrong for this one. Samuel W7STF: "Direct entry is the sort of thing
+     * that the background could be completely obscured during the short
+     * period of time needed to actually enter the frequency." He is right:
+     * a moving trace behind a digit is contrast working against the only task
+     * on screen, and the task lasts seconds. The small pad keeps the old
+     * behaviour, because seeing past it is the reason to choose it. */
+    lv_obj_set_style_bg_opa(panel, small ? kp_opa : LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_radius(panel, 10, 0);
@@ -2173,6 +2203,14 @@ static void pinch_poll_cb(lv_timer_t *t);
 static void sync_nav_affordances(void);   // defined below; called from the 1 Hz poll
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
+
+/* One tap on the S-meter opens the audio panel - see the note at the hit area
+ * in build_top_bar(). */
+static void smeter_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    audio_modal_show();
+}
 
 /* ⭐ THE DIAL AS IT WAS WHEN THE SAMPLES WERE TAKEN (#298).
  *
@@ -5580,6 +5618,23 @@ static void build_top_bar(lv_obj_t *parent)
             lv_obj_set_style_radius(t, 0, 0);
             lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
         }
+
+        /* ⭐ THE S-METER IS THE AUDIO PANEL'S "HOT AREA" (Samuel W7STF).
+         *
+         * He counted four gestures to change the volume - swipe the drawer,
+         * scroll it, adjust, dismiss - and asked for "a button or a 'hot'
+         * area". This is one tap, and the S-meter is the right thing to tap:
+         * it is already about what you are HEARING, it is in the top bar on
+         * both the panadapter and FT8 screens, and it is the one part of that
+         * bar not already spoken for. The operator's own words about the top
+         * bar were "FULL of modes and features", so a sixth zone was not
+         * available even if one had been wanted.
+         *
+         * ⚠ It stays a meter. Nothing moves, nothing is greyed, no new chrome
+         * appears - the tap is the only thing added, and the panel it opens
+         * closes on a tap anywhere outside it. */
+        lv_obj_add_flag(smeter_cont, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(smeter_cont, smeter_tap_cb, LV_EVENT_CLICKED, NULL);
 
         // Moving level bar underneath the scale (half the original height).
         s_smeter_bar = lv_bar_create(smeter_cont);

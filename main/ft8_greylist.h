@@ -48,3 +48,10 @@ void ft8_greylist_clear_all(void);
 // Snapshot the calls currently being skipped (fail count at the limit), for the
 // web viewer. Returns the number written to out[0..max).
 int ft8_greylist_get_all(char out[][12], int max);
+
+/* The stations the OPERATOR skipped by hand, newest first, and a Clear for
+ * just those - Randy N4OPI asked for both. Separate from get_all()/clear_all()
+ * on purpose: a timeout entry means "cannot hear me", a skip means "I decided
+ * against this one", and one button must not silently do both. */
+int  ft8_greylist_get_skipped(char out[][12], int max);
+void ft8_greylist_clear_skipped(void);
