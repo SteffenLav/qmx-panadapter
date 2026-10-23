@@ -21,6 +21,52 @@
 
 static const char *TAG = "audio_modal";
 
+/* ---- THE GRID ------------------------------------------------------------
+ *
+ * Every y and every width in this panel comes from here. The first version
+ * had nine hand-picked numbers and the operator's verdict on the result was
+ * "you will never be a UI style designer". He was right, and the fault was
+ * not that anything was clipped - the arithmetic was correct - it was that
+ * nothing shared a rhythm: the AGC label landed 4 px under the slider above
+ * it, its buttons landed 10 px above the ones below, and three different row
+ * widths (860 slider, 200 button, 320/260 buttons) fought each other inside a
+ * 892 px panel.
+ *
+ * So: ONE content width, ONE gap between a control and the next label, and
+ * rows derived rather than typed. Change a constant, the panel reflows.
+ *
+ * Vertical: title, optional warning, three label+slider rows, a 3-button row,
+ * a 2-button row. PANEL_H is the sum, and the _Static_assert below refuses a
+ * build that would run off a 720 px screen. */
+#define AM_PAD        24     /* panel padding, all four sides            */
+#define AM_W          892    /* content width - EVERY row is this wide   */
+#define AM_LBL_H      40     /* a 32 px font's line box                  */
+#define AM_SLIDER_H   30
+#define AM_GAP        30     /* control -> next label                    */
+#define AM_BTN_H      72
+#define AM_BTN_GAP    20
+
+#define AM_Y_TITLE    0
+#define AM_Y_NOTE     58     /* 24 px warning; hidden most of the time   */
+#define AM_Y_ROW1     92     /* Tab5 speaker                             */
+#define AM_Y_ROW(n)   (AM_Y_ROW1 + (n) * (AM_LBL_H + AM_SLIDER_H + AM_GAP))
+#define AM_Y_SLIDER(n) (AM_Y_ROW(n) + AM_LBL_H)
+#define AM_Y_AGC      AM_Y_ROW(3)                      /* label          */
+#define AM_Y_AGC_BTN  (AM_Y_AGC + AM_LBL_H)
+#define AM_Y_BOTTOM   (AM_Y_AGC_BTN + AM_BTN_H + AM_GAP)
+#define AM_BTN_BOT_H  84
+#define AM_INNER_H    (AM_Y_BOTTOM + AM_BTN_BOT_H)
+#define AM_PANEL_H    (AM_INNER_H + 2 * AM_PAD)
+#define AM_PANEL_W    (AM_W + 2 * AM_PAD)
+/* Three across, two across - both spanning the same AM_W as the sliders. */
+#define AM_BTN3_W     ((AM_W - 2 * AM_BTN_GAP) / 3)
+#define AM_BTN2_W     ((AM_W - AM_BTN_GAP) / 2)
+
+/* The display is 720 tall. A panel that does not fit is a bug the compiler
+ * can catch, and this file has now had two layout faults that a glance at
+ * the glass found and a read of the source did not. */
+_Static_assert(AM_PANEL_H <= 700, "audio panel is too tall for the display");
+
 static lv_obj_t *s_modal = NULL, *s_panel = NULL;
 static lv_obj_t *s_btn_mute = NULL, *s_lbl_mute = NULL;
 static lv_obj_t *s_sl_vol = NULL,  *s_lbl_vol = NULL;
@@ -253,7 +299,7 @@ static lv_obj_t *make_slider(lv_obj_t *parent, int y, int max, lv_event_cb_t cb)
      * kept. A control that looks like nothing else in the UI is not clearer,
      * it is just unfamiliar, and the drawer's sliders are the shape his hands
      * already know. Same construction as those: size, range, callback. */
-    lv_obj_set_size(s, 860, 30);
+    lv_obj_set_size(s, AM_W, AM_SLIDER_H);
     lv_obj_align(s, LV_ALIGN_TOP_LEFT, 0, y);
     lv_slider_set_range(s, 0, max);
     lv_obj_add_event_cb(s, cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -286,17 +332,15 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_modal, close_cb, LV_EVENT_CLICKED, NULL);
 
     s_panel = lv_obj_create(s_modal);
-    /* 700 tall, not 520: two more rows went in (T78) and the text sizes are
-     * set for poor eyesight, so the panel grows rather than the text
-     * shrinking - the mistake the first version of this panel made. */
-    lv_obj_set_size(s_panel, 940, 700);
+    /* Derived, not typed - see THE GRID at the top of this file. */
+    lv_obj_set_size(s_panel, AM_PANEL_W, AM_PANEL_H);
     lv_obj_center(s_panel);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(s_panel, 2, 0);
     lv_obj_set_style_radius(s_panel, 10, 0);
-    lv_obj_set_style_pad_all(s_panel, 24, 0);
+    lv_obj_set_style_pad_all(s_panel, AM_PAD, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
     /* Stop a tap inside the panel from reaching the scrim behind it. */
     lv_obj_add_flag(s_panel, LV_OBJ_FLAG_CLICKABLE);
@@ -309,40 +353,36 @@ static void modal_build(void)
      * left, and 48 is the right end of the choice anyway for the one word
      * that says which panel this is. */
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, AM_Y_TITLE);
 
     s_lbl_vol = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(0xdddddd), 0);
-    lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, 0, 74);
-    s_sl_vol = make_slider(s_panel, 126, 100, vol_cb);
+    lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, 0, AM_Y_ROW(0));
+    s_sl_vol = make_slider(s_panel, AM_Y_SLIDER(0), 100, vol_cb);
 
     s_lbl_af = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_af, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_af, lv_color_hex(0xdddddd), 0);
-    lv_obj_align(s_lbl_af, LV_ALIGN_TOP_LEFT, 0, 206);
-    s_sl_af = make_slider(s_panel, 258, CAT_AF_GAIN_DB_MAX, af_cb);
+    lv_obj_align(s_lbl_af, LV_ALIGN_TOP_LEFT, 0, AM_Y_ROW(1));
+    s_sl_af = make_slider(s_panel, AM_Y_SLIDER(1), CAT_AF_GAIN_DB_MAX, af_cb);
 
     s_lbl_rf = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_rf, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_rf, lv_color_hex(0xdddddd), 0);
-    lv_obj_align(s_lbl_rf, LV_ALIGN_TOP_LEFT, 0, 360);
-    s_sl_rf = make_slider(s_panel, 412, CAT_RF_GAIN_DB_MAX, rf_cb);
+    lv_obj_align(s_lbl_rf, LV_ALIGN_TOP_LEFT, 0, AM_Y_ROW(2));
+    s_sl_rf = make_slider(s_panel, AM_Y_SLIDER(2), CAT_RF_GAIN_DB_MAX, rf_cb);
 
     {
         lv_obj_t *agc = lv_label_create(s_panel);
         lv_label_set_text(agc, "AGC");
         lv_obj_set_style_text_font(agc, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_color(agc, lv_color_hex(0xdddddd), 0);
-        lv_obj_align(agc, LV_ALIGN_TOP_LEFT, 0, 446);
+        lv_obj_align(agc, LV_ALIGN_TOP_LEFT, 0, AM_Y_AGC);
         for (int i = 0; i < 3; i++) {
-            s_btn_agc[i] = make_btn(s_panel, AGC_PRESETS[i].name, 200, 72,
-                                    /* 478, not 492: the inner height is
-                                     * 700 - 2*24 = 652 and Mute/Close are
-                                     * bottom-aligned at 92 tall, so anything
-                                     * past 560 is under them. 478 + 72 = 550
-                                     * clears it by 10 px. */
-                                    LV_ALIGN_TOP_LEFT, i * 220, 478,
+            s_btn_agc[i] = make_btn(s_panel, AGC_PRESETS[i].name,
+                                    AM_BTN3_W, AM_BTN_H, LV_ALIGN_TOP_LEFT,
+                                    i * (AM_BTN3_W + AM_BTN_GAP), AM_Y_AGC_BTN,
                                     agc_cb, NULL);
         }
     }
@@ -350,14 +390,24 @@ static void modal_build(void)
     s_lbl_note = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_note, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_lbl_note, lv_color_hex(0xFFC864), 0);
-    lv_obj_align(s_lbl_note, LV_ALIGN_TOP_LEFT, 0, 318);
+    /* Under the title, not buried between the controls: when it is showing,
+     * it is the most important thing on the panel - the radio is silent. Its
+     * row is reserved whether or not it is visible, so nothing below moves
+     * when it appears. */
+    lv_obj_align(s_lbl_note, LV_ALIGN_TOP_LEFT, 0, AM_Y_NOTE);
     lv_label_set_text(s_lbl_note, "");
     lv_obj_add_flag(s_lbl_note, LV_OBJ_FLAG_HIDDEN);
 
-    s_btn_mute = make_btn(s_panel, "Mute", 320, 92, LV_ALIGN_BOTTOM_LEFT, 0, 0,
+    /* Placed on the grid, NOT bottom-aligned. Bottom alignment is what let
+     * the AGC row drift to within 10 px of these two: the two rows were
+     * measured from opposite ends of the panel, so neither number knew about
+     * the other. Both halves span AM_W between them, like every other row. */
+    s_btn_mute = make_btn(s_panel, "Mute", AM_BTN2_W, AM_BTN_BOT_H,
+                          LV_ALIGN_TOP_LEFT, 0, AM_Y_BOTTOM,
                           mute_cb, &s_lbl_mute);
-    lv_obj_t *close = make_btn(s_panel, "Close", 260, 92,
-                               LV_ALIGN_BOTTOM_RIGHT, 0, 0, close_cb, NULL);
+    lv_obj_t *close = make_btn(s_panel, "Close", AM_BTN2_W, AM_BTN_BOT_H,
+                               LV_ALIGN_TOP_LEFT, AM_BTN2_W + AM_BTN_GAP,
+                               AM_Y_BOTTOM, close_cb, NULL);
     lv_obj_set_style_bg_color(close, lv_color_hex(0x3a4149), 0);
     lv_obj_set_style_border_color(close, lv_color_hex(0x5a6169), 0);
 
