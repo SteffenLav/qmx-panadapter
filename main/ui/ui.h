@@ -431,6 +431,13 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 // Bottom-bar UTC clock (center). valid=false shows "--:--:--" with suffix.
 // suffix is the time-source indicator, e.g. " UTC(NTP)" or " UTC".
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix);
+/* Spectrum peak hold: the window in SECONDS, 0 = off. A sliding window, not
+ * a latch - what is drawn is the highest each column reached in the last N
+ * seconds. Safe from any task: the setter only stores the number, and the
+ * buffers live and die inside ui_push_spectrum(). */
+void    ui_set_peak_hold_s(uint8_t secs);
+uint8_t ui_get_peak_hold_s(void);
+
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 /* Flat mode from the web (#357). ui_set_flat_mode() moves LVGL objects and so

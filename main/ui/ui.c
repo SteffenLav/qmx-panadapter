@@ -3459,7 +3459,7 @@ static const drawer_item_t GRP_SPECTRUM[] = {
      * the dB range entirely, which is why those controls grey out when it is
      * on. A switch that disables its neighbours belongs beside them. */
     { DRAWER_SEC_FLAT, "Flat Spectrum", false },
-    { DRAWER_SEC_SMOOTHING, "Smoothing", false },
+    { DRAWER_SEC_SMOOTHING, "Smoothing & peak hold", false },
     { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window", false },
     { DRAWER_SEC_IQ, "IQ Balance", false },
     /* IF calibration moved to the Radio group, above CW centre - it trims where
@@ -3832,6 +3832,12 @@ static lv_obj_t *s_lbl_wf_black = NULL;
 static lv_obj_t *s_slider_wf_contrast = NULL;
 static lv_obj_t *s_lbl_wf_contrast = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
+static lv_obj_t *s_dropdown_peak = NULL;
+/* The peak-hold windows offered, in the dropdown's own order. ONE table: the
+ * option list is built from it, the callback indexes it, and the web page's
+ * list is generated from the same numbers - a second copy is how the
+ * waterfall rate's two surfaces drifted. 0 = off. */
+static const uint8_t PEAK_STEPS[] = { 0, 2, 5, 10, 30 };
 static lv_obj_t *s_dropdown_wf_speed = NULL;
 static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
@@ -4062,6 +4068,7 @@ static void drawer_refresh_activation(void);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
+static void drawer_dropdown_peak_cb(lv_event_t *e);
 static void drawer_dropdown_wf_speed_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
 static int  spur_mode_to_menu_idx(uint8_t mode);
@@ -4242,6 +4249,41 @@ static uint8_t *s_spec_canvas_buf = NULL;
  * is at the invalidate itself. */
 static int16_t *s_frame_ytop;         /* y_top per column, PREVIOUS push   */
 static bool     s_frame_ytop_valid;
+
+/* PEAK HOLD - A4 step 1 (Sam W7STF), and it is a SLIDING WINDOW, not a latch.
+ *
+ * Operator, 2026-10-23: "maybe it should not be an absolute peak-hold - but
+ * kind of skip peaks older than xx seconds?" A latched maximum fills in with
+ * the loudest thing that ever happened and never lets go; what is wanted is
+ * "the highest this column reached in the last N seconds", which falls on its
+ * own the moment the signal that made it is older than N.
+ *
+ * HELD IN SCREEN Y, NOT IN dB, and that is deliberate. In flat mode the drawn
+ * height is (smooth - floor - bias) computed HERE, per column, after a 5-tap
+ * spatial average - a peak held on the dB bins in render.c would sit off the
+ * trace it is supposed to cap. Smaller y = stronger.
+ *
+ * NOT A RING OF EVERY FRAME. 10 fps x 30 s x 1280 columns is 384,000 samples
+ * to scan per push. The window is split into PEAK_BUCKETS sub-windows instead:
+ * each push writes only the CURRENT bucket, and the displayed value is the
+ * minimum across all of them. That minimum is recomputed only when a bucket
+ * rotates - once every N/8 seconds - so the per-push cost is two sequential
+ * passes over 1280 int16, and the expiry is accurate to N/8.
+ *
+ * PSRAM: 8 x 1280 x 2 = 20 KB plus two 2.5 KB rows. Allocated when the feature
+ * is switched on and freed when it is off, both from ui_push_spectrum() - the
+ * ONE task that touches these arrays. The setter only stores the number, so a
+ * drawer tap or an /api/settings POST can never free a buffer out from under
+ * a draw in progress. */
+#define PEAK_BUCKETS 8
+static int16_t *s_peak_buk;        /* [PEAK_BUCKETS][DISPLAY_H_RES] min y    */
+static int16_t *s_peak_show;       /* min across the buckets = what is drawn */
+static int16_t *s_peak_prev;       /* what was drawn last push, for the band */
+static int      s_peak_cur;        /* bucket being filled                    */
+static int64_t  s_peak_roll_us;    /* when the current bucket started        */
+static uint8_t  s_peak_secs;       /* window, seconds. 0 = off               */
+static uint8_t  s_peak_secs_now;   /* the window the buckets were built for  */
+static uint64_t s_peak_view_sig;   /* dial/zoom/pan - a change voids the hold */
 static uint64_t s_frame_overlay_sig;  /* everything that is not the trace  */
 /* ⛔ WHY THE PARTIAL PATH DID NOT ENGAGE - measured, not guessed.
  *
@@ -10041,6 +10083,18 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
      * progress belongs to the next window, not to this one. */
 }
 
+/* Peak-hold window in seconds; 0 switches it off. Stored only - the buffers
+ * are allocated and freed inside ui_push_spectrum(), which is the one task
+ * that reads them. See the note at s_peak_buk. */
+void ui_set_peak_hold_s(uint8_t secs)
+{
+    if (secs > 60) secs = 60;
+    s_peak_secs = secs;
+    ESP_LOGI(TAG, "spectrum peak hold: %u s%s", (unsigned)secs, secs ? "" : " (off)");
+}
+
+uint8_t ui_get_peak_hold_s(void) { return s_peak_secs; }
+
 void ui_push_spectrum(const float *bins, int n_bins)
 {
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
@@ -10336,6 +10390,85 @@ void ui_push_spectrum(const float *bins, int n_bins)
     SPEC_SIG((int)(eff_zoom * 1000.0f)); SPEC_SIG(zoom_spec != NULL);
     if (pv_ok) { SPEC_SIG(pvc.dial_hz); SPEC_SIG(pvc.if_offset_hz); }
 
+    /* Peak hold: allocate, expire, rotate. See the note at s_peak_buk. */
+    int16_t *peak_buk_cur = NULL;
+    {
+        uint8_t secs = s_peak_secs;
+        if (!secs) {
+            if (s_peak_buk) {
+                free(s_peak_buk);  s_peak_buk  = NULL;
+                free(s_peak_show); s_peak_show = NULL;
+                free(s_peak_prev); s_peak_prev = NULL;
+                s_peak_secs_now = 0;
+            }
+        } else if (!s_peak_buk) {
+            s_peak_buk  = heap_caps_malloc((size_t)PEAK_BUCKETS * DISPLAY_H_RES * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_peak_show = heap_caps_malloc(DISPLAY_H_RES * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_peak_prev = heap_caps_malloc(DISPLAY_H_RES * sizeof(int16_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!s_peak_buk || !s_peak_show || !s_peak_prev) {
+                /* Not fatal - the trace is what matters. Say so once and leave
+                 * the feature off rather than drawing half of it. */
+                ESP_LOGW(TAG, "no PSRAM for the peak hold - staying off");
+                free(s_peak_buk);  s_peak_buk  = NULL;
+                free(s_peak_show); s_peak_show = NULL;
+                free(s_peak_prev); s_peak_prev = NULL;
+                s_peak_secs = 0;
+            } else {
+                s_peak_secs_now = 0;   /* forces the reset below */
+            }
+        }
+        if (s_peak_buk) {
+            /* A pan, a zoom or a retune moves what every column MEANS, so a
+             * peak held against the old mapping is a peak on the wrong
+             * frequency. Voided, not dragged along. */
+            uint64_t vs = 1469598103934665603ULL;
+#define PEAK_SIG(v) do { vs = (vs ^ (uint64_t)(int64_t)(v)) * 1099511628211ULL; } while (0)
+            PEAK_SIG(center_bin); PEAK_SIG(window_bins); PEAK_SIG(bin_start);
+            PEAK_SIG((int)(eff_zoom * 1000.0f)); PEAK_SIG(pv_ok);
+            PEAK_SIG(s_flat_mode); PEAK_SIG(s_last_qmx_freq_hz);
+#undef PEAK_SIG
+            if (vs != s_peak_view_sig || secs != s_peak_secs_now) {
+                for (int i = 0; i < PEAK_BUCKETS * DISPLAY_H_RES; i++)
+                    s_peak_buk[i] = (int16_t)SPECTRUM_H;
+                for (int i = 0; i < DISPLAY_H_RES; i++) {
+                    s_peak_show[i] = (int16_t)SPECTRUM_H;
+                    s_peak_prev[i] = -1;          /* unknown: full repaint */
+                }
+                s_peak_view_sig = vs;
+                s_peak_secs_now = secs;
+                s_peak_cur      = 0;
+                s_peak_roll_us  = (int64_t)now_us;
+            }
+            int64_t per_us = (int64_t)secs * 1000000 / PEAK_BUCKETS;
+            if (per_us < 1000) per_us = 1000;
+            int64_t age = (int64_t)now_us - s_peak_roll_us;
+            if (age >= per_us) {
+                int steps = (int)(age / per_us);
+                if (steps > PEAK_BUCKETS) steps = PEAK_BUCKETS;
+                for (int k = 0; k < steps; k++) {
+                    s_peak_cur = (s_peak_cur + 1) % PEAK_BUCKETS;
+                    int16_t *b = &s_peak_buk[s_peak_cur * DISPLAY_H_RES];
+                    for (int i = 0; i < DISPLAY_H_RES; i++) b[i] = (int16_t)SPECTRUM_H;
+                }
+                s_peak_roll_us += (int64_t)steps * per_us;
+                /* The only place the shown value can RISE (= get weaker): the
+                 * bucket that held the old maximum has just been dropped. */
+                for (int i = 0; i < DISPLAY_H_RES; i++) {
+                    int16_t m = (int16_t)SPECTRUM_H;
+                    for (int k = 0; k < PEAK_BUCKETS; k++) {
+                        int16_t v = s_peak_buk[k * DISPLAY_H_RES + i];
+                        if (v < m) m = v;
+                    }
+                    s_peak_show[i] = m;
+                }
+            }
+            peak_buk_cur = &s_peak_buk[s_peak_cur * DISPLAY_H_RES];
+        }
+    }
+
     for (int x = 0; x < DISPLAY_H_RES; x++) {
         int bin;
         if (pv_ok) {
@@ -10347,6 +10480,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 /* The hatch is static for a given run, and the run itself is
                  * in the signature - so this column contributes no band. */
                 if (s_frame_ytop) s_frame_ytop[x] = -1;
+                /* "No information here" must not keep yesterday's peak either. */
+                if (peak_buk_cur) {
+                    peak_buk_cur[x] = (int16_t)SPECTRUM_H;
+                    s_peak_show[x]  = (int16_t)SPECTRUM_H;
+                    s_peak_prev[x]  = -1;
+                }
                 continue;
             }
         } else {
@@ -10401,6 +10540,32 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Dim fill from just below the connecting line down to the bottom.
         for (int y = y_hi + 1; y < SPECTRUM_H; y++) {
             px[y * DISPLAY_H_RES + x] = fg_dim;
+        }
+        /* The peak line, one pixel, drawn AFTER the fill so the fill cannot
+         * paint over it and BEFORE the overlays so the cursor and the passband
+         * edges still win. Cyan: the trace is green, the VFO gold, RIT
+         * magenta - cyan is the one unused colour on this canvas. */
+        if (peak_buk_cur) {
+            if (y_top < peak_buk_cur[x]) peak_buk_cur[x] = (int16_t)y_top;
+            if (y_top < s_peak_show[x])  s_peak_show[x]  = (int16_t)y_top;
+            int py = s_peak_show[x];
+            if (py < y_b) px[py * DISPLAY_H_RES + x] = 0x07FF;
+            /* The peak moves on its own clock, so the changed band has to
+             * cover it as well as the trace - otherwise a peak that falls
+             * inside an otherwise unchanged column leaves its old pixel on the
+             * glass until something else repaints that row. */
+            if (s_frame_ytop) {
+                int pprev = s_frame_ytop_valid ? s_peak_prev[x] : -1;
+                if (pprev != py) {
+                    int lo3, hi3;
+                    if (pprev < 0) { lo3 = 0; hi3 = SPECTRUM_H - 1; }
+                    else { lo3 = (pprev < py) ? pprev : py;
+                           hi3 = (pprev > py) ? pprev : py; }
+                    if (lo3 - 1 < band_lo) band_lo = lo3 - 1;
+                    if (hi3 + 1 > band_hi) band_hi = hi3 + 1;
+                }
+                s_peak_prev[x] = (int16_t)py;
+            }
         }
         /* The rows that can differ from last push are exactly those between
          * the old y_top and the new one. Above both: still black or overlay.
@@ -15118,7 +15283,7 @@ static void drawer_build(void)
 
     // Smoothing section
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SMOOTHING, y, 130);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SMOOTHING, y, 210);
         lv_obj_t *sm_hdr = lv_label_create(sec);
         lv_label_set_text(sm_hdr, "Smoothing");
         lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -15149,7 +15314,33 @@ static void drawer_build(void)
         lv_slider_set_value(s_slider_alpha, alpha_v, LV_ANIM_OFF);
         lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, 70);
         lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 130;
+
+        /* Peak hold sits with the smoothing, not with the waterfall: both
+         * controls decide how the SPECTRUM TRACE treats time. It is a sliding
+         * window - the line shows the highest each column reached in the last
+         * N seconds and falls when that peak ages out - so the label says
+         * "last N s" rather than "hold". */
+        lv_obj_t *pk_lbl = lv_label_create(sec);
+        lv_label_set_text(pk_lbl, "Peak hold");
+        lv_obj_set_style_text_color(pk_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(pk_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(pk_lbl, LV_ALIGN_TOP_LEFT, 0, 112);
+        s_dropdown_peak = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_peak, "Off\nlast 2 s\nlast 5 s\nlast 10 s\nlast 30 s");
+        lv_obj_set_size(s_dropdown_peak, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_peak, LV_ALIGN_TOP_LEFT, 0, 148);
+        lv_obj_set_style_text_font(s_dropdown_peak, &lv_font_montserrat_28, 0);
+        for (size_t i = 0; i < sizeof(PEAK_STEPS) / sizeof(PEAK_STEPS[0]); i++) {
+            if (PEAK_STEPS[i] == smcfg.spec_peak_s) {
+                lv_dropdown_set_selected(s_dropdown_peak, (uint32_t)i);
+                break;
+            }
+        }
+        lv_obj_add_event_cb(s_dropdown_peak, drawer_dropdown_peak_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_peak, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        /* 130 -> 210 with the row above. The section HEIGHT and this number
+         * must always move together or the next section overlaps it. */
+        y += 210;
     }
 
     // CW section
@@ -16140,7 +16331,7 @@ static void drawer_build(void)
     //    dark drawer), applied to the closed box AND the option list
     lv_obj_t *drawer_dropdowns[] = {
         s_dropdown_sleep, s_dropdown_bpregion, s_dropdown_cmap, s_dropdown_wf_window,
-        s_dropdown_wf_speed,
+        s_dropdown_wf_speed, s_dropdown_peak,
     };
     for (size_t i = 0; i < sizeof(drawer_dropdowns) / sizeof(drawer_dropdowns[0]); i++) {
         lv_obj_t *dd = drawer_dropdowns[i];
@@ -17661,6 +17852,18 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
     uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
     dsp_set_window(idx);
     settings_set_wf_window(idx);
+}
+
+static void drawer_dropdown_peak_cb(lv_event_t *e)
+{
+    /* The dropdown index IS the PEAK_STEPS index - the option list is built
+     * from that table and in its order, so there is no second mapping here
+     * that could drift from it. */
+    uint32_t idx = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx >= sizeof(PEAK_STEPS) / sizeof(PEAK_STEPS[0])) idx = 0;
+    uint8_t secs = PEAK_STEPS[idx];
+    ui_set_peak_hold_s(secs);
+    settings_set_spec_peak_s(secs);
 }
 
 static void drawer_dropdown_wf_speed_cb(lv_event_t *e)

@@ -833,6 +833,11 @@ static esp_err_t status_handler(httpd_req_t *req)
      * the setting is changed from the Tab5 drawer instead. */
     cJSON_AddNumberToObject(root, "wf_rows_per_s",
                             (double)settings_get_wf_rows_per_s());
+    /* The peak-hold window, here for exactly the reason above: the BROWSER
+     * runs its own copy of the hold, and a value cached from /api/settings
+     * would go stale the moment the setting is changed on the Tab5. */
+    cJSON_AddNumberToObject(root, "peak_hold_s",
+                            (double)settings_get_spec_peak_s());
     // TX/QSO banner data, only while the FT8/FT4 screen is live (the FT8
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
@@ -6138,6 +6143,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     /* Added 2026-09-18: it was a Tab5-drawer setting only, while every other
        waterfall control on the same drawer row was already here. */
     cJSON_AddNumberToObject(d, "wf_rows_per_s",  c.wf_rows_per_s);
+    cJSON_AddNumberToObject(d, "peak_hold_s",    c.spec_peak_s);
     cJSON_AddNumberToObject(d, "colormap",       c.colormap_idx);
     cJSON_AddNumberToObject(d, "brightness",     c.brightness_pct);
     cJSON_AddNumberToObject(d, "sleep_min",      c.display_sleep_min);
@@ -6970,6 +6976,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             render_set_waterfall_rows_per_s((uint8_t)wf_rows);
             settings_set_wf_rows_per_s((uint8_t)wf_rows);
             ui_sync_wf_rate_controls();
+        }
+        /* Spectrum peak hold, seconds; 0 = off. Applied live - there is
+         * nothing to restart, the buffers are built on the next push. */
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "peak_hold_s"))) {
+            int sec = v->valueint;
+            if (sec < 0)  sec = 0;
+            if (sec > 60) sec = 60;
+            settings_set_spec_peak_s((uint8_t)sec);
+            ui_set_peak_hold_s((uint8_t)sec);
         }
         if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_window"))) {
             uint8_t idx = (uint8_t)v->valuedouble; if (idx > 2) idx = 0;

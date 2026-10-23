@@ -374,6 +374,25 @@ teal. You can always see what is being touched.
 
 ## Panadapter & Zoom
 
+**Peak hold** *(Smoothing & peak hold; off by default)* — draws a cyan line over
+the spectrum showing the highest each point of the band reached in the last
+**2, 5, 10 or 30 seconds**. The browser has the same control and the two screens
+run the same arithmetic.
+
+It is a sliding window, not a latch. A latched maximum keeps the loudest thing
+that ever happened and never lets it go, so after a few minutes the line is a
+record of the past rather than a picture of the band. Here a peak falls on its
+own once it is older than the window, which is what makes an intermittent
+signal — an FT8 station that transmits every 15 seconds, a CW operator between
+overs — visible as a peak that is still there seconds after the trace itself
+has dropped back into the noise.
+
+A retune, a zoom or a pan clears the hold: every column then means a different
+frequency, and a peak carried across would be a peak on the wrong one.
+
+Cost: about 25 KB of PSRAM while it is on, and nothing at all while it is off —
+the buffers are not allocated until you switch it on.
+
 **Still spectrum** *(Radio & display, on by default)* — the spectrum and waterfall hold
 still and the VFO marker moves across them, so a signal stays where you last saw it while
 you tune towards it. Switch it off and the display re-centres on the dial at every step

@@ -456,6 +456,13 @@ typedef struct {
      * drawer comment that already made that call once.
      * NVS migrates the old key automatically (settings.c, KEY_WF_SPEED). */
     uint8_t  wf_rows_per_s;
+    /* Spectrum peak hold, in SECONDS of window; 0 = off (default).
+     * A sliding window, not a latch: what is drawn is the highest this column
+     * reached in the last N seconds, so a peak falls on its own once the
+     * signal that made it is older than that. The operator asked for it that
+     * way - "maybe it should not be an absolute peak-hold, but kind of skip
+     * peaks older than xx seconds" (2026-10-23). Sam W7STF's A4. */
+    uint8_t  spec_peak_s;
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
     // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
@@ -1005,6 +1012,8 @@ void settings_set_wf_contrast_db(float db);
 void settings_set_wf_floor_blend(uint8_t pct);
 void settings_set_wf_window(uint8_t idx);
 void settings_set_wf_rows_per_s(uint8_t rows);
+/* Spectrum peak-hold window in seconds, 0..60; 0 = off. */
+void settings_set_spec_peak_s(uint8_t secs);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
@@ -1025,6 +1034,8 @@ uint8_t settings_get_wspr_rx_cycles(void);
  * the httpd task on /api/settings, and a qmx_settings_t on that stack is the
  * fault this header warns about four times over. */
 uint8_t settings_get_wf_rows_per_s(void);
+/* Narrow read, same reason as the rows/s one above it. */
+uint8_t settings_get_spec_peak_s(void);
 uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none
 /* Static-IP fields ONLY, 64 bytes of caller-supplied buffers. Any argument may

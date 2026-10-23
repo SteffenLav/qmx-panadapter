@@ -4857,6 +4857,8 @@ const SET_FIELDS = [
   ["Display & waterfall", "display.db_min",         "num", "Scale floor (dBm)", "default -130"],
   ["Display & waterfall", "display.db_max",         "num", "Scale ceiling (dBm)", "default -30"],
   ["Display & waterfall", "display.ema_pct",        "num", "Spectrum smoothing (%)", "EMA alpha x 100; default 20"],
+  ["Display & waterfall", "display.peak_hold_s",    "num", "Peak hold (seconds)",
+   "0 is off. A sliding window, not a latch: the cyan line is the highest each point reached in the last N seconds, and it falls once that peak is older than N. The Tab5 drawer offers 2, 5, 10 and 30; any value up to 60 is accepted here."],
 
   /* The download half of updating, on its own switch. Three people asked for
      it in one afternoon - Michael KZ4LY, Samuel W7STF and Steve N9SZ - and
@@ -7655,6 +7657,9 @@ async function tick() {
     /* FT8 vs FT4 straight from the engine (s.ft8.proto). It used to be
        inferred by looking for "FT4" in the TX status text, which reads FT8
        whenever nothing is transmitting - a guess wearing a fact's clothes. */
+    /* Peak hold, live, for the same reason the waterfall rate is: changing it
+       on the Tab5 drawer must move this screen too, with no reload. */
+    if (typeof s.peak_hold_s === "number") peakHoldS = s.peak_hold_s;
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
     if (s.ft8 && typeof s.ft8.js8_submode === "number") {
       lastJs8Submode = s.ft8.js8_submode;
@@ -10317,9 +10322,11 @@ function drawSpectrumFlat(bytes) {
   sctx.lineTo(W, H); sctx.closePath();
   sctx.fillStyle = "#003800"; sctx.fill();
 
+  const peakOnF = peakBegin(W, H, "flat|" + (frameDialHz || radioFreqHz) + "|" + lastZoom + "|" + lastPanBins + "|" + lastZoomDecim);
   sctx.beginPath(); sctx.moveTo(0, yOf(0));
   for (let i = 1; i < W; i++) sctx.lineTo(i, yOf(i));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
+  if (peakOnF) { for (let i = 0; i < W; i++) peakFeed(i, yOf(i)); peakStroke(W); }
 
   drawPassbandEdges(sctx, W, H);
   const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
@@ -10396,6 +10403,13 @@ function drawSpectrumRaw(bytes) {
   for (let i = 1; i < W; i++)
     sctx.lineTo(i, H - 1 - Math.round(bytes[getBinR(i)] * (H-1) / 255));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
+  if (peakBegin(W, H, "raw|" + (frameDialHz || radioFreqHz) + "|" + lastZoom + "|" + lastPanBins + "|" + lastZoomDecim)) {
+    for (let i = 0; i < W; i++) {
+      const b = getBinR(i);
+      peakFeed(i, b === null ? null : H - 1 - Math.round(bytes[b] * (H-1) / 255));
+    }
+    peakStroke(W);
+  }
 
   drawPassbandEdges(sctx, W, H);
   const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
@@ -10509,6 +10523,94 @@ let wfBlackDb = 9, wfContrastDb = 45, wfFloorBlend = 1.0;
    the RAW scratch with its own alpha, independently, which is what wfSmooth already
    mirrors. Chaining the two would smooth twice and is why they are kept separate. */
 let specEmaAlpha = 0.4;                       // render.c's default
+
+/* PEAK HOLD, the browser's half - ui.c's algorithm, not a second design.
+   A SLIDING WINDOW, not a latch: the line shows the highest each column
+   reached in the last peakHoldS seconds and falls when that peak ages out
+   (operator, 2026-10-23: "kind of skip peaks older than xx seconds").
+
+   Same bucketing as the device, for the same reason: keeping every frame
+   would be 10 fps x 30 s x W samples to scan per draw. The window is split
+   into PEAK_BUCKETS sub-windows, each draw writes only the current one, and
+   the shown minimum is recomputed when a bucket rotates - so expiry is
+   accurate to window/8 on both screens.
+
+   Y, not dB, and for the same reason as on the Tab5: the flat and raw paths
+   compute their heights differently and the peak has to sit on whichever
+   trace is being drawn. The canvas can also be resized under us, so the
+   buffers are rebuilt whenever W, H or the view changes. */
+const PEAK_BUCKETS = 8;
+let peakHoldS   = 0;          // 0 = off; /api/status carries the setting
+let peakBuk     = null;       // PEAK_BUCKETS arrays of W
+let peakShow    = null;
+let peakSig     = "";
+let peakCur     = 0;
+let peakRollMs  = 0;
+
+function peakReset(W, sig) {
+  peakBuk = [];
+  for (let k = 0; k < PEAK_BUCKETS; k++) peakBuk.push(new Float32Array(W).fill(Infinity));
+  peakShow   = new Float32Array(W).fill(Infinity);
+  peakSig    = sig;
+  peakCur    = 0;
+  peakRollMs = performance.now();
+}
+
+/* Called once per draw, BEFORE the trace loop. Returns false when the feature
+   is off, which is also the signal to skip peakFeed/peakStroke. */
+function peakBegin(W, H, sig) {
+  if (!peakHoldS) { peakBuk = null; peakShow = null; peakSig = ""; return false; }
+  const full = sig + "|" + W + "x" + H + "|" + peakHoldS;
+  if (!peakBuk || peakSig !== full || peakShow.length !== W) peakReset(W, full);
+  const perMs = Math.max(100, peakHoldS * 1000 / PEAK_BUCKETS);
+  const now   = performance.now();
+  let age = now - peakRollMs;
+  if (age >= perMs) {
+    let steps = Math.min(PEAK_BUCKETS, Math.floor(age / perMs));
+    for (let k = 0; k < steps; k++) {
+      peakCur = (peakCur + 1) % PEAK_BUCKETS;
+      peakBuk[peakCur].fill(Infinity);
+    }
+    peakRollMs += steps * perMs;
+    /* The only place the shown value can get WEAKER: the bucket that held the
+       old maximum has just been dropped. */
+    for (let i = 0; i < W; i++) {
+      let m = Infinity;
+      for (let k = 0; k < PEAK_BUCKETS; k++) { const v = peakBuk[k][i]; if (v < m) m = v; }
+      peakShow[i] = m;
+    }
+  }
+  return true;
+}
+
+/* One column. y === null means "no data here" - that column holds nothing,
+   exactly as the hatched columns on the Tab5 hold nothing. */
+function peakFeed(x, y) {
+  if (!peakBuk) return;
+  if (y === null || y === undefined || !isFinite(y)) {
+    peakBuk[peakCur][x] = Infinity;
+    peakShow[x] = Infinity;
+    return;
+  }
+  if (y < peakBuk[peakCur][x]) peakBuk[peakCur][x] = y;
+  if (y < peakShow[x])         peakShow[x] = y;
+}
+
+/* Drawn after the trace and before the passband edges and the VFO marker, so
+   the markers still win - the same order as the Tab5 canvas. Cyan, because
+   the trace is green, the VFO amber and RIT magenta. */
+function peakStroke(W) {
+  if (!peakBuk) return;
+  sctx.strokeStyle = "#35d6e6"; sctx.lineWidth = 1;
+  sctx.beginPath();
+  let pen = false;
+  for (let i = 0; i < W; i++) {
+    const y = peakShow[i];
+    if (!isFinite(y)) { if (pen) { sctx.stroke(); sctx.beginPath(); pen = false; } continue; }
+    if (!pen) { sctx.moveTo(i, y); pen = true; } else sctx.lineTo(i, y);
+  }
+  if (pen) sctx.stroke();
+}
 const specStage1 = new Float32Array(SPEC_W);
 let specStage1Ready = false;
 

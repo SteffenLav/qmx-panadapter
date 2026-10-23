@@ -738,6 +738,7 @@ void app_main(void)
     render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
     dsp_set_window(cfg->wf_window);
     render_set_waterfall_rows_per_s(cfg->wf_rows_per_s);
+    ui_set_peak_hold_s(cfg->spec_peak_s);
     if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
     cfg = NULL;
 
