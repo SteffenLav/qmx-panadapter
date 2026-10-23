@@ -1272,27 +1272,34 @@ static void bw_preset_cb(lv_event_t *e)
     }
 }
 
-/* CW-Tune, reached from the BW popup's last row - see where it is built.
+/* CW-Tune: a LONG PRESS ON THE BW HIT ZONE.
  *
- * ⛔ NOT a double-tap and NOT a long-press on the spectrum. The double-tap on
- * that surface already resets zoom+pan, and the comment at it records why
- * repurposing it was tried and reverted: the first tap of an attempted
- * double-tap can be held long enough to RETUNE before a second tap can be
- * compared against it. A long press has the same problem from the other end -
- * a slow pan drag trips it. The BW popup is where CW filtering decisions are
- * already made, it only exists in CW with CW widths in it, and it costs no
- * permanent screen space on a display the operator has just said has too much
- * competing for the eye. */
-static void cw_tune_row_cb(lv_event_t *e)
+ * It was the last row of the BW dropdown for one flash and the operator's
+ * verdict was that it is "all the way down the bottom of the dropdown and not
+ * easy to hit". The long press is one gesture on a 165 px-wide zone that is
+ * already about the CW filter, and it costs no permanent screen space on a
+ * display he has just said has too much competing for the eye.
+ *
+ * Safe here, and ONLY here: the zones take SHORT_CLICKED for their dropdowns,
+ * so a long press does not also open one, and long press on them has been
+ * free since Resource Management was taken off it (Gyula HA3HZ, 2026-09-29).
+ *
+ * ⛔ NOT a double-tap and NOT a long-press on the SPECTRUM. The double-tap
+ * there already resets zoom+pan, and the comment at it records that
+ * repurposing it was tried and reverted: the first tap can be held long
+ * enough to RETUNE before a second can be compared against it. A long press
+ * on that surface is tripped by a slow pan. */
+static void bw_label_long_cb(lv_event_t *e)
 {
     (void)e;
-    bw_popup_close();
     int32_t moved = 0;
     ui_cw_tune_t r = ui_cw_tune_to_peak(&moved);
     char msg[72];
     if (r == UI_CW_TUNE_OK) {
         if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
         else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
+    } else if (r == UI_CW_TUNE_LISTENING) {
+        snprintf(msg, sizeof(msg), "Zero-beat: listening for up to 8 s...");
     } else {
         snprintf(msg, sizeof(msg), "Zero-beat: %s", ui_cw_tune_reason(r));
     }
@@ -1449,10 +1456,7 @@ static void bw_popup_open(void)
 
     int btn_h = 64;
     int panel_w = 140;
-    /* One more row in CW: the zero-beat action. The height and the row count
-     * must move together or the last row is clipped. */
-    const bool cw_row = (cur_mode && strstr(cur_mode, "CW") != NULL);
-    int panel_h = (n_bw + (cw_row ? 1 : 0)) * btn_h + 4;
+    int panel_h = n_bw * btn_h + 4;
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_set_style_pad_top(panel, 0, 0);
@@ -1492,27 +1496,6 @@ static void bw_popup_open(void)
         lv_obj_center(lbl);
     }
 
-    if (cw_row) {
-        /* An ACTION, not a width, so it is drawn as one: separated by a rule
-         * and in the accent colour rather than the list's grey. */
-        lv_obj_t *btn = lv_obj_create(panel);
-        lv_obj_set_size(btn, panel_w, btn_h);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_SURFACE), 0);
-        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_BORDER), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
-        lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_TOP, 0);
-        lv_obj_set_style_border_width(btn, 1, 0);
-        lv_obj_set_style_radius(btn, 0, 0);
-        lv_obj_set_style_pad_all(btn, 0, 0);
-        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(btn, cw_tune_row_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "Zero-beat");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-        lv_obj_center(lbl);
-    }
 }
 
 static void bw_label_clicked_cb(lv_event_t *e)
@@ -8075,12 +8058,16 @@ void ui_init(lv_display_t *disp)
         static const struct {
             int x, w;
             lv_event_cb_t cb;
+            lv_event_cb_t long_cb;   /* NULL = a long press does nothing */
         } hit_zones[] = {
-            { 0,    180, band_label_clicked_cb },  // Band
-            { 180,  165, mode_label_clicked_cb },  // Mode
-            { 345,  165, bw_label_clicked_cb   },  // BW
-            { 580,  280, freq_label_clicked_cb },  // Freq
-            { 1090, 190, zoom_label_clicked_cb },  // Zoom
+            { 0,    180, band_label_clicked_cb, NULL },  // Band
+            { 180,  165, mode_label_clicked_cb, NULL },  // Mode
+            /* BW's long press is CW-Tune (zero-beat) - see bw_label_long_cb.
+             * The only zone with one; the rest keep "a long press does
+             * nothing" deliberately. */
+            { 345,  165, bw_label_clicked_cb,   bw_label_long_cb },  // BW
+            { 580,  280, freq_label_clicked_cb, NULL },  // Freq
+            { 1090, 190, zoom_label_clicked_cb, NULL },  // Zoom
         };
         for (size_t i = 0; i < sizeof(hit_zones) / sizeof(hit_zones[0]); i++) {
             lv_obj_t *hit = lv_obj_create(scr);
@@ -8096,6 +8083,8 @@ void ui_init(lv_display_t *disp)
             // (Band/Mode/BW/...) AND Resource Management on the same press.
             // Same pairing as the RIT pill and the Call CQ/ADIF buttons.
             lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_SHORT_CLICKED, NULL);
+            if (hit_zones[i].long_cb)
+                lv_obj_add_event_cb(hit, hit_zones[i].long_cb, LV_EVENT_LONG_PRESSED, NULL);
             // Long-press used to also open Resource Management here - removed
             // (Gyula HA3HZ, 2026-09-29): redundant with the drawer's own
             // Audio Settings button and easy to trigger by accident across a
@@ -10164,7 +10153,53 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
  * filter the radio has, which cannot be what the operator meant by "tune this
  * one"; narrower would miss a station you can hear but have not landed on. */
 #define CW_TUNE_SEARCH_HZ   400
-#define CW_TUNE_MIN_SNR_DB  6.0f
+/* +3 dB over the window's median, not +6.
+ *
+ * The first version used 6 dB on a SINGLE frame and the operator's verdict was
+ * "you need a prolonged signal to beat it". Two things changed together: the
+ * search now runs on several seconds of history (below), which lifts a keyed
+ * signal well clear of the noise by itself, and the gate came down to 3 dB so
+ * a weak one still counts. The median keeps that honest - a 3 dB gate on a
+ * MEAN would trip on the carrier's own skirts. */
+#define CW_TUNE_MIN_SNR_DB  3.0f
+
+/* ⭐ SEVERAL SECONDS OF HISTORY, NOT THE CURRENT FRAME.
+ *
+ * Operator, 2026-10-23: "you need a prolonged signal to beat it - but why
+ * don't you just use the WF signal that have history several seconds back?
+ * With CW there is always periods with silence."
+ *
+ * Exactly right: CW is a keyed carrier, so a single 100 ms frame catches the
+ * key UP about as often as the key DOWN, and the one it catches decides
+ * whether the feature works. This keeps a per-bin MAXIMUM over the last
+ * CW_HIST_SPAN_US, which is the same thing the waterfall shows the eye.
+ *
+ * Only the +/-400 Hz search window is kept, not all 1024 bins: 19 bins x 4
+ * buckets is 300 bytes and 19 compares per push, against 16 KB and 4096
+ * compares for the whole spectrum. The buckets expire the history the same
+ * way the peak-hold line does - see s_peak_buk for the reasoning - so a
+ * station that stopped transmitting four seconds ago stops being a candidate.
+ *
+ * ⛔ VOIDED when the mapping moves. s_cw_hist_sig is the whole-bin IF shift,
+ * which carries the dial, the CW offset and RIT: if any of them changes, the
+ * window is looking at different frequencies and the history is somebody
+ * else's signal. */
+#define CW_HIST_BUCKETS   4
+#define CW_HIST_SPAN_US   4000000
+#define CW_SPAN_BINS      ((CW_TUNE_SEARCH_HZ * DSP_FFT_SIZE + 24000) / 48000)
+#define CW_WIN_N          (2 * CW_SPAN_BINS + 1)
+/* How long "keep listening" listens. Long enough for a QSO's next over to
+ * start, short enough that the operator does not wonder whether the button
+ * worked - and it says so on screen while it waits. */
+#define CW_TUNE_WAIT_US   8000000
+
+static float   s_cw_hist[CW_HIST_BUCKETS][CW_WIN_N];
+static float   s_cw_hist_max[CW_WIN_N];
+static bool    s_cw_hist_ready;
+static int     s_cw_hist_cur;
+static int64_t s_cw_hist_roll_us;
+static int     s_cw_hist_sig = INT32_MIN;
+static int64_t s_cw_wait_until_us;    /* 0 = not waiting */
 
 const char *ui_cw_tune_reason(ui_cw_tune_t r)
 {
@@ -10174,63 +10209,88 @@ const char *ui_cw_tune_reason(ui_cw_tune_t r)
     case UI_CW_TUNE_NO_FREQ:     return "no dial frequency yet";
     case UI_CW_TUNE_NO_SPECTRUM: return "no spectrum yet";
     case UI_CW_TUNE_NO_SIGNAL:   return "no signal within 400 Hz";
+    case UI_CW_TUNE_LISTENING:   return "listening for a signal";
     }
     return "?";
 }
 
-ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
+/* Fold this frame into the history. Called from ui_push_spectrum, inside the
+ * display lock, and only in CW - there is nothing to zero-beat otherwise and
+ * an idle feature should cost nothing. */
+static void cw_hist_update(const float *bins, int n_bins, int64_t now_us)
 {
-    if (moved_hz) *moved_hz = 0;
-    if (!strstr(s_current_mode, "CW"))  return UI_CW_TUNE_NOT_CW;
-    if (!s_last_qmx_freq_hz)            return UI_CW_TUNE_NO_FREQ;
-
+    if (n_bins < DSP_FFT_SIZE) return;
     const int N = DSP_FFT_SIZE;
-    /* Half-open window in bins each side. 400 Hz / 46.875 = 8.5 -> 9. */
-    const int span = (CW_TUNE_SEARCH_HZ * N + 24000) / 48000;
-    float win[64];
-    int   nwin = 2 * span + 1;
-    if (nwin > (int)(sizeof(win) / sizeof(win[0]))) return UI_CW_TUNE_NO_SPECTRUM;
+    int shift = ui_get_if_bin_shift(N);
+    if (shift != s_cw_hist_sig) {
+        s_cw_hist_sig   = shift;
+        s_cw_hist_ready = false;
+    }
+    if (!s_cw_hist_ready) {
+        for (int k = 0; k < CW_HIST_BUCKETS; k++)
+            for (int i = 0; i < CW_WIN_N; i++) s_cw_hist[k][i] = -1e30f;
+        for (int i = 0; i < CW_WIN_N; i++) s_cw_hist_max[i] = -1e30f;
+        s_cw_hist_cur     = 0;
+        s_cw_hist_roll_us = now_us;
+        s_cw_hist_ready   = true;
+    }
+    const int64_t per = CW_HIST_SPAN_US / CW_HIST_BUCKETS;
+    int64_t age = now_us - s_cw_hist_roll_us;
+    if (age >= per) {
+        int steps = (int)(age / per);
+        if (steps > CW_HIST_BUCKETS) steps = CW_HIST_BUCKETS;
+        for (int k = 0; k < steps; k++) {
+            s_cw_hist_cur = (s_cw_hist_cur + 1) % CW_HIST_BUCKETS;
+            for (int i = 0; i < CW_WIN_N; i++) s_cw_hist[s_cw_hist_cur][i] = -1e30f;
+        }
+        s_cw_hist_roll_us += (int64_t)steps * per;
+        for (int i = 0; i < CW_WIN_N; i++) {
+            float m = -1e30f;
+            for (int k = 0; k < CW_HIST_BUCKETS; k++)
+                if (s_cw_hist[k][i] > m) m = s_cw_hist[k][i];
+            s_cw_hist_max[i] = m;
+        }
+    }
+    float *cur = s_cw_hist[s_cw_hist_cur];
+    for (int i = 0; i < CW_WIN_N; i++) {
+        int b = ((shift + (i - CW_SPAN_BINS)) % N + N) % N;
+        float v = bins[b];
+        if (v > cur[i])            cur[i] = v;
+        if (v > s_cw_hist_max[i])  s_cw_hist_max[i] = v;
+    }
+}
 
-    if (!display_lock(50)) return UI_CW_TUNE_NO_SPECTRUM;
-    if (!s_last_spec || s_last_spec_n < N) { display_unlock(); return UI_CW_TUNE_NO_SPECTRUM; }
-
-    /* The dial's own position in bin space, to the same rounding the drawing
-     * uses: the whole-bin rotation plus the residual the rotation left over.
-     * Getting this wrong puts the answer up to 23 Hz out, which is exactly
-     * Roy KI0ER's tap-to-tune report in a different place. */
-    const int   shift    = ui_get_if_bin_shift(N);
-    const float residual = (float)ui_get_if_residual_hz();
-    const float hz_per_bin = 48000.0f / (float)N;
-
+/* The peak in a window of CW_WIN_N dB values, refined to a fraction of a bin.
+ * Returns false when nothing stands far enough above the median. */
+static bool cw_peak_in(const float *win, float *off_bins, float *peak_db, float *noise_db)
+{
     int   best_i = 0;
     float best_v = -1e30f;
-    for (int i = 0; i < nwin; i++) {
-        int off = i - span;
-        int b = ((shift + off) % N + N) % N;
-        win[i] = s_last_spec[b];
+    for (int i = 0; i < CW_WIN_N; i++)
         if (win[i] > best_v) { best_v = win[i]; best_i = i; }
-    }
 
     /* Noise reference: the MEDIAN of the window, not its mean. One strong
      * carrier drags a mean of 19 bins up by several dB and the gate then
      * passes on its own signal. */
-    float sorted[64];
-    memcpy(sorted, win, (size_t)nwin * sizeof(float));
-    for (int i = 1; i < nwin; i++) {
+    float sorted[CW_WIN_N];
+    memcpy(sorted, win, sizeof(sorted));
+    for (int i = 1; i < CW_WIN_N; i++) {
         float k = sorted[i];
         int j = i - 1;
         while (j >= 0 && sorted[j] > k) { sorted[j + 1] = sorted[j]; j--; }
         sorted[j + 1] = k;
     }
-    float noise = sorted[nwin / 2];
-    if (best_v < noise + CW_TUNE_MIN_SNR_DB) { display_unlock(); return UI_CW_TUNE_NO_SIGNAL; }
+    float noise = sorted[CW_WIN_N / 2];
+    if (peak_db)  *peak_db  = best_v;
+    if (noise_db) *noise_db = noise;
+    if (best_v < noise + CW_TUNE_MIN_SNR_DB) return false;
 
     /* Parabolic interpolation on the dB values, the standard refinement for a
      * windowed FFT peak. Skipped at the window edge, where there is no
      * neighbour on one side - a peak there is probably outside the window
      * anyway and the bin centre is the honest answer. */
     float delta = 0.0f;
-    if (best_i > 0 && best_i < nwin - 1) {
+    if (best_i > 0 && best_i < CW_WIN_N - 1) {
         float a = win[best_i - 1], b = win[best_i], c = win[best_i + 1];
         float den = a - 2.0f * b + c;
         if (den != 0.0f) {
@@ -10239,12 +10299,37 @@ ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
             if (delta < -0.5f) delta = -0.5f;
         }
     }
-    display_unlock();
+    *off_bins = (float)(best_i - CW_SPAN_BINS) + delta;
+    return true;
+}
 
-    float off_hz = ((float)(best_i - span) + delta) * hz_per_bin - residual;
+/* One attempt. The caller holds the display lock. */
+static ui_cw_tune_t cw_tune_attempt(int32_t *moved_hz)
+{
+    const int N = DSP_FFT_SIZE;
+    if (!s_last_spec || s_last_spec_n < N) return UI_CW_TUNE_NO_SPECTRUM;
+
+    float win[CW_WIN_N];
+    if (s_cw_hist_ready) {
+        memcpy(win, s_cw_hist_max, sizeof(win));
+    } else {
+        int shift = ui_get_if_bin_shift(N);
+        for (int i = 0; i < CW_WIN_N; i++) {
+            int b = ((shift + (i - CW_SPAN_BINS)) % N + N) % N;
+            win[i] = s_last_spec[b];
+        }
+    }
+
+    float off_bins = 0.0f, peak = 0.0f, noise = 0.0f;
+    if (!cw_peak_in(win, &off_bins, &peak, &noise)) return UI_CW_TUNE_NO_SIGNAL;
+
+    /* The dial's own position in bin space is the whole-bin rotation plus the
+     * residual that rotation left over. Without the residual the answer is up
+     * to 23 Hz out, which is Roy KI0ER's tap-to-tune report in another place. */
+    float off_hz = off_bins * (48000.0f / (float)N) - (float)ui_get_if_residual_hz();
     int32_t move = (int32_t)lroundf(off_hz);
     if (moved_hz) *moved_hz = move;
-    if (move == 0) return UI_CW_TUNE_OK;        /* already on it */
+    if (move == 0) return UI_CW_TUNE_OK;
 
     uint32_t target = (uint32_t)((int32_t)s_last_qmx_freq_hz + move);
     /* FORCED and un-snapped. The 10 Hz tap grid exists so a finger lands
@@ -10253,9 +10338,53 @@ ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
      * interpolation that is the whole point. */
     cat_set_frequency_forced(target);
     ui_update_frequency(target);
-    ESP_LOGI(TAG, "CW tune: %+d Hz -> %lu Hz (peak %.1f dB over %.1f)",
-             (int)move, (unsigned long)target, (double)best_v, (double)noise);
+    ESP_LOGI(TAG, "CW tune: %+d Hz -> %lu Hz (peak %.1f dB over %.1f, %s)",
+             (int)move, (unsigned long)target, (double)peak, (double)noise,
+             s_cw_hist_ready ? "4 s history" : "one frame");
     return UI_CW_TUNE_OK;
+}
+
+ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
+{
+    if (moved_hz) *moved_hz = 0;
+    if (!strstr(s_current_mode, "CW"))  { s_cw_wait_until_us = 0; return UI_CW_TUNE_NOT_CW; }
+    if (!s_last_qmx_freq_hz)            return UI_CW_TUNE_NO_FREQ;
+    if (!display_lock(50))              return UI_CW_TUNE_NO_SPECTRUM;
+    ui_cw_tune_t r = cw_tune_attempt(moved_hz);
+    if (r == UI_CW_TUNE_NO_SIGNAL) {
+        /* ⭐ KEEP LISTENING, because silence is normal. Operator: "can you
+         * also possibly wait a bit longer to listen if not possible to use
+         * the wf?" The band is quiet between overs, so a press that lands in
+         * a gap now arms a bounded window instead of answering "nothing
+         * here". It is still one shot: the first signal that passes the gate
+         * ends it, and so does the timeout. Nothing keeps correcting. */
+        s_cw_wait_until_us = esp_timer_get_time() + CW_TUNE_WAIT_US;
+        r = UI_CW_TUNE_LISTENING;
+    } else {
+        s_cw_wait_until_us = 0;
+    }
+    display_unlock();
+    return r;
+}
+
+/* Called once per spectrum push, with the lock held. Does nothing unless a
+ * press is waiting for a signal to appear. */
+static void cw_tune_tick(int64_t now_us)
+{
+    if (!s_cw_wait_until_us) return;
+    if (!strstr(s_current_mode, "CW")) { s_cw_wait_until_us = 0; return; }
+    int32_t moved = 0;
+    ui_cw_tune_t r = cw_tune_attempt(&moved);
+    if (r == UI_CW_TUNE_OK) {
+        s_cw_wait_until_us = 0;
+        char msg[72];
+        if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
+        else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
+        ui_toast_ms(msg, 2500);
+    } else if (now_us >= s_cw_wait_until_us) {
+        s_cw_wait_until_us = 0;
+        ui_toast_ms("Zero-beat: nothing heard within 400 Hz", 2500);
+    }
 }
 
 /* Peak-hold window in seconds; 0 switches it off. Stored only - the buffers
@@ -10291,6 +10420,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int ncopy = (n_bins < DSP_FFT_SIZE) ? n_bins : DSP_FFT_SIZE;
         memcpy(s_last_spec, bins, (size_t)ncopy * sizeof(float));
         s_last_spec_n = ncopy;
+    }
+    /* CW-Tune's own history, and the one place a waiting press is retried.
+     * CW only: nothing else has a carrier to zero-beat, and an idle feature
+     * should cost nothing. */
+    {
+        int64_t cw_now = esp_timer_get_time();
+        if (strstr(s_current_mode, "CW")) {
+            cw_hist_update(bins, n_bins, cw_now);
+            cw_tune_tick(cw_now);
+        } else {
+            s_cw_hist_ready = false;
+        }
     }
 
     /* Overlay signature and changed-row band - see the note at s_frame_ytop.

@@ -451,6 +451,7 @@ typedef enum {
     UI_CW_TUNE_NO_FREQ,       /* the dial is not known yet (no CAT)   */
     UI_CW_TUNE_NO_SPECTRUM,   /* nothing has been drawn yet           */
     UI_CW_TUNE_NO_SIGNAL,     /* nothing stands above the noise       */
+    UI_CW_TUNE_LISTENING,     /* nothing yet - waiting for a signal   */
 } ui_cw_tune_t;
 
 /* Returns what happened; *moved_hz (may be NULL) is how far the dial went. */
