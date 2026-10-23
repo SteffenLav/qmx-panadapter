@@ -1193,15 +1193,6 @@
            title="Receive off the dial without moving transmit. Click to arm, then click a signal on the spectrum to listen there. Click again to clear.">
         <span class="lab">RIT</span><span id="rit">off</span>
       </div>
-      <!-- A/B for the 2026-10-22 stutter work. A pill rather than a settings
-           entry because the whole point is to flip it REPEATEDLY while
-           watching the Tab5 - a control you have to go and find is not a
-           control you can compare with. Dev aid; not persisted, and a reboot
-           comes back on NEW. -->
-      <div class="pill clickable" id="pill-ab" onclick="abToggle()"
-           title="Switch the Tab5 render path between this session's fixes (NEW) and the behaviour from before it (OLD). Flip it while watching the Tab5.">
-        <span class="lab">A/B</span><span id="ab">NEW</span>
-      </div>
       <!-- Activation, shown ONLY while one is running. The hazard is forgetting, so
            it says so without being asked - the same job the Tab5's bottom bar does. -->
       <div class="pill clickable" id="pill-act" style="display:none" onclick="actOpen()"
@@ -8948,33 +8939,6 @@ async function actSend(type, ref) {
      bottom menus, which is how every other item in them behaves. */
   if (menu) menu.addEventListener('click', (e) => { e.preventDefault(); actOpen(); });
 })();
-
-/* A/B pill: flip the whole 2026-10-22 render session on the Tab5 between
-   this session's fixes and the behaviour from before it.
-
-   Reads the answer back rather than assuming. The endpoint returns the state
-   it actually ended in, and a pill that lies about which half you are looking
-   at is worse than no pill - the operator is being asked to judge a 30 ms
-   difference, so being sure which side is on screen is the whole experiment. */
-async function abToggle() {
-  const el = document.getElementById("ab");
-  if (!el) return;
-  const wantLegacy = (el.textContent.trim() !== "OLD");
-  el.textContent = "...";
-  try {
-    const r = await fetch("/api/cmd", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "legacy", on: wantLegacy })
-    });
-    const j = await r.json();
-    el.textContent = j.legacy ? "OLD" : "NEW";
-    const pill = document.getElementById("pill-ab");
-    if (pill) pill.style.borderColor = j.legacy ? "#c08040" : "";
-  } catch (err) {
-    el.textContent = "err";
-  }
-}
 
 function ritPillClick() {
   if (lastRitHz) {

@@ -3133,33 +3133,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         return ESP_OK;
     } else if (action && strcmp(action, "framesync") == 0) {
         /* Isolate the one lever: push a spectrum per display frame (on) or on
-         * the old 100 ms timer (off). "legacy" moves this together with
-         * everything else from the 2026-10-22 session; this moves it alone,
-         * for when the A/B needs to attribute a difference to THIS and not to
-         * the other three changes. {"action":"framesync","on":false} */
+         * the old 100 ms timer (off). Frame sync is what the operator chose
+         * to keep, so OFF is only a diagnostic - it exists to attribute a
+         * future regression to this lever rather than to the three around it.
+         * {"action":"framesync","on":false} */
         cJSON *jfs = cJSON_GetObjectItem(root, "on");
         if (cJSON_IsBool(jfs)) render_set_frame_sync(cJSON_IsTrue(jfs));
         cJSON_Delete(root);
         char body[64];
         snprintf(body, sizeof(body), "{\"ok\":true,\"framesync\":%s}",
                  render_get_frame_sync() ? "true" : "false");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_sendstr(req, body);
-        return ESP_OK;
-    } else if (action && strcmp(action, "legacy") == 0) {
-        /* The A/B the operator asked for: flip the whole 2026-10-22 stutter
-         * session off and on live, so "before" and "after" can be seen a
-         * second apart on the same band instead of across a reflash and a
-         * power cycle. {"action":"legacy","on":true} = as it was.
-         * See ui_set_legacy_mode() for exactly what moves. */
-        cJSON *jon = cJSON_GetObjectItem(root, "on");
-        if (cJSON_IsBool(jon)) ui_set_legacy_mode(cJSON_IsTrue(jon));
-        cJSON_Delete(root);
-        char body[96];
-        snprintf(body, sizeof(body),
-                 "{\"ok\":true,\"legacy\":%s,\"wfbatch\":%d}",
-                 ui_get_legacy_mode() ? "true" : "false",
-                 ui_wf_get_shift_batch());
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;
