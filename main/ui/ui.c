@@ -885,6 +885,22 @@ static void freq_popup_build(void)
      * on screen, and the task lasts seconds. The small pad keeps the old
      * behaviour, because seeing past it is the reason to choose it. */
     lv_obj_set_style_bg_opa(panel, small ? kp_opa : LV_OPA_COVER, 0);
+    /* ⛔ AND THE PANEL HAS TO BE LIGHTER THAN THE KEYS, WHICH IS A FAULT I
+     * INTRODUCED ONE COMMIT AGO.
+     *
+     * Making the large pad opaque put a flat 0x1c2128 behind keys that are
+     * 0x2a2a2a - two dark greys eight points apart - so the gaps I had just
+     * widened for Sam's dexterity became invisible. The operator, looking at
+     * it: "Padding/background around keys are now the same colour - increase
+     * contrast by making background a bit lighter."
+     *
+     * ⭐ Widening the gaps and then hiding them is worse than not widening
+     * them: a target you cannot see the edge of is harder to hit than a small
+     * one you can. So at the large size the panel goes to a light slate and
+     * the keys stay dark - dark keys on a light field, with the gap reading as
+     * a bright grid between them. The SMALL pad keeps the old scheme, because
+     * it is translucent by design and has nothing to separate from. */
+    if (!small) lv_obj_set_style_bg_color(panel, lv_color_hex(0x3c444e), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_radius(panel, 10, 0);
@@ -942,8 +958,17 @@ static void freq_popup_build(void)
         lv_obj_set_size(btn, cell_w, cell_h);
         lv_obj_set_pos(btn, col * (cell_w + gap), grid_top + row * (cell_h + gap));
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
-        lv_obj_set_style_bg_opa(btn, kp_opa, 0);
+        /* Opaque on the large pad: a translucent key over the now-opaque
+         * panel only muddies the very edge that has to be visible. */
+        lv_obj_set_style_bg_opa(btn, small ? kp_opa : LV_OPA_COVER, 0);
         lv_obj_set_style_radius(btn, 6, 0);
+        /* A drawn edge as well as a colour step. For poor eyesight the outline
+         * is doing more work than the fill - it survives glare on the glass,
+         * which a four-point luminance difference does not. */
+        if (!small) {
+            lv_obj_set_style_border_color(btn, lv_color_hex(0x6a737f), 0);
+            lv_obj_set_style_border_width(btn, 2, 0);
+        }
         lv_obj_add_event_cb(btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)keycodes[i]);
         if (keycodes[i] == 'D') {
             // Long-press Delete clears the whole entry.

@@ -1,5 +1,14 @@
 // One-tap audio panel - see audio_modal.h for whose complaint this answers
 // and what deliberately is NOT in it.
+//
+// EVERY SIZE HERE IS SET FOR POOR EYESIGHT, not for balance. The operator,
+// after looking at the first version: "As Sam has poor eye sight and poor
+// dexterity - we need to improve this ... All text needs to be much bigger."
+// Title 48, labels and buttons 32, the warning 24; sliders 40 px tall with a
+// 20 px knob pad and a coloured indicator against a dark track, because at low
+// vision the thing you aim at is the BAR, not the dot on it. The panel grew to
+// 940x520 to hold it rather than the text being squeezed to fit the panel -
+// which is the mistake that produced the first version.
 
 #include "audio_modal.h"
 #include "ui_theme.h"
@@ -128,7 +137,7 @@ static lv_obj_t *make_btn(lv_obj_t *parent, const char *text, int w, int h,
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
     lv_obj_center(l);
     if (lbl_out) *lbl_out = l;
     return b;
@@ -137,12 +146,16 @@ static lv_obj_t *make_btn(lv_obj_t *parent, const char *text, int w, int h,
 static lv_obj_t *make_slider(lv_obj_t *parent, int y, int max, lv_event_cb_t cb)
 {
     lv_obj_t *s = lv_slider_create(parent);
-    lv_obj_set_size(s, 700, 28);
+    lv_obj_set_size(s, 860, 40);
     lv_obj_align(s, LV_ALIGN_TOP_LEFT, 0, y);
     lv_slider_set_range(s, 0, max);
     /* Generous knob: this is adjusted with a finger while listening, which is
      * the same argument Don WB0LQW made about the keyboard. */
-    lv_obj_set_style_pad_all(s, 14, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s, 20, LV_PART_KNOB);
+    /* A visible track as well as a visible knob: at low vision the thing you
+     * aim at is the bar, not the dot on it. */
+    lv_obj_set_style_bg_color(s, lv_color_hex(0x11161b), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s, lv_color_hex(0x5a9fd4), LV_PART_INDICATOR);
     lv_obj_add_event_cb(s, cb, LV_EVENT_VALUE_CHANGED, NULL);
     return s;
 }
@@ -168,7 +181,7 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_modal, close_cb, LV_EVENT_CLICKED, NULL);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 780, 420);
+    lv_obj_set_size(s_panel, 940, 520);
     lv_obj_center(s_panel);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -183,31 +196,35 @@ static void modal_build(void)
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "Audio");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    /* 48, not 40: the build carries 14/18/20/22/24/26/28/32/48 and nothing
+     * between 32 and 48. Adding a font size costs flash in a binary with 25%
+     * left, and 48 is the right end of the choice anyway for the one word
+     * that says which panel this is. */
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_lbl_vol = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(0xdddddd), 0);
-    lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, 0, 60);
-    s_sl_vol = make_slider(s_panel, 94, 100, vol_cb);
+    lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, 0, 74);
+    s_sl_vol = make_slider(s_panel, 126, 100, vol_cb);
 
     s_lbl_af = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_lbl_af, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_font(s_lbl_af, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_af, lv_color_hex(0xdddddd), 0);
-    lv_obj_align(s_lbl_af, LV_ALIGN_TOP_LEFT, 0, 150);
-    s_sl_af = make_slider(s_panel, 184, CAT_AF_GAIN_DB_MAX, af_cb);
+    lv_obj_align(s_lbl_af, LV_ALIGN_TOP_LEFT, 0, 206);
+    s_sl_af = make_slider(s_panel, 258, CAT_AF_GAIN_DB_MAX, af_cb);
 
     s_lbl_note = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_lbl_note, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_lbl_note, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_lbl_note, lv_color_hex(0xFFC864), 0);
-    lv_obj_align(s_lbl_note, LV_ALIGN_TOP_LEFT, 0, 230);
+    lv_obj_align(s_lbl_note, LV_ALIGN_TOP_LEFT, 0, 318);
     lv_label_set_text(s_lbl_note, "");
     lv_obj_add_flag(s_lbl_note, LV_OBJ_FLAG_HIDDEN);
 
-    s_btn_mute = make_btn(s_panel, "Mute", 260, 72, LV_ALIGN_BOTTOM_LEFT, 0, 0,
+    s_btn_mute = make_btn(s_panel, "Mute", 320, 92, LV_ALIGN_BOTTOM_LEFT, 0, 0,
                           mute_cb, &s_lbl_mute);
-    lv_obj_t *close = make_btn(s_panel, "Close", 200, 72,
+    lv_obj_t *close = make_btn(s_panel, "Close", 260, 92,
                                LV_ALIGN_BOTTOM_RIGHT, 0, 0, close_cb, NULL);
     lv_obj_set_style_bg_color(close, lv_color_hex(0x3a4149), 0);
     lv_obj_set_style_border_color(close, lv_color_hex(0x5a6169), 0);
