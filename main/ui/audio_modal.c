@@ -4,9 +4,9 @@
 // EVERY SIZE HERE IS SET FOR POOR EYESIGHT, not for balance. The operator,
 // after looking at the first version: "As Sam has poor eye sight and poor
 // dexterity - we need to improve this ... All text needs to be much bigger."
-// Title 48, labels and buttons 32, the warning 24; sliders 40 px tall with a
-// 20 px knob pad and a coloured indicator against a dark track, because at low
-// vision the thing you aim at is the BAR, not the dot on it. The panel grew to
+// Title 48, labels and buttons 32, the warning 24. The SLIDERS are
+// deliberately plain - see make_slider(); dressing them up made them worse.
+// The panel grew to
 // 940x520 to hold it rather than the text being squeezed to fit the panel -
 // which is the mistake that produced the first version.
 
@@ -146,16 +146,21 @@ static lv_obj_t *make_btn(lv_obj_t *parent, const char *text, int w, int h,
 static lv_obj_t *make_slider(lv_obj_t *parent, int y, int max, lv_event_cb_t cb)
 {
     lv_obj_t *s = lv_slider_create(parent);
-    lv_obj_set_size(s, 860, 40);
+    /* ⛔ PLAIN, LIKE EVERY OTHER SLIDER ON THE DEVICE. The first version gave
+     * these a 20 px knob pad and hand-picked track colours, on the theory that
+     * low vision wants a bigger target. On the glass it was wrong twice over:
+     * the knob drew as an outsized disc that overhung the track, and at the
+     * bottom of its range it sat outside the bar altogether. The operator,
+     * looking at it: "all good except please revert the sliders only on the
+     * Audio window".
+     *
+     * The text around them is what carries the legibility here - that part he
+     * kept. A control that looks like nothing else in the UI is not clearer,
+     * it is just unfamiliar, and the drawer's sliders are the shape his hands
+     * already know. Same construction as those: size, range, callback. */
+    lv_obj_set_size(s, 860, 30);
     lv_obj_align(s, LV_ALIGN_TOP_LEFT, 0, y);
     lv_slider_set_range(s, 0, max);
-    /* Generous knob: this is adjusted with a finger while listening, which is
-     * the same argument Don WB0LQW made about the keyboard. */
-    lv_obj_set_style_pad_all(s, 20, LV_PART_KNOB);
-    /* A visible track as well as a visible knob: at low vision the thing you
-     * aim at is the bar, not the dot on it. */
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x11161b), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x5a9fd4), LV_PART_INDICATOR);
     lv_obj_add_event_cb(s, cb, LV_EVENT_VALUE_CHANGED, NULL);
     return s;
 }
