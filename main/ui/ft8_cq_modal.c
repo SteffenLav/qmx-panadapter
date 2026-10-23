@@ -10,6 +10,7 @@
 #include "ft8_screen_view.h"
 #include "ft8_msg_guard.h"
 #include "settings.h"
+#include "activation_modal.h"   /* activation_is_running - see forced_cq_modifier */
 #include "lvgl.h"
 #include "esp_log.h"
 #include <string.h>
@@ -98,32 +99,66 @@ static bool token_has_digit(const char *tok)
     return false;
 }
 
-// Core Field Day tagging logic, shared between the real TX path
-// (ft8_cq_get_active_text, reading the saved preset) and the editor's live
-// preview (reading whatever is currently typed, unsaved) - one function, so
-// the preview can never drift out of sync with what actually gets sent.
+/* THE CQ MODIFIER THE OPERATION IMPLIES, NOT JUST FIELD DAY.
+ *
+ * Bruce N9JCV, 2026-10-23, after a real activation: "Is it possible in this
+ * display of the transmitting message to include the word POTA? I know I
+ * activated but the message does not reflect it is calling CQ POTA." He had
+ * started an activation and his CQ still went out plain, so nobody hunting
+ * parks knew he was in one.
+ *
+ * He was told he should have long-pressed the CQ button and typed it. That is
+ * true, and it is beside the point, because THIS FUNCTION ALREADY DOES
+ * EXACTLY THAT FOR FIELD DAY: switch FD on and every CQ goes out as "CQ FD"
+ * without being asked. An activation had the same claim on the message and
+ * was not using the mechanism sitting next to it. An omission, not something
+ * an operator should have to know about.
+ *
+ * ONE MODIFIER, AND FD OUTRANKS AN ACTIVATION. FT8's CQ format has room for
+ * one token, so they cannot stack. Field Day wins because it is declared for a
+ * whole operation and is a contest exchange; an activation is a session inside
+ * which FD may still be running. Anything the preset carries (DX, a region) is
+ * replaced by either.
+ *
+ * It follows the LIVE activation, so it appears the moment one starts and goes
+ * when it stops. The operator never edits a preset for it and never has to
+ * remember to put it back.
+ */
+static const char *forced_cq_modifier(bool field_day_en)
+{
+    if (field_day_en) return "FD";
+    if (activation_is_running()) {
+        /* 1 = POTA, 2 = SOTA (settings.h). Both are the standard on-air
+         * tokens, which is why they need no translation table. */
+        return (settings_get_activation_type() == 2) ? "SOTA" : "POTA";
+    }
+    return NULL;
+}
+
+// Shared between the real TX path (ft8_cq_get_active_text, reading the saved
+// preset) and the editor's live preview (reading whatever is currently typed,
+// unsaved) - one function, so the preview can never drift out of sync with
+// what actually gets sent.
 static void apply_fd_tag(const char *base, char *out, size_t len, bool field_day_en)
 {
     // Not a "CQ" message (or "CQ" isn't a standalone token) - nothing to tag.
-    bool is_cq = (strncmp(base, "CQ", 2) == 0) && (base[2] == ' ' || base[2] == '\0');
-    if (!field_day_en || !is_cq) {
+    bool is_cq = (strncmp(base, "CQ", 2) == 0) && (base[2] == ' ' || base[2] == 0);
+    const char *mod = forced_cq_modifier(field_day_en);
+    if (!mod || !is_cq) {
         snprintf(out, len, "%s", base);
         return;
     }
 
-    // Field Day mode: force the standard "CQ FD ..." modifier (same
-    // mechanism as "CQ POTA"/"CQ SOTA"), REPLACING any other modifier the
-    // preset carries (DX/POTA/SOTA/...) - FD signalling takes priority for
-    // the whole-operation duration FD mode is on, and FT8's CQ format only
-    // has room for one modifier token.
+    // Force the standard modifier, REPLACING any other the preset carries
+    // (DX/POTA/SOTA/...) - FT8's CQ format only has room for one token.
     const char *rest = base + 2;
     while (*rest == ' ') rest++;
     if (*rest && !token_has_digit(rest)) {
         while (*rest && *rest != ' ') rest++;  // skip the existing modifier token
         while (*rest == ' ') rest++;
     }
-    if (*rest) snprintf(out, len, "CQ FD %s", rest);
-    else       snprintf(out, len, "CQ FD");
+    if (*rest) snprintf(out, len, "CQ %s %s", mod, rest);
+    else       snprintf(out, len, "CQ %s", mod);
 }
 
 void ft8_cq_get_active_text(char *out, size_t len)

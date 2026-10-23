@@ -1641,11 +1641,38 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // operator must finish or ft8_qso_abort() the current one first.
     char busy_target[FT8_CALL_MAX_LEN];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
-        if (err) {
-            if (busy_target[0]) snprintf(err, err_len, "Busy: working %s", busy_target);
-            else                snprintf(err, err_len, "Busy: calling CQ");
+        if (busy_target[0]) {
+            if (err) snprintf(err, err_len, "Busy: working %s", busy_target);
+            return false;
         }
-        return false;
+        /* CALLING CQ IS NOT A REASON TO REFUSE A CALLER - IT IS THE REASON
+         * THERE IS ONE.
+         *
+         * Don WB0LQW, 2026-10-22, with "Pick callers myself" on: "A CQ is
+         * transmitted and I get 1 or more responders... I tap one and the
+         * window appears where I choose Pounce. However, since I did not
+         * manually stop the CQ, the Tab5 tells me 'Busy Calling CQ.' I have to
+         * close the window and go back to manually stop the CQ; then tap the
+         * responder again... By then my responder has often given up on me."
+         *
+         * He is right and the old behaviour was the radio arguing with the
+         * operator. Answering somebody who came back to your CQ is the entire
+         * purpose of having called it, so the CQ stands down and the pounce
+         * goes ahead.
+         *
+         * An empty busy_target is exactly the FT8_QSO_CQ case: a WAIT_* state
+         * always has a target, so this cannot swallow a real exchange. The
+         * refusal above is kept for that, because dropping a half-finished QSO
+         * without being asked is a different act and should stay deliberate.
+         *
+         * SAFE BY CONSTRUCTION: every caller that reaches this line today gets
+         * `false` back, so nothing that currently succeeds changes behaviour -
+         * only the paths that were failing. The robot does not come through
+         * here to answer its own CQ; if it did, it would already be refused.
+         *
+         * A burst already on the air finishes - clearing the request does not
+         * stop a transmission in progress. */
+        ft8_qso_abort();
     }
 
     if (!load_my_call(err, err_len)) return false;

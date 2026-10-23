@@ -756,6 +756,41 @@ int adif_log_count_activation(const char *sig_info)
     char needle[32];
     snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(sig_info), sig_info);
 
+    /* ⛔⛔ TODAY'S UTC DAY ONLY. THIS COUNTED EVERY CONTACT EVER LOGGED
+     * AGAINST THE REFERENCE.
+     *
+     * Bruce N9JCV, 2026-10-23: he activated US-0986, came back another day and
+     * activated it again, and the panel opened showing 39 contacts and
+     * "activated" before he had made one. "It seems like it is using my past
+     * historical activations in this window to display the counts and status."
+     *
+     * He is right, and the number was not merely stale - it was ANSWERING THE
+     * WRONG QUESTION. The panel exists to say "can I go home yet", and POTA
+     * decides that per UTC DAY: ten contacts today activates the park today,
+     * and yesterday's ten do not carry over. A count that spans days tells an
+     * operator he is finished when he has not started.
+     *
+     * ⚠ UTC, not local, and that is not a detail - it is the whole point. A
+     * US activator working an evening session is already into the next UTC day,
+     * so a local-midnight boundary would split one sitting in half and join
+     * two others. The log writes QSO_DATE from gmtime_r (see adif_log_append),
+     * so comparing against a gmtime_r of now is the same clock on both sides.
+     *
+     * ⚠ A record with no QSO_DATE is COUNTED, as records with no CALL already
+     * are. Over-counting by one is a number an operator can argue with; losing
+     * a contact he really made is not. */
+    char today[9] = "";
+    {
+        time_t now = time(NULL);
+        struct tm tmv;
+        gmtime_r(&now, &tmv);
+        /* Before the clock is set the year reads 1970, and every record would
+         * then fail to match - which would show zero and look like a lost log.
+         * Leave `today` empty in that case and count everything, as before. */
+        if (tmv.tm_year + 1900 >= 2020)
+            strftime(today, sizeof(today), "%Y%m%d", &tmv);
+    }
+
     // Heap (PSRAM), never the stack: this runs from activation_modal.c's
     // refresh() on taskLVGL, which CLAUDE.md already documents as having
     // only ~8 KB - a 512*16 array would be a guaranteed stack-protection
@@ -778,6 +813,15 @@ int adif_log_count_activation(const char *sig_info)
             if (strncasecmp(p, needle, nl) == 0) { hit = true; break; }
         }
         if (!hit) continue;
+
+        /* Wrong UTC day - a different activation of the same reference. */
+        if (today[0]) {
+            char qdate[12];
+            if (adif_log_extract_field(line, "QSO_DATE", qdate, sizeof(qdate))
+                && strcmp(qdate, today) != 0) {
+                continue;
+            }
+        }
 
         char call[ADIF_CALL_MAX];
         if (!seen || !adif_log_extract_field(line, "CALL", call, sizeof(call))) {
