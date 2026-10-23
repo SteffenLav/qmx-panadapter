@@ -1238,7 +1238,14 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
      * and that is what sets the PITCH you hear, which must stay the CW centre
      * the operator chose. RIT is deliberately still absent from both: the
      * radio moves its own LO for RIT, so the tone is supposed to change. */
-    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz + (int)ui_get_if_cal_hz()) / fs;
+    /* ⛔ CW ONLY, and getting that wrong was a regression of its own. The
+     * display adds the trim inside `if (mode == CW)` (ui_get_if_offset_hz),
+     * so applying it in DiGi/SSB/AM moves the audio 60 Hz the OTHER way on
+     * this unit - which is the same class of fault as the one it was added to
+     * fix, just pointing elsewhere. One rule, in both places: the trim is a
+     * CW thing. */
+    const int if_cal = (mode == RXAUD_MODE_CW) ? (int)ui_get_if_cal_hz() : 0;
+    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz + if_cal) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
     float half_split = panoramic ? (float)half_bw_hz / 2.0f : 0.0f;
