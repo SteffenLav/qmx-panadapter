@@ -5777,6 +5777,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
     cJSON_AddStringToObject(root, "my_callsign", c.my_callsign);
     cJSON_AddStringToObject(root, "my_grid",     c.my_grid);
+    cJSON_AddStringToObject(root, "my_state",    c.my_state);
 
     cJSON *cq = cJSON_AddObjectToObject(root, "cq");
     cJSON *msgs = cJSON_AddArrayToObject(cq, "msg");
@@ -6189,6 +6190,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_state"))))    settings_set_my_state(s);
 
     /* RX input source. Unlike port_a_mode this switches NOTHING live: the
      * source is latched at boot (rx_source_t), so the store always succeeds

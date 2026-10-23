@@ -242,7 +242,7 @@ void ft8_robot_tick(int64_t slot_sec)
         if (f->robot_skip_directed_cq) {
             char why[96];
             if (ft8_cq_direction(snap[i].last_text, snap[i].call,
-                                 qs.my_callsign, why, sizeof why)
+                                 qs.my_callsign, qs.my_state, why, sizeof why)
                     == FT8_CQ_NOT_FOR_US) {
                 ESP_LOGI(TAG, "passing over %s: %s", snap[i].call, why);
                 continue;

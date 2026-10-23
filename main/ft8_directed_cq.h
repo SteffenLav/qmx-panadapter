@@ -31,6 +31,12 @@
  * centroids, ISO-3 codes and names. Guessing a continent from a centroid was
  * not worth a wrong decline.
  *
+ * ⛔ "DE" IS NEVER JUDGED. It is the old abbreviation for "from", and in
+ * Randy N4OPI's own log 51 of 51 "CQ DE" decodes were ordinary CQs - WB4FIS
+ * in EM70 is Florida, KD2UUC in FN20 New York, AJ6CG in DM14 California. None
+ * was Delaware. Declining on it would cost every one of those for the sake of
+ * a state call that may never come.
+ *
  * ⚠ TWO-LETTER TOKENS ARE GENUINELY AMBIGUOUS and the guard matters: "OK" is
  * Oklahoma and also a Czech callsign prefix; "CA" is California and also a
  * Chilean one; "DE" is Delaware and also Germany's. A state code is therefore
@@ -47,12 +53,16 @@ typedef enum {
 /* text:       the decoded message, e.g. "CQ DX K1ABC FN42"
  * their_call: the caller's callsign (needed for the DX test); may be NULL
  * my_call:    our own callsign; without it nothing can be judged
+ * my_state:   our US state, two letters, or NULL/empty when not set. Only
+ *             consulted inside the USA, where the entity alone cannot decide
+ *             a state call. Unset means every state call is still answered.
  * why:        optional, filled on FT8_CQ_NOT_FOR_US with a short reason for
  *             the log - e.g. "CQ DX but K1ABC is in our own entity (DNK)"
  */
 ft8_cq_direction_t ft8_cq_direction(const char *text,
                                     const char *their_call,
                                     const char *my_call,
+                                    const char *my_state,
                                     char *why, size_t why_len);
 
 // True for one of the 50 US state two-letter codes. Exposed for the host

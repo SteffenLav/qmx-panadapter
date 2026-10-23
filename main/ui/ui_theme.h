@@ -222,6 +222,27 @@ static inline void ui_theme_style_keyboard(lv_obj_t *kb)
     lv_obj_set_style_border_color(kb, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(kb, 1, 0);
 
+    /* KEY LABELS BIG ENOUGH TO READ OUTSIDE.
+     *
+     * Don WB0LQW, 2026-10-22, about the Activation panel: "I love the little
+     * keyboard that appears in Settings--Activation. The only problem is I
+     * have trouble reading the key chars, especially when I am outside."
+     *
+     * Set HERE rather than in activation_modal.c, because the keyboard he is
+     * looking at is the same object every other panel uses - WiFi, FT8 free
+     * text, the lot - and they are all read in the same daylight. Fixing only
+     * the one he happened to name would leave the identical complaint waiting
+     * in the next panel.
+     *
+     * The keys are ~70 px tall at the 280 px keyboard height, so the default
+     * label was small relative to its own key rather than small in absolute
+     * terms - there is room for this without touching any layout.
+     *
+     * He also asked for bold. LVGL's built-in Montserrat ships ONE weight, so
+     * size is the only lever here without adding a font to the binary; saying
+     * so is better than quietly giving him half of what he asked for. */
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, LV_PART_ITEMS);
+
     /* The default theme draws "checked" keys (active mode toggle, shift,
      * etc.) with a bright primary-colour fill - override to keep the same
      * dark key background used everywhere else. CHECKED is repurposed by

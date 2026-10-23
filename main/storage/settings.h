@@ -376,6 +376,11 @@ typedef struct {
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
     char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
+    /* US state/province, two letters, upper case, EMPTY when not set.
+     * Only the directed-CQ filter uses it: the grid gives a position but not
+     * a reliable state line, so a "CQ TX" cannot be declined from the grid
+     * alone. Randy N4OPI asked for exactly this field. */
+    char     my_state[4];
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
@@ -953,6 +958,7 @@ void settings_set_colormap_idx(uint8_t idx);
 // transmitter (v0.11+) and shown in the FT8 view info pane.
 void settings_set_my_callsign(const char *call);
 void settings_set_my_grid(const char *grid);
+void settings_set_my_state(const char *st);
 
 // The grid the GPS last wrote into my_grid. Provenance, not configuration:
 // gps_autogrid.c uses it to leave a hand-corrected grid alone (see the ⭐

@@ -7,6 +7,7 @@
 #include "sd_archive.h"
 
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>   // strncasecmp - band names are matched case-INSENSITIVELY
 #include <stdint.h>
 #include <time.h>   // time(NULL) - power-calibration row timestamp
@@ -34,6 +35,7 @@ static const char *TAG = "settings";
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
+#define KEY_MY_STATE    "my_state"
 /* Provenance, NOT a user setting: the grid the GPS last wrote into
  * my_grid. gps_autogrid.c needs it to tell "the operator typed over my
  * value" from "we have not written this square yet", and that answer must
@@ -458,6 +460,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
    the comments above had gone stale - the checker is the authority. */
 #define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
 #define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
+#define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -475,7 +478,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_OTA_AUTODL,
     DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
     DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
-    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_CW_CAL,
+    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_MY_STATE, DIRTY_CW_CAL,
     DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
@@ -608,6 +611,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WIFI_SSID))  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
         if (dirty_test(&dirty_local, DIRTY_MY_CALL))    nvs_set_str(s_nvs, KEY_MY_CALL,   snap.my_callsign);
         if (dirty_test(&dirty_local, DIRTY_MY_GRID))    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
+        if (dirty_test(&dirty_local, DIRTY_MY_STATE))   nvs_set_str(s_nvs, KEY_MY_STATE,  snap.my_state);
         if (dirty_test(&dirty_local, DIRTY_WIFI_PASS))  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_test(&dirty_local, DIRTY_LAST_VFO))  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
         if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
@@ -1099,6 +1103,9 @@ static void load_from_nvs(qmx_settings_t *out)
     out->my_grid[0] = '\0';
     sz = sizeof(out->my_grid);
     nvs_get_str(s_nvs, KEY_MY_GRID, out->my_grid, &sz);
+    out->my_state[0] = 0;
+    sz = sizeof(out->my_state);
+    nvs_get_str(s_nvs, KEY_MY_STATE, out->my_state, &sz);
 
     // FT8 CQ presets
     sz = sizeof(out->cq_msg[0]); nvs_get_str(s_nvs, KEY_CQ_MSG0, out->cq_msg[0], &sz);
@@ -1739,6 +1746,22 @@ void settings_set_my_grid(const char *grid)
     }
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_MY_GRID);
+}
+
+/* Upper-cased and clamped to two letters on the way in, so the comparison in
+ * ft8_cq_direction() never has to care how it was typed. Empty clears it. */
+void settings_set_my_state(const char *st)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.my_state[0] = ' ';
+    if (st && st[0] && st[1]) {
+        s_pending.my_state[0] = (char)toupper((unsigned char)st[0]);
+        s_pending.my_state[1] = (char)toupper((unsigned char)st[1]);
+        s_pending.my_state[2] = ' ';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_MY_STATE);
 }
 
 void settings_set_cq_msg(uint8_t idx, const char *text)

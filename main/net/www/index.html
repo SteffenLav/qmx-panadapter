@@ -4570,6 +4570,8 @@ document.getElementById("mem-modal").addEventListener("click", (e) => {
 const SET_FIELDS = [
   ["Station",  "my_callsign", "text", "Your callsign", "Used for FT8/FT4 and every log entry"],
   ["Station",  "my_grid",     "text", "Your grid",     "Maidenhead, e.g. JO65 or JO65ab"],
+  ["Station",  "my_state",    "text", "Your state",
+     "US state, two letters, e.g. TN. Only used to decide whether a directed CQ is for you: with it set, the robot passes over a call for another state. Leave it EMPTY outside the USA, or if you would rather answer every state call. ⚠ CQ DE is never treated as Delaware - in practice it means 'from', and on air it is almost always an ordinary CQ (Randy N4OPI)"],
 
   ["CQ messages", "cq.msg.0", "text", "CQ preset 1", "e.g. CQ OZ1LAV JO65"],
   ["CQ messages", "cq.msg.1", "text", "CQ preset 2", ""],

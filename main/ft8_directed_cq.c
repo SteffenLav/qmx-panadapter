@@ -60,6 +60,7 @@ static void directed_token(const char *text, char *out, size_t out_len)
 ft8_cq_direction_t ft8_cq_direction(const char *text,
                                     const char *their_call,
                                     const char *my_call,
+                                    const char *my_state,
                                     char *why, size_t why_len)
 {
     if (why && why_len) why[0] = '\0';
@@ -90,12 +91,44 @@ ft8_cq_direction_t ft8_cq_direction(const char *text,
         return FT8_CQ_MAYBE_FOR_US;
     }
 
+    /* ⛔⛔ "DE" IS NEVER JUDGED AS A STATE. IT ALMOST ALWAYS MEANS "FROM".
+     *
+     * Randy N4OPI reported being auto-answered to "CQ DE WB4FIS" and read it
+     * as a Delaware call. His own diagnostic log says otherwise: the decode is
+     * "CQ DE WB4FIS EM70", and EM70 is FLORIDA. The same log carries 51 "CQ DE"
+     * decodes - KD2UUC in FN20 (New York), AJ6CG in DM14 (California) and
+     * others. Not one is from Delaware. They are all using DE in its ordinary
+     * sense, the old abbreviation for "from", in a free-text CQ.
+     *
+     * So declining on DE would have cost him every one of those contacts while
+     * appearing to do what he asked for. This is the cheap mistake the whole
+     * file is built to avoid, and it is the one case where the header's
+     * prefix-collision guard is not enough: the collision here is not with a
+     * callsign prefix, it is with plain English.
+     *
+     * ⚠ A genuine Delaware call is therefore answered. That is the correct
+     * trade - one unnecessary answer against 51 lost contacts - and it is the
+     * same doctrine as everything else here. */
+    if (strcmp(tok, "DE") == 0) return FT8_CQ_NOT_DIRECTED;
+
     if (ft8_cq_token_is_us_state(tok)) {
         if (strcmp(mine, "USA") == 0) {
-            /* ⛔ NEVER decline a state call when we are IN the USA. We know
-             * the entity, not the state - my_grid would give a position but
-             * not a reliable state line - so a Florida station must not be
-             * told that "CQ FL" is not for them. */
+            /* ⭐ INSIDE THE USA, DECIDE IT ONLY IF THE OPERATOR TOLD US WHERE
+             * HE IS. The entity is known, the state is not - my_grid gives a
+             * position but not a reliable state line, which is exactly why
+             * Randy asked for a field of his own ("Like maybe a 'Your State'
+             * field next to 'Your Grid' in FT8 settings"). With it set, a call
+             * for another state is demonstrably not for us.
+             *
+             * ⛔ Unset is still MAYBE, not a guess. A Florida station who has
+             * not filled the field in must never be told that "CQ FL" is not
+             * for them. */
+            if (my_state && my_state[0] && my_state[1]
+                && strncmp(my_state, tok, 2) != 0) {
+                if (why && why_len)
+                    snprintf(why, why_len, "CQ %s, and we are in %s", tok, my_state);
+                return FT8_CQ_NOT_FOR_US;
+            }
             return FT8_CQ_MAYBE_FOR_US;
         }
         /* ⚠ The ambiguity guard. Several state codes are also callsign
