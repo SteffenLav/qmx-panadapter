@@ -52,7 +52,9 @@ static const char *TAG = "audio_modal";
 #define AM_Y_ROW(n)   (AM_Y_ROW1 + (n) * (AM_LBL_H + AM_SLIDER_H + AM_GAP))
 #define AM_Y_SLIDER(n) (AM_Y_ROW(n) + AM_LBL_H)
 #define AM_Y_AGC      AM_Y_ROW(3)                      /* label          */
-#define AM_Y_AGC_BTN  (AM_Y_AGC + AM_LBL_H)
+/* +14: the label sat straight on top of the Fast button. "Then give a tad
+ * more space between AGC and the Fast button" - operator, looking at it. */
+#define AM_Y_AGC_BTN  (AM_Y_AGC + AM_LBL_H + 14)
 #define AM_Y_BOTTOM   (AM_Y_AGC_BTN + AM_BTN_H + AM_GAP)
 #define AM_BTN_BOT_H  84
 #define AM_INNER_H    (AM_Y_BOTTOM + AM_BTN_BOT_H)
@@ -187,8 +189,46 @@ static void refresh(void)
     }
 }
 
+/* ⛔ WHY THE TWO GAINS READ "--" UNTIL NOW.
+ *
+ * Operator: "Please make AF and QMX RF gain persistent - they always return
+ * to --". They are not lost, they were never drawn: audio_modal_show() asks
+ * the radio and then paints ONCE, while the answer arrives on the CAT poll
+ * task a moment later with nothing left running to draw it. The drawer has
+ * had a resolve timer for exactly this since the same bug there
+ * (gain_resolve_cb in ui.c); this panel never got one.
+ *
+ * Same shape, same numbers as the drawer's: tick twice a second, re-ask
+ * every ~3 s because an open-time query can be lost to a busy CAT pipe, and
+ * give up after ~10 s rather than polling for ever. The timer exists only
+ * while the panel is open. */
+#define AM_RESOLVE_PERIOD_MS   500
+#define AM_RESOLVE_MAX_TICKS   20   /* ~10 s  */
+#define AM_RESOLVE_REASK_EVERY 6    /* ~3 s   */
+static lv_timer_t *s_resolve_timer = NULL;
+static int         s_resolve_ticks = 0;
+
+static void resolve_stop(void)
+{
+    if (s_resolve_timer) { lv_timer_delete(s_resolve_timer); s_resolve_timer = NULL; }
+}
+
+static void resolve_cb(lv_timer_t *t)
+{
+    (void)t;
+    refresh();
+    bool waiting = (cat_get_af_gain() < 0) || (cat_get_rf_gain() < 0);
+    if (!waiting) { resolve_stop(); return; }
+    if (++s_resolve_ticks >= AM_RESOLVE_MAX_TICKS) { resolve_stop(); return; }
+    if ((s_resolve_ticks % AM_RESOLVE_REASK_EVERY) == 0) {
+        if (cat_get_af_gain() < 0) cat_query_af_gain();
+        if (cat_get_rf_gain() < 0) cat_query_rf_gain();
+    }
+}
+
 static void modal_close(void)
 {
+    resolve_stop();
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -434,6 +474,10 @@ void audio_modal_show(void)
      * whichever band was in use then. */
     cat_query_rf_gain();
     refresh();
+    /* Keep drawing until both numbers have arrived - see resolve_cb(). */
+    s_resolve_ticks = 0;
+    resolve_stop();
+    s_resolve_timer = lv_timer_create(resolve_cb, AM_RESOLVE_PERIOD_MS, NULL);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
 }
