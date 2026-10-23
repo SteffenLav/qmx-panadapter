@@ -1463,6 +1463,7 @@
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
         <a href="/ss.bmp" id="ss-link" target="_blank" title="Opens in a new tab straight away - quickest way to just look at the screen">Tab5 screenshot</a> <a href="#" id="ss-save" title="Saves a PNG file - slower, but the format forums and apps accept">(save PNG)</a>
+        <a href="#" id="server-mode-link" title="Stop the Tab5 drawing its screen and running its speaker, and keep serving this page. Measured: it hands back about half of core 0 and a fifth of core 1. A touch on the Tab5 ends it.">Server mode: <span id="server-mode-state">off</span></a>
         <a href="#" id="reboot-link" title="Restart the Tab5 now. Receiving stops for about ten seconds. Until now this was only reachable after a firmware update.">Reboot the Tab5</a>
         <a href="#" id="poweroff-link" class="danger" title="Shut the Tab5 down. The radio is put back into receive FIRST, so a transmission in progress cannot be left keyed. It does NOT come back on its own - someone has to press the button, or cut and restore its power.">Power off the Tab5</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
@@ -3253,6 +3254,28 @@ function adifImportMessage(j) {
       }
     });
   })();
+
+  /* Server mode (T19). The Tab5 stops drawing and stops its own audio; this
+     page is unaffected, because the spectrum it shows comes from ws_push_task
+     reading the DSP directly, not from the Tab5's canvases.
+     ⚠ No confirm(): it is reversible from here AND by touching the Tab5, and
+     a dialog in front of a one-tap switch is the thing operators complain
+     about. The state comes from /api/status so this label cannot drift from
+     the device - the same rule the waterfall rate follows. */
+  { const sm = document.getElementById("server-mode-link");
+    if (sm) sm.addEventListener("click", async function (e) {
+      e.preventDefault();
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "server_mode", on: !serverModeOn })
+        });
+        const j = await r.json();
+        if (j && typeof j.server_mode === "boolean") setServerModeLabel(j.server_mode);
+      } catch (err) {
+        alert("No answer from the Tab5.");
+      }
+    }); }
 
   { const rb = document.getElementById("reboot-link");
     if (rb) rb.addEventListener("click", (e) => { e.preventDefault(); plainRestart(); }); }
@@ -7662,6 +7685,8 @@ async function tick() {
     /* Peak hold, live, for the same reason the waterfall rate is: changing it
        on the Tab5 drawer must move this screen too, with no reload. */
     if (typeof s.peak_hold_s === "number") peakHoldS = s.peak_hold_s;
+    if (typeof s.server_mode === "boolean" && s.server_mode !== serverModeOn)
+      setServerModeLabel(s.server_mode);
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
     if (s.ft8 && typeof s.ft8.js8_submode === "number") {
       lastJs8Submode = s.ft8.js8_submode;
@@ -10524,6 +10549,15 @@ let wfBlackDb = 9, wfContrastDb = 45, wfFloorBlend = 1.0;
    NOTE the waterfall does NOT chain off this - render.c builds s_wf_smoothed from
    the RAW scratch with its own alpha, independently, which is what wfSmooth already
    mirrors. Chaining the two would smooth twice and is why they are kept separate. */
+/* Server mode, mirrored from /api/status so the menu label cannot disagree
+   with the device - someone may have switched it at the Tab5. */
+let serverModeOn = false;
+function setServerModeLabel(on) {
+  serverModeOn = !!on;
+  const el = document.getElementById("server-mode-state");
+  if (el) el.textContent = serverModeOn ? "ON" : "off";
+}
+
 let specEmaAlpha = 0.4;                       // render.c's default
 
 /* PEAK HOLD, the browser's half - ui.c's algorithm, not a second design.

@@ -3347,6 +3347,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * low volts and the Tab5 goes on draining the same pack - he has already lost
  * a set of 18650s to undervoltage that way. */
 #define DRAWER_SEC_POWEROFF   51
+#define DRAWER_SEC_SERVER     52  /* T19 server mode: stop drawing, feed the web */
 // ⛔ THE NEXT ONE MUST RAISE N_DRAWER_SECTIONS TOO - see CLAUDE.md's "fixed-
 // size array indexed by an enum will be overrun" section. IDs are 0..51.
 //
@@ -3360,7 +3361,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     52
+#define N_DRAWER_SECTIONS     53
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3371,7 +3372,7 @@ _Static_assert(DRAWER_SEC_OUTPWR  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_JS8SUB  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
-_Static_assert(DRAWER_SEC_POWEROFF < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_SERVER < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3504,6 +3505,10 @@ static const drawer_item_t GRP_SPECTRUM[] = {
      * and the transmit offset, not a drawing setting like everything else here. */
 };
 static const drawer_item_t GRP_DEVICE[] = {
+    /* Basic, not Advanced: it is the whole point of the web UI for anyone
+     * running the Tab5 in another room, and an operator who turns it on has
+     * to be able to find it again. Measured saving in TODO T19. */
+    { DRAWER_SEC_SERVER, "Server mode (screen off, web only)", true },
     /* First in the group: it decides what the connector below the settings is
      * wired to, and Battery care is a question you ask after the hardware is
      * right. Advanced-only (basic = false) - see DRAWER_SEC_PORTA. */
@@ -4106,6 +4111,7 @@ static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_check_still_cb(lv_event_t *e);
+static void drawer_check_server_cb(lv_event_t *e);
 static void drawer_still_refresh_label(void);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_pwrcal_entry_btn_cb(lv_event_t *e);
@@ -15291,6 +15297,31 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
+    /* Server mode (T19). Measured: core 0 idle 10-13 % -> 67 %, core 1
+     * 42-56 % -> 72 %, with a browser on the page the whole time. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SERVER, y, 124);
+        lv_obj_t *lbl = lv_label_create(sec);
+        lv_label_set_text(lbl, "Server mode");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        lv_obj_t *cb = make_drawer_checkbox(sec, ui_get_server_mode(),
+                                            drawer_check_server_cb, NULL);
+        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        lv_obj_t *note = lv_label_create(sec);
+        lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(note, DRAWER_W - 80);
+        lv_label_set_text(note,
+            "Screen off, drawing and Tab5 audio stopped - the browser keeps "
+            "everything. Touch the screen to come back.");
+        lv_obj_set_style_text_color(note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
+        lv_obj_align(note, LV_ALIGN_TOP_LEFT, 0, 52);
+        y += 124;
+    }
+
     /* Power off, directly under Restart. They are the same control with
      * different endings, and an operator looking for one will look here for
      * the other. Its own section so the Advanced/Basic filter can hide it. */
@@ -17263,6 +17294,16 @@ static void drawer_still_refresh_label(void)
         ui_get_still_view()
             ? "The spectrum and waterfall hold still and the VFO marker moves across them."
             : "The spectrum re-centres on the dial each time you tune. The marker stays put.");
+}
+
+static void drawer_check_server_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    /* ⚠ Switching it ON darkens the screen under the operator's finger, which
+     * is exactly what it is for - and the drawer goes with it. A touch wakes
+     * the screen AND ends the mode, so there is always a way back that does
+     * not need the browser. */
+    ui_set_server_mode(on);
 }
 
 static void drawer_check_still_cb(lv_event_t *e)

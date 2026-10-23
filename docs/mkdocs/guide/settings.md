@@ -374,6 +374,22 @@ teal. You can always see what is being touched.
 
 ## Panadapter & Zoom
 
+**Server mode** *(Device group, off by default; also in the browser menu)* — the
+Tab5 stops drawing its screen and stops its own audio, and keeps serving the web
+page. For running the radio from another room.
+
+Measured with a browser on the page the whole time: **core 0 idle 10–13 % → 67 %,
+core 1 idle 42–56 % → 72 %**. The drawing is what costs — serving the page is
+about 1 % between the WebSocket push and the HTTP server.
+
+The browser is unaffected: its spectrum and waterfall come from the DSP directly,
+not from the Tab5's canvases. If you are listening to the audio in the browser,
+that keeps working too — a web listener overrides the suspend.
+
+**Touch the Tab5 to come back**, or switch it off from the browser. It is not
+remembered across a reboot, deliberately: a unit that boots with a dark screen
+and no explanation looks broken.
+
 **CW peak filter** *(drawer: Radio > CW, under CW centre; off by default)* — a
 narrow audio peak **on** the CW pitch: **250, 150 or 100 Hz** wide at -3 dB. It
 sits in the Tab5's own audio, after the mode filter and **before the AGC**, so
