@@ -57,6 +57,28 @@ This is the single most-missed step — two users reported "no web audio" in one
 and in both cases the stream was working and the button had never been pressed. See
 [Listen in the browser](#listen-in-the-browser).
 
+### The audio panel - one tap on the S-meter
+
+New in v1.20.5, after Samuel W7STF counted four gestures to change the volume.
+**Tap the S-meter in the top bar.** The panel holds:
+
+- **Mute** - instant, both ways. Not remembered across a reboot, deliberately:
+  a mute that survived one would be indistinguishable from a dead speaker.
+- **Tab5 speaker** - the same volume the drawer's RX Volume sets.
+- **Radio AF gain** - the QMX's own, in the decibels its LCD shows. It is read
+  back from the radio when the panel opens, so it shows what the radio is
+  actually set to, including a change you made on its own knob. A `--` means
+  the radio has not answered yet.
+
+A tap anywhere outside closes it.
+
+!!! warning "Mute is not the RX audio switch"
+    **Mute** silences the speaker at once and brings it back at once. The
+    drawer's **RX audio** switch is different: the audio hardware is opened
+    when the Tab5 boots, or not at all, so turning that switch on part-way
+    through a session does nothing until you restart. The panel says so when
+    that is the case, rather than letting you move sliders against silence.
+
 ### 4. Know which volume control does what
 
 There are three, and they act in different places — see

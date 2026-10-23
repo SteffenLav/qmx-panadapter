@@ -30,6 +30,17 @@ Slim **breathing grip handles** on these three edges show where to swipe.
 
 Tap any item on the top bar to open its selector:
 
+## Audio panel
+
+| Gesture | From | Effect |
+|---|---|---|
+| Tap | **S-meter**, top bar | Open the audio panel |
+
+New in v1.20.5. The panel holds **Mute**, the **Tab5 speaker** volume and the
+**radio's AF gain**, and closes on a tap anywhere outside it. It is on the
+S-meter because that is the one thing in the top bar already about what you are
+hearing. Mute is instant and is not remembered across a reboot.
+
 | Item | Selector |
 |---|---|
 | **Frequency** | Numeric keypad (MHz format) |

@@ -336,7 +336,15 @@ then 20, 30 and 40. Before v1.16.12 this was a 1× to 4× multiplier over a fixe
 both to put more history on one screen and to cut the waterfall's share of the
 drawing work. The spectrum and S-meter update rate is unchanged either way.
 
-The same control is in the browser, and the two lists match.
+The same control is in the browser, and the two lists match. **From v1.20.5 it
+moves the browser's waterfall as well.** Before that it only changed the Tab5's
+carpet while the web page drew one row per received frame whatever the setting
+said. Both screens now run the same arithmetic, so they scroll alike.
+
+The picture stream is a fixed ten frames a second, so **10 is the ceiling of
+genuinely new rows**. Above it — 20, 30, 40 — the extra rows repeat the newest
+frame, which scrolls faster but adds no detail, on the Tab5 and in the browser
+alike.
 
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.

@@ -114,6 +114,30 @@ Tap the **Options** button to open the Options modal:
 
 All filters persist across sessions. Toggle any filter on/off to enable or disable it without erasing the criteria.
 
+#### Stations you skipped (v1.20.5)
+
+The **Skip** button ends the exchange in progress and leaves the robot running;
+the station is not called again this session. From v1.20.5 the web FT8 page
+lists those stations under the grey-list line, and each one can be cleared on
+its own or all at once *(Randy N4OPI)*.
+
+It is a **separate list** from the grey-list above: that one is the software
+setting aside a station that never answers, this one is your own decision, and
+one button should not quietly undo both.
+
+#### Your state (v1.20.5)
+
+**Settings → Station → Your state**, beside Your grid. Two letters. With it set,
+the robot passes over a CQ aimed at a different US state. Leave it empty — as
+everyone outside the USA should — and every state call is answered as before,
+because the radio knows which country you are in but not which state.
+
+!!! warning "`CQ DE` is never read as Delaware"
+    On the air `DE` almost always means *from*, not the state. In one operator's
+    log there were fifty-one `CQ DE` decodes, from Florida, New York and
+    California, and none from Delaware — so treating it as a state call would
+    have cost every one of those contacts.
+
 ### 4. Decoding Performance
 
 On a reasonably busy band, expect roughly **15–20 distinct messages per slot** in

@@ -414,6 +414,14 @@ Presets persist across power cycles. Common modifiers:
 - **SOTA** — Summits on the Air activation
 - *(blank)* — standard CQ
 
+!!! tip "From v1.20.5 you do not have to set POTA by hand"
+    While an **activation is running**, your CQ goes out as `CQ POTA` — or
+    `CQ SOTA` for a summit — whatever the preset says, and goes back to normal
+    when you stop the session. Before this, starting an activation left the CQ
+    unchanged, so nobody hunting parks knew you were in one *(Bruce N9JCV)*.
+    Field Day mode has always worked this way and still outranks it: FT8 has
+    room for exactly one modifier.
+
 The preset editor's top-right **CQ stop** button sets the CQ auto-stop limit (see [Call CQ](#2-call-cq) above) — it cycles never / 1–5 / 10 and applies on tap, independent of Save/Cancel.
 
 ### 10. Frequency & Tone Control

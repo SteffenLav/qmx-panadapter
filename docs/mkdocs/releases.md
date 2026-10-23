@@ -4,7 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.20.4** - 2026-10-22
+**v1.20.5** - 2026-10-23
+
+**The spectrum and waterfall on the Tab5 were throwing away part of what they had already computed, and I had not known it. Plus a round of fixes and ergonomics from your reports.**
+
+- **The Tab5 spectrum and waterfall now show you everything they decode** *(Samuel W7STF)*. Sam reported the spectrum stalling briefly on the Tab5 while the same picture in a browser stayed smooth. Measuring it properly turned up something worse than a display quirk: **fourteen of every hundred spectrum frames were being computed and then silently discarded**, and about a third of all waterfall rows with them. The drawing code waited twenty milliseconds for the display and gave up, while the display routinely holds it for a hundred and eighty. A lost waterfall row is a missing line of history, not a repeated one — the operator could see it as a 10 rows/second setting behaving like 5. The trace also reaches the screen about twice as often as before, and the display no longer spends frames redrawing numbers it has already shown. ⚠ It is **better, not solved**: what remains is how unevenly the display itself refreshes, which is also why the browser still looks smoother — it repaints sixty times a second against ten frames of data, and the Tab5 cannot.
+- **The waterfall rate setting now moves the waterfall you are looking at** *(the operator)*. On the web page the control only ever changed the Tab5's carpet; the browser drew one row per received frame whatever it said. Both screens follow it now, using the same arithmetic, so they agree. The stream is a fixed ten frames a second, so ten is the ceiling of genuinely new rows — 20, 30 and 40 scroll faster by repeating the newest row, on both screens alike, and the setting's help text now says so instead of implying they add detail.
+- ⛔ **A CW keying command could transmit without the band check.** The check added in v1.20.3 reads the firmware's own source to find transmit paths, and `KY` — the command that sends CW text — was not recognised as one of them. It is now, so keying from outside the firmware is refused where the band plan does not allow it. Found here; nobody reported it.
+- **POTA and SOTA: the contact count was counting every activation you had ever made of that park** *(Bruce N9JCV)*. Activate the same reference on a second day and the panel opened already showing the first day's contacts, and saying the park was activated before you had worked anybody. POTA counts per UTC day, so that is what it counts now.
+- **Your CQ says POTA while an activation is running** *(Bruce N9JCV)*. It did not, so nobody hunting parks knew you were in one. Field Day mode has always done exactly this — switch it on and every CQ goes out as "CQ FD" without being asked — and an activation simply was not using the same mechanism. It sends "CQ POTA" (or "CQ SOTA") for as long as the session is running, and goes back to normal when you stop it. Nothing to set, nothing to put back.
+- **Tapping somebody who answered your CQ now works straight away** *(Don WB0LQW)*. It used to say "Busy: calling CQ" and make you stop the CQ by hand first, by which time the caller had often given up. Answering a caller is the whole point of having called CQ, so the CQ stands down and the exchange starts. Tapping a *second* station while you are already mid-contact with a first still refuses — dropping a half-finished QSO without being asked is a different thing.
+- **The stations you skipped are listed, and you can take it back** *(Randy N4OPI)*. On the web FT8 page, under the grey-list line. Each call clears on its own as well as all at once. It is a separate list from the grey-list on purpose: that one is the software setting aside a station that cannot hear you, this one is your own decision, and one button should not quietly undo both.
+- **A "Your state" field, so a CQ for another state can be passed over** *(Randy N4OPI)*. Next to Your grid in the web settings. Set it and the robot passes over a call for a different state; leave it empty and every state call is answered as before, because the radio knows which country you are in but not which state and must not guess. ⚠ **"CQ DE" is never read as Delaware.** Randy's own log settled that: the station he reported was sending "CQ DE WB4FIS EM70", and EM70 is Florida. There were fifty-one "CQ DE" decodes in that one file, from New York, California and elsewhere, and none from Delaware — they are all using DE in its old sense, "from". Treating it as a state would have cost him every one of those contacts.
+- **An audio panel, one tap on the S-meter** *(Samuel W7STF)*. Sam counted four gestures to change the volume. The S-meter opens a panel with mute, the Tab5's speaker volume and the radio's AF gain, and it closes on a tap anywhere outside it. The **mute is instant both ways** — it had to be separate from the RX audio switch, because that switch only takes effect at boot, which is the thing that cost Sam fifteen minutes back in October. The panel also tells you plainly when RX audio was off at boot, instead of letting you move sliders against silence.
+- **Bigger text and bigger targets** *(Samuel W7STF, Don WB0LQW)*. The frequency keypad's keys are larger with noticeably more space between them — a hand that is not steady misses by landing *between* two keys — and the pad is opaque while you type. The on-screen keyboards everywhere got larger key labels, after Don said he could not read them outdoors. The audio panel's text is sized to match.
+- **The FT8 Options window no longer overlaps itself at the bottom right** *(the operator)*. The Fox/Hound control and the "Skip CQs not for me" checkbox were on the same row and drew on top of each other. Fox/Hound has its own row now.
+
+## Previous Releases
+
+### v1.20.4 - 2026-10-22
 
 **A patch release. Two of its items are corrections you should know about: the web interface could transmit without the band check that v1.20.3 added.**
 
@@ -13,8 +31,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **An AM listening frequency can be stored in a memory channel** *(Gyula HA3HZ)*. v1.20.3 gave the editor its AM button; the frequency itself was still refused if it fell outside an amateur band, which is exactly where AM listening is. A memory is a receive target and receiving is not restricted — your QMX has its own **System config → RX outside band** for tuning there. So it stores now, and says it is a receive-only channel. Transmitting there is refused by the band check, which is the right place for that decision.
 - **Messages that appeared behind the frequency keypad are visible again** *(Gyula HA3HZ)*. He reported it as "the response message appears behind the frequency table", and that is precisely what it was: notices were drawn on the screen while the keypad and the band popup are drawn on a layer above it. **Every** notice raised while one of those was open went unseen, not just the one that made him look — which is why the refusal above never gave him a reason.
 - **Receiver audio on the Tab5 wandered in pitch** *(Samuel W7STF, on WWV's one-second tone)*. The playback rate is measured from the audio the radio sends, and it was re-measured every second — but the radio delivers in 40 ms bursts, so a one-second count of a *perfect* stream reads up to 4 % wrong, and the pitch followed that. It is measured over ten seconds now. On the bench the wander dropped from about 0.6 % to 0.03 %, roughly a thirtieth. ⚠ Measured on the bench, not yet confirmed by ear: 10 MHz was dead here, so there was no steady tone to listen to.
-
-## Previous Releases
 
 ### v1.20.3 - 2026-10-21
 
@@ -1160,7 +1176,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.4.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.5.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
