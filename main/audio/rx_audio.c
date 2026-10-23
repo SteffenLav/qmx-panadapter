@@ -654,6 +654,10 @@ static volatile float s_pan_overlap = 0.3f;
 // full reasoning; default picked to noticeably widen the perceived image.
 static volatile float s_pan_width = 1.8f;
 
+/* Server mode's session-only gate on the whole chain - see rx_audio.h.
+ * Declared up here because the audio task below reads it. */
+static volatile bool s_suspended = false;
+
 static float s_agc_env = 1.0f;
 /* Peak limiter (see the block in the per-sample loop). 26000 of 32767 leaves
    about 2 dB of headroom under the hard clamp, so the clamp stops being part
@@ -1523,7 +1527,11 @@ static void rx_audio_task(void *arg)
          * whole point of Sam W7STF's request is listening from another room
          * while the Tab5 sits silent. So the chain runs for `s_enabled ||
          * s_web_en`, and only the esp_codec_dev_write() is conditional. */
-        if (!s_enabled && !s_web_en) {
+        /* s_suspended joins the SAME condition rather than getting a branch
+         * of its own: "nobody is listening" and "the operator told us nobody
+         * is listening" want identical behaviour, and two sleep paths would
+         * be two things to keep in step. The web listener still wins. */
+        if ((!s_enabled || s_suspended) && !s_web_en) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Fully asleep - zero wakeups, zero cost - until
             // rx_audio_set_enabled(true) gives this notification. This is the
@@ -2853,6 +2861,16 @@ static void preopen_body(void)
     ESP_LOGI(TAG, "preopen OK (TX-only I2S, codec ready, vol=%d, free_int=%u)",
              (int)s_volume, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
+
+void rx_audio_suspend(bool on)
+{
+    if (s_suspended == on) return;
+    s_suspended = on;
+    ESP_LOGW(TAG, "RX audio chain %s (server mode)", on ? "SUSPENDED" : "resumed");
+    if (!on && s_task) xTaskNotifyGive(s_task);   /* same wake as the enable */
+}
+
+bool rx_audio_is_suspended(void) { return s_suspended; }
 
 void rx_audio_set_enabled(bool en)
 {

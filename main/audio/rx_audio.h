@@ -167,6 +167,25 @@ void rx_audio_apply_settings(void);
  *
  * CW/CW-R only. Persisted, because it is a listening preference rather than
  * a bench knob. */
+/* ⭐ SUSPEND THE WHOLE CHAIN, RAM ONLY (T19 server mode).
+ *
+ * ⛔ NOT rx_audio_set_enabled(false): that one is PERSISTED, and a stored
+ * "off" means the codec is not opened at the next boot, which cannot be
+ * undone without another restart. This is a session-only gate - the task
+ * sleeps on the same indefinite block it already uses when nobody is
+ * listening, and resuming wakes it with the same notification.
+ *
+ * ⛔ A WEB LISTENER OVERRIDES IT. The chain runs for `s_web_en` whatever this
+ * says, because audio in the browser is exactly the thing server mode exists
+ * to serve: "ONLY what the web needs" (operator, 2026-10-23). What it stops
+ * is the demodulator running for a speaker nobody is in the room to hear -
+ * measured at 17-20 %% of core 1.
+ *
+ * Muting is not a substitute: a muted chain still filters, demodulates, runs
+ * the AGC and writes the codec. It costs the same and produces silence. */
+void     rx_audio_suspend(bool on);
+bool     rx_audio_is_suspended(void);
+
 void     rx_audio_set_cw_peak_hz(uint16_t bw_hz);
 uint16_t rx_audio_get_cw_peak_hz(void);
 

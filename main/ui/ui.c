@@ -8466,6 +8466,9 @@ static bool     s_disp_asleep       = false;
 /* Server mode (T19) lives beside the sleep flag because it uses the same
  * enter/wake pair - see ui.h for why it gates the canvases, not taskLVGL. */
 static bool     s_server_mode       = false;
+/* What the speaker was doing before server mode muted it, so leaving the mode
+ * cannot un-mute something the operator had muted himself. */
+static bool     s_server_was_muted  = false;
 static bool     s_wake_pending      = false;  // touch seen while asleep; swallow until lift
 static uint64_t s_2f_down_us        = 0;      // two-finger session start (0 = none)
 static int      s_2f_dist0          = 0;      // finger spread at session start
@@ -8545,6 +8548,8 @@ static void display_sleep_wake(void)
      * crashed device rather than as a mode. */
     if (s_server_mode) {
         s_server_mode = false;
+        rx_audio_suspend(false);
+        if (!s_server_was_muted) rx_audio_set_muted(false);
         ESP_LOGI(TAG, "server mode off - woken by touch");
     }
     ESP_LOGI(TAG, "display sleep: woken by touch");
@@ -9481,11 +9486,35 @@ void ui_set_server_mode(bool on)
          * and its wake is already wired to a touch. A second way to darken
          * the screen would be a second thing to get wrong. */
         display_sleep_enter();
-        ESP_LOGW(TAG, "SERVER MODE on - the Tab5 stops drawing; the browser is "
-                      "unaffected (ws_push_task reads the DSP directly)");
+        /* ⛔ AND THE SPEAKER. "I still hear sound..... that is wrong and
+         * should be shut off" - operator, the first time he tried it. He is
+         * right and it is the mode's own definition: the Tab5 speaker serves
+         * nobody while the operator is at the browser, so it is activity that
+         * does not serve the WebSocket.
+         *
+         * MUTE, not rx_audio_set_enabled(false): the enable cannot be turned
+         * back on mid-session (the codec is opened at boot or not at all, see
+         * rx_audio.h), so disabling it here would cost a reboot to undo. The
+         * mute is instant both ways and the web stream is independent of it -
+         * a browser listening to the audio keeps hearing it. */
+        /* ⛔ SUSPEND, NOT MUTE. The first version muted the speaker and the
+         * operator's answer was "ONLY what the web needs I said...". He is
+         * right: a muted chain still filters, demodulates, runs the AGC and
+         * writes the codec - it costs 17-20 %% of core 1 to produce silence.
+         * The mute stays as well, so that the speaker cannot come back loud
+         * on a path that does not go through here. */
+        s_server_was_muted = rx_audio_is_muted();
+        rx_audio_set_muted(true);
+        rx_audio_suspend(true);
+        ESP_LOGW(TAG, "SERVER MODE on - the Tab5 stops drawing and the speaker "
+                      "is muted; the browser is unaffected (ws_push_task reads "
+                      "the DSP directly)");
     } else {
         display_sleep_wake();
-        ESP_LOGI(TAG, "server mode off - drawing resumed");
+        rx_audio_suspend(false);
+        if (!s_server_was_muted) rx_audio_set_muted(false);
+        ESP_LOGI(TAG, "server mode off - drawing resumed%s",
+                 s_server_was_muted ? " (speaker left muted, as it was)" : "");
     }
 }
 
