@@ -21,7 +21,7 @@ It drives only {"action":"wspr_guards","deep":N}, a dev action with no TX and
 no flash, and it puts the ration back to 0 when it exits, including on Ctrl-C.
 
 Usage:
-    python tools/wspr_deep_ab.py --host 192.168.1.211 \
+    python tools/wspr_deep_ab.py --host 192.168.1.210 \
         --capture scratchpad/capture-dev.txt --ration 14 --minutes 120
 
 ⚠ READ THE CAPTURE, NOT THE API, for the result: the decode counts are in
@@ -107,11 +107,12 @@ def report(label, rates, decs):
 
 def main():
     ap = argparse.ArgumentParser()
-    # ⚠ A hard-coded IP here goes stale silently - this said .211 while the
-    # board was on .209, which is a timeout and not an error message.
+    # The dev bench, STATIC since 2026-10-24. Before that it was a DHCP lease
+    # and this default went stale twice in a day - it said .211 while the
+    # board was on .209, and a stale IP is a timeout, not an error message.
     # tools/bench.json is the registry; the board prints its own address in
-    # its capture ("sta ip:"). Pass --host when in doubt.
-    ap.add_argument("--host", default="192.168.1.209")
+    # its capture ("sta ip:"), which stays the authority. --host overrides.
+    ap.add_argument("--host", default="192.168.1.210")
     ap.add_argument("--capture", default="scratchpad/capture-dev.txt")
     ap.add_argument("--ration", type=int, default=14)
     ap.add_argument("--minutes", type=int, default=120)

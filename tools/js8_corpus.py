@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Record a JS8 (or FT8/FT4) reference corpus off a running board.
 
-    python tools/js8_corpus.py 192.168.1.211 --out test/wav_reference_js8
-    python tools/js8_corpus.py 192.168.1.211 --slots 40          # then stop
-    python tools/js8_corpus.py 192.168.1.211 --off               # disarm only
+    python tools/js8_corpus.py 192.168.1.210 --out test/wav_reference_js8
+    python tools/js8_corpus.py 192.168.1.210 --slots 40          # then stop
+    python tools/js8_corpus.py 192.168.1.210 --off               # disarm only
 
 WHY THIS AND NOT rxcap. /api/slot.wav serves the decoder's OWN slot buffer -
 12 kHz, mono, slot-aligned to the UTC boundary by dsp_ft8_capture_begin()'s
