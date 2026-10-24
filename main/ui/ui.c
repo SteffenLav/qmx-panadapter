@@ -8843,6 +8843,8 @@ static void pinch_poll_cb(lv_timer_t *t)
                 cat_set_frequency(tgt);
                 ui_update_frequency(tgt);
                 // Clear waterfall on pan
+                /* ⚠ INSTRUMENT 2026-10-24 - see the other two clear sites. */
+                ESP_LOGW(TAG, "wf clear: pan settle");
                 if (s_wf_canvas_buf) wf_clear_all();
                 ESP_LOGI("pinch", "Waterfall processed, passband fade started");
             }
@@ -11433,7 +11435,16 @@ static void wf_track_viewport(void)
 
     if (!sv_effective()) {
         if (s_wf_view_x != WF_MARGIN || s_wf_anchor_ok) {
-            wf_clear_all();          /* leaving still mode: history is not aligned */
+            /* ⚠ INSTRUMENT 2026-10-24: the operator sees the waterfall reset
+             * on its own, by his account once it is a third to a half down
+             * the panel - which at 10 rows/s is every 12-18 s, so it is a
+             * CLEAR firing periodically, not anything to do with depth.
+             * There are exactly three clear sites and the log named none of
+             * them, so each now says it fired and why. Remove once the cause
+             * is found; a permanent line per clear is noise. */
+            ESP_LOGW(TAG, "wf clear: leaving still mode (view_x=%d anchor_ok=%d)",
+                     (int)s_wf_view_x, (int)s_wf_anchor_ok);
+            wf_clear_all();
         }
         return;
     }
@@ -11445,6 +11456,12 @@ static void wf_track_viewport(void)
     /* A scale change cannot be honoured by moving pixels - the old rows are at
      * a different Hz/px and rescaling them would be a lie. Start again. */
     if (!s_wf_anchor_ok || s_wf_anchor_span != span) {
+        /* ⚠ INSTRUMENT 2026-10-24 - the prime suspect. This clears on ANY
+         * change of span, and span is recomputed every frame: if it jitters
+         * by one count the history is thrown away for nothing. Print both
+         * values so a spontaneous reset can be told from a real zoom. */
+        ESP_LOGW(TAG, "wf clear: span %ld -> %ld (anchor_ok=%d)",
+                 (long)s_wf_anchor_span, (long)span, (int)s_wf_anchor_ok);
         wf_clear_all();
         s_wf_anchor_span = span;
         s_wf_anchor_hz   = view_lo - (int64_t)WF_MARGIN * span / DISPLAY_H_RES;
@@ -18940,7 +18957,7 @@ void ui_request_base_mode_m(ui_mode_t m)
  * already uses for its own title, and for the same reason recorded there: an
  * estimate written as a fact cost that page a header two sizes too small.
  * Guessing a label width from a character count has been wrong here before. */
-#define LD_MARGIN_X         80
+#define LD_MARGIN_X         40   /* halved from 80 on the glass - operator */
 #define LD_BTN_PAD_X        28   /* breathing room each side of the text */
 #define LD_BTN_H           104   /* a 48 pt line needs more than 72 */
 #define LD_BTN_GAP          14
@@ -19083,7 +19100,14 @@ static void left_drawer_build(void)
      * them. MODE: CW BELONGS DIRECTLY UNDER PANADAPTER when UI_MODE_CW
      * arrives from the other branch (ui_mode.h reserves = 2) - his words, so
      * insert there rather than appending. */
-    int y = 0;
+    /* Centred vertically rather than hung from the top: with five buttons at
+     * 104 the stack is 576 of 720, so top-aligned it sat high with a long
+     * empty tail. Computed from the list length so adding MODE: CW re-centres
+     * itself instead of needing this number edited. */
+    const int n_btn   = (int)(sizeof(LD_LABELS) / sizeof(LD_LABELS[0]));
+    const int stack_h = n_btn * LD_BTN_H + (n_btn - 1) * LD_BTN_GAP;
+    int y = (DISPLAY_V_RES - stack_h) / 2 - LD_PAD;
+    if (y < 0) y = 0;
     left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
                         LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
     left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], 0xFFDD00,
