@@ -10530,7 +10530,24 @@ let wfPaletteIdx = 0;
    The FLOOR is different: it tracks how the band's noise moves, which is a physical
    thing happening in seconds regardless of anyone's frame rate, so those stay as
    time constants derived from the elapsed time. */
-const WF_SMOOTH_ALPHA     = 0.15;                // WF_EMA_ALPHA, render.c - per ROW
+/* ⛔ A TIME CONSTANT, NOT A PER-ROW ALPHA - the number was copied from the
+   device and the CLOCK IT RUNS ON WAS NOT.
+
+   render.c applies WF_EMA_ALPHA 0.15 once per 100 ms FRAME, so its memory is
+   tau = -0.1 / ln(1 - 0.15) = 0.62 s, fixed in seconds, and the row rate then
+   samples that running average. This file applied the same 0.15 once per ROW,
+   so its memory was ~6 ROWS - whatever a row happened to last.
+
+   They agree only at 10 rows/s, where a row IS 100 ms. Below that they
+   diverge badly: at 1 row/s the browser smeared over ~6 s against the Tab5's
+   0.62 s, about ten times longer. The operator saw it as "much more smearing
+   on the web wf than on the Tab5" (2026-10-24). It only became visible in
+   v1.20.5, which is when the browser started following wf_rows_per_s at all
+   (T74) - before that it ignored the rate and the bug could not show.
+
+   Expressed in SECONDS and converted with alphaFor(dt), so the two surfaces
+   now smear by the same amount at every rate. */
+const WF_SMOOTH_TC_S      = 0.62;                // = render.c's WF_EMA_ALPHA 0.15 per 100 ms
 const WF_FLOOR_ATTACK_TC_S= 1 / (0.05   * 30);   // WF_FLOOR_ATTACK              -> 0.67 s
 const WF_FLOOR_FAST_TC_S  = 1 / (0.05   * 30);   // WF_FLOOR_DECAY_FAST          -> 0.67 s
 const WF_FLOOR_SLOW_TC_S  = 1 / (0.0005 * 30);   // WF_FLOOR_DECAY_SLOW          -> 67 s
@@ -10710,7 +10727,7 @@ function drawWaterfall(bytes) {
 
   /* Fast decay briefly after (re)init so a fresh connection settles in seconds
      instead of a minute, then slow - signals must not be absorbed into the floor. */
-  const aSmooth  = WF_SMOOTH_ALPHA;          // per ROW, not per second - see above
+  const aSmooth  = alphaFor(WF_SMOOTH_TC_S); // per SECOND, matching render.c - see above
   /* With the floor re-seeded every frame there is nothing accumulating, so the single
      update step that follows has to use the device's PER-TICK alpha (0.05), not an
      alpha derived from elapsed time - at 10 fps that came out 0.14 and quietly cut
