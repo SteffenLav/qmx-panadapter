@@ -107,7 +107,11 @@ def report(label, rates, decs):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="192.168.1.211")
+    # ⚠ A hard-coded IP here goes stale silently - this said .211 while the
+    # board was on .209, which is a timeout and not an error message.
+    # tools/bench.json is the registry; the board prints its own address in
+    # its capture ("sta ip:"). Pass --host when in doubt.
+    ap.add_argument("--host", default="192.168.1.209")
     ap.add_argument("--capture", default="scratchpad/capture-dev.txt")
     ap.add_argument("--ration", type=int, default=14)
     ap.add_argument("--minutes", type=int, default=120)
