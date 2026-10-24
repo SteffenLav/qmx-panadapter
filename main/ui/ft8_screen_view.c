@@ -3878,44 +3878,60 @@ static void ft8_freq_popup_open(void)
     const int col_w  = 240;
     const int col_gap = 20;
 
-    /* One column per sub-mode, left to right: FT8 (gold), FT4 (cyan), JS8
-     * (magenta). All three share the QMX's USB/DiGi data mode, so a tap in any
-     * of them sends no CAT mode change - only the dial and the Tab5-side
-     * sub-mode move.
+    /* \u2b50 ONE COLUMN - THE SUB-MODE YOU ARE ACTUALLY IN.
      *
-     * Three columns at 240 + 20 start at x = 320 and end at 1100, inside
-     * MID_W (1280). A fourth would not fit and would need a different layout,
-     * not a smaller gap. */
+     * This drew all three at once (FT8 gold, FT4 cyan, JS8 magenta) because
+     * the popup was the ONLY way to reach FT4 and JS8: there was no other
+     * door, so every door had to be on display. Since 2026-10-24 the Tab5's
+     * left drawer and the browser's Radio menu both enter FT8/FT4/JS8
+     * directly, so the popup no longer has to carry mode SELECTION as well as
+     * frequency selection. Operator, in the message that asked for the
+     * drawer: "we no longer need to see all three Preset columns at once -
+     * but only the one relevant to the actual choice(!)".
+     *
+     * \u2b50 And this is what makes per-mode presets possible at all. With three
+     * columns up at once, a "current preset" had no single meaning; with one,
+     * the page knows which mode's list it is showing and a persistent
+     * per-mode preset becomes a thing that can exist. NOT built here.
+     *
+     * All three share the QMX's USB/DiGi data mode, so a tap sends no CAT
+     * mode change - only the dial and the Tab5-side sub-mode move. */
     int total = 0;
     int col = 0;
+    const ft8_op_mode_t cur_mode = ft8_op_mode_get();
 
     /* Rebuilt from scratch every time the columns are, so the registry cannot
      * carry rows from a previous popup. */
     preset_rows_reset();
 
-    total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
-                                 "FT8", 0xFFDD00,
-                                 FT8_BAND_FREQS, N_FT8_BAND_FREQS,
-                                 bands, band_count, cur_hz, ft8_freq_preset_cb,
-                                 FT8_OP_MODE_FT8);
-    col++;
+    if (cur_mode == FT8_OP_MODE_FT8) {
+        total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
+                                     "FT8", 0xFFDD00,
+                                     FT8_BAND_FREQS, N_FT8_BAND_FREQS,
+                                     bands, band_count, cur_hz, ft8_freq_preset_cb,
+                                     FT8_OP_MODE_FT8);
+        col++;
+    }
     // FT4 soft-disabled (see FT4_MODE_DISABLED in ft8_test.h) - skip building
     // the column entirely so it's invisible, not just inert; ft8_op_mode_set()
     // would coerce a tap to FT8 anyway, but a visible-but-nonfunctional
     // column would look broken rather than "never there".
 #if !FT4_MODE_DISABLED
-    total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
-                                 "FT4", FT4_ACCENT_HEX,
-                                 FT4_BAND_FREQS, N_FT4_BAND_FREQS,
-                                 bands, band_count, cur_hz, ft4_freq_preset_cb,
-                                 FT8_OP_MODE_FT4);
-    col++;
+    if (cur_mode == FT8_OP_MODE_FT4) {
+        total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
+                                     "FT4", FT4_ACCENT_HEX,
+                                     FT4_BAND_FREQS, N_FT4_BAND_FREQS,
+                                     bands, band_count, cur_hz, ft4_freq_preset_cb,
+                                     FT8_OP_MODE_FT4);
+        col++;
+    }
 #endif
     /* The JS8 column is built only when the protocol is actually implemented,
      * for the same reason FT4's is skipped when disabled: ft8_op_mode_set()
      * refuses an unimplemented mode, and a column whose rows silently did
      * nothing would read as broken rather than as absent. */
-    if (ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
+    if (cur_mode == FT8_OP_MODE_JS8 &&
+        ftx_protocol_is_implemented(FTX_PROTOCOL_JS8)) {
         total += build_preset_column(ov, LEFT_W + col * (col_w + col_gap), top_y,
                                      "JS8", JS8_ACCENT_HEX,
                                      JS8_BAND_FREQS, N_JS8_BAND_FREQS,

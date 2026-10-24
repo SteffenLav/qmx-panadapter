@@ -18923,16 +18923,32 @@ void ui_request_base_mode_m(ui_mode_t m)
  * they are deliberately the same colour because they are the same thing. */
 /* 80 px of drawer either side of the buttons, operator's figure, and every
  * button the SAME width - so the stack reads as one column rather than as
- * labels of different lengths. The drawer width falls out of those two.
- * ⚠ LD_BTN_W is not measured: "PANADAPTER" at montserrat_24 has never been
- * put through /ss.bmp. If it ever looks tight, measure it in PIXELS - this
- * project has been wrong guessing label widths from character counts. */
+ * labels of different lengths.
+ *
+ * ⛔ THE WIDTH IS MEASURED, NOT GUESSED, AND THE FONT IS 48.
+ *
+ * I built this at montserrat_24 first. That is the pages' BODY size; the
+ * thing these buttons duplicate is the page's MODE TITLE, which every mode
+ * page draws at 48 - wspr_screen_view.c's LEFT_W is 372 precisely "to fit
+ * MODE: WSPR at 48 pt". The operator asked for "the same font size and font
+ * itself as used on the pages now" in his first message and I used the wrong
+ * one of the two sizes on the page.
+ *
+ * At 48 the labels are roughly twice as wide, so the button and the drawer
+ * can no longer be constants. They are computed in left_drawer_build() by
+ * asking LVGL for the widest label - the same pattern wspr_screen_view.c
+ * already uses for its own title, and for the same reason recorded there: an
+ * estimate written as a fact cost that page a header two sizes too small.
+ * Guessing a label width from a character count has been wrong here before. */
 #define LD_MARGIN_X         80
-#define LD_BTN_W           280
-#define LEFT_DRAWER_W      (LD_BTN_W + 2 * LD_MARGIN_X)   /* = 440 */
-#define LD_BTN_H            72
+#define LD_BTN_PAD_X        28   /* breathing room each side of the text */
+#define LD_BTN_H           104   /* a 48 pt line needs more than 72 */
 #define LD_BTN_GAP          14
 #define LD_PAD              16
+
+/* Filled by left_drawer_build() once the text has been measured. */
+static int s_ld_btn_w = 0;
+static int s_ld_w     = 0;
 
 static lv_obj_t *s_left_drawer       = NULL;
 static lv_obj_t *s_left_drawer_scrim = NULL;
@@ -18982,7 +18998,7 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
                                 uint32_t hex, void *dest)
 {
     lv_obj_t *b = lv_btn_create(parent);
-    lv_obj_set_size(b, LD_BTN_W, LD_BTN_H);
+    lv_obj_set_size(b, s_ld_btn_w, LD_BTN_H);
     lv_obj_set_pos(b, LD_MARGIN_X - LD_PAD, y);   /* pad_all already inset us */
     lv_obj_set_style_bg_color(b, lv_color_hex(0x262c34), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
@@ -18998,17 +19014,41 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, txt);
     lv_obj_set_style_text_color(l, lv_color_hex(hex), 0);
-    /* montserrat_24 - the size the FT8/WSPR pages use, which is what the
-     * operator asked these to match. */
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    /* 48 - the size every mode page draws its own MODE: title at. These
+     * buttons ARE that title, seen from outside the page. */
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_48, 0);
     lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
 
     lv_obj_add_event_cb(b, left_drawer_btn_cb, LV_EVENT_CLICKED, dest);
 }
 
+/* The labels, in the order they are stacked. Kept as one list so the
+ * measuring pass and the building pass cannot disagree about what is on the
+ * drawer - a width measured over a different set of strings than the one
+ * drawn is a bug that looks like a font problem. */
+static const char *LD_LABELS[] = {
+    "PANADAPTER", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
+};
+
+static void left_drawer_measure(void)
+{
+    const lv_font_t *f = &lv_font_montserrat_48;
+    int widest = 0;
+    for (unsigned i = 0; i < sizeof(LD_LABELS) / sizeof(LD_LABELS[0]); i++) {
+        lv_point_t sz;
+        lv_txt_get_size(&sz, LD_LABELS[i], f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (sz.x > widest) widest = sz.x;
+    }
+    s_ld_btn_w = widest + 2 * LD_BTN_PAD_X;
+    s_ld_w     = s_ld_btn_w + 2 * LD_MARGIN_X;
+    ESP_LOGI(TAG, "left drawer: widest label %d px -> button %d, drawer %d",
+             widest, s_ld_btn_w, s_ld_w);
+}
+
 static void left_drawer_build(void)
 {
     if (s_left_drawer) return;          /* lazy, like the settings drawer */
+    left_drawer_measure();
     lv_obj_t *scr = lv_scr_act();
 
     /* Tap anywhere else to dismiss. Built before the drawer so it sits
@@ -19027,8 +19067,8 @@ static void left_drawer_build(void)
                         LV_EVENT_CLICKED, NULL);
 
     s_left_drawer = lv_obj_create(scr);
-    lv_obj_set_size(s_left_drawer, LEFT_DRAWER_W, DISPLAY_V_RES);
-    lv_obj_set_pos(s_left_drawer, -LEFT_DRAWER_W, 0);   /* parked off-screen left */
+    lv_obj_set_size(s_left_drawer, s_ld_w, DISPLAY_V_RES);
+    lv_obj_set_pos(s_left_drawer, -s_ld_w, 0);          /* parked off-screen left */
     lv_obj_set_style_bg_color(s_left_drawer, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_left_drawer, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_left_drawer, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -19044,13 +19084,13 @@ static void left_drawer_build(void)
      * arrives from the other branch (ui_mode.h reserves = 2) - his words, so
      * insert there rather than appending. */
     int y = 0;
-    left_drawer_add_btn(s_left_drawer, y, "PANADAPTER", 0xFFFFFF,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
                         LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, "MODE: FT8",  0xFFDD00,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], 0xFFDD00,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, "MODE: FT4",  FT4_ACCENT_HEX,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], FT4_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, "MODE: JS8",  JS8_ACCENT_HEX,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], JS8_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8)); y += LD_BTN_H + LD_BTN_GAP;
     /* ⛔ NO wspr_feature_enabled() GATE HERE, and the old cycle's gate was not
      * a reason to copy one. I wrote that WSPR was gated "because the page is
@@ -19058,7 +19098,7 @@ static void left_drawer_build(void)
      * by design. A gate carried forward on a misremembered reason hides a
      * finished page from the operator who fixed it. WSPR is a peer mode and
      * gets a door like the rest. */
-    left_drawer_add_btn(s_left_drawer, y, "MODE: WSPR", UI_COLOR_MODE_WSPR,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], UI_COLOR_MODE_WSPR,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
 }
 
@@ -19075,7 +19115,7 @@ static void left_drawer_open(void)
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_left_drawer);
     lv_anim_set_exec_cb(&a, left_drawer_anim_x_cb);
-    lv_anim_set_values(&a, -LEFT_DRAWER_W, 0);
+    lv_anim_set_values(&a, -s_ld_w, 0);
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
@@ -19091,7 +19131,7 @@ static void left_drawer_close(void)
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_left_drawer);
     lv_anim_set_exec_cb(&a, left_drawer_anim_x_cb);
-    lv_anim_set_values(&a, 0, -LEFT_DRAWER_W);
+    lv_anim_set_values(&a, 0, -s_ld_w);
     lv_anim_set_time(&a, 200);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
