@@ -8902,8 +8902,19 @@ function overlayTuneCursor() {
   const snap    = tuneSnapHz();
   const freqHz  = Math.round((lastFreqHz + offsetHz) / snap) * snap;
 
-  drawTuneCursor(sctx,    tuneCursorX,                   specPxW, specPxH, freqHz);
-  drawTuneCursor(wfcurctx, tuneCursorX * wfPxW / specPxW, wfPxW,  wfPxH,  freqHz);
+  /* ⛔ THE LINE SNAPS TOO, NOT JUST THE LABEL. The number was rounded here and
+     then the line was drawn at tuneCursorX - the raw mouse pixel - so the
+     readout jumped in 250 Hz steps while the cyan dash glided smoothly past
+     it. The Tab5's cursor moves in steps, and the operator noticed the
+     browser's did not. Worse than cosmetic: with the two disagreeing, the
+     line pointed at a frequency the click would not use.
+
+     Project the SNAPPED frequency back through the same mapping that
+     produced offsetHz, so the dash sits exactly where the click will land. */
+  const snapX = (((freqHz - lastFreqHz - panHz) / spanHz) + 0.5) * specPxW;
+
+  drawTuneCursor(sctx,    snapX,                   specPxW, specPxH, freqHz);
+  drawTuneCursor(wfcurctx, snapX * wfPxW / specPxW, wfPxW,  wfPxH,  freqHz);
 }
 
 function handleTuneMove(clientX, rect) {
