@@ -1528,7 +1528,18 @@
     <div class="bot-menu-wrap">
       <button type="button" class="bot-btn" id="radio-group-btn">Radio &#9650;</button>
       <div class="bot-menu" id="radio-menu">
-        <a href="#" id="screen-toggle-link" title="Switch the Tab5 between the panadapter and the FT8/FT4 screen">Switch to FT8/FT4</a>
+        <!-- ⛔ FIVE ENTRIES, NOT ONE CYCLING LINK. It used to be a single
+             "Switch to <next>" that rotated Panadapter -> FT8 -> WSPR, which
+             could not reach FT4 or JS8 at all: those were only ever selectable
+             by opening FT8 and picking a preset column. Mirrors the Tab5's
+             left drawer, added the same day, button for button and colour for
+             colour - the label colour is the page's own accent, which is why
+             the hexes are repeated from ft8_screen_view.h and ui_theme.h. -->
+        <a href="#" class="screen-to" data-screen="panadapter" style="color:#FFFFFF" title="Show the spectrum and waterfall on the Tab5">Switch to Panadapter</a>
+        <a href="#" class="screen-to" data-screen="ft8" style="color:#FFDD00" title="Open the FT8 page on the Tab5 and select FT8">Switch to FT8</a>
+        <a href="#" class="screen-to" data-screen="ft4" style="color:#00B4FF" title="Open the FT8 page on the Tab5 and select FT4">Switch to FT4</a>
+        <a href="#" class="screen-to" data-screen="js8" style="color:#E040FB" title="Open the FT8 page on the Tab5 and select JS8">Switch to JS8</a>
+        <a href="#" class="screen-to" data-screen="wspr" style="color:#3D8C40" title="Open the WSPR page on the Tab5">Switch to WSPR</a>
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
         <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
@@ -7354,23 +7365,26 @@ document.getElementById("pause-btn").addEventListener("click", async () => {
   paintPaused(!pausedNow);   // optimistic; the next status poll is authoritative
 });
 
-(function wireScreenToggle() {
-  const a = document.getElementById("screen-toggle-link");
-  if (!a) return;
-  a.addEventListener("click", async (e) => {
-    e.preventDefault();
-    /* CYCLES, because there are three pages now and a two-state toggle could
-       not reach the third: sitting on WSPR it offered "Switch to FT8/FT4" and
-       left no one-step way back to the panadapter. Same order as the Tab5's own
-       swipe cycle, and WSPR is only in the rotation when it is enabled - the
-       browser must be able to SELECT it, not merely reflect it, because for at
-       least one user (Markus DL8MBY) the Tab5 is "only the WiFi bridge and all
-       control is now done from the notebook". */
-    const cycle = wsprEnabled ? ["panadapter", "ft8", "wspr"] : ["panadapter", "ft8"];
-    const here  = cycle.indexOf(lastScreen || "panadapter");
-    const next  = cycle[(here < 0 ? 0 : here + 1) % cycle.length];
-    a.textContent = "Switching...";
-    await sendCmd({ action: "set_screen", screen: next });
+(function wireScreenLinks() {
+  /* ⛔ ONE LINK PER PAGE, NOT A CYCLE. The old single link rotated
+     Panadapter -> FT8 -> WSPR and therefore could not reach FT4 or JS8 at
+     all. The Tab5 got a left drawer with the same five destinations on
+     2026-10-24; this is the same list so the two surfaces cannot drift.
+     Selecting, not merely reflecting, matters here: for at least one user
+     (Markus DL8MBY) the Tab5 is "only the WiFi bridge and all control is now
+     done from the notebook". */
+  document.querySelectorAll("a.screen-to").forEach((a) => {
+    a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const want = a.dataset.screen;
+      const was  = a.textContent;
+      a.textContent = "Switching...";
+      /* The device refuses a sub-mode it does not implement, and says so in
+         the body - show that rather than leaving the label stuck. */
+      const r = await sendCmd({ action: "set_screen", screen: want });
+      a.textContent = (r && r.ok === false && r.error) ? ("Refused: " + r.error) : was;
+      if (r && r.ok === false) setTimeout(() => { a.textContent = was; }, 4000);
+    });
   });
 })();
 
@@ -7757,15 +7771,13 @@ async function tick() {
     if (s.spots_v !== undefined) lastSpotsV = s.spots_v;
     lastTimeSrc = s.time_src && s.time_src !== "none" ? s.time_src : "";
     paintPaused(s.paused);
-    {
-      const a = document.getElementById("screen-toggle-link");
-      if (a) {
-        const cyc  = wsprEnabled ? ["panadapter", "ft8", "wspr"] : ["panadapter", "ft8"];
-        const name = { panadapter: "Panadapter", ft8: "FT8/FT4", wspr: "WSPR" };
-        const i    = cyc.indexOf(s.screen || "panadapter");
-        a.textContent = "Switch to " + name[cyc[(i < 0 ? 0 : i + 1) % cyc.length]];
-      }
-    }
+    /* The five Switch-to links are static labels now - nothing to relabel per
+       poll. What the poll still owns is WHERE WE ARE: the current page's link
+       is dimmed, so the menu says what is showing as well as what it can do. */
+    document.querySelectorAll("a.screen-to").forEach((a) => {
+      const here = a.dataset.screen === (s.screen || "panadapter");
+      a.style.opacity = here ? "0.45" : "";
+    });
     tuneAntSync(s);
     // #216 (Samuel W7STF): out of band the Tab5 keeps the strip and turns it
     // into a centre-detented coarse tuner, but the browser used to hide it
