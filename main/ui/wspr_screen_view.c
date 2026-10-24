@@ -1885,7 +1885,12 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * corner of the waterfall, which carries the low (1360 Hz) edge of the window. */
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
     lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    /* GREEN, not the gold every other page uses. WSPR got its own colour on
+     * 2026-10-24 when the left drawer gave each mode a button: the drawer's
+     * MODE: WSPR is UI_COLOR_MODE_WSPR, and the button label and the page it
+     * opens have to agree or the colour means nothing. Gold was never WSPR's
+     * own colour - it was the default every page started from. */
+    lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_MODE_WSPR), 0);
     lv_obj_set_pos(s_lbl_title, 16, 4);
     lv_obj_move_foreground(s_lbl_title);
 

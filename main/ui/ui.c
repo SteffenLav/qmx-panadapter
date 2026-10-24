@@ -18905,7 +18905,15 @@ void ui_request_base_mode_m(ui_mode_t m)
  * than matched by eye: the FT8 preset header, FT4_ACCENT_HEX, JS8_ACCENT_HEX
  * and UI_COLOR_MODE_WSPR. If a page accent changes, change it here too -
  * they are deliberately the same colour because they are the same thing. */
-#define LEFT_DRAWER_W      300   /* wider than "PANADAPTER" at montserrat_24 */
+/* 80 px of drawer either side of the buttons, operator's figure, and every
+ * button the SAME width - so the stack reads as one column rather than as
+ * labels of different lengths. The drawer width falls out of those two.
+ * ⚠ LD_BTN_W is not measured: "PANADAPTER" at montserrat_24 has never been
+ * put through /ss.bmp. If it ever looks tight, measure it in PIXELS - this
+ * project has been wrong guessing label widths from character counts. */
+#define LD_MARGIN_X         80
+#define LD_BTN_W           280
+#define LEFT_DRAWER_W      (LD_BTN_W + 2 * LD_MARGIN_X)   /* = 440 */
 #define LD_BTN_H            72
 #define LD_BTN_GAP          14
 #define LD_PAD              16
@@ -18958,16 +18966,17 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
                                 uint32_t hex, void *dest)
 {
     lv_obj_t *b = lv_btn_create(parent);
-    lv_obj_set_size(b, LEFT_DRAWER_W - 2 * LD_PAD, LD_BTN_H);
-    lv_obj_set_pos(b, 0, y);
+    lv_obj_set_size(b, LD_BTN_W, LD_BTN_H);
+    lv_obj_set_pos(b, LD_MARGIN_X - LD_PAD, y);   /* pad_all already inset us */
     lv_obj_set_style_bg_color(b, lv_color_hex(0x262c34), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    /* The accent is the LEFT BORDER and the text, not the fill: a solid
-     * yellow slab next to a solid purple one is a toy, and the pages these
-     * lead to use the colour as an accent too. */
-    lv_obj_set_style_border_color(b, lv_color_hex(hex), 0);
-    lv_obj_set_style_border_width(b, 4, 0);
-    lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, 0);
+    /* ⛔ THE LABEL CARRIES THE COLOUR, NOT THE BUTTON. I first accented the
+     * left border as well and the operator cut it: "it is not the drawer but
+     * the button label that must be the same colour as the page it opens".
+     * The page shows "MODE: FT4" as coloured TEXT, so the button does too -
+     * the two are the same object seen twice. Neutral chrome here. */
+    lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(b, 1, 0);
     lv_obj_set_style_radius(b, 6, 0);
 
     lv_obj_t *l = lv_label_create(b);
@@ -19027,13 +19036,14 @@ static void left_drawer_build(void)
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4)); y += LD_BTN_H + LD_BTN_GAP;
     left_drawer_add_btn(s_left_drawer, y, "MODE: JS8",  JS8_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8)); y += LD_BTN_H + LD_BTN_GAP;
-    /* WSPR only when it is enabled, exactly as the old cycle did - it ships on
-     * the main track unfinished, and a door into a half-built page is worse
-     * than no door. */
-    if (wspr_feature_enabled()) {
-        left_drawer_add_btn(s_left_drawer, y, "MODE: WSPR", UI_COLOR_MODE_WSPR,
-                            LD_DEST(UI_MODE_WSPR, 0xFF));
-    }
+    /* ⛔ NO wspr_feature_enabled() GATE HERE, and the old cycle's gate was not
+     * a reason to copy one. I wrote that WSPR was gated "because the page is
+     * half-built"; the operator corrected it - it was disabled over a BUG, not
+     * by design. A gate carried forward on a misremembered reason hides a
+     * finished page from the operator who fixed it. WSPR is a peer mode and
+     * gets a door like the rest. */
+    left_drawer_add_btn(s_left_drawer, y, "MODE: WSPR", UI_COLOR_MODE_WSPR,
+                        LD_DEST(UI_MODE_WSPR, 0xFF));
 }
 
 static void left_drawer_open(void)
