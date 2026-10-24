@@ -20,7 +20,7 @@
   "benches": [
     {
       "name": "dev",
-      "role": "MAIN, on v1.20.0-15-g21e628c9 (flashed 2026-10-17). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
+      "role": "MAIN, on v1.20.5-31-g0cf92aeb (flashed 2026-10-24). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
         "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
         "what 'bench flash dev' builds from. A stale entry here does not read",
@@ -39,8 +39,8 @@
       ],
       "board": "Tab5 #1",
       "mac": "30:ED:A0:EA:DD:57",
-      "ip": "192.168.1.211",
-      "ip_note": "DHCP, so it drifts - a convenience, not the authority. The board prints its own address at boot ('sta ip:' in its capture). qmx.local is NOT a discriminator: every unit answers to it, and on 2026-08-27 it resolved to a different board entirely. WAS .210 here and that entry sat STALE FOR ABOUT A WEEK - found 2026-10-22 when .210 would not answer a ping while this machine was on the same /24. Corrected to .211 ON THE OPERATOR'S WORD (\"the board is now on 192.168.1.211 and has been for one week\"), NOT by a MAC check: neither Tab5 MAC was in the ARP table at the time, and per the warning above resolving qmx.local would not have settled which board it was. Re-verify by MAC at the next bench session.",
+      "ip": "192.168.1.209",
+      "ip_note": "DHCP, so it drifts - a convenience, not the authority. The board prints its own address at boot ('sta ip:' in its capture). qmx.local is NOT a discriminator: every unit answers to it, and on 2026-08-27 it resolved to a different board entirely. CORRECTED .211 -> .209 on 2026-10-24, and THIS one is MAC-verified: bench flash dev printed \"Identity OK: 30:ED:A0:EA:DD:57\" and the sta ip line below came out of that same board's own boot in the same capture. The stale .211 cost a \"no answer\" from bench status immediately before. Earlier: WAS .210 here and that entry sat STALE FOR ABOUT A WEEK - found 2026-10-22 when .210 would not answer a ping while this machine was on the same /24. Corrected to .211 ON THE OPERATOR'S WORD (\"the board is now on 192.168.1.211 and has been for one week\"), NOT by a MAC check: neither Tab5 MAC was in the ARP table at the time, and per the warning above resolving qmx.local would not have settled which board it was. Re-verify by MAC at the next bench session.",
       "com": "COM5",
       "com_note": "Was COM3 on the old laptop; re-verified by MAC (30:ED:A0:EA:DD:57) on the Ryzen box 2026-09-03, enumerated as COM5 there instead. COM follows the socket, not the board - re-check on any machine change.",
       "com_planned": "COM20",
