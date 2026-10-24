@@ -95,8 +95,8 @@ if (-not (Test-Path $target)) {
 
 $content = Get-Content -Raw -Path $target
 
-if ($content -match "QMX_RPC_DROP_UNCLAIMED_RESP") {
-    Write-Host "Already patched (RPC orphan-response deadlock) - nothing to do." -ForegroundColor Green
+if ($content -match "QMX_RPC_SEM_UAF") {
+    Write-Host "Already patched (RPC orphan response + semaphore UAF) - nothing to do." -ForegroundColor Green
     exit 0
 }
 
@@ -162,11 +162,81 @@ $patchedQ = @'
 			post_sync_resp_sem(app_resp);
 '@
 
+
+# --- edit 3: do not free the semaphore the RX thread may still post to -----
+$origWait = @'
+			ret = g_h.funcs->_h_get_semaphore(sync_rsp_table[i].sem, timeout_sec);
+			if (g_h.funcs->_h_destroy_semaphore(sync_rsp_table[i].sem)) {
+				ESP_LOGE(TAG, "read sem rx for resp[0x%x] destroy failed", exp_resp_msg_id);
+			}
+			// clear table entry
+			sync_rsp_table[i].uid = 0;
+			sync_rsp_table[i].sem = NULL;
+			return ret;
+'@
+
+$patchedWait = @'
+			ret = g_h.funcs->_h_get_semaphore(sync_rsp_table[i].sem, timeout_sec);
+			/* QMX_RPC_SEM_UAF - see tools/patches/.
+			 * Stock DESTROYED the semaphore here and then cleared the table
+			 * entry. process_rpc_rx_msg() on the SDIO RX thread meanwhile
+			 * does is_sync_resp_sem_available() -> queue -> post, and
+			 * post_sync_resp_sem() re-reads this same table. If this caller
+			 * times out between that lookup and the _h_post_semaphore(),
+			 * the RX thread posts a semaphore this thread has just deleted
+			 * - and _h_destroy_semaphore() frees the block.
+			 *
+			 * Crash on the bench 2026-10-24, v1.20.5-40-ga2e19ac2, 417 s
+			 * uptime, one line after "Response not received for [0x126]":
+			 *   assert failed: tlsf_free tlsf.c:630
+			 *       (!block_is_free(block) && "block already marked as free")
+			 *   task: sdio_process_rx  core 0
+			 *
+			 * Two changes close it. Clear the uid FIRST, so any later
+			 * lookup misses and the response is dropped instead of posted;
+			 * and DEFER the destroy to whoever next claims this slot, so
+			 * nothing is freed while an in-flight post may still touch it.
+			 * The semaphore then outlives its transaction by at most one
+			 * slot reuse, which is bounded by MAX_SYNC_RPC_TRANSACTIONS.
+			 *
+			 * DO NOT "tidy" this back into a destroy here. */
+			sync_rsp_table[i].uid = 0;
+			return ret;
+'@
+
+# --- edit 4: the deferred destroy, when the slot is reused -----------------
+$origClaim = @'
+			if (!sync_rsp_table[i].uid) {
+				ESP_LOGD(TAG, "Register sync sem %p for uid %ld", app_req->rx_sem, app_req->uid);
+				sync_rsp_table[i].uid = app_req->uid;
+				sync_rsp_table[i].sem = app_req->rx_sem;
+				return CALLBACK_SET_SUCCESS;
+			}
+'@
+
+$patchedClaim = @'
+			if (!sync_rsp_table[i].uid) {
+				/* QMX_RPC_SEM_UAF - the other half. The previous owner of
+				 * this slot left its semaphore behind rather than freeing
+				 * it under the RX thread; free it now, when no post can be
+				 * aimed at it any more because its uid is long cleared. */
+				if (sync_rsp_table[i].sem && sync_rsp_table[i].sem != app_req->rx_sem) {
+					g_h.funcs->_h_destroy_semaphore(sync_rsp_table[i].sem);
+					sync_rsp_table[i].sem = NULL;
+				}
+				ESP_LOGD(TAG, "Register sync sem %p for uid %ld", app_req->rx_sem, app_req->uid);
+				sync_rsp_table[i].uid = app_req->uid;
+				sync_rsp_table[i].sem = app_req->rx_sem;
+				return CALLBACK_SET_SUCCESS;
+			}
+'@
+
 $contentLf = $content -replace "`r`n", "`n"
 
-foreach ($pair in @(@($origSem, $patchedSem), @($origQ, $patchedQ))) {
+foreach ($pair in @(@($origSem, $patchedSem), @($origQ, $patchedQ), @($origWait, $patchedWait), @($origClaim, $patchedClaim))) {
     $o = $pair[0] -replace "`r`n", "`n"
     $p = $pair[1] -replace "`r`n", "`n"
+    if ($contentLf.Contains($p)) { continue }   # this edit is already in
     if (-not $contentLf.Contains($o)) {
         Write-Host "Could not find a stock block - rpc_core.c may have changed." -ForegroundColor Red
         Write-Host "Patch by hand and update this script. Missing block starts:" -ForegroundColor Red
@@ -178,5 +248,5 @@ foreach ($pair in @(@($origSem, $patchedSem), @($origQ, $patchedQ))) {
 
 [System.IO.File]::WriteAllText($target, $contentLf, (New-Object System.Text.UTF8Encoding $false))
 
-Write-Host "Patched rpc_core.c: an unclaimed RPC response is dropped, not queued for ever." -ForegroundColor Green
+Write-Host "Patched rpc_core.c: unclaimed RPC responses dropped, and the sync semaphore is no longer freed under the RX thread." -ForegroundColor Green
 Write-Host "  $target"
