@@ -6180,7 +6180,15 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(d, "sleep_min",      c.display_sleep_min);
     cJSON_AddNumberToObject(d, "db_min",         c.db_min);
     cJSON_AddNumberToObject(d, "db_max",         c.db_max);
+    /* TWO NAMES FOR ONE STORED VALUE, and the difference is the point.
+     * `ema_pct` is the EMA COEFFICIENT x 100 - what it has always been, so
+     * every config file and script written before 2026-10-24 still means what
+     * it meant. `smooth_pct` is the same number inverted, which is what an
+     * operator means by smoothing: higher is smoother. The settings form shows
+     * smooth_pct; the raw one stays accepted and reported. See the block above
+     * smoothing_label() in ui.c for why the surface was inverted. */
     cJSON_AddNumberToObject(d, "ema_pct",        (int)(c.ema_alpha * 100.0f + 0.5f));
+    cJSON_AddNumberToObject(d, "smooth_pct", 100 - (int)(c.ema_alpha * 100.0f + 0.5f));
     cJSON_AddBoolToObject  (d, "flip",           c.display_flip);
 
     // SSID yes, password never: it would put the operator's WiFi key in every
@@ -7068,11 +7076,41 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
                 settings_set_db_max(mx);
             }
         }
+        /* ⛔ STORING IT IS NOT APPLYING IT. This used to call
+         * settings_set_ema_alpha() alone, under a comment claiming "the render
+         * task reads it live" - it does not. The setter writes s_pending and
+         * marks dirty; only main.c's boot-time render_set_ema_alpha() ever
+         * reached the pipeline. So smoothing changed from the browser moved
+         * the BROWSER's own trace (it reads wf.ema_pct from /api/status) and
+         * left the Tab5 drawing on the old coefficient until a reboot. Found
+         * 2026-10-24 while inverting the control for Sam W7STF; it is the
+         * mirror of the "applied but never stored" class this file records
+         * elsewhere, and the Tab5 drawer callback has always done both.
+         *
+         * `smooth_pct` is the operator-facing name (higher is smoother) and
+         * `ema_pct` the raw coefficient. If a payload carries both, the
+         * operator-facing one is applied last and wins. */
+        bool ema_set = false;
+        float a = 0.0f;
         if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "ema_pct"))) {
-            float a = (float)v->valuedouble / 100.0f;
-            if (a < 0.0f) a = 0.0f;
-            if (a > 1.0f) a = 1.0f;
-            settings_set_ema_alpha(a);      // the render task reads it live
+            a = (float)v->valuedouble / 100.0f;
+            ema_set = true;
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "smooth_pct"))) {
+            a = (float)(100.0 - v->valuedouble) / 100.0f;
+            ema_set = true;
+        }
+        if (ema_set) {
+            /* ⛔ THE FLOOR IS 0.05, NOT 0. alpha 0 is not "maximum smoothing",
+             * it is a trace that never takes a new sample again - frozen, and
+             * indistinguishable from a dead spectrum. The Tab5 slider stops at
+             * 95% smoothing for this reason; smooth_pct 100 from the API lands
+             * on the same place rather than on a frozen picture. */
+            if (a < 0.05f) a = 0.05f;
+            if (a > 1.0f)  a = 1.0f;
+            settings_set_ema_alpha(a);
+            render_set_ema_alpha(a);        // the part that was missing
+            ui_sync_smoothing_controls();   // and the drawer must follow
         }
     }
 

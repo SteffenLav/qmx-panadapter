@@ -6712,6 +6712,40 @@ static void update_freq_axis_labels(uint32_t center_hz)
     }
 }
 
+/* ===== The smoothing control: a percentage on the surface, alpha in store ===
+ *
+ * ⛔ THE CONTROL USED TO RUN BACKWARDS, AND IT SAT UNDER A HEADING CALLED
+ * "Smoothing". It was labelled "Alpha" and carried the EMA coefficient
+ * straight through: render.c computes
+ *
+ *     trace = alpha * this_frame + (1 - alpha) * trace
+ *
+ * so alpha 1.00 is NO smoothing and 0.05 is a ~2 s time constant. Dragging it
+ * right made the trace jumpier. Sam W7STF, 2026-10-23: "it's considered highly
+ * confusing to a user when you create a slider, and when that slider is at a
+ * minimum, the effect on the process is faster than when it is at max" - and
+ * his "I see no appreciable smoothing" was him turning it up.
+ *
+ * The SURFACE is inverted, not the stored value: smoothing% = 100 - alpha*100.
+ * ema_alpha stays the coefficient everywhere - settings, config files,
+ * /api/status's wf.ema_pct and /api/settings' display.ema_pct - so no config
+ * file written before today means something different when it is read back.
+ * index.html carries the same inversion under display.smooth_pct.
+ *
+ * ⚠ The percentage is LINEAR IN ALPHA, NOT IN TIME. tau at 100 ms frames:
+ * 50% -> 0.14 s, 80% -> 0.45 s, 90% -> 0.95 s, 95% -> 1.95 s. Most of the
+ * visible change lives in the last fifth of the travel, which is why the
+ * label prints the time constant as well as the percentage. Making the travel
+ * linear in tau was considered and NOT done: it would put the two surfaces in
+ * different units unless the API changed too. */
+static void smoothing_label(char *buf, size_t n, int pct)
+{
+    if (pct <= 0) { snprintf(buf, n, "Smoothing: off"); return; }
+    /* alpha = (100 - pct)/100, so 1 - alpha = pct/100. */
+    float tau_s = -((float)RENDER_PERIOD_MS / 1000.0f) / logf((float)pct / 100.0f);
+    snprintf(buf, n, "Smoothing: %d%%  (%.2f s)", pct, (double)tau_s);
+}
+
 /* ===== Waterfall rate: the step table behind the drawer dropdown =====
  *
  * The rate is stored in ROWS PER SECOND (settings.h, wf_rows_per_s), 1..40,
@@ -15771,8 +15805,8 @@ static void drawer_build(void)
         if (alpha_v > 100) alpha_v = 100;
 
         s_lbl_alpha = lv_label_create(sec);
-        char albuf[24];
-        snprintf(albuf, sizeof(albuf), "Alpha: %.2f", (double)alpha_v / 100.0);
+        char albuf[40];
+        smoothing_label(albuf, sizeof(albuf), 100 - alpha_v);
         lv_label_set_text(s_lbl_alpha, albuf);
         lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_28, 0);
@@ -15780,8 +15814,10 @@ static void drawer_build(void)
 
         s_slider_alpha = lv_slider_create(sec);
         lv_obj_set_size(s_slider_alpha, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_alpha, 5, 100);   // = alpha 0.05..1.00
-        lv_slider_set_value(s_slider_alpha, alpha_v, LV_ANIM_OFF);
+        /* ⛔ THE SLIDER IS SMOOTHING, THE STORED VALUE IS ALPHA. 0..95 here,
+         * alpha = (100 - v) / 100 going in. See smoothing_label(). */
+        lv_slider_set_range(s_slider_alpha, 0, 95);
+        lv_slider_set_value(s_slider_alpha, 100 - alpha_v, LV_ANIM_OFF);
         lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, 70);
         lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -17224,7 +17260,8 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
 {
     if (s_slider_db_min) lv_slider_set_value(s_slider_db_min, db_min, LV_ANIM_OFF);
     if (s_slider_db_max) lv_slider_set_value(s_slider_db_max, db_max, LV_ANIM_OFF);
-    if (s_slider_alpha)  lv_slider_set_value(s_slider_alpha, (int)(alpha * 100.0f + 0.5f), LV_ANIM_OFF);
+    /* The slider is SMOOTHING PERCENT; alpha is what the preset carries. */
+    if (s_slider_alpha)  lv_slider_set_value(s_slider_alpha, 100 - (int)(alpha * 100.0f + 0.5f), LV_ANIM_OFF);
 
     char buf[24];
     if (s_lbl_db_min) {
@@ -17236,8 +17273,9 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
         lv_label_set_text(s_lbl_db_max, buf);
     }
     if (s_lbl_alpha) {
-        snprintf(buf, sizeof(buf), "Alpha: %.2f", (double)alpha);
-        lv_label_set_text(s_lbl_alpha, buf);
+        char smbuf[40];
+        smoothing_label(smbuf, sizeof(smbuf), 100 - (int)(alpha * 100.0f + 0.5f));
+        lv_label_set_text(s_lbl_alpha, smbuf);
     }
 
     ui_set_db_range((float)db_min, (float)db_max);
@@ -17425,13 +17463,34 @@ static void drawer_slider_db_max_cb(lv_event_t *e)
 static void drawer_slider_alpha_cb(lv_event_t *e)
 {
     lv_obj_t *sl = lv_event_get_target(e);
-    int v = (int)lv_slider_get_value(sl);
-    float alpha = (float)v / 100.0f;
-    char buf[24];
-    snprintf(buf, sizeof(buf), "Alpha: %.2f", (double)alpha);
+    int v = (int)lv_slider_get_value(sl);     /* SMOOTHING percent, 0..95 */
+    float alpha = (float)(100 - v) / 100.0f;  /* the stored coefficient */
+    char buf[40];
+    smoothing_label(buf, sizeof(buf), v);
     if (s_lbl_alpha) lv_label_set_text(s_lbl_alpha, buf);
     render_set_ema_alpha(alpha);
     settings_set_ema_alpha(alpha);
+}
+
+/* Re-point the drawer's smoothing slider at the stored value, for a change
+ * that arrived from the browser. Same job and the same reasoning as
+ * ui_sync_wf_rate_controls(): a setting changed in one place that leaves the
+ * other surface showing the old number is the bug this project keeps
+ * re-finding. Takes display_lock because the caller is the httpd task. */
+void ui_sync_smoothing_controls(void)
+{
+    if (!s_slider_alpha) return;
+    int alpha_v = (int)(settings_get_ema_alpha() * 100.0f + 0.5f);
+    if (alpha_v < 5)   alpha_v = 5;
+    if (alpha_v > 100) alpha_v = 100;
+    if (!display_lock(500)) return;
+    lv_slider_set_value(s_slider_alpha, 100 - alpha_v, LV_ANIM_OFF);
+    if (s_lbl_alpha) {
+        char buf[40];
+        smoothing_label(buf, sizeof(buf), 100 - alpha_v);
+        lv_label_set_text(s_lbl_alpha, buf);
+    }
+    display_unlock();
 }
 
 static void drawer_slider_cwpitch_cb(lv_event_t *e)

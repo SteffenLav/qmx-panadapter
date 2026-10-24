@@ -1043,6 +1043,11 @@ uint8_t settings_get_wspr_rx_cycles(void);
 uint8_t settings_get_wf_rows_per_s(void);
 /* Narrow read, same reason as the rows/s one above it. */
 uint8_t settings_get_spec_peak_s(void);
+/* The spectrum EMA coefficient, 0..1. Narrow for the same reason again:
+ * ui_sync_smoothing_controls() runs on httpd. ⚠ This is the COEFFICIENT, not
+ * the smoothing percentage the drawer and the web form show - those invert it
+ * (100 - alpha*100) on the surface only. */
+float settings_get_ema_alpha(void);
 uint16_t settings_get_cw_peak_hz(void);
 uint8_t settings_get_wspr_tx_cycles(void);
 uint16_t settings_get_wspr_pa_saved_x10(void); // outstanding PA-guard restore, 0 = none

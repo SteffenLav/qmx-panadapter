@@ -126,6 +126,15 @@ action is then a silent no-op.
 maximum 60. The Tab5 drawer offers 1, 2, 3 and 5; the API accepts any value in range. It is also in `/api/status` as `peak_hold_s`, so a browser can follow a
 change made on the Tab5 without re-reading the settings.
 
+**Spectrum smoothing has two names for one stored value.**
+`display.smooth_pct` is the operator-facing one: 0 is off, higher is smoother,
+and it is what the settings form shows. `display.ema_pct` is the raw EMA
+coefficient × 100, where **100 means no smoothing** — the inverse. Both are
+reported by `GET /api/settings` and both are accepted by the POST; if a payload
+carries both, `smooth_pct` wins. `ema_pct` is kept because config files and
+scripts written before 2026-10-24 use it, and `/api/status` reports it under
+`wf.ema_pct` for a browser drawing its own trace.
+
 **A missing required parameter is refused with HTTP 400.** `set_freq`,
 `set_band`, `set_bw`, `set_zoom`, `set_rit` and `view_center` answer
 `<key> required (number)` when the key is absent or is sent as a string. Until

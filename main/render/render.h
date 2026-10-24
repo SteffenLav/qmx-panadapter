@@ -2,6 +2,15 @@
 #include "esp_err.h"
 #include <stdbool.h>
 
+// Render at 10 Hz. Higher rates cause LVGL flush cascades on this hardware
+// (PSRAM ~30 MB/s vs 1280x720 RGB565 framebuffer); 10 Hz gives LVGL clean
+// breathing room between iterations and keeps unlock cost stable ~26 ms.
+//
+// Public because the EMA coefficient is only meaningful against this
+// interval: the drawer's smoothing label shows the time constant, which is
+// tau = -RENDER_PERIOD_MS / ln(1 - alpha).
+#define RENDER_PERIOD_MS  100
+
 // Initialize the render subsystem. Call after dsp_init().
 esp_err_t render_init(void);
 

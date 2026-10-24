@@ -4879,7 +4879,14 @@ const SET_FIELDS = [
      "For a Tab5 mounted upside down. Touch follows, and it is reversible from either screen"],
   ["Display & waterfall", "display.db_min",         "num", "Scale floor (dBm)", "default -130"],
   ["Display & waterfall", "display.db_max",         "num", "Scale ceiling (dBm)", "default -30"],
-  ["Display & waterfall", "display.ema_pct",        "num", "Spectrum smoothing (%)", "EMA alpha x 100; default 20"],
+  /* ⛔ smooth_pct, NOT ema_pct, and the label used to lie. The field carried
+     the EMA coefficient x 100 under the name "Spectrum smoothing (%)", so 100
+     meant NO smoothing - the same inversion Sam W7STF reported on the Tab5
+     slider. The device now reports and accepts both names for one stored
+     value: ema_pct is the raw coefficient, kept so older config files and
+     scripts still mean what they meant, and smooth_pct is this one. */
+  ["Display & waterfall", "display.smooth_pct",     "num", "Spectrum smoothing (%)",
+   "0 is off, higher is smoother. A first-order average on the spectrum trace, on the Tab5 and on this page alike. The scale is linear in the coefficient, not in time, so most of the visible change is at the top end: 50% is a 0.14 s time constant, 80% is 0.45 s, 90% is 0.95 s and 95% is 1.95 s. Default 60"],
   ["Display & waterfall", "display.peak_hold_s",    "num", "Peak hold (seconds)",
    "0 is off. A sliding window, not a latch: the cyan line is the highest each point reached in the last N seconds, and it falls once that peak is older than N. The Tab5 drawer offers 1, 2, 3 and 5; any value up to 60 is accepted here."],
 
@@ -5240,8 +5247,10 @@ function dbPresetRender(body) {
     b.type = "button";
     b.className = "bot-btn";
     b.textContent = name;
-    b.title = "Floor " + lo + " dBm, ceiling " + hi + " dBm, smoothing " + ema +
-              "%. Fills the three rows below - press Save to apply.";
+    /* The preset table stores the COEFFICIENT (it predates the inversion);
+       the tooltip and the field both show smoothing, so both invert here. */
+    b.title = "Floor " + lo + " dBm, ceiling " + hi + " dBm, smoothing " +
+              (100 - ema) + "%. Fills the three rows below - press Save to apply.";
     b.addEventListener("click", () => {
       const set = (path, v) => {
         const el = body.querySelector('[data-path="' + path + '"]');
@@ -5249,7 +5258,7 @@ function dbPresetRender(body) {
       };
       set("display.db_min", lo);
       set("display.db_max", hi);
-      set("display.ema_pct", ema);
+      set("display.smooth_pct", 100 - ema);   // the row is smoothing, not alpha
     });
     row.appendChild(b);
   }
@@ -7673,7 +7682,7 @@ async function tick() {
       /* blend_pct is 0..100; the renderer's blend is 0..1. */
       if (typeof s.wf.blend_pct === "number") wfFloorBlend = s.wf.blend_pct / 100;
       if (typeof s.wf.ema_pct === "number" && s.wf.ema_pct > 0)
-        specEmaAlpha = s.wf.ema_pct / 100;    // the operator's smoothing slider
+        specEmaAlpha = s.wf.ema_pct / 100;    // the COEFFICIENT; the slider shows 100 minus it
       if (typeof s.wf.cmap     === "number" && s.wf.cmap !== wfPaletteIdx) {
         wfPaletteIdx = s.wf.cmap;
         wfPalette    = buildWfPalette(wfPaletteIdx);

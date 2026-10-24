@@ -207,6 +207,10 @@ bool ui_update_line_tappable(void);
  * dropdown) at the stored value. Call after changing it from anywhere that
  * is not one of those two - /api/settings does. */
 void ui_sync_wf_rate_controls(void);
+/* Same job for the Smoothing slider, called from the same handler. ⚠ The
+ * slider is SMOOTHING PERCENT and the stored value is the EMA coefficient;
+ * the inversion lives in ui.c next to smoothing_label(). */
+void ui_sync_smoothing_controls(void);
 
 /* Band-plan repaint counts since the previous call, then reset. `calls` counts
  * every path into update_bandplan_strip(); `from_poll` counts only the

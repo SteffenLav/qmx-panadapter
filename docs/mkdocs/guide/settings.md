@@ -408,6 +408,22 @@ and 32 dB down 500 Hz away; 150 Hz is 137 Hz and -25 dB; 250 Hz is 227 Hz and
 The same setting is in the browser as `rxaudio.cw_peak_hz`, where any width from
 40 to 1000 Hz is accepted.
 
+**Smoothing** *(Smoothing & peak hold; 60% by default)* — a running average on
+the spectrum trace. **0 is off and higher is smoother.** The Tab5 slider and the
+browser's `display.smooth_pct` are the same setting, and the browser draws its
+own trace with it too.
+
+The label also prints the time constant, because the scale is linear in the
+underlying coefficient rather than in time: 50% is 0.14 s, 80% is 0.45 s, 90%
+is 0.95 s and 95% is 1.95 s. Most of the change you can see is in the top fifth
+of the travel.
+
+!!! note "It used to run the other way"
+    This was labelled **Alpha** and carried the coefficient itself until
+    2026-10-24, so moving it right made the trace *less* smooth. The stored value is
+    unchanged — `display.ema_pct` is still the coefficient × 100 and still
+    accepted, so an older config file still means what it meant.
+
 **Peak hold** *(Smoothing & peak hold; off by default)* — draws a second line over
 the spectrum showing the highest each point of the band reached in the last
 **1, 2, 3 or 5 seconds**. The browser has the same control and the two screens

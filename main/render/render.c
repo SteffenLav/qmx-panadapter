@@ -17,10 +17,10 @@
 
 static const char *TAG = "render";
 
-// Render at 10 Hz. Higher rates cause LVGL flush cascades on this hardware
-// (PSRAM ~30 MB/s vs 1280x720 RGB565 framebuffer); 10 Hz gives LVGL clean
-// breathing room between iterations and keeps unlock cost stable ~26 ms.
-#define RENDER_PERIOD_MS  100
+// RENDER_PERIOD_MS moved to render.h on 2026-10-24: the drawer's smoothing
+// label turns the EMA coefficient into a time constant, and that arithmetic
+// needs the frame interval. A second copy of the number in ui.c is the
+// two-surfaces-drift class, so there is one definition and ui.c includes it.
 
 static TaskHandle_t s_render_task = NULL;
 static float *s_scratch = NULL;

@@ -2389,6 +2389,15 @@ uint8_t settings_get_wf_rows_per_s(void)
     return v;
 }
 
+float settings_get_ema_alpha(void)
+{
+    if (!s_ready) return DEF_EMA_ALPHA;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    float v = s_pending.ema_alpha;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 uint8_t settings_get_spec_peak_s(void)
 {
     if (!s_ready) return DEF_SPEC_PEAK;
