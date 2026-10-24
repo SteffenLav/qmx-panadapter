@@ -2044,14 +2044,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  * records a whole evening lost to a silent no-op read as a
                  * result - so a gate that declines has to be louder than the
                  * typo it resembles. */
-                if (!wspr_feature_enabled()) {
-                    httpd_resp_set_type(req, "application/json");
-                    httpd_resp_sendstr(req,
-                        "{\"ok\":false,\"error\":\"wspr disabled\","
-                        "\"hint\":\"send the wspr_enable action first\"}");
-                    cJSON_Delete(root);
-                    return ESP_OK;
-                }
+                /* NO LONGER REFUSED. Asking for the WSPR page IS asking
+                 * for WSPR: ui_set_base_mode() turns wspr_en on when the page
+                 * is selected, in the one place both surfaces go through, so
+                 * the browser and the Tab5 cannot end up on different pages.
+                 * The modes are mutually exclusive - choosing one stops the
+                 * others - and a separate unlock in front of that only makes
+                 * a menu entry that does nothing. */
                 ui_request_base_mode_m(UI_MODE_WSPR);
             }
             else if (!strcmp(scr, "pan") || !strcmp(scr, "panadapter")) {

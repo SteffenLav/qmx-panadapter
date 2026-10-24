@@ -18701,6 +18701,22 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
 {
     ui_mode_t cur = ui_mode_get();
     if (next == cur) return;
+    /* ⛔ CHOOSING THE PAGE IS WHAT ENABLES IT. wspr_en began life as a master
+     * unlock for a page that was not finished (default off, plus the hidden
+     * unlock in ota_modal.c). Once WSPR has a button in the left drawer and a
+     * "Switch to WSPR" in the web Radio menu, a separate unlock can only
+     * produce a button that does nothing - the operator asked for WSPR, which
+     * IS the answer to "do you want WSPR enabled".
+     *
+     * It lives HERE, in the one function both surfaces go through, rather
+     * than in the drawer callback and in set_screen: the modes are mutually
+     * exclusive and the Tab5 and the browser drive this same ui_mode, so
+     * there is no arrangement in which they can show different pages. Two
+     * copies of this unlock is exactly how that guarantee would be lost. */
+    if (next == UI_MODE_WSPR && !wspr_feature_enabled()) {
+        ESP_LOGI(TAG, "WSPR selected - enabling the page (wspr_en was off)");
+        settings_set_wspr_en(true);
+    }
     ESP_LOGI(TAG, "Base mode: %s -> %s%s",
              mode_name(cur), mode_name(next), animate ? "" : " (instant)");
     ui_mode_set(next);
