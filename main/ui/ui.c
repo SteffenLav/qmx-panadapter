@@ -3917,6 +3917,7 @@ void ui_raise_edge_strips(void)
     if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
 }
 static void ui_advance_page(void);
+static void left_drawer_open(void);   /* the page picker - see its block below */
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
@@ -12734,11 +12735,16 @@ static void left_edge_swipe_cb(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_RELEASED) {
+        /* THE PAGE PICKER, NOT THE CYCLE. This called ui_advance_page()
+         * until 2026-10-24 - one page per swipe, and no way to reach FT4
+         * or JS8 at all. Replaced on the operator's word; see
+         * left_drawer_open(). Do not restore the cycle alongside it:
+         * one gesture, one meaning. */
         if (s_left_edge_swipe_start_x >= 0 &&
             (int)p.x - s_left_edge_swipe_start_x >= EDGE_SWIPE_MIN_DX) {
-            ui_advance_page();
+            left_drawer_open();
         } else if (grip_mouse_click(e, s_left_edge_grip)) {
-            ui_advance_page();          // a pointer cannot swipe: see grip_mouse_click()
+            left_drawer_open();         // a pointer cannot swipe: see grip_mouse_click()
         }
         s_left_edge_swipe_start_x = -1;
     }
@@ -18876,6 +18882,196 @@ void ui_request_base_mode_m(ui_mode_t m)
 // docs Reader overlay is open (launched from the Settings drawer, NOT part of
 // this swipe stack), the same swipe closes it instead — a convenient exit
 // alongside its Back button.
+/* ===== The LEFT drawer: land directly on a page ==========================
+ *
+ * Swiping in from the left used to call ui_advance_page(), which CYCLED
+ * Panadapter -> FT8 -> WSPR. That is one gesture per step and it cannot reach
+ * a sub-mode at all: FT4 and JS8 were only ever reachable by opening FT8 and
+ * then picking a preset column. The operator asked for a direct choice
+ * (2026-10-24) and the cycle is REPLACED, on his word - not kept alongside,
+ * because two meanings for one gesture is how an edge zone becomes a lottery.
+ *
+ * THERE IS NO NEW MECHANISM HERE and that is the point. Every button is a
+ * call that already existed and is already used by /api/cmd's set_screen:
+ * ui_set_base_mode() raises the page, ft8_screen_view_request_preset() asks
+ * for the sub-mode. This is a new DOOR onto the same rooms.
+ *
+ * Consequence the operator named, NOT built here: with separate entrances to
+ * FT8/FT4/JS8, the page no longer needs all three preset columns at once - it
+ * can show the one for the mode you came in by, which in turn makes per-mode
+ * persistent presets possible. That is ft8_screen_view.c's work, not this.
+ *
+ * Colours are the ones the pages already use, read out of the code rather
+ * than matched by eye: the FT8 preset header, FT4_ACCENT_HEX, JS8_ACCENT_HEX
+ * and UI_COLOR_MODE_WSPR. If a page accent changes, change it here too -
+ * they are deliberately the same colour because they are the same thing. */
+#define LEFT_DRAWER_W      300   /* wider than "PANADAPTER" at montserrat_24 */
+#define LD_BTN_H            72
+#define LD_BTN_GAP          14
+#define LD_PAD              16
+
+static lv_obj_t *s_left_drawer       = NULL;
+static lv_obj_t *s_left_drawer_scrim = NULL;
+static bool      s_left_drawer_open  = false;
+
+static void left_drawer_close(void);
+
+static void left_drawer_anim_x_cb(void *obj, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)obj, v);
+}
+
+/* One callback for every button; the destination rides in user_data.
+ * ui_mode_t in the low bits, the FT8 sub-mode in the high bits, so there is
+ * one handler and no per-button copies to drift apart. */
+#define LD_DEST(mode, sub)  ((void *)(uintptr_t)(((sub) << 8) | (mode)))
+
+static void left_drawer_btn_cb(lv_event_t *e)
+{
+    uintptr_t dest = (uintptr_t)lv_event_get_user_data(e);
+    ui_mode_t m    = (ui_mode_t)(dest & 0xFF);
+    int       sub  = (int)(dest >> 8);
+
+    left_drawer_close();
+
+    /* Raise the page first, then ask for the sub-mode - the same order
+     * set_screen uses in webserver.c, and for the same reason: the preset
+     * request is drained by the FT8 page own timer, which only runs once
+     * that page is up and ft8_task is spawned. Asking the other way round
+     * moves the dial with nothing decoding. */
+    ui_set_base_mode(m, true);
+    if (m == UI_MODE_FT8 && sub != 0xFF) {
+        /* 0 = keep the dial; the drain moves it to the mode own calling
+         * frequency. ft8_op_mode_set() refuses a protocol that is not built,
+         * so an unimplemented sub-mode cannot land here silently. */
+        ft8_screen_view_request_preset(0, (ft8_op_mode_t)sub);
+    }
+}
+
+static void left_drawer_scrim_cb(lv_event_t *e)
+{
+    (void)e;
+    left_drawer_close();
+}
+
+static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
+                                uint32_t hex, void *dest)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_size(b, LEFT_DRAWER_W - 2 * LD_PAD, LD_BTN_H);
+    lv_obj_set_pos(b, 0, y);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x262c34), 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    /* The accent is the LEFT BORDER and the text, not the fill: a solid
+     * yellow slab next to a solid purple one is a toy, and the pages these
+     * lead to use the colour as an accent too. */
+    lv_obj_set_style_border_color(b, lv_color_hex(hex), 0);
+    lv_obj_set_style_border_width(b, 4, 0);
+    lv_obj_set_style_border_side(b, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_radius(b, 6, 0);
+
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_color(l, lv_color_hex(hex), 0);
+    /* montserrat_24 - the size the FT8/WSPR pages use, which is what the
+     * operator asked these to match. */
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
+
+    lv_obj_add_event_cb(b, left_drawer_btn_cb, LV_EVENT_CLICKED, dest);
+}
+
+static void left_drawer_build(void)
+{
+    if (s_left_drawer) return;          /* lazy, like the settings drawer */
+    lv_obj_t *scr = lv_scr_act();
+
+    /* Tap anywhere else to dismiss. Built before the drawer so it sits
+     * underneath it in z-order. */
+    s_left_drawer_scrim = lv_obj_create(scr);
+    lv_obj_set_size(s_left_drawer_scrim, DISPLAY_H_RES, DISPLAY_V_RES);
+    lv_obj_set_pos(s_left_drawer_scrim, 0, 0);
+    lv_obj_set_style_bg_color(s_left_drawer_scrim, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_left_drawer_scrim, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(s_left_drawer_scrim, 0, 0);
+    lv_obj_clear_flag(s_left_drawer_scrim, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_left_drawer_scrim, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_left_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_left_drawer_scrim, UI_FLAG_NOT_HOT);
+    lv_obj_add_event_cb(s_left_drawer_scrim, left_drawer_scrim_cb,
+                        LV_EVENT_CLICKED, NULL);
+
+    s_left_drawer = lv_obj_create(scr);
+    lv_obj_set_size(s_left_drawer, LEFT_DRAWER_W, DISPLAY_V_RES);
+    lv_obj_set_pos(s_left_drawer, -LEFT_DRAWER_W, 0);   /* parked off-screen left */
+    lv_obj_set_style_bg_color(s_left_drawer, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(s_left_drawer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_left_drawer, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_left_drawer, 1, 0);
+    lv_obj_set_style_border_side(s_left_drawer, LV_BORDER_SIDE_RIGHT, 0);
+    lv_obj_set_style_radius(s_left_drawer, 0, 0);
+    lv_obj_set_style_pad_all(s_left_drawer, LD_PAD, 0);
+    lv_obj_clear_flag(s_left_drawer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_left_drawer, UI_FLAG_NOT_HOT);
+
+    /* Panadapter at the top, then the operating modes in the order he listed
+     * them. MODE: CW BELONGS DIRECTLY UNDER PANADAPTER when UI_MODE_CW
+     * arrives from the other branch (ui_mode.h reserves = 2) - his words, so
+     * insert there rather than appending. */
+    int y = 0;
+    left_drawer_add_btn(s_left_drawer, y, "PANADAPTER", 0xFFFFFF,
+                        LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
+    left_drawer_add_btn(s_left_drawer, y, "MODE: FT8",  0xFFDD00,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8)); y += LD_BTN_H + LD_BTN_GAP;
+    left_drawer_add_btn(s_left_drawer, y, "MODE: FT4",  FT4_ACCENT_HEX,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4)); y += LD_BTN_H + LD_BTN_GAP;
+    left_drawer_add_btn(s_left_drawer, y, "MODE: JS8",  JS8_ACCENT_HEX,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8)); y += LD_BTN_H + LD_BTN_GAP;
+    /* WSPR only when it is enabled, exactly as the old cycle did - it ships on
+     * the main track unfinished, and a door into a half-built page is worse
+     * than no door. */
+    if (wspr_feature_enabled()) {
+        left_drawer_add_btn(s_left_drawer, y, "MODE: WSPR", UI_COLOR_MODE_WSPR,
+                            LD_DEST(UI_MODE_WSPR, 0xFF));
+    }
+}
+
+static void left_drawer_open(void)
+{
+    left_drawer_build();
+    if (!s_left_drawer || s_left_drawer_open) return;
+
+    lv_obj_clear_flag(s_left_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_left_drawer_scrim);
+    lv_obj_move_foreground(s_left_drawer);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_left_drawer);
+    lv_anim_set_exec_cb(&a, left_drawer_anim_x_cb);
+    lv_anim_set_values(&a, -LEFT_DRAWER_W, 0);
+    lv_anim_set_time(&a, 250);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+    s_left_drawer_open = true;
+}
+
+static void left_drawer_close(void)
+{
+    if (!s_left_drawer || !s_left_drawer_open) return;
+    if (s_left_drawer_scrim) lv_obj_add_flag(s_left_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_left_drawer);
+    lv_anim_set_exec_cb(&a, left_drawer_anim_x_cb);
+    lv_anim_set_values(&a, 0, -LEFT_DRAWER_W);
+    lv_anim_set_time(&a, 200);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+    s_left_drawer_open = false;
+}
+
 static void ui_advance_page(void)
 {
     if (reader_view_is_active()) {

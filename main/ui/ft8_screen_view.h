@@ -2,6 +2,15 @@
 #include "lvgl.h"
 #include "ft8_test.h"   // ft8_op_mode_t - the sub-mode these take and return
 
+// Cyan accent used for everything FT4: the dropdown's FT4 column header, the
+// "MODE: FT4" label, and the left drawer's MODE: FT4 button - so they can
+// never drift apart. FT8 keeps the gold UI_COLOR_ACCENT_GOLD.
+#define FT4_ACCENT_HEX 0x00B4FF
+// Magenta for JS8. Picked to be unmistakable against both gold and cyan at a
+// glance across the room - the mode label is the only thing on the screen that
+// says which protocol is about to be transmitted.
+#define JS8_ACCENT_HEX 0xE040FB
+
 // Step 4c.2 v0.10: FT8 screen LVGL view.
 //
 // Owns the middle-band container shown when ui_mode == UI_MODE_FT8.

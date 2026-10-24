@@ -3209,14 +3209,10 @@ const ft8_preset_t *ft8_preset_list(ft8_op_mode_t mode, int *out_count)
     return (const ft8_preset_t *)t;
 }
 
-// Cyan accent used for everything FT4: the dropdown's FT4 column header and the
-// "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
-// UI_COLOR_ACCENT_GOLD.
-#define FT4_ACCENT_HEX 0x00B4FF
-// Magenta for JS8. Picked to be unmistakable against both gold and cyan at a
-// glance across the room - the mode label is the only thing on the screen that
-// says which protocol is about to be transmitted.
-#define JS8_ACCENT_HEX 0xE040FB
+// FT4_ACCENT_HEX / JS8_ACCENT_HEX moved to ft8_screen_view.h on 2026-10-24:
+// the left drawer's MODE buttons in ui.c must be the SAME colour as this
+// page, and a second copy of the number in another file is the drift this
+// project keeps paying for. The reasoning went with them.
 /* The accent is a MARKER colour - a tab border, a mode word on black - and at
  * full saturation it is wrong as a 288x60 fill: white text on it is hard to
  * read and it is the loudest thing on the screen. Same hue, saturation 52%
