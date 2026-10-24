@@ -1060,6 +1060,13 @@ static esp_err_t status_handler(httpd_req_t *req)
      * empty list. See cat.c for why zero is a real state and not just a guard. */
     cJSON_AddNumberToObject(root, "cw_filter_mask", (double)cat_cw_filter_mask());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
+    /* The tune-snap grid, in /api/status and not only in the settings form.
+     * The browser hardcoded 250 Hz for SSB in tuneSnapHz() and never read
+     * the setting at all, so "Tune snap" moved the Tab5 and did nothing in
+     * the browser - the operator found it with the mouse wheel. A setting
+     * the device obeys and the page ignores is the web/Tab5 parity class
+     * this file already carries several notes about. */
+    cJSON_AddNumberToObject(root, "tune_snap_hz", (double)settings_get_tune_snap_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
     // the same number and the browser can draw the marker in the same place.

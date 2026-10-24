@@ -7695,6 +7695,7 @@ async function tick() {
       if (typeof s.wf.contrast === "number") wfContrastDb = s.wf.contrast;
       /* blend_pct is 0..100; the renderer's blend is 0..1. */
       if (typeof s.wf.blend_pct === "number") wfFloorBlend = s.wf.blend_pct / 100;
+      if (typeof s.tune_snap_hz === "number") tuneSnapGrid = s.tune_snap_hz;
       if (typeof s.wf.ema_pct === "number" && s.wf.ema_pct > 0)
         specEmaAlpha = s.wf.ema_pct / 100;    // the COEFFICIENT; the slider shows 100 minus it
       if (typeof s.wf.cmap     === "number" && s.wf.cmap !== wfPaletteIdx) {
@@ -8511,9 +8512,19 @@ function tuneSnapHz() {
      not use. */
   if (ritArmed) return 10;
   const m = (lastMode || "").toUpperCase();
-  if (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  return 250;
-  if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
-      m.indexOf("RTTY") >= 0)                          return 500;
+  /* ⛔ THE SETTING, NOT A CONSTANT. "Tune snap (SSB & digital)" moved the
+     Tab5 and did nothing here: this returned a hardcoded 250 for SSB and
+     never read tune_snap_hz at all, so every mouse tune in the browser used
+     a grid the operator had not chosen. He found it with the wheel - "on web
+     it is always 250". tuneSnapGrid mirrors /api/status, so a change on
+     either surface moves both. 0 means "tune exactly where I tap", a 1 Hz
+     grid. Scoped to SSB and digital by the setting's own label; CW stays 10
+     and AM/FM 1000, as the Tab5 does. */
+  if (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0 ||
+      m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
+      m.indexOf("RTTY") >= 0) {
+    return (tuneSnapGrid === null) ? 250 : (tuneSnapGrid > 0 ? tuneSnapGrid : 1);
+  }
   if (m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0)    return 1000;
   if (m.indexOf("CW") >= 0)                            return 10;
   return 10;
@@ -10578,6 +10589,11 @@ const WF_COUNTS_PER_DB = WS_COUNTS_PER_DB;
    match WF_*_DEFAULT in render_waterfall.c. */
 let wfBlackDb = 9, wfContrastDb = 45, wfFloorBlend = 1.0;
 
+/* The operator's tune-snap grid, mirrored from /api/status. null until the
+   first poll answers, and tuneSnapHz() then falls back to the old 250 so a
+   click before any status is not a surprise. */
+let tuneSnapGrid = null;
+
 /* render.c applies an EMA to the raw spectrum BEFORE anything renders it -
    s_ema_alpha, which is the operator's own "Spectrum smoothing" setting - and the
    Tab5's flat mode then adds its own 0.25 EMA on top. The browser had only the
@@ -11952,12 +11968,19 @@ function handleWheel(e) {
   e.preventDefault();
   if (!lastFreqHz) return;
   const m = (lastMode || "").toUpperCase();
-  let step = 10;
-  if      (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  step = 500;
-  else if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
-           m.indexOf("RTTY") >= 0)                           step = 100;
-  else if (m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0)    step = 1000;
-  // else CW / unknown: 10 Hz
+  /* ⛔ THE WHEEL HAD ITS OWN LADDER, which is why fixing tuneSnapHz() alone
+     would have left this half-alive: the click path and the wheel path each
+     carried hardcoded steps, and they DISAGREED - 500 here against the click
+     path's 250 for the same SSB signal. One function now, so the operator's
+     "Tune snap" setting reaches every way of tuning in the browser.
+     A snap of 0 means "exactly where I tap": no grid for a click, but useless
+     for a wheel detent, so the wheel keeps a usable minimum per mode. */
+  let step = tuneSnapHz();
+  if (step <= 1) {
+    if      (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  step = 100;
+    else if (m.indexOf("AM")  >= 0 || m.indexOf("FM")  >= 0)  step = 1000;
+    else                                                      step = 10;
+  }
   const dir = e.deltaY > 0 ? -1 : 1;  // scroll up = tune up
   // Snap to step grid then advance one step, so we always land on a grid point
   const newHz = Math.round(lastFreqHz / step) * step + dir * step;
