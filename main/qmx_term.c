@@ -609,7 +609,7 @@ bool qmx_term_key_checked(const char *name, char *err, size_t err_len)
         /* ⛔ T65 - THE TWO WAYS A FORWARDED KEYSTROKE PUTS RF OUT.
          *
          * Enter on a Hardware-tests row (the sweeps, SSB Calibration, Test
-         * ADC I/Q, PA mod. test, Diagnostics, Beacon), and `t`/`p` once the
+         * ADC I/Q, PA mod. test, Virtual U3S), and `t`/`p` once the
          * Diagnostics screen is up - where the manual says the transmit is
          * "at the full PA voltage and there is no SWR protection". Both
          * arrive here from the browser and from the Tab5, and nothing

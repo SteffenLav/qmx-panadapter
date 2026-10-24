@@ -26,6 +26,13 @@
  * tools; the manual prints "USE DUMMY LOAD" in red beside each one. The radio's
  * own front panel still reaches all of them.
  *
+ * ⚠ ENTERING A SCREEN AND KEYING FROM IT ARE DIFFERENT QUESTIONS. This list
+ * is only about Enter on a menu row. "Diagnostics" was in it until 2026-10-24
+ * and should never have been: that screen is a read-out, and its transmit keys
+ * are handled by qmx_term_key_transmits_on_diagnostics() below. The row entry
+ * cost an operator a screen he uses weekly and bought nothing - see the block
+ * in qmx_term_tx_rows.c.
+ *
  * ⚠ THIS LIST IS NOT PROVABLY COMPLETE. It is built from the 1_04_001
  * operating manual, section 8.6, cross-checked against every "dummy load"
  * warning in it - not from reading the menu off a radio. A label this does not

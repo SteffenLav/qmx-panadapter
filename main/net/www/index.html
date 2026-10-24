@@ -10948,6 +10948,19 @@ function termShowErr(msg) {
   el.style.display = msg ? "" : "none";
 }
 
+/* A refused keystroke must SAY so. The firmware answers
+   {"ok":false,"error":"Refused: ..."} when the transmit guard stops a key, and
+   this function used to throw that away - so on the browser the press simply
+   did nothing, which is indistinguishable from a dead radio. Randy N4OPI spent
+   2026-10-24 on it: Hardware tests > Diagnostics > Enter, no page, no message,
+   on two Tab5s. The Tab5's own Radio Menus has toasted the reason since T65
+   (qmx_term_view.c); only the browser was silent. The refusal that cost him the
+   screen is gone, but EVERY refusal from this endpoint is now visible. */
+function termKeyResult(r) {
+  if (r && r.ok) { termShowErr(""); return; }
+  termShowErr((r && r.error) ? r.error : "the radio did not accept that key");
+}
+
 async function termSend(action, extra) {
   const body = Object.assign({ action: action }, extra || {});
   try {
@@ -11270,7 +11283,7 @@ window.addEventListener("resize", () => {
 });
 document.querySelectorAll(".term-key").forEach((b) => {
   b.addEventListener("click", async () => {
-    await termSend("key", { key: b.dataset.key });
+    termKeyResult(await termSend("key", { key: b.dataset.key }));
     setTimeout(termPoll, 120);   // the radio repaints, then we look
   });
 });
@@ -11291,7 +11304,7 @@ document.addEventListener("keydown", async (e) => {
   if (!key && e.key.length === 1) key = e.key;
   if (!key) return;
   e.preventDefault();
-  await termSend("key", { key: key });
+  termKeyResult(await termSend("key", { key: key }));
   setTimeout(termPoll, 120);
 });
 

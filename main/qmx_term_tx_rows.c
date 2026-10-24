@@ -37,7 +37,23 @@ static const struct { const char *needle; const char *why; } TX_ROWS[] = {
     { "ADC I/Q",    "Test ADC I/Q injects a signal into the RF front end" },
     { "SSB Cal",    "SSB Calibration transmits and needs a dummy load" },
     { "PA mod",     "the PA modulator test drives the PA" },
-    { "Diagnostics","the Diagnostics screen can key at full PA voltage with no SWR protection" },
+    /* ⛔ "Diagnostics" IS NOT IN THIS LIST, AND THAT IS DELIBERATE.
+     *
+     * It was, from T65 (v1.20.4) until 2026-10-24, and it was wrong. ENTERING
+     * the Diagnostics screen emits nothing - it is a read-out. What transmits
+     * is `t` and `p` ONCE THAT SCREEN IS UP (manual 1_04_001 §8.6.10), and
+     * those are refused by qmx_term_key_transmits_on_diagnostics(), which is a
+     * separate check that does not depend on this list at all. So the row
+     * entry blocked nothing that the key guard was not already blocking.
+     *
+     * What it did block was the screen itself. Randy N4OPI reads his remote
+     * station's battery voltage there regularly and reported it dead on two
+     * Tab5s on 2026-10-24: Hardware tests > Diagnostics > Enter, and nothing
+     * happens. A guard that costs a read-only screen and buys no safety is a
+     * defect, not caution.
+     *
+     * ⚠ Do not "restore" it. If a future firmware makes entry itself key, the
+     * evidence for that goes here first. */
     /* ⛔ BOTH SPELLINGS, AND THE SECOND ONE IS THE REAL MENU.
      *
      * "Beacon" came from the operating manual's LCD main-menu list. On

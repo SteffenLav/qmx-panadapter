@@ -38,7 +38,6 @@ int main(void)
       {"|  Test ADC I/Q          |", true,  "injects into the RF front end"},
       {"|  SSB Calibration       |", true,  "manual: YOU MUST ATTACH A 50-OHM DUMMY LOAD"},
       {"|  PA mod. Test          |", true,  "drives the PA modulator"},
-      {"|  Diagnostics           |", true,  "its Transmitter block keys at full PA volts"},
       {"|  Beacon                |", true,  "the LCD menu's wording"},
       {"|  Virtual U3S           |", true,  "what the TERMINAL actually shows - read off a 1_04_010 QMX+ on 2026-10-22"},
 
@@ -48,6 +47,7 @@ int main(void)
       {"|  Sweep (SWR)           |", true,  "reordered"},
 
       /* --- and what must NOT be refused: the whole point of Radio Menus --- */
+      {"|  Diagnostics           |", false, "ENTERING it emits nothing - `t`/`p` on the screen do, and the key guard refuses those (Randy N4OPI, 2026-10-24)"},
       {"|  GPS viewer            |", false, "we navigate here ourselves"},
       {"|  Microphone test       |", false, "no transmit"},
       {"|  Hardware tests        |", false, "the submenu itself is just a door"},

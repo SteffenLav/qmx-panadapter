@@ -82,9 +82,10 @@ RAW_SENDERS = re.compile(r"\bcat_send_raw_cmd\s*\(")
 #   CAT port (T64)      - text from the web API or a future PC pass-through.
 #   terminal port (T65) - keystrokes forwarded to the radio's OWN menus, where
 #                         the sweeps, SSB Calibration, Test ADC I/Q, PA mod.
-#                         test, Diagnostics and Beacon all key the transmitter,
-#                         and `t` on the Diagnostics screen does it at full PA
-#                         voltage with no SWR protection.
+#                         test and the beacon all key the transmitter, and `t`
+#                         on the Diagnostics screen does it at full PA voltage
+#                         with no SWR protection. Entering Diagnostics does
+#                         NOT key - see main/qmx_term_tx_rows.c.
 #
 # Each door must consult its classifier. The CAT door also calls the band
 # guard; the terminal door REFUSES instead, because a sweep emits across a
