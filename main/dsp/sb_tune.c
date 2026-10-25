@@ -121,6 +121,102 @@ sb_tune_result_t sb_tune_find_edge(const float *win_db, int n, int centre_i,
     return SB_TUNE_OK;
 }
 
+/* Squared residual of the half-open bin range [a,b) about its own mean, from
+ * prefix sums of x and x^2. Keeping it here rather than in a statement-
+ * expression macro means no GCC extension and one place to read the algebra. */
+static double sse_about_mean(const double *s1, const double *s2, int a, int b)
+{
+    const int    na = b - a;
+    if (na <= 0) return 0.0;
+    const double su = s1[b] - s1[a];
+    const double sq = s2[b] - s2[a];
+    const double sse = sq - (su * su) / (double)na;
+    return sse > 0.0 ? sse : 0.0;   /* rounding can make an exact fit negative */
+}
+
+/* Smallest number of bins on either side of the step. A changepoint computed
+ * from three bins is noise with an opinion; eight is enough for the means to
+ * mean something at 23-47 Hz per bin. */
+#define SB_FIT_MIN_SIDE 8
+
+sb_tune_result_t sb_tune_find_edge_fit(const float *win_db, int n, int centre_i,
+                                       float bin_hz, bool upper,
+                                       const sb_tune_cfg_t *cfg,
+                                       float *edge_off_hz, float *snr_db)
+{
+    if (!win_db || !cfg || n < 8 || n > SB_TUNE_MAX_BINS) return SB_TUNE_NO_SIGNAL;
+    if (centre_i < 0 || centre_i >= n) return SB_TUNE_NO_SIGNAL;
+    if (bin_hz <= 0.0f) return SB_TUNE_NO_SIGNAL;
+    if (n < 2 * SB_FIT_MIN_SIDE + 1) return SB_TUNE_NO_SIGNAL;
+
+    /* Work in an array ordered so index 0 is the end FURTHEST from the signal
+     * and increasing index walks into it. For USB the carrier is below the
+     * occupied band, so the window's low end is the noise end; for LSB it is
+     * the high end. One code path, one mapping back at the finish. */
+    float v[SB_TUNE_MAX_BINS];
+    for (int i = 0; i < n; i++) v[i] = upper ? win_db[i] : win_db[n - 1 - i];
+
+    /* Prefix sums make the squared-residual of every candidate split O(1), so
+     * the whole scan is O(n) rather than O(n^2). */
+    double s1[SB_TUNE_MAX_BINS + 1], s2[SB_TUNE_MAX_BINS + 1];
+    s1[0] = 0.0; s2[0] = 0.0;
+    for (int i = 0; i < n; i++) {
+        s1[i + 1] = s1[i] + (double)v[i];
+        s2[i + 1] = s2[i] + (double)v[i] * (double)v[i];
+    }
+
+    int    best_e   = -1;
+    double best_sse = 0.0;
+    for (int e = SB_FIT_MIN_SIDE; e <= n - SB_FIT_MIN_SIDE; e++) {
+        const double sse = sse_about_mean(s1, s2, 0, e)
+                         + sse_about_mean(s1, s2, e, n);
+        if (best_e < 0 || sse < best_sse) { best_sse = sse; best_e = e; }
+    }
+    if (best_e < 0) return SB_TUNE_EDGE_NOT_FOUND;
+
+    const double mean_lo = (s1[best_e] - s1[0]) / (double)best_e;
+    const double mean_hi = (s1[n] - s1[best_e]) / (double)(n - best_e);
+    const double step    = mean_hi - mean_lo;
+
+    if (snr_db) *snr_db = (float)step;
+
+    /* The step must be upward - noise then signal. A downward best split means
+     * the window does not hold a carrier-side edge at all (the signal is the
+     * wrong side, or there is no signal), and reporting its position would be
+     * a confident answer to a question that was not asked. */
+    if (step < (double)cfg->min_step_db) return SB_TUNE_NO_SIGNAL;
+
+    /* Sub-bin position from the SSE curve's own shape. The curve is smooth and
+     * locally quadratic near its minimum, so a parabola through the three
+     * points brackets the true split - unlike the dB-domain parabola ui.c
+     * fits to a PEAK, this one is fitted to the COST, which is what has a
+     * minimum here. Skipped at the scan limits, where there is no neighbour. */
+    double delta = 0.0;
+    if (best_e > SB_FIT_MIN_SIDE && best_e < n - SB_FIT_MIN_SIDE) {
+        const double a = sse_about_mean(s1, s2, 0, best_e - 1)
+                       + sse_about_mean(s1, s2, best_e - 1, n);
+        const double b = best_sse;
+        const double c = sse_about_mean(s1, s2, 0, best_e + 1)
+                       + sse_about_mean(s1, s2, best_e + 1, n);
+        const double den = a - 2.0 * b + c;
+        if (den != 0.0) {
+            delta = 0.5 * (a - c) / den;
+            if (delta >  0.5) delta =  0.5;
+            if (delta < -0.5) delta = -0.5;
+        }
+    }
+    #undef SSE_OF
+
+    const double e_f = (double)best_e + delta;
+    /* Map back out of the walk-into-the-signal ordering. The step sits BETWEEN
+     * v[e-1] and v[e], i.e. at e - 0.5 in bin centres. */
+    const double idx = upper ? (e_f - 0.5)
+                             : ((double)(n - 1) - (e_f - 0.5));
+
+    if (edge_off_hz) *edge_off_hz = (float)((idx - (double)centre_i) * (double)bin_hz);
+    return SB_TUNE_OK;
+}
+
 unsigned sb_tune_snap(unsigned freq_hz, unsigned grid_hz)
 {
     if (grid_hz == 0) return freq_hz;

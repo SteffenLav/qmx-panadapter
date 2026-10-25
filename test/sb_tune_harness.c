@@ -298,7 +298,7 @@ static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
         synth_window(&s, wdb);
 
         float edge = 0.0f, snr = 0.0f;
-        sb_tune_result_t r = sb_tune_find_edge(wdb, WIN_N, SPAN_BINS,
+        sb_tune_result_t r = sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS,
                                                (float)BIN_HZ, s.upper,
                                                &cfg, &edge, &snr);
         if (r != SB_TUNE_OK) { (*refused)++; continue; }
@@ -410,7 +410,7 @@ static void gate4(void)
         if (got != win_n) continue;
         frames++;
         float edge = 0.0f, snr = 0.0f;
-        if (sb_tune_find_edge(w, win_n, span_bins, (float)bin_hz, false,
+        if (sb_tune_find_edge_fit(w, win_n, span_bins, (float)bin_hz, false,
                               &cfg, &edge, &snr) == SB_TUNE_OK) {
             ok++;
             stat_add(&edges, (double)edge);
@@ -500,7 +500,7 @@ int main(void)
                 float wdb[WIN_N], edge = 0.0f;
                 s_rng = 1 + (uint64_t)(a * 1000 + b * 100 + c * 10 + d);
                 synth_window(&s, wdb);
-                if (sb_tune_find_edge(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+                if (sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
                                       s.upper, &cfg, &edge, NULL) != SB_TUNE_OK)
                     continue;
                 stat_add(&one, (double)edge - s.carrier_off_hz);
@@ -536,7 +536,7 @@ int main(void)
                 float wdb[WIN_N], edge = 0.0f;
                 s_rng = 1 + (uint64_t)(a * 1000 + b * 100 + c * 10 + d);
                 synth_window(&s, wdb);
-                if (sb_tune_find_edge(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+                if (sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
                                       s.upper, &cfg, &edge, NULL) != SB_TUNE_OK)
                     continue;
                 double theirs = 14200000.0 + 3.0 * (double)grid;
@@ -559,6 +559,66 @@ int main(void)
      * >=95 % accepted at 30 dB with sd <= 60 Hz. The point is not accuracy -
      * it is that a weak signal produces no answer at all, because the previous
      * version produced a confident wrong one and never refused. */
+    /* CALIBRATION, NOT GOALPOST-MOVING. The fit's confidence is the height of
+     * the fitted STEP - a difference of means in dB - and that is a different
+     * quantity from the threshold version's peak-to-floor percentile gap. It
+     * is necessarily smaller: between voice harmonics the spectrum sits at the
+     * noise floor, so the signal-side mean is pulled well below the peaks.
+     * Reusing min_snr_db = 25 therefore refused every case at every SNR.
+     *
+     * Gate 1's criterion is unchanged and is about the SIGNAL (refuse below
+     * 20 dB achieved SNR, accept above 30). What has to be chosen is the step
+     * threshold that DELIVERS that behaviour, so it is measured here first. */
+    printf("=== step-height calibration (what the fit actually returns)\n");
+    printf("  achieved SNR | cases | step mean | step p10 | step p90\n");
+    {
+        const double KNOBS[] = { -40, -30, -25, -20, -15, -10, -5, 0, 10 };
+        const double EDGES[] = { 0.0, 10.0, 20.0, 30.0, 40.0, 1e9 };
+        enum { NB = NELEM(EDGES) - 1 };
+        static double steps[NB][4096];
+        int cnt[NB];
+        memset(cnt, 0, sizeof(cnt));
+        sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+        cfg.min_step_db = -1000.0f;     /* accept everything, just to observe */
+        for (int k = 0; k < NELEM(KNOBS); k++)
+        for (int a = 0; a < NELEM(LOW_CUTS); a++)
+        for (int b = 0; b < NELEM(DIAL_ERRS); b++)
+        for (int c = 0; c < NELEM(F0S); c++) {
+            scene_t s = { .carrier_off_hz = DIAL_ERRS[b],
+                          .low_cut_hz = LOW_CUTS[a], .high_cut_hz = 2700.0,
+                          .f0_hz = F0S[c], .snr_db = KNOBS[k],
+                          .upper = true, .win = WIN_HANN };
+            float wdb[WIN_N], edge = 0.0f, st = 0.0f;
+            s_rng = 1 + (uint64_t)(k * 10000 + a * 1000 + b * 100 + c);
+            synth_window(&s, wdb);
+            double a_snr = achieved_snr_db(wdb, WIN_N);
+            int bk = 0;
+            while (bk < NB - 1 && a_snr >= EDGES[bk + 1]) bk++;
+            if (sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+                                      s.upper, &cfg, &edge, &st) == SB_TUNE_OK
+                && cnt[bk] < 4096) {
+                steps[bk][cnt[bk]++] = (double)st;
+            }
+        }
+        for (int bk = 0; bk < NB; bk++) {
+            if (!cnt[bk]) continue;
+            for (int i = 1; i < cnt[bk]; i++) {
+                double key = steps[bk][i]; int j = i - 1;
+                while (j >= 0 && steps[bk][j] > key) { steps[bk][j+1] = steps[bk][j]; j--; }
+                steps[bk][j+1] = key;
+            }
+            double sum = 0.0;
+            for (int i = 0; i < cnt[bk]; i++) sum += steps[bk][i];
+            char lbl[24];
+            if (EDGES[bk + 1] > 1e8) snprintf(lbl, sizeof(lbl), "   >= %2.0f dB", EDGES[bk]);
+            else snprintf(lbl, sizeof(lbl), "  %2.0f - %2.0f dB", EDGES[bk], EDGES[bk+1]);
+            printf("  %-12s | %5d | %8.1f  | %7.1f  | %7.1f\n",
+                   lbl, cnt[bk], sum / cnt[bk],
+                   steps[bk][cnt[bk] / 10], steps[bk][cnt[bk] * 9 / 10]);
+        }
+    }
+    printf("\n");
+
     printf("=== GATE 1: refuse when the signal is too weak\n");
     for (int sb = 0; sb < 2; sb++) {
     const bool g_upper = (sb == 0);
@@ -591,7 +651,7 @@ int main(void)
             int bk = 0;
             while (bk < NB - 1 && a_snr >= EDGES[bk + 1]) bk++;
             tot[bk]++;
-            if (sb_tune_find_edge(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+            if (sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
                                   s.upper, &cfg, &edge, NULL) == SB_TUNE_OK) {
                 acc[bk]++;
                 stat_add(&st[bk], (double)edge - s.carrier_off_hz);
@@ -647,7 +707,7 @@ int main(void)
                 float wdb[WIN_N], edge = 0.0f;
                 s_rng = 1 + (uint64_t)(a * 1000 + b * 100 + c * 10 + d);
                 synth_window(&s, wdb);
-                if (sb_tune_find_edge(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+                if (sb_tune_find_edge_fit(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
                                       s.upper, &cfg, &edge, NULL) != SB_TUNE_OK)
                     continue;
                 stat_add(&one, (double)edge - s.carrier_off_hz);

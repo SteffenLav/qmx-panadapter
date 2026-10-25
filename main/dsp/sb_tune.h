@@ -62,6 +62,24 @@ typedef struct {
     // bin is a syllable, not a level, so the reference is the median of the
     // strongest few.
     int inband_bins;
+
+    /* ⛔ THE FIT'S OWN GATE, AND IT IS A SEPARATE FIELD ON PURPOSE.
+     *
+     * sb_tune_find_edge_fit() measures confidence as the height of the fitted
+     * step - a difference of MEANS in dB - which is a fundamentally smaller
+     * number than min_snr_db's peak-to-floor percentile gap, because between
+     * voice harmonics the spectrum sits at the noise floor and drags the
+     * signal-side mean down. Feeding the fit a min_snr_db of 25 refused every
+     * case at every SNR. Two estimators, two scales, two fields; sharing one
+     * number cost a cycle and would cost the next reader more.
+     *
+     * 11.5 dB is measured, not chosen. Across the synthetic sweep the step
+     * runs 1.0 dB mean (p90 5.3) for signals at 10-20 dB SNR, 7.8 dB mean
+     * (p90 11.5) at 20-30 dB, and 18.7 dB mean (p10 15.9) above 30 dB. It is
+     * set to that 20-30 dB p90: a first try at 13 dB cleared only 91.2 % of
+     * the 30-40 dB band against Gate 1's 95 % criterion, and the table says
+     * where the room is. */
+    float min_step_db;
 } sb_tune_cfg_t;
 
 // The edge threshold must clear the noise reference by this much or the window
@@ -79,6 +97,7 @@ typedef struct {
     .min_snr_db   = 25.0f,                     \
     .edge_drop_db = 6.0f,                       \
     .inband_bins  = 5,                         \
+    .min_step_db  = 11.5f,                     \
 })
 
 // win_db      per-bin power in dB, low frequency first
@@ -95,6 +114,34 @@ sb_tune_result_t sb_tune_find_edge(const float *win_db, int n, int centre_i,
                                    float bin_hz, bool upper,
                                    const sb_tune_cfg_t *cfg,
                                    float *edge_off_hz, float *snr_db);
+
+/* ⭐ THE SHAPE FIT - a changepoint, not a threshold crossing.
+ *
+ * WHY THE THRESHOLD VERSION ABOVE IS NOT ENOUGH, measured on the bench:
+ * real 40 m SSB presents about 19 dB median and 26 dB p90 per-bin SNR against
+ * a genuine noise floor, while sb_tune_find_edge() needs about 30 dB to track
+ * the far station's filter. Three ways of closing that gap were measured and
+ * all three failed - a stronger station (+4.3 dB), a 4 s per-bin max-hold
+ * (p90 moved 20 -> 23 dB), and a full-span noise reference (+1.5 dB).
+ *
+ * The reason is that a threshold crossing decides the answer from ONE bin's
+ * worth of evidence. This fits the carrier-side profile as two levels - noise,
+ * then signal - and picks the transition that minimises the total squared
+ * residual, so every bin in the window votes. Noise averages down instead of
+ * moving the answer.
+ *
+ * It needs no quiet reference and no threshold: the fitted STEP HEIGHT is the
+ * confidence, and cfg->min_snr_db is read as the smallest step worth
+ * believing. cfg->edge_drop_db and cfg->inband_bins are unused here.
+ *
+ * Same arguments and same contract as sb_tune_find_edge(): on anything but
+ * SB_TUNE_OK the outputs are untouched, and *snr_db (when asked for) is the
+ * fitted step height rather than a percentile difference.
+ */
+sb_tune_result_t sb_tune_find_edge_fit(const float *win_db, int n, int centre_i,
+                                       float bin_hz, bool upper,
+                                       const sb_tune_cfg_t *cfg,
+                                       float *edge_off_hz, float *snr_db);
 
 // Round a dial to the operator's tune grid. grid_hz of 0 means "no snapping"
 // and returns freq_hz unchanged, matching settings' tune_snap_hz where 0 is
