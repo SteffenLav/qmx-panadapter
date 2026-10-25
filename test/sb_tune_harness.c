@@ -270,7 +270,8 @@ static const double STRONG_KNOBS[] = { 0.0, 5.0, 10.0, 15.0 };
 
 static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
                   stat_t *bias, int *refused, int *snap_hits, int *snap_tot,
-                  unsigned grid_hz, const double *knobs, int nknobs)
+                  unsigned grid_hz, const double *knobs, int nknobs,
+                  bool upper)
 {
     sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
     cfg.edge_drop_db = edge_drop_db;
@@ -285,7 +286,7 @@ static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
             .high_cut_hz    = 2700.0,
             .f0_hz          = F0S[c],
             .snr_db         = knobs[d],
-            .upper          = true,
+            .upper          = upper,
             .win            = win,
         };
         float wdb[WIN_N];
@@ -324,7 +325,13 @@ static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
          * air we do not know the far station's filter. Removing the sweep's
          * own mean bias instead would be grading the estimator on an answer
          * it cannot have. */
-        const double assumed_low_cut = 300.0;
+        /* The calibration's SIGN follows the sideband. On USB the occupied
+         * band sits above the carrier so the edge reads high and 300 Hz comes
+         * off; on LSB it sits below, the edge reads negative, and the same
+         * 300 Hz goes back on. Getting this sign wrong would show up as an
+         * LSB bias of about 600 Hz rather than 0, which is why Gate 3 checks
+         * the magnitudes against USB and not just the hit rate. */
+        const double assumed_low_cut = s.upper ? 300.0 : -300.0;
         double their_carrier = 14200000.0 + 3.0 * (double)grid_hz; // on the grid
         double dial_now      = their_carrier - s.carrier_off_hz;
         double est_carrier   = dial_now + edge - assumed_low_cut;
@@ -356,26 +363,68 @@ int main(void)
      * fixed 300 Hz, because on air the far station's filter is unknowable.
      * See the long note at the hit test for the two ways this was built wrong
      * the first time. */
-    printf("=== GATE 2: does the snap land on their frequency?\n");
-    for (int w = 0; w <= 1; w++) {
-        printf("  %s\n", wname[w]);
+    printf("=== GATE 2 (USB) / GATE 3 (LSB): does the snap land on their frequency?\n");
+    for (int sb = 0; sb < 2; sb++) {
+      const bool upper = (sb == 0);
+      for (int w = 0; w <= 1; w++) {
+        printf("  %s, %s\n", upper ? "USB" : "LSB", wname[w]);
         printf("    drop | refused | bias mean |     sd | snap@500 | snap@1k | verdict\n");
         for (int i = 0; i < NELEM(drops); i++) {
             stat_t st = {0};
             int refused = 0, h5 = 0, t5 = 0, h1 = 0, t1 = 0, r2 = 0;
             stat_t st2 = {0};
             sweep((wintype_t)w, drops[i], 0.0, &st,  &refused, &h5, &t5, 500,
-                  STRONG_KNOBS, NELEM(STRONG_KNOBS));
+                  STRONG_KNOBS, NELEM(STRONG_KNOBS), upper);
             sweep((wintype_t)w, drops[i], 0.0, &st2, &r2,      &h1, &t1, 1000,
-                  STRONG_KNOBS, NELEM(STRONG_KNOBS));
+                  STRONG_KNOBS, NELEM(STRONG_KNOBS), upper);
             double p5 = t5 ? 100.0 * h5 / t5 : 0.0;
             printf("    %4.0f | %7d | %7.1f Hz | %6.1f | %5.1f %% | %5.1f %% | %s\n",
                    (double)drops[i], refused, stat_mean(&st), stat_sd(&st),
                    p5, t1 ? 100.0 * h1 / t1 : 0.0,
                    p5 >= 90.0 ? "PASS" : "fail");
+            if (p5 < 90.0) fails++;
         }
         printf("\n");
+      }
     }
+
+    /* GATE 3's REAL TEST. A hit rate alone would not catch a sideband bug: get
+     * the scan direction or the calibration sign wrong and the hit rate
+     * collapses, but so would a dozen other faults. The discriminating check
+     * is that the edge sits the SAME DISTANCE from the carrier on both
+     * sidebands, just mirrored - so |LSB| must equal |USB| per filter. */
+    printf("=== GATE 3: LSB edge magnitudes must mirror USB (Hann, 6 dB)\n");
+    printf("    low cut |   USB edge |   LSB edge | |diff| | verdict\n");
+    for (int a = 0; a < NELEM(LOW_CUTS); a++) {
+        double mag[2] = { 0.0, 0.0 };
+        for (int sb = 0; sb < 2; sb++) {
+            stat_t one = {0};
+            sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+            cfg.edge_drop_db = 6.0f;
+            for (int b = 0; b < NELEM(DIAL_ERRS); b++)
+            for (int c = 0; c < NELEM(F0S); c++)
+            for (int d = 0; d < NELEM(STRONG_KNOBS); d++) {
+                scene_t s = { .carrier_off_hz = DIAL_ERRS[b],
+                              .low_cut_hz = LOW_CUTS[a], .high_cut_hz = 2700.0,
+                              .f0_hz = F0S[c], .snr_db = STRONG_KNOBS[d],
+                              .upper = (sb == 0), .win = WIN_HANN };
+                float wdb[WIN_N], edge = 0.0f;
+                s_rng = 1 + (uint64_t)(a * 1000 + b * 100 + c * 10 + d);
+                synth_window(&s, wdb);
+                if (sb_tune_find_edge(wdb, WIN_N, SPAN_BINS, (float)BIN_HZ,
+                                      s.upper, &cfg, &edge, NULL) != SB_TUNE_OK)
+                    continue;
+                stat_add(&one, (double)edge - s.carrier_off_hz);
+            }
+            mag[sb] = stat_mean(&one);
+        }
+        double diff = fabs(fabs(mag[0]) - fabs(mag[1]));
+        const char *v = (diff <= 20.0) ? "PASS" : "FAIL";
+        if (diff > 20.0) fails++;
+        printf("    %4.0f Hz | %+8.1f Hz | %+8.1f Hz | %5.1f | %s\n",
+               LOW_CUTS[a], mag[0], mag[1], diff, v);
+    }
+    printf("\n");
 
     /* HOW FAR OFF CAN THE OPERATOR BE? An operational limit, not a pass/fail:
      * the snap can only rescue an estimate that is already inside half a step,
@@ -422,6 +471,9 @@ int main(void)
      * it is that a weak signal produces no answer at all, because the previous
      * version produced a confident wrong one and never refused. */
     printf("=== GATE 1: refuse when the signal is too weak\n");
+    for (int sb = 0; sb < 2; sb++) {
+    const bool g_upper = (sb == 0);
+    printf("  %s\n", g_upper ? "USB" : "LSB");
     printf("  achieved SNR | cases | accepted | edge sd | verdict\n");
     {
         /* Bucket by ACHIEVED per-bin SNR, not by the amplitude knob. The knob
@@ -442,7 +494,7 @@ int main(void)
             scene_t s = { .carrier_off_hz = DIAL_ERRS[b],
                           .low_cut_hz = LOW_CUTS[a], .high_cut_hz = 2700.0,
                           .f0_hz = F0S[c], .snr_db = KNOBS[k],
-                          .upper = true, .win = WIN_HANN };
+                          .upper = g_upper, .win = WIN_HANN };
             float wdb[WIN_N], edge = 0.0f;
             s_rng = 1 + (uint64_t)(k * 10000 + a * 1000 + b * 100 + c);
             synth_window(&s, wdb);
@@ -481,6 +533,7 @@ int main(void)
         }
     }
     printf("\n");
+    }   /* sideband */
 
     /* WHERE THE SPREAD COMES FROM - the question that decides whether stage 1
      * is fixable. If the error is set by the far station's FILTER it is one
@@ -529,9 +582,9 @@ int main(void)
         stat_t clean = {0}, bad = {0};
         int rc = 0, rb = 0, hc = 0, tc = 0, hb = 0, tb = 0;
         sweep(WIN_HANN, 6.0f, 0.0,   &clean, &rc, &hc, &tc, 500,
-              STRONG_KNOBS, NELEM(STRONG_KNOBS));
+              STRONG_KNOBS, NELEM(STRONG_KNOBS), true);
         sweep(WIN_HANN, 6.0f, 500.0, &bad,   &rb, &hb, &tb, 500,
-              STRONG_KNOBS, NELEM(STRONG_KNOBS));
+              STRONG_KNOBS, NELEM(STRONG_KNOBS), true);
         double pc = tc ? 100.0 * hc / tc : 0.0;
         double pb = tb ? 100.0 * hb / tb : 0.0;
         printf("  clean  bias mean %.1f Hz, snap@500 %.1f %% (%d/%d)\n",
