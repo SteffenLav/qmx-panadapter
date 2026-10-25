@@ -70,6 +70,23 @@
 #define SPAN_BINS    ((int)(SEARCH_HZ / BIN_HZ + 0.5))
 #define WIN_N        (2 * SPAN_BINS + 1)
 
+/* ONE PLACE EVERY GATE TAKES ITS CONFIG FROM, so a sweep cannot grade one
+ * estimator against a config another gate did not use.
+ *
+ * SB_TUNE_MIN_STEP / SB_TUNE_MIN_SNR override the shipped defaults for a run.
+ * They exist so the acceptance gate can be SWEPT and read off a table rather
+ * than nudged by eye - sb_tune.h says exactly that about edge_drop_db and the
+ * same discipline belongs on the gate. Unset, this is SB_TUNE_CFG_DEFAULT
+ * byte for byte, so a plain run grades what ships. */
+static sb_tune_cfg_t harness_cfg(void)
+{
+    sb_tune_cfg_t c = SB_TUNE_CFG_DEFAULT;
+    const char *e;
+    if ((e = getenv("SB_TUNE_MIN_STEP")) && *e) c.min_step_db = (float)atof(e);
+    if ((e = getenv("SB_TUNE_MIN_SNR"))  && *e) c.min_snr_db  = (float)atof(e);
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 // A small complex FFT. The device uses esp-dsp, which is not on the host; this
 // is a plain radix-2 and only has to agree with it to within the window's own
@@ -277,7 +294,7 @@ static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
                   unsigned grid_hz, const double *knobs, int nknobs,
                   bool upper)
 {
-    sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+    sb_tune_cfg_t cfg = harness_cfg();
     cfg.edge_drop_db = edge_drop_db;
 
     for (int a = 0; a < NELEM(LOW_CUTS); a++)
@@ -391,7 +408,7 @@ static void gate4(void)
     printf("  dial %ld, %.4f Hz/bin, window %d bins (+/-%.0f Hz)\n",
            dial, bin_hz, win_n, span_bins * bin_hz);
 
-    sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+    sb_tune_cfg_t cfg = harness_cfg();
     stat_t edges = {0}, snrs = {0};
     int frames = 0, ok = 0;
 
@@ -488,7 +505,7 @@ int main(void)
         double mag[2] = { 0.0, 0.0 };
         for (int sb = 0; sb < 2; sb++) {
             stat_t one = {0};
-            sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+            sb_tune_cfg_t cfg = harness_cfg();
             cfg.edge_drop_db = 6.0f;
             for (int b = 0; b < NELEM(DIAL_ERRS); b++)
             for (int c = 0; c < NELEM(F0S); c++)
@@ -521,7 +538,7 @@ int main(void)
     printf("=== GATE 2b: tolerance to the operator's own mistuning (Hann, 6 dB)\n");
     printf("    dial off | snap@500 | snap@1k\n");
     for (int b = 0; b < NELEM(DIAL_ERRS); b++) {
-        sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+        sb_tune_cfg_t cfg = harness_cfg();
         cfg.edge_drop_db = 6.0f;
         int h5 = 0, t5 = 0, h1 = 0, t1 = 0;
         for (int g = 0; g < 2; g++) {
@@ -578,7 +595,7 @@ int main(void)
         static double steps[NB][4096];
         int cnt[NB];
         memset(cnt, 0, sizeof(cnt));
-        sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+        sb_tune_cfg_t cfg = harness_cfg();
         cfg.min_step_db = -1000.0f;     /* accept everything, just to observe */
         for (int k = 0; k < NELEM(KNOBS); k++)
         for (int a = 0; a < NELEM(LOW_CUTS); a++)
@@ -635,7 +652,7 @@ int main(void)
         memset(acc, 0, sizeof(acc));
         memset(tot, 0, sizeof(tot));
 
-        sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+        sb_tune_cfg_t cfg = harness_cfg();
         for (int k = 0; k < NELEM(KNOBS); k++)
         for (int a = 0; a < NELEM(LOW_CUTS); a++)
         for (int b = 0; b < NELEM(DIAL_ERRS); b++)
@@ -694,7 +711,7 @@ int main(void)
     printf("=== what drives the spread (Hann, drop 6 dB)\n");
     for (int a = 0; a < NELEM(LOW_CUTS); a++) {
         stat_t st = {0};
-        sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+        sb_tune_cfg_t cfg = harness_cfg();
         cfg.edge_drop_db = 6.0f;
         for (int d = 0; d < NELEM(SNRS); d++) {
             stat_t one = {0};
