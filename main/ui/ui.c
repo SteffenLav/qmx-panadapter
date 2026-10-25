@@ -10625,7 +10625,12 @@ static void sb_tune_feed(const float *bins, int n_bins)
     bool upper = false;
     if (!sb_mode_now(&upper)) return;
 
-    float win[SB_WIN_N];
+    /* Static, not on the stack: this runs on the RENDER task, whose stack a
+     * 484-byte window plus sb_tune.c's own buffers overran at
+     * v1.21.0-6-gf7d28a76. One caller, under the display lock - the same
+     * condition sb_tune.c's statics depend on. CW-Tune gets away with an
+     * automatic because its window is 19 floats against this one's 121. */
+    static float win[SB_WIN_N];
     int shift = ui_get_if_bin_shift(N);
     for (int i = 0; i < SB_WIN_N; i++) {
         int b = ((shift + (i - SB_SPAN_BINS)) % N + N) % N;

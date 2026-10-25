@@ -30,7 +30,10 @@ sb_tune_result_t sb_tune_find_edge(const float *win_db, int n, int centre_i,
     if (centre_i < 0 || centre_i >= n) return SB_TUNE_NO_SIGNAL;
     if (bin_hz <= 0.0f) return SB_TUNE_NO_SIGNAL;
 
-    float sorted[SB_TUNE_MAX_BINS];
+    /* Static for the same reason as the fit's buffers below, and with the same
+     * one-caller condition: 512 bytes on a 1.5 KB-guarded render stack is what
+     * crashed v1.21.0-6. Not reentrant. */
+    static float sorted[SB_TUNE_MAX_BINS];
     memcpy(sorted, win_db, (size_t)n * sizeof(float));
     sort_asc(sorted, n);
 
@@ -152,13 +155,32 @@ sb_tune_result_t sb_tune_find_edge_fit(const float *win_db, int n, int centre_i,
     /* Work in an array ordered so index 0 is the end FURTHEST from the signal
      * and increasing index walks into it. For USB the carrier is below the
      * occupied band, so the window's low end is the noise end; for LSB it is
-     * the high end. One code path, one mapping back at the finish. */
-    float v[SB_TUNE_MAX_BINS];
+     * the high end. One code path, one mapping back at the finish.
+     *
+     * ⛔⛔ STATIC, NOT ON THE STACK, AND THAT COST A CRASH ON HARDWARE.
+     * These three were automatics: float v[128] plus double s1[129], s2[129]
+     * is about 2.6 KB, and the caller on the device is ui_push_spectrum() on
+     * the RENDER task. v1.21.0-6-gf7d28a76 died with "Guru Meditation Error:
+     * Core 1 panic'ed (Stack protection fault), task render" the first time
+     * the operator pressed the BW zone in LSB. The host harness never saw it
+     * because a PC gives the main thread megabytes.
+     *
+     * ⚠ SO THIS FUNCTION IS NOT REENTRANT. That is sound here and must stay
+     * checked: the firmware has exactly ONE caller, sb_tune_feed() in ui.c,
+     * which runs on the render task with the display lock held, and the
+     * harness is single-threaded. A second concurrent caller needs these
+     * passed in as scratch, not another static.
+     *
+     * ⚠ And they are plain statics rather than PSRAM on purpose: sb_tune.c
+     * builds on the host for the harness and must not grow a heap or an
+     * ESP-only attribute. The cost is ~2.6 KB of .bss - see
+     * project_internal_ram_bss_audit before adding more. */
+    static float v[SB_TUNE_MAX_BINS];
     for (int i = 0; i < n; i++) v[i] = upper ? win_db[i] : win_db[n - 1 - i];
 
     /* Prefix sums make the squared-residual of every candidate split O(1), so
      * the whole scan is O(n) rather than O(n^2). */
-    double s1[SB_TUNE_MAX_BINS + 1], s2[SB_TUNE_MAX_BINS + 1];
+    static double s1[SB_TUNE_MAX_BINS + 1], s2[SB_TUNE_MAX_BINS + 1];
     s1[0] = 0.0; s2[0] = 0.0;
     for (int i = 0; i < n; i++) {
         s1[i + 1] = s1[i] + (double)v[i];
