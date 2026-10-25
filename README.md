@@ -405,7 +405,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 
 | Gesture | From | Does |
 |---------|------|------|
-| Swipe → | Left edge | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
+| Swipe → | Left edge | Open the **page picker** — tap Panadapter, FT8, FT4, JS8 or WSPR |
 | Swipe ← | Right edge | Open settings drawer |
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
@@ -757,7 +757,7 @@ hunt for.
 
 A propagation beacon rather than a contact mode: a very slow, very weak signal
 carrying only your callsign, grid and declared power, reported by stations
-worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4/JS8 → WSPR**.
+worldwide. Swipe → from the left edge opens the **page picker**; tap **MODE: WSPR** to go straight there.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
 **Calibrate Power measures what your QMX actually does, on your antenna
@@ -839,7 +839,7 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
 | Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
-| Swipe → from left edge | Left edge strip | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
+| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the five pages directly |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |

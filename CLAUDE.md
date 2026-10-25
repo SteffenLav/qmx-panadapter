@@ -99,7 +99,7 @@ the checker by adding to EXEMPT without writing why.
 `docs/unattended-tx-inventory.md` — **run it for the number**. This line said
 11 arming sites while the checker and the inventory both said 12 (corrected
 2026-10-17); a count in prose cannot keep up, the same rot the patches section
-above records. Today: 12 sites, **6 unattended**. Run it
+above records. Today: 13 sites, **6 unattended** (12 -> 13 at v1.21.0; the prose has now been stale twice, which is why the checker is the authority). Run it
 every release; if the table changed, say so in the notes. ⛔ Never call a
 capability "not completed" or "not yet": say implemented or not, then proven or
 not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
