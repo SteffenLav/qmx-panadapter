@@ -493,6 +493,32 @@ typedef enum {
 ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz);
 const char  *ui_cw_tune_reason(ui_cw_tune_t r);
 
+/* T90 SSB auto-tune - the sibling of CW-Tune, on the same gesture.
+ *
+ * SSB has no carrier, so the reference is the sharp edge the far station's
+ * own transmit filter leaves at the suppressed carrier. The estimate alone is
+ * worth about +/-100 Hz, which would be useless on its own - what makes it
+ * work is that the other operator is nearly always on a round 500 Hz, so the
+ * estimate only has to pick the right grid point. Measured on two real bench
+ * captures: every accepted frame snapped to the SAME point, on a clean band
+ * and on one with a second station 1 kHz away.
+ *
+ * It is a VOTE over a 4 s window, not one frame: the estimator accepts about
+ * 10 % of frames on a clean band and 2.5 % with a neighbour present, so a
+ * single frame can be the only evidence there is. Fewer than two agreeing
+ * frames is a refusal, and a refusal leaves the dial alone. */
+typedef enum {
+    UI_SB_TUNE_OK = 0,
+    UI_SB_TUNE_NOT_SSB,       /* not in USB/LSB                        */
+    UI_SB_TUNE_NO_FREQ,       /* the dial is not known yet (no CAT)    */
+    UI_SB_TUNE_NO_SPECTRUM,   /* nothing has been drawn yet            */
+    UI_SB_TUNE_LISTENING,     /* the 4 s window is open                */
+    UI_SB_TUNE_NO_EDGE,       /* the window closed without two votes   */
+} ui_sb_tune_t;
+
+ui_sb_tune_t ui_sb_tune_start(void);
+const char  *ui_sb_tune_reason(ui_sb_tune_t r);
+
 /* Spectrum peak hold: the window in SECONDS, 0 = off. A sliding window, not
  * a latch - what is drawn is the highest each column reached in the last N
  * seconds. Safe from any task: the setter only stores the number, and the

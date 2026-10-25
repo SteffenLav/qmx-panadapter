@@ -1,5 +1,6 @@
 #include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
+#include "sb_tune.h"        /* T90 SSB auto-tune */
 #include "util/pan_view.h"
 #include "util/format_freq.h"   // #302: ONE frequency format
 #include "util/freq_gridlines.h"
@@ -1289,19 +1290,47 @@ static void bw_preset_cb(lv_event_t *e)
  * repurposing it was tried and reverted: the first tap can be held long
  * enough to RETUNE before a second can be compared against it. A long press
  * on that surface is tripped by a slow pan. */
+/* ⭐ ONE GESTURE, TWO ESTIMATORS, CHOSEN BY MODE (T90).
+ *
+ * The press means "put the dial on the signal". In CW that is a zero-beat on a
+ * carrier; in USB/LSB it is the far station's own filter edge plus a snap to
+ * the grid they are almost certainly on. The radio cannot be in both modes at
+ * once, so the two can never collide and the operator learns one gesture.
+ *
+ * DiGi and AM get a refusal that names the modes rather than silence: DiGi
+ * rides on USB in the radio but nobody tunes it by ear, and AM has a carrier
+ * of its own that neither estimator was measured against. */
 static void bw_label_long_cb(lv_event_t *e)
 {
     (void)e;
-    int32_t moved = 0;
-    ui_cw_tune_t r = ui_cw_tune_to_peak(&moved);
     char msg[72];
-    if (r == UI_CW_TUNE_OK) {
-        if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
-        else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
-    } else if (r == UI_CW_TUNE_LISTENING) {
-        snprintf(msg, sizeof(msg), "Zero-beat: listening for up to 8 s...");
+
+    /* ⛔ THE DISPATCH IS THE CW ESTIMATOR'S OWN REFUSAL, not a mode string read
+     * here. s_current_mode is declared further down this file, and more to the
+     * point: each estimator already decides whether the mode is its own, so
+     * reading the mode a third time here would be a second model that can
+     * disagree with both. CW first, and UI_CW_TUNE_NOT_CW is what hands the
+     * press to SSB. */
+    int32_t moved = 0;
+    ui_cw_tune_t cw = ui_cw_tune_to_peak(&moved);
+    if (cw != UI_CW_TUNE_NOT_CW) {
+        if (cw == UI_CW_TUNE_OK) {
+            if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
+            else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
+        } else if (cw == UI_CW_TUNE_LISTENING) {
+            snprintf(msg, sizeof(msg), "Zero-beat: listening for up to 8 s...");
+        } else {
+            snprintf(msg, sizeof(msg), "Zero-beat: %s", ui_cw_tune_reason(cw));
+        }
     } else {
-        snprintf(msg, sizeof(msg), "Zero-beat: %s", ui_cw_tune_reason(r));
+        ui_sb_tune_t sb = ui_sb_tune_start();
+        if (sb == UI_SB_TUNE_LISTENING) {
+            /* The window has to run before there is an answer, so this says
+             * what is happening and sb_tune_tick() says how it ended. */
+            snprintf(msg, sizeof(msg), "SSB tune: listening for 4 s...");
+        } else {
+            snprintf(msg, sizeof(msg), "SSB tune: %s", ui_sb_tune_reason(sb));
+        }
     }
     /* Said out loud either way. A tuning aid that silently does nothing when
      * there is no signal reads as a dead button. */
@@ -10495,6 +10524,188 @@ static void cw_tune_tick(int64_t now_us)
     }
 }
 
+/* ======================= T90: SSB auto-tune =========================
+ *
+ * Same gesture as CW-Tune, and that is deliberate - the long press on the BW
+ * zone means "put the dial on the signal", and which estimator runs is decided
+ * by the MODE. CW and SSB cannot both be current, so the two can never
+ * collide, and the operator learns one gesture instead of two.
+ *
+ * WHY A VOTE AND NOT A MAX-HOLD. CW-Tune folds 4 s into a per-bin maximum
+ * because a keyed carrier is absent half the time and the maximum is exactly
+ * what it wants. SSB is the opposite: the estimator fits a STEP in the
+ * carrier-side profile, and a max-hold over 4 s merges the wanted station with
+ * anything else that transmitted in that window - including the neighbour this
+ * is supposed to ignore. So each frame is estimated on its own, the SNAPPED
+ * result is voted, and the modal target wins.
+ *
+ * MEASURED on two bench captures, 201 frames each (2026-10-25):
+ *   7.088000 LSB, one station    10.0 % of frames accepted, 20/20 snapped to
+ *                                7088000 Hz - the dial itself, +0 Hz
+ *   7.140200 LSB, two stations    2.5 % accepted, 5/5 snapped to 7140500 Hz
+ * One distinct target in both. The per-frame edge sd was 14.2 and 36.3 Hz and
+ * neither mattered: both vanish inside a 500 Hz snap. An edge sd is NOT the
+ * deliverable, and the harness reported only that for a while - see the snap
+ * report added to test/sb_tune_harness.c.
+ *
+ * NEIGHBOUR COSTS ACCEPTANCE, NOT CORRECTNESS. With a station 1 kHz away the
+ * gate refused 196 of 201 frames, and every frame it took still agreed.
+ * Loosening the gate to recover those frames was measured and is WORSE: one dB
+ * of slack took the two-station spread from 103 Hz to 563 Hz and produced an
+ * answer 450 Hz out, which snaps to the WRONG grid point. The gate stays where
+ * it is, and that is why the floor here is two agreeing frames rather than one.
+ *
+ * NEVER AUTOMATIC, the same reason as CW-Tune: #276 has an operator reporting
+ * unexplained automatic corrections, and an aid that moves the dial unasked
+ * cannot be told apart from that fault. */
+#define SB_SEARCH_HZ    1406
+#define SB_SPAN_BINS    ((SB_SEARCH_HZ * DSP_FFT_SIZE + 24000) / 48000)
+#define SB_WIN_N        (2 * SB_SPAN_BINS + 1)
+#define SB_WINDOW_US    4000000     /* the vote window, as the design says */
+#define SB_VOTE_SLOTS   8
+#define SB_MIN_VOTES    2
+
+/* 500 Hz, NOT the tap grid. settings' tune_snap_hz offers 250/500/1000 and the
+ * tap grid in SSB is 250 - too fine for this, because the estimate carries a
+ * bias of roughly 200 Hz that the fixed 300 Hz calibration only partly removes
+ * (the far station's own low cut is unknowable). 500 absorbs that bias; 250
+ * would turn it into a one-step error. 500 is also the grid both bench
+ * captures were validated against. */
+#define SB_GRID_HZ      500u
+
+static int64_t  s_sb_wait_until_us;          /* 0 = not listening */
+static uint32_t s_sb_vote_hz[SB_VOTE_SLOTS];
+static int      s_sb_vote_n[SB_VOTE_SLOTS];
+static int      s_sb_slots;
+static int      s_sb_frames, s_sb_acc;
+
+const char *ui_sb_tune_reason(ui_sb_tune_t r)
+{
+    switch (r) {
+    case UI_SB_TUNE_OK:          return "tuned";
+    case UI_SB_TUNE_NOT_SSB:     return "not in USB or LSB";
+    case UI_SB_TUNE_NO_FREQ:     return "no dial frequency yet";
+    case UI_SB_TUNE_NO_SPECTRUM: return "no spectrum yet";
+    case UI_SB_TUNE_LISTENING:   return "listening";
+    case UI_SB_TUNE_NO_EDGE:     return "no station edge found";
+    }
+    return "?";
+}
+
+static bool sb_mode_now(bool *upper)
+{
+    /* "USB" and "LSB" only. DiGi rides on USB in the radio but nobody tunes by
+     * ear there, and AM has a carrier of its own - neither is what this
+     * estimator was measured on, so neither gets it. */
+    if (!strcmp(s_current_mode, "USB")) { if (upper) *upper = true;  return true; }
+    if (!strcmp(s_current_mode, "LSB")) { if (upper) *upper = false; return true; }
+    return false;
+}
+
+static void sb_vote_add(uint32_t hz)
+{
+    for (int i = 0; i < s_sb_slots; i++)
+        if (s_sb_vote_hz[i] == hz) { s_sb_vote_n[i]++; return; }
+    if (s_sb_slots < SB_VOTE_SLOTS) {
+        s_sb_vote_hz[s_sb_slots] = hz;
+        s_sb_vote_n[s_sb_slots]  = 1;
+        s_sb_slots++;
+    }
+    /* More than SB_VOTE_SLOTS distinct targets in one 4 s window means the
+     * estimator is not agreeing with itself, which is a refusal anyway - so
+     * dropping the overflow cannot turn a refusal into a wrong answer. */
+}
+
+/* One frame, estimated and voted. Called from ui_push_spectrum with the
+ * display lock held, and only while a press is listening. */
+static void sb_tune_feed(const float *bins, int n_bins)
+{
+    const int N = DSP_FFT_SIZE;
+    if (n_bins < N) return;
+    bool upper = false;
+    if (!sb_mode_now(&upper)) return;
+
+    float win[SB_WIN_N];
+    int shift = ui_get_if_bin_shift(N);
+    for (int i = 0; i < SB_WIN_N; i++) {
+        int b = ((shift + (i - SB_SPAN_BINS)) % N + N) % N;
+        win[i] = bins[b];
+    }
+
+    sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+    float edge = 0.0f, step = 0.0f;
+    s_sb_frames++;
+    if (sb_tune_find_edge_fit(win, SB_WIN_N, SB_SPAN_BINS,
+                              48000.0f / (float)N, upper,
+                              &cfg, &edge, &step) != SB_TUNE_OK) return;
+    s_sb_acc++;
+
+    /* The dial's own position carries the sub-bin residual the whole-bin
+     * rotation left over, exactly as CW-Tune corrects for - without it the
+     * answer is up to 23 Hz out. Then the fixed calibration for the far
+     * station's low cut, whose SIGN follows the sideband: on USB the occupied
+     * band sits above the carrier so the edge reads high and 300 Hz comes off;
+     * on LSB it sits below and the same 300 Hz goes back on. Getting this sign
+     * wrong shows up as a 600 Hz bias, which is what Gate 3 in the harness
+     * guards against. */
+    double off_hz = (double)edge - (double)ui_get_if_residual_hz();
+    double est    = (double)s_last_qmx_freq_hz + off_hz - (upper ? 300.0 : -300.0);
+    if (est < 1000.0) return;
+    sb_vote_add(sb_tune_snap((unsigned)(est + 0.5), SB_GRID_HZ));
+}
+
+/* Called once per spectrum push, with the lock held. Closes the window. */
+static void sb_tune_tick(int64_t now_us)
+{
+    if (!s_sb_wait_until_us) return;
+    if (!sb_mode_now(NULL)) { s_sb_wait_until_us = 0; return; }
+    if (now_us < s_sb_wait_until_us) return;
+    s_sb_wait_until_us = 0;
+
+    int best = -1;
+    for (int i = 0; i < s_sb_slots; i++)
+        if (best < 0 || s_sb_vote_n[i] > s_sb_vote_n[best]) best = i;
+
+    if (best < 0 || s_sb_vote_n[best] < SB_MIN_VOTES) {
+        ESP_LOGI(TAG, "SSB tune: refused - %d/%d frames accepted, %d distinct target(s)",
+                 s_sb_acc, s_sb_frames, s_sb_slots);
+        ui_toast_ms("SSB tune: no station edge found", 2500);
+        return;
+    }
+
+    uint32_t target = s_sb_vote_hz[best];
+    int32_t  move   = (int32_t)target - (int32_t)s_last_qmx_freq_hz;
+    ESP_LOGI(TAG, "SSB tune: %+d Hz -> %lu Hz (%d/%d frames accepted, "
+                  "%d agreed, %d distinct target(s))",
+             (int)move, (unsigned long)target, s_sb_acc, s_sb_frames,
+             s_sb_vote_n[best], s_sb_slots);
+    char msg[72];
+    if (move) {
+        cat_set_frequency_forced(target);
+        ui_update_frequency(target);
+        snprintf(msg, sizeof(msg), "SSB tune: %+d Hz", (int)move);
+    } else {
+        snprintf(msg, sizeof(msg), "SSB tune: already on the station");
+    }
+    ui_toast_ms(msg, 2500);
+}
+
+ui_sb_tune_t ui_sb_tune_start(void)
+{
+    if (!sb_mode_now(NULL))  { s_sb_wait_until_us = 0; return UI_SB_TUNE_NOT_SSB; }
+    if (!s_last_qmx_freq_hz) return UI_SB_TUNE_NO_FREQ;
+    if (!display_lock(50))   return UI_SB_TUNE_NO_SPECTRUM;
+    /* Arm a fresh window. A second press restarts it rather than adding to the
+     * previous vote - the dial may have moved between the two, and a vote that
+     * spans a retune is counting two different windows of the band. */
+    s_sb_slots  = 0;
+    s_sb_frames = 0;
+    s_sb_acc    = 0;
+    s_sb_wait_until_us = esp_timer_get_time() + SB_WINDOW_US;
+    display_unlock();
+    return UI_SB_TUNE_LISTENING;
+}
+
 /* Peak-hold window in seconds; 0 switches it off. Stored only - the buffers
  * are allocated and freed inside ui_push_spectrum(), which is the one task
  * that reads them. See the note at s_peak_buk. */
@@ -10539,6 +10750,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
             cw_tune_tick(cw_now);
         } else {
             s_cw_hist_ready = false;
+        }
+        /* T90, and it costs nothing unless a press is listening: no history is
+         * kept, and a frame is only estimated while the 4 s window is open. */
+        if (s_sb_wait_until_us) {
+            sb_tune_feed(bins, n_bins);
+            sb_tune_tick(cw_now);
         }
     }
 

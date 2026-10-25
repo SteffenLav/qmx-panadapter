@@ -89,6 +89,7 @@ idf_component_register(
         "audio/rx_audio.c"
         "audio/line_in.c"
         "dsp/dsp.c"
+    "dsp/sb_tune.c"
         "dsp/iq_balance.c"
         "dsp/spur_map.c"
         "render/render.c"
