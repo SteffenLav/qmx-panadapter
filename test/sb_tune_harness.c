@@ -411,6 +411,10 @@ static void gate4(void)
     sb_tune_cfg_t cfg = harness_cfg();
     stat_t edges = {0}, snrs = {0};
     int frames = 0, ok = 0;
+    /* Accepted frames only, for the snap report below. */
+    enum { GATE4_MAX_ACC = 4096 };
+    static unsigned est_hz[GATE4_MAX_ACC];
+    int nsn = 0;
 
     while (fgets(line, sizeof(line), f)) {
         float w[HARNESS_MAX_BINS];
@@ -432,6 +436,11 @@ static void gate4(void)
             ok++;
             stat_add(&edges, (double)edge);
             stat_add(&snrs, (double)snr);
+            if (nsn < GATE4_MAX_ACC) {
+                /* LSB capture, so the fixed 300 Hz calibration goes back ON -
+                 * the same sign rule Gate 2 uses and Gate 3 guards. */
+                est_hz[nsn++] = (unsigned)((double)dial + (double)edge + 300.5);
+            }
         }
     }
     fclose(f);
@@ -443,6 +452,39 @@ static void gate4(void)
         printf("  edge offset  : mean %+.1f Hz, sd %.1f Hz, min %+.1f, max %+.1f\n",
                stat_mean(&edges), stat_sd(&edges), edges.min, edges.max);
         printf("  the sd IS the repeatability on one real station.\n");
+
+        /* WHAT THE OPERATOR ACTUALLY GETS, which an edge sd does not say.
+         *
+         * His point, in the T90 row from the start: there is no absolute
+         * correct SSB tuning, only the frequency the other station set, and
+         * they are nearly always on a round 500 Hz or 1 kHz. So the deliverable
+         * is the SNAPPED DIAL, not the edge - an edge wandering 100 Hz and a
+         * perfect edge land on the same grid point and are the same result to
+         * the ear. An estimator that agrees with itself on the grid is
+         * finished, whatever its sd; when it cannot, it refuses and the
+         * operator tunes by hand as before.
+         *
+         * Modal snapped target plus the share of accepted frames agreeing with
+         * it: 100 % means every accepted frame would move the dial to the same
+         * place. Same fixed 300 Hz calibration as Gate 2. */
+        for (int gi = 0; gi < 2; gi++) {
+            const unsigned grid = gi ? 1000u : 500u;
+            unsigned best = 0; int bestn = 0, distinct = 0;
+            for (int i = 0; i < nsn; i++) {
+                unsigned si = sb_tune_snap(est_hz[i], grid);
+                int c = 0, seen = 0;
+                for (int j = 0; j < nsn; j++)
+                    if (sb_tune_snap(est_hz[j], grid) == si) c++;
+                for (int j = 0; j < i; j++)
+                    if (sb_tune_snap(est_hz[j], grid) == si) seen = 1;
+                if (!seen) distinct++;
+                if (c > bestn) { bestn = c; best = si; }
+            }
+            printf("  snap@%-4u    : modal %u Hz, %d/%d agree (%.1f %%), "
+                   "%d distinct target(s), %+ld Hz from the dial\n",
+                   grid, best, bestn, nsn, nsn ? 100.0 * bestn / nsn : 0.0,
+                   distinct, (long)best - dial);
+        }
         printf("  no absolute bias is claimed - the far carrier is unknown.\n");
     }
 }
