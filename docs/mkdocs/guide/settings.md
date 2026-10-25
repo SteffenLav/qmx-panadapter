@@ -651,7 +651,7 @@ only place RBN skimmers more precisely.
 
 **Field Day Mode** — ARRL Field Day mode (on/off, class, section).
 
-**Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
+**Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). The same setting appears in the WSPR drawer as **Test station (simulation)** and in the web UI as **Simulation mode (practice)**; all three are one flag and move together. See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
 
 **Fast pounce (early decode)** — On by default. Decodes surface ~1.8 s *before* the slot boundary (WSJT-X style), so a fresh CQ can be answered in the very next slot and mid-QSO replies land on the beat. Trade-off: the capture window closes early, so a station transmitting late in the slot can occasionally be missed. ⚠️ *Not yet A/B-verified on a live band — if your decodes-per-slot drop with it on, turn it off and please report your numbers.*
 

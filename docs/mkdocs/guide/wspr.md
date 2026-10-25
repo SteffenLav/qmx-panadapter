@@ -258,7 +258,7 @@ A few things worth knowing before you leave it running:
   it holds the burst and shows **TX held - radio is in SPLIT, clear VFO B**. It
   will not clear it for you: that is your setting, and on the QMX split cannot be
   cleared over the cable anyway — use the radio's own menu or power-cycle it.
-- **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **FT8 Simulation Mode** in the drawer; it interlocks WSPR TX as well.
+- **Simulation mode blocks every byte.** If you want to watch the mechanics without keying anything, turn on **Test station (simulation)** in the WSPR drawer; it interlocks WSPR TX as well. It is the same setting the FT8 drawer calls **Simulation Mode** — one flag, two labels, so ticking it here also puts the FT8 phantom stations on the air. See [FT8 Simulation Mode](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
 
 ---
 

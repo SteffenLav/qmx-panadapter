@@ -262,6 +262,13 @@ Each of these says on screen why it stood down.
 
 ### 4. FT8 Simulation Mode (Practice QSOs)
 
+!!! info "Also labelled **Test station**"
+    This is **one setting with two checkboxes**. The FT8 settings drawer calls it
+    **Simulation Mode**; the WSPR settings drawer calls it **Test station
+    (simulation)**, because on that page it is the WSPR transmitter it holds down.
+    The web UI calls it **Simulation mode (practice)**. Tick any one of them and
+    all of them move together — there is no separate WSPR simulator.
+
 ⚠️ **For practice only** — no real stations involved, radio never keys up. Since v1.3.0 the simulator needs **no QMX connected at all** — no radio, no antenna, zero RF.
 
 Enable **FT8 Simulation Mode** in the settings drawer to practice everything: manual step-by-step Transmit, Auto Pounce, CQ-runs, pileups, and Field Day exchanges. Useful for:
