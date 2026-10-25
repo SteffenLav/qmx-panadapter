@@ -56,6 +56,10 @@
 
 #include "sb_tune.h"
 
+// Mirrors sb_tune.c's own cap; a capture wider than this is refused rather
+// than silently truncated to a window that means something different.
+#define HARNESS_MAX_BINS 128
+
 // Matches main/dsp/dsp.h - a mismatch here would silently measure a different
 // radio than the one we ship.
 #define FFT_N        1024
@@ -341,6 +345,91 @@ static void sweep(wintype_t win, float edge_drop_db, double inject_hz,
     }
 }
 
+/* ===================== GATE 4 =====================
+ * Real signals, captured off the bench QMX on 40 m LSB with tools in
+ * scratchpad/ws_capture.py. Path from SB_TUNE_REAL, since the capture is a
+ * 700 KB data file and does not belong in the repo.
+ *
+ * WHAT THIS CAN AND CANNOT SHOW. The operator knows his dial (7.080500) but
+ * nobody knows the far station's true carrier, so there is NO ground truth
+ * here and no absolute bias is claimed. What synthetic voice could not give,
+ * and this can:
+ *   - REPEATABILITY. Does the estimate hold still across real speech, with
+ *     its pauses, level swings and the plosives a harmonic stack has none of?
+ *     A tuning aid that wanders between syllables is unusable however good
+ *     its mean is.
+ *   - REFUSAL ON REAL NOISE. Does the Gate 1 gate actually decline during the
+ *     gaps between overs, or does it invent an edge out of band noise?
+ *   - SURVIVAL IN A CONTEST. Adjacent stations a few hundred Hz away are
+ *     exactly what the synthetic sweep never contained.
+ *
+ * ⛔ LSB, so the carrier-side edge is the HIGH edge of the occupied band. */
+static void gate4(void)
+{
+    const char *path = getenv("SB_TUNE_REAL");
+    if (!path) { printf("  SB_TUNE_REAL not set - gate 4 not run\n"); return; }
+    FILE *f = fopen(path, "r");
+    if (!f) { printf("  cannot open %s - gate 4 not run\n", path); return; }
+
+    static char line[16384];
+    double bin_hz = 0.0;
+    int span_bins = 0, win_n = 0;
+    long dial = 0;
+    if (!fgets(line, sizeof(line), f) ||
+        sscanf(line, "# dial=%ld mode=%*s bin_hz=%lf span_bins=%d win_n=%d",
+               &dial, &bin_hz, &span_bins, &win_n) != 4) {
+        printf("  capture header not understood - gate 4 not run\n");
+        fclose(f);
+        return;
+    }
+    if (win_n > HARNESS_MAX_BINS) {
+        printf("  capture window %d bins exceeds %d - refused\n",
+               win_n, HARNESS_MAX_BINS);
+        fclose(f);
+        return;
+    }
+    printf("  dial %ld, %.4f Hz/bin, window %d bins (+/-%.0f Hz)\n",
+           dial, bin_hz, win_n, span_bins * bin_hz);
+
+    sb_tune_cfg_t cfg = SB_TUNE_CFG_DEFAULT;
+    stat_t edges = {0}, snrs = {0};
+    int frames = 0, ok = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        float w[HARNESS_MAX_BINS];
+        char *p = strchr(line, ',');          /* past dial */
+        if (!p) continue;
+        p = strchr(p + 1, ',');               /* past sig */
+        if (!p) continue;
+        int got = 0;
+        for (char *tok = strtok(p + 1, ",\n");
+             tok && got < win_n;
+             tok = strtok(NULL, ",\n")) {
+            w[got++] = (float)atof(tok);
+        }
+        if (got != win_n) continue;
+        frames++;
+        float edge = 0.0f, snr = 0.0f;
+        if (sb_tune_find_edge(w, win_n, span_bins, (float)bin_hz, false,
+                              &cfg, &edge, &snr) == SB_TUNE_OK) {
+            ok++;
+            stat_add(&edges, (double)edge);
+            stat_add(&snrs, (double)snr);
+        }
+    }
+    fclose(f);
+
+    printf("  frames %d | accepted %d (%.1f %%) | refused %d\n",
+           frames, ok, frames ? 100.0 * ok / frames : 0.0, frames - ok);
+    if (ok) {
+        printf("  accepted SNR : mean %.1f dB\n", stat_mean(&snrs));
+        printf("  edge offset  : mean %+.1f Hz, sd %.1f Hz, min %+.1f, max %+.1f\n",
+               stat_mean(&edges), stat_sd(&edges), edges.min, edges.max);
+        printf("  the sd IS the repeatability on one real station.\n");
+        printf("  no absolute bias is claimed - the far carrier is unknown.\n");
+    }
+}
+
 int main(void)
 {
     printf("SSB edge estimator - bias sweep (T90)\n");
@@ -599,6 +688,10 @@ int main(void)
             printf("  ok: the injected error is detected\n");
         }
     }
+
+    printf("=== GATE 4: real signals from the bench QMX (40 m LSB)\n");
+    gate4();
+    printf("\n");
 
     printf("\n%s\n", fails ? "HARNESS FAILED" : "harness self-check passed");
     return fails ? 1 : 0;
