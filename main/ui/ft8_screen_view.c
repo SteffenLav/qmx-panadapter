@@ -1476,6 +1476,36 @@ static bool          s_web_result_sticky;        // outlives WEB_RESULT_TTL_MS
 static bool          s_web_done_said;            // DONE reported once per QSO
 static bool          s_web_timeout_said;          // TIMEOUT reported once per QSO - see web_result_set_sticky's TIMEOUT call below
 
+/* ⭐ THE OUTCOME OF A BROWSER CLICK IS NOW IN THE LOG, NOT ONLY ON THE BANNER.
+ *
+ * Randy N4OPI, 2026-10-25, twice: "busy when it isn't", with the diag attached
+ * both times - "hopefully the clue is in the diag file". It was not, and it
+ * could not have been. The Tab5's own refusal logs (ft8_tx_modal.c's
+ * "transmit refused: %s"), but every refusal on the web path wrote a sentence
+ * for /api/status and nothing at all for the log, so a 1 MB capture of the
+ * exact window held no trace of the click or of the answer he got.
+ *
+ * ⛔ LOGGED HERE RATHER THAN AT THE NINE RETURNS. web_reply_drain() has nine
+ * silent exits (busy, queued, expired, no snapshot, not in either list, two
+ * build failures, pounce refused, could not arm) and sprinkling an ESP_LOG at
+ * each is the version that rots - the tenth one gets added without it. Every
+ * one of them already funnels through these two setters for the timestamp, so
+ * this is the same choke point, used for the same reason.
+ *
+ * ⚠ ON CHANGE ONLY. The WAIT_DONE queue re-writes "Queued: ..." on every 1 Hz
+ * tick for up to WEB_REPLY_QUEUE_MAX_MS (90 s), so logging unconditionally
+ * would put 90 identical lines into the capture and push the window that
+ * matters out past the 128 KB flash-persist cap. */
+static char s_web_result_logged[64];
+
+static void web_result_log(void)
+{
+    if (strcmp(s_web_reply_result, s_web_result_logged) == 0) return;
+    snprintf(s_web_result_logged, sizeof(s_web_result_logged), "%s", s_web_reply_result);
+    ESP_LOGI(TAG, "web result: %s [qso=%s]", s_web_reply_result,
+             ft8_qso_state_name(ft8_qso_get_state()));
+}
+
 // Every write goes through here so none can forget the timestamp. The printf
 // attribute keeps the compiler checking the format strings it used to check
 // when these were plain snprintf() calls.
@@ -1488,6 +1518,7 @@ static void web_result_set(const char *fmt, ...)
     va_end(ap);
     s_web_reply_result_us = esp_timer_get_time();
     s_web_result_sticky   = false;   // an answer to a click expires with the click
+    web_result_log();
 }
 
 // A completed QSO is the one result here that nobody clicked for, so nothing
@@ -1512,6 +1543,7 @@ static void web_result_set_sticky(const char *fmt, ...)
     va_end(ap);
     s_web_reply_result_us = esp_timer_get_time();
     s_web_result_sticky   = true;
+    web_result_log();
 }
 
 // Cancel is the one browser action that should leave NOTHING behind - the
@@ -1526,6 +1558,30 @@ static void web_result_clear(void)
     s_web_reply_result[0] = '\0';
     s_web_reply_result_us = 0;
     s_web_result_sticky   = false;
+    // Forget what was logged with it, so the SAME sentence after a clear is a
+    // new event and gets its own line rather than being swallowed as a repeat.
+    s_web_result_logged[0] = '\0';
+}
+
+/* ⭐ THE ARRIVAL IS LOGGED SEPARATELY FROM THE OUTCOME, and it has to be.
+ *
+ * web_result_log() can only speak for picks that reached web_reply_drain().
+ * A pick that is dropped before it ever drains - the FT8 screen not up, or the
+ * POST never arriving at all because the browser's socket died (Randy's own
+ * captures carry httpd_sock_err 11 and 104 either side of the window) - writes
+ * nothing, and "no line" would then be indistinguishable from "no click". One
+ * line here makes that difference readable: an arrival with no result means
+ * the pick was lost inside the firmware, no arrival means it never landed.
+ *
+ * The state goes in because a single click and the browser's own follow-up
+ * dblclick arrive as two picks milliseconds apart, and what separates "the
+ * second one collided with the first" from "the machine was already stuck" is
+ * which state the second one found. */
+static void web_reply_request_log(const char *call, bool retarget)
+{
+    ESP_LOGI(TAG, "web reply request: %s%s [qso=%s]", call,
+             retarget ? " (retarget/double-click)" : "",
+             ft8_qso_state_name(ft8_qso_get_state()));
 }
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1534,6 +1590,7 @@ void ft8_screen_view_request_reply(const char *call)
     snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
     s_web_reply_pending  = true;
     s_web_reply_retarget = false;
+    web_reply_request_log(call, false);
 }
 
 void ft8_screen_view_request_reply_retarget(const char *call)
@@ -1542,6 +1599,7 @@ void ft8_screen_view_request_reply_retarget(const char *call)
     snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
     s_web_reply_pending  = true;
     s_web_reply_retarget = true;
+    web_reply_request_log(call, true);
 }
 
 // #221: ask for a sub-mode preset from the API. freq_hz of 0 means "keep the
@@ -1634,7 +1692,7 @@ static void web_reply_drain(void)
                 ft8_qso_final_watch_clear();
                 ESP_LOGI(TAG, "web re-target: dropped %s for %s, auto-answer left ON",
                          who, call);
-                busy_target[0] = ' ';   /* fall through and work the new one */
+                busy_target[0] = '\0';   /* fall through and work the new one */
             } else {
                 web_result_set("%s", serr[0] ? serr : "Could not drop the exchange");
                 return;

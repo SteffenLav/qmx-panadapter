@@ -4427,6 +4427,27 @@ bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len)
     return true;
 }
 
+/* A state number in a log line is unreadable six months later, and "busy when
+ * it isn't" (Randy N4OPI, 2026-10-25) is exactly the fault where the state is
+ * the whole answer: WAIT_DONE clears itself within a slot or two, a stuck
+ * WAIT_RPT never does, and both print as "Busy: working X" on the browser's
+ * banner. Public rather than a static helper in ft8_screen_view.c because
+ * every caller of ft8_qso_is_busy() that logs a refusal wants the same word. */
+const char *ft8_qso_state_name(ft8_qso_state_t st)
+{
+    switch (st) {
+    case FT8_QSO_IDLE:       return "IDLE";
+    case FT8_QSO_CQ:         return "CQ";
+    case FT8_QSO_WAIT_RPT:   return "WAIT_RPT";
+    case FT8_QSO_WAIT_ROGER: return "WAIT_ROGER";
+    case FT8_QSO_WAIT_RR73:  return "WAIT_RR73";
+    case FT8_QSO_WAIT_DONE:  return "WAIT_DONE";
+    case FT8_QSO_DONE:       return "DONE";
+    case FT8_QSO_TIMEOUT:    return "TIMEOUT";
+    }
+    return "?";
+}
+
 bool ft8_qso_is_busy(char *target_buf, size_t len)
 {
     lock();

@@ -1532,7 +1532,7 @@ static void wspr_release_mode(void)
     if (!s_rx_mode_before[0]) return;
     char want[sizeof(s_rx_mode_before)];
     snprintf(want, sizeof(want), "%s", s_rx_mode_before);
-    s_rx_mode_before[0] = ' ';          /* one shot, like the TX path's */
+    s_rx_mode_before[0] = '\0';          /* one shot, like the TX path's */
     const char *now = cat_get_mode_str();
     if (now && strcmp(now, want) == 0) return;
     ESP_LOGI(TAG, "leaving WSPR - handing the radio back to %s", want);

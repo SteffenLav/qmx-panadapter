@@ -212,6 +212,9 @@ int             ft8_qso_get_cq_calls_sent(void);
 // overwriting the in-progress exchange.
 bool ft8_qso_is_busy(char *target_buf, size_t len);
 
+// The state as a word, for log lines. Never NULL.
+const char *ft8_qso_state_name(ft8_qso_state_t st);
+
 /* Is this decoded message addressed to US, while a QSO is running?
  *
  * Exists for ONE caller: the decode loop's early-advance (see ft8_test.c). It

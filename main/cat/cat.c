@@ -664,7 +664,7 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
  */
 esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len)
 {
-    if (err && err_len) err[0] = ' ';
+    if (err && err_len) err[0] = '\0';
     if (!cmd || !cmd[0]) return ESP_ERR_INVALID_ARG;
     if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
 

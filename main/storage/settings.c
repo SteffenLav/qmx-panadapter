@@ -1771,11 +1771,11 @@ void settings_set_my_state(const char *st)
 {
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    s_pending.my_state[0] = ' ';
+    s_pending.my_state[0] = '\0';
     if (st && st[0] && st[1]) {
         s_pending.my_state[0] = (char)toupper((unsigned char)st[0]);
         s_pending.my_state[1] = (char)toupper((unsigned char)st[1]);
-        s_pending.my_state[2] = ' ';
+        s_pending.my_state[2] = '\0';
     }
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_MY_STATE);
