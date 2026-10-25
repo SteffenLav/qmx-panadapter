@@ -36,8 +36,9 @@ Tap any item on the top bar to open its selector:
 |---|---|---|
 | Tap | **S-meter**, top bar | Open the audio panel |
 
-New in v1.20.5. The panel holds **Mute**, the **Tab5 speaker** volume and the
-**radio's AF gain**, and closes on a tap anywhere outside it. It is on the
+New in v1.20.5, and extended in v1.21.0. The panel holds **Mute**, the **Tab5
+speaker** volume, the **radio's AF gain**, the **radio's RF gain** and an **AGC
+Fast / Slow / Off** row, and closes on a tap anywhere outside it. It is on the
 S-meter because that is the one thing in the top bar already about what you are
 hearing. Mute is instant and is not remembered across a reboot.
 
@@ -46,8 +47,9 @@ hearing. Mute is instant and is not remembered across a reboot.
 | **Frequency** | Numeric keypad (MHz format) |
 | **Mode** | USB / LSB / CW / DiGi buttons |
 | **Bandwidth** | Filter width (SSB) or CW passband |
+| **Bandwidth**, long press | **CW-Tune** — put the dial on the nearest CW signal within ±400 Hz (see [Settings](../guide/settings.md)) |
 | **Band** | Band list (160 m – 10 m + custom) |
-| **S-meter** | Peak-hold toggle |
+| **S-meter** | [Audio panel](../guide/audio.md#the-audio-panel-one-tap-on-the-s-meter) |
 | **Zoom** | x1 / x2 / x4 / x8 / x16 / x24 presets; pinch for anything between |
 
 ## Spectrum / Waterfall

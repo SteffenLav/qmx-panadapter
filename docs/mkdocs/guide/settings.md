@@ -390,6 +390,24 @@ that keeps working too — a web listener overrides the suspend.
 remembered across a reboot, deliberately: a unit that boots with a dark screen
 and no explanation looks broken.
 
+**CW-Tune** *(a long press on the bandwidth in the top bar - not a drawer setting)*
+- puts the dial on the nearest CW signal, searching **±400 Hz** either side of where
+you are.
+
+A keyed carrier is absent as often as it is present, so a single spectrum frame would
+decide the answer by luck. It uses a **per-bin maximum over the last 4 seconds**
+instead - the same history the waterfall is drawn from - keeps listening for up to
+8 seconds on a quiet band, and accepts a peak at **+3 dB over the median** of the
+search window.
+
+⛔ **It moves the dial once, when you ask it to, and never by itself.** An aid that
+retuned on its own could not be told apart from a fault.
+
+The gesture is a long press because the top-bar zones open their own selectors on a
+short click, so the two cannot collide. There is no CW-Tune on the spectrum itself: a
+double-tap there already resets zoom and pan, and a long press on that surface is
+tripped by a slow pan.
+
 **CW peak filter** *(drawer: Radio > CW, under CW centre; off by default)* — a
 narrow audio peak **on** the CW pitch: **250, 150 or 100 Hz** wide at -3 dB. It
 sits in the Tab5's own audio, after the mode filter and **before the AGC**, so

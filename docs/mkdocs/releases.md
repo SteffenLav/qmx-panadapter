@@ -4,7 +4,34 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.20.5** - 2026-10-23
+**v1.21.0** - 2026-10-25
+
+**CW gets two tuning aids: a long press on the bandwidth puts the dial on the nearest CW signal, and a narrow audio filter sits on the CW pitch. The spectrum gains a peak-hold line, the audio panel gains RF gain and an AGC row, and the Tab5 can stop drawing and just serve the web page.**
+
+- **CW-Tune: a long press on the bandwidth in the top bar puts the dial on the nearest CW signal** *(Samuel W7STF)*. It searches ±400 Hz either side of the dial and moves once, when you ask it to. A keyed carrier is absent as often as it is present, so a single spectrum frame decides by luck: it uses a per-bin maximum over the last **4 seconds** instead, keeps listening for up to 8 seconds on a quiet band, and accepts a peak at +3 dB over the median of the search window. ⛔ **It is never automatic.** An aid that moves the dial unasked cannot be told apart from a fault, and there is an open report of exactly that.
+- **A narrow audio peak filter on the CW pitch** *(Samuel W7STF)*. **250, 150 or 100 Hz** wide at −3 dB, in the Tab5's own audio, after the mode filter and **before the AGC** — so the AGC rides the wanted note rather than the hiss either side of it. Measured at a 700 Hz pitch: the 100 Hz setting is 91 Hz wide and 32 dB down 500 Hz away, 150 Hz is 137 Hz and −25 dB, 250 Hz is 227 Hz and −18 dB. **Peak gain is 0 dB**, deliberately, so switching it on does not also change the volume. It is in the drawer under Radio > CW, under CW centre, and off by default. ⚠ It is not a second IF filter: the radio's own CW filter still decides what reaches the Tab5.
+- ⛔ **CW audio arrived up to 60 Hz off the dial, and had for as long as the CW calibration trim has existed.** The peak filter is what made it audible — a 100 Hz peak is already past −3 dB 60 Hz away. The receive audio mixed at the CW offset while the spectrum mapped the dial through the offset **plus** your per-unit CW trim, so on a unit with a trim the speaker and the CW decoder were both out by that amount. Measured by capturing the receive audio and looking at where the tone actually was: 569.7 Hz before, 620.9 Hz after, against a predicted 625. **Only units with a non-zero CW calibration are affected**, and the error equals that number. Found here; nobody reported it.
+- **Peak hold on the spectrum** *(Samuel W7STF)*. A second line showing the highest each point of the band reached in the last **1, 2, 3 or 5 seconds**, on the Tab5 and in the browser, running the same arithmetic on both. It is a sliding window, not a latch: a peak falls away on its own once it is older than the window, so the line stays a picture of the band instead of becoming a record of the past. That is what makes an intermittent signal — an FT8 station every 15 seconds, a CW operator between overs — visible seconds after the live trace has dropped back into the noise. Dim green on the Tab5, cyan in the browser.
+- **RF gain and an AGC Fast / Slow / Off row in the audio panel** *(Samuel W7STF)*. Sam asked for RF gain in the panel to experiment with what reaches the ears. The radio's RF gain is 0–99 dB and the QMX stores it per band, so it is written when you let go of the slider rather than on every tick of a drag. **Fast** is a 1 ms attack and 30 ms release for CW, **Slow** is 5 ms and 400 ms, **Off** pins the gain at the AGC ceiling. Both gain figures used to sit at `--`: the panel asked the radio and painted once, while the answer arrived a moment later with nothing left running to draw it. It keeps looking for about ten seconds now, and re-asks if the first query was lost to a busy CAT link.
+- **Server mode: the Tab5 stops drawing its screen and keeps serving the web page** *(the operator)*. For running the radio from another room. Measured with a browser on the page throughout: **core 0 idle 10–13% → 67%, core 1 idle 42–56% → 72%**. The drawing is what costs; serving the page is about 1%. The browser is unaffected, because its spectrum and waterfall come from the DSP and not from the Tab5's canvases, and a browser listening to the audio overrides the suspend. Touch the Tab5 to come back. It is not remembered across a reboot, deliberately: a unit that boots dark looks broken. It is in the drawer under Device, and in the browser menu.
+- **The swipe in from the left edge is a page picker, not a cycle.** It opens a list — Panadapter, FT8, FT4, JS8, WSPR — and you tap the one you want. The old behaviour stepped through three pages, so FT4 and JS8 could not be reached from it at all. The browser's Radio menu lists the same five. Choosing WSPR is what enables it; there is no separate unlock step any more.
+- ⛔ **The Smoothing slider ran backwards, and the browser never applied it at all** *(Samuel W7STF)*. It was labelled **Alpha** and carried the coefficient itself, so moving it right made the trace *less* smooth. It is **Smoothing** now: 0 is off and higher is smoother, and the label prints the time constant as well, because the scale is linear in the coefficient rather than in time. The browser stored the setting and drew its trace without it; it uses it now, and the two screens agree. Your stored value is unchanged and an older config file still means what it meant.
+- ⛔ **The Diagnostics page in the browser was refused by a guard that bought nothing** *(Randy N4OPI)*. Every request to it was turned away, and the browser discarded the refusal without showing it, so the page simply never filled. The guard is gone.
+- **Tune snap in the browser moves the browser's own cursor** *(the operator)*. Clicking to tune snapped the Tab5's dial to the mode's grid but left the browser drawing the unsnapped position — the line as well as the label. Both now show where the radio actually went.
+- **The browser waterfall no longer smears.** Its row smoothing was a fixed time constant while the row rate is yours to set, so at a slow rate each row carried up to ten times more history than the Tab5's. The constant tracks the rate now, and the two carpets look alike.
+- **WSPR: the deep decode pass was never actually armed.** The setting existed and every sweep ran without it. It runs now, and on the bench it recovers about 16% more decodes — measured over two pooled blocks, which is a 1.5-sigma result, so treat it as an improvement that is real but not yet precisely sized. Separately, opening the WSPR page moved the dial but never set the radio's mode.
+- **The CW audio trim is a CW thing and is no longer applied in the digital modes.**
+- ⛔ **A crash in the WiFi co-processor driver after a command timeout.** The driver freed its synchronisation semaphore while its own receive thread could still reach it, which is a double free. Patched in our copy of the component.
+- **Smoother drawing on the Tab5.** The display task's share of its core fell from 73.9% to 64.5–68.6%.
+- **Web API: a request missing a required argument is refused instead of guessed, and FT4 opens in one call.** A call that asked for a page but not the mode used to land on FT8.
+
+⚠ **Still open: a browser reply that says the station is busy when it is not** *(Randy N4OPI)*. Every reply the web page asks for now writes both its arrival and its outcome to the diagnostic log, which is what was missing. The refusal reaches the log but can take up to a second to reach the page, so a browser that polls inside that window shows the previous banner — a second candidate alongside a double-click arriving as two requests. Neither is proven.
+
+Audio and binaural CW remain a **declared beta**.
+
+## Previous Releases
+
+### v1.20.5 - 2026-10-23
 
 **The spectrum and waterfall on the Tab5 were throwing away part of what they had already computed, and I had not known it. Plus a round of fixes and ergonomics from your reports.**
 
@@ -20,7 +47,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Bigger text and bigger targets** *(Samuel W7STF, Don WB0LQW)*. The frequency keypad's keys are larger with noticeably more space between them — a hand that is not steady misses by landing *between* two keys — and the pad is opaque while you type. The on-screen keyboards everywhere got larger key labels, after Don said he could not read them outdoors. The audio panel's text is sized to match.
 - **The FT8 Options window no longer overlaps itself at the bottom right** *(the operator)*. The Fox/Hound control and the "Skip CQs not for me" checkbox were on the same row and drew on top of each other. Fox/Hound has its own row now.
 
-## Previous Releases
 
 ### v1.20.4 - 2026-10-22
 
@@ -1163,12 +1189,10 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 ### Next up (post-v1.0.0)
 
 1. **CW page** — canned-message CW TX memories, then decoded-CW display
-2. **Binaural CW audio** — a stereo sound stage so two stations a few tens of hertz apart land in different places in your head (asked for by Roy KI0ER; shaped by Don N2VGU and Michael KZ4LY, whose point that the stage **width** should be a setting rather than a fixed angle is now the plan). Waits on the same audio-output rework as the CW page
-3. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
+2. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
 ### Future Additions
 
-- CW audio (shelved since v0.18.5 due to CPU contention; needs pipeline redesign)
 - Offline maps (grid squares, distance visualization)
 - Video tutorials & regional quick-start guides
 
@@ -1176,7 +1200,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.20.5.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.21.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

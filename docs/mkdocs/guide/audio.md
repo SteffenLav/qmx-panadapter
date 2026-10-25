@@ -69,6 +69,20 @@ New in v1.20.5, after Samuel W7STF counted four gestures to change the volume.
   back from the radio when the panel opens, so it shows what the radio is
   actually set to, including a change you made on its own knob. A `--` means
   the radio has not answered yet.
+- **Radio RF gain** *(new in v1.21.0)* - 0-99 dB, the same control as
+  Drawer -> Radio. The QMX stores it **per band**, so it is written when you
+  let go of the slider rather than on every tick of a drag.
+- **AGC Fast / Slow / Off** *(new in v1.21.0)* - the three settings worth
+  having in one tap. **Fast** is a 1 ms attack and a 30 ms release, for CW;
+  **Slow** is 5 ms and 400 ms; **Off** pins the gain at the
+  [AGC Ceiling](#the-agc-controls) rather than running a very slow AGC. The
+  row shows which one is in force, and the drawer's own sliders still hold
+  anything in between.
+
+Both gain figures used to sit at `--`. They were never lost: the panel asked
+the radio and painted once, while the answer arrives on the CAT poll a moment
+later with nothing left running to draw it. It now keeps looking for about ten
+seconds and re-asks if the first query was lost to a busy CAT link.
 
 A tap anywhere outside closes it.
 
