@@ -29,7 +29,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
-| **T96** | ⛔ **RF gain does nothing: `RG` is not the Band Config RF gain.** Measured - the radio echoes the value back, its own menu still reads 54, and the noise floor moves 0.06 dB. The real setting needs `MM`+`MU;`, which drops I/Q mode. **Decision needed: make it work on slider release, or remove the slider.** Detail in `06c3df19` | Sam W7STF |
+| **T96** | ⛔ **RF gain does nothing: `RG` is not the Band Config RF gain.** Measured - the radio echoes the value back, its own menu still reads 54, and the noise floor moves 0.06 dB. The real setting needs `MM`+`MU;`, which drops I/Q mode. **Decision needed: make it work on slider release, or remove the slider** - and promised to Sam 2026-10-26 that he would be told which. Detail in `06c3df19` | Sam W7STF |
 | **T98** | ⚠ Smoothing still looks inert to Sam after v1.21.0 fixed two faults in it. He calls it "alpha", the old name - check he is on v1.21.0 first. Measurable from a capture | Sam W7STF |
 | **T99** | ⛔ **ALREADY PARKED 2026-10-01 AT SAM'S OWN REQUEST - he has re-asked without remembering.** `4b66da08`: *"consider it a super-low enhancement, inquiry moreso than feature request ... probably just not worth trying to cram it in."* That commit parked it so a later session could not read it as outstanding work, and I opened this row anyway. **Ask him whether he is re-opening it before any work** | Sam W7STF |
 | **T100** | WSPR -> Panadapter leaves stale pixels in the waterfall area. His own framing is minor; may be bounded by T99 | Sam W7STF |
