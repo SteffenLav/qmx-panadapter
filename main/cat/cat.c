@@ -3182,6 +3182,30 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
         return ESP_ERR_INVALID_STATE;  // QMX not connected
     }
 
+    /* ⛔⛔ EVERY DIAL WRITE IS QUANTISED TO 10 Hz, AND IT IS DONE HERE BECAUSE
+     * THERE ARE TWELVE CALLERS IN ui.c ALONE.
+     *
+     * The QMX accepts an arbitrary Hz over CAT but its own encoder steps 10 Hz,
+     * so a write of 7020003 leaves a units digit the operator CANNOT CLEAR from
+     * the radio - turning the knob moves in tens and carries the 3 along for
+     * ever. Samuel W7STF, 2026-10-26: "You seem to have done something to force
+     * the VFO to have some non-zero Hz component that can't be tuned out,
+     * unless one goes back to direct frequency entry ... Please quantize all
+     * tuning to the 10Hz capability of the QMX/+."
+     *
+     * The grid at the UI end was fixed in the same change (tune snap Off meant
+     * a 1 Hz grid, not 10), but a per-site fix cannot hold: twelve sites today,
+     * and the two that deliberately wrote un-rounded values - CW-Tune's
+     * interpolated peak and the mouse wheel - each had their own comment saying
+     * why rounding was wrong. It is not wrong, it is free: the radio rounds
+     * anyway, so the only thing an un-rounded write changes is that the dial
+     * keeps a digit nobody asked for. At most 5 Hz of the estimate is lost,
+     * which no ear resolves on a CW note.
+     *
+     * ⚠ RIT is NOT affected: it is its own command with its own resolution, and
+     * tap-to-RIT depends on that - see the note at the tap handler in ui.c. */
+    freq_hz = ((freq_hz + 5) / 10) * 10;
+
     /* ⛔ SOMETHING ELSE MAY OWN THE PIPE, AND THIS USED TO WRITE ANYWAY.
      *
      * Randy N4OPI, 2026-09-08: "I use the pull-down to change bands and the

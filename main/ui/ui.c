@@ -721,6 +721,13 @@ static void freq_apply_key(char key, lv_obj_t *target_btn)
                 for (const char *q = s_freq_buf; *q; q++) if (*q == '.') dots++;
                 if (dots >= 2) break;
             }
+            /* ⛔ AND NOT TWO IN A ROW, which the count above does not catch:
+             * "7.." has only one dot when the second is pressed, so it went
+             * through and freq_buf_to_hz() then read an empty group. Samuel
+             * W7STF, 2026-10-26: "you are now allowing the introduction of a
+             * double (consecutive) '.' following the MHz". A leading dot is
+             * refused for the same reason - there is no MHz group before it. */
+            if (len == 0 || s_freq_buf[len - 1] == '.') break;
             if (len + 1 < sizeof(s_freq_buf)) { s_freq_buf[len] = '.'; s_freq_buf[len + 1] = '\0'; }
             break;
         default:  // digit
@@ -12785,7 +12792,23 @@ static void touch_event_cb(lv_event_t *e)
             if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB") ||
                 strstr(s_current_mode, "FT")  || strstr(s_current_mode, "DIG") ||
                 strstr(s_current_mode, "RTTY") || strstr(s_current_mode, "DiGi")) {
-                snap = user_snap ? (int)user_snap : 1;   // 0 = off, i.e. land exactly where the finger went
+                /* ⛔ OFF MEANS "NO GRID OF MINE", NOT "1 Hz". It was 1, and a
+                 * 1 Hz target is a frequency the radio cannot have: the QMX
+                 * tunes in 10 Hz steps, so it rounds internally and the dial
+                 * keeps a stray units digit the operator cannot clear.
+                 * Samuel W7STF, 2026-10-26: "You seem to have done something
+                 * to force the VFO to have some non-zero Hz component that
+                 * can't be tuned out ... Please quantize all tuning to the
+                 * 10Hz capability of the QMX/+."
+                 *
+                 * ⚠ He read it as new in v1.21.0 and it is not - the 1 came in
+                 * at v1.12.0 with a1642638, and v1.21.0 changed nothing in this
+                 * path. What is new is that he turned the setting Off.
+                 *
+                 * TUNE_ROUND_HZ has existed for exactly this since long before,
+                 * with the comment "round target frequency to nearest 10 Hz",
+                 * and was referenced NOWHERE. Now it is. */
+                snap = user_snap ? (int)user_snap : TUNE_ROUND_HZ;
             }
             else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
             else if (strstr(s_current_mode, "CW")) snap = 10;
