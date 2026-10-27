@@ -2024,7 +2024,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * operator. */
         if (scr) {
             /* Three pages now, so the bool form cannot express it. */
-            if      (!strcmp(scr, "ft8"))  ui_request_base_mode_m(UI_MODE_FT8);
+            /* ⛔ FT8 MUST ASK FOR THE SUB-MODE TOO (Randy N4OPI, 2026-10-27).
+             * Raising the page alone leaves the sub-mode at whatever it was,
+             * so "Switch to FT8" from the panadapter landed you in FT4 or JS8
+             * if that is where you were last - his words, "picking FT8 takes
+             * you to whatever FT/JS mode you were previously in". The ft4 and
+             * js8 branches below have always done both; this one did not, and
+             * the asymmetry is the bug. T75 added the sub-mode to those two
+             * and left the default case looking like it needed nothing. */
+            if      (!strcmp(scr, "ft8")) {
+                ui_request_base_mode_m(UI_MODE_FT8);
+                ft8_screen_view_request_preset(0, FT8_OP_MODE_FT8);
+            }
             else if (!strcmp(scr, "ft4")) {
                 ui_request_base_mode_m(UI_MODE_FT8);
                 /* 0 = keep the dial, which the drain then moves to the FT4

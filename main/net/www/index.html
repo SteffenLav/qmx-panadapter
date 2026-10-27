@@ -7776,7 +7776,17 @@ async function tick() {
        poll. What the poll still owns is WHERE WE ARE: the current page's link
        is dimmed, so the menu says what is showing as well as what it can do. */
     document.querySelectorAll("a.screen-to").forEach((a) => {
-      const here = a.dataset.screen === (s.screen || "panadapter");
+      /* ⚠ `screen` is the PAGE, and FT8/FT4/JS8 are ONE page - it answers
+         "ft8" for all three, and nine other tests in this file depend on that
+         meaning. So the dimming cannot come from it alone, or every one of the
+         three dims whichever of them you are on (Randy N4OPI, 2026-10-27: from
+         FT4 or JS8 "the button to select FT8 is greyed out"). The sub-mode is
+         already here in lastFtProto, so ask the page which of the three it is
+         and dim only that one. */
+      const page = s.screen || "panadapter";
+      const here = page === "ft8"
+                 ? a.dataset.screen === ft8Proto().toLowerCase()
+                 : a.dataset.screen === page;
       a.style.opacity = here ? "0.45" : "";
     });
     tuneAntSync(s);
