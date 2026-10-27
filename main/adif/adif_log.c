@@ -1563,3 +1563,116 @@ const char *adif_log_band_for_freq(uint32_t hz)
 {
     return freq_to_band(hz);
 }
+
+/* ⭐ ONE FILE PER ACTIVATION (Brian KB9WFS, 2026-10-27: "I activate more than
+ * one park in a day"). The whole-log export already on the card cannot be
+ * handed to POTA as one activation, and splitting it afterwards by hand is
+ * exactly the work the device can do for free at the moment the session ends.
+ *
+ * Written to the SD card, named for the reference and the UTC day -
+ * DL-0123-20261027.adi - so two activations of the SAME park on different days
+ * do not overwrite each other.
+ *
+ * ⚠ TODAY'S RECORDS ONLY, matching adif_log_count_activation(): the file holds
+ * the session that just ended, not every contact ever made at that reference.
+ * A previous activation of the same park belongs in its own file, which it
+ * already has.
+ *
+ * Returns the number of records written, or -1 when there is no card, no
+ * matching record or the write failed. The caller reports it; a silent
+ * failure here would be discovered when the activation was submitted. */
+int adif_log_export_activation(const char *sig_info, char *out_path, size_t out_sz)
+{
+    if (out_path && out_sz) out_path[0] = '\0';
+    if (!s_mounted || !sig_info || !sig_info[0]) return -1;
+    if (!sd_archive_is_mounted()) return -1;
+
+    char today[9] = "";
+    {
+        time_t now = time(NULL);
+        struct tm tmv;
+        gmtime_r(&now, &tmv);
+        /* Same guard as the counter: before the clock is set every record
+         * would fail to match, and an empty file is worse than an undated
+         * one. With no usable clock, take them all. */
+        if (tmv.tm_year + 1900 >= 2020)
+            strftime(today, sizeof(today), "%Y%m%d", &tmv);
+    }
+
+    /* The reference goes into a filename, so anything FatFs will not take is
+     * replaced rather than refused - a slash in a SOTA reference (OZ/SJ-001)
+     * would otherwise name a directory that does not exist. */
+    char safe[32];
+    size_t si = 0;
+    for (const char *p = sig_info; *p && si + 1 < sizeof(safe); p++) {
+        char c = *p;
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_';
+        safe[si++] = ok ? c : '-';
+    }
+    safe[si] = '\0';
+    if (!safe[0]) return -1;
+
+    char path[96];
+    if (today[0]) snprintf(path, sizeof(path), "/sdcard/qmx-panadapter/%s-%s.adi", safe, today);
+    else          snprintf(path, sizeof(path), "/sdcard/qmx-panadapter/%s.adi", safe);
+
+    FILE *in = fopen(FILE_PATH, "r");
+    if (!in) return -1;
+
+    /* FatFs has no internal locking and the archive task writes the same
+     * directory - the same lock every other bulk SD access here takes. */
+    if (!sd_archive_lock(3000)) { fclose(in); return -1; }
+
+    FILE *out = fopen(path, "w");
+    if (!out) {
+        sd_archive_unlock();
+        fclose(in);
+        ESP_LOGE(TAG, "activation export: cannot create %s", path);
+        return -1;
+    }
+    fprintf(out, "<ADIF_VER:5>3.1.4 <PROGRAMID:13>QMX-Panadapter <EOH>\n");
+
+    char needle[40];
+    snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s",
+             (unsigned)strlen(sig_info), sig_info);
+    size_t nl = strlen(needle);
+
+    char line[1024];
+    int  n = 0;
+    bool header_done = false;
+    bool write_failed = false;
+    while (fgets(line, sizeof(line), in)) {
+        if (!header_done) { header_done = true; continue; }
+        bool hit = false;
+        for (const char *p = line; *p && !hit; p++)
+            if (strncasecmp(p, needle, nl) == 0) hit = true;
+        if (!hit) continue;
+        if (today[0]) {
+            char qdate[12];
+            if (adif_log_extract_field(line, "QSO_DATE", qdate, sizeof(qdate))
+                && strcmp(qdate, today) != 0) continue;
+        }
+        if (fputs(line, out) < 0) { write_failed = true; break; }
+        n++;
+    }
+    fclose(in);
+    /* ⛔ fsync before the close is believed: a card pulled straight after an
+     * activation ends is the normal case, not an edge one. */
+    fflush(out);
+    fsync(fileno(out));
+    fclose(out);
+    sd_archive_unlock();
+
+    if (write_failed || n == 0) {
+        /* An empty or truncated file on the card would be taken for the
+         * activation's record. Remove it and say nothing was written. */
+        remove(path);
+        ESP_LOGW(TAG, "activation export %s: %s", path,
+                 write_failed ? "write failed" : "no matching records");
+        return -1;
+    }
+    if (out_path && out_sz) snprintf(out_path, out_sz, "%s", path);
+    ESP_LOGI(TAG, "activation export: %d records -> %s", n, path);
+    return n;
+}

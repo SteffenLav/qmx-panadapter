@@ -60,6 +60,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "ft8_pileup_modal.h"
 #include "resource_mgmt_modal.h"
 #include "activation_modal.h"
+#include "manual_log_modal.h"
 #include "audio_modal.h"
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
@@ -3397,7 +3398,11 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 //   lv_obj_has_flag_any <- lv_obj_is_layout_positioned
 //
 // A comment cannot stop this on its own, so the assert below now does.
-#define N_DRAWER_SECTIONS     53
+/* Manual CW/SSB QSO entry (Brian KB9WFS, 2026-10-27). Directly ABOVE
+ * Activation in the Station group: the two are one job in the field -
+ * start the activation, then log the people you work by hand. */
+#define DRAWER_SEC_MANLOG     53
+#define N_DRAWER_SECTIONS     56
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3409,6 +3414,7 @@ _Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_JS8SUB  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_SERVER < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_MANLOG < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3437,6 +3443,7 @@ typedef struct { const char *title; const drawer_item_t *items; int n; } drawer_
 
 static const drawer_item_t GRP_STATION[] = {
     { DRAWER_SEC_IDENTITY, "Callsign & Grid square", false },
+    { DRAWER_SEC_MANLOG, "Log a contact (CW/SSB)", true },
     { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)", true },
     { DRAWER_SEC_BPREGION, "Band-plan region", false },
 };
@@ -3803,6 +3810,7 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * Note the precedent right below: DRAWER_SEC_RITPILL sits in the Radio GROUP
      * and is still panadapter-only. Group is where a control is FILED; this
      * function is where it is SHOWN. They are allowed to differ. */
+    if (id == DRAWER_SEC_MANLOG) return !wspr;
     if (id == DRAWER_SEC_ACTIVATION) return !wspr;
     // Output power's own CAT write is gated off while WSPR is running (it
     // never gets to speak over Declared power's own PA-voltage management) -
@@ -4152,6 +4160,7 @@ static void drawer_check_server_cb(lv_event_t *e);
 static void drawer_still_refresh_label(void);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_pwrcal_entry_btn_cb(lv_event_t *e);
+static void drawer_manlog_btn_cb(lv_event_t *e);
 static void drawer_activation_btn_cb(lv_event_t *e);
 static void drawer_refresh_activation(void);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
@@ -15687,6 +15696,24 @@ static void drawer_build(void)
         y += 100;
     }
 
+    // Log a contact by hand (Brian KB9WFS). The quickest route he has to a
+    // CW or SSB contact: one swipe, one tap, then the callsign. Everything
+    // else the record needs is already on the device.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_MANLOG, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_manlog_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, LV_SYMBOL_EDIT " Log a contact (CW/SSB)");
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+        lv_obj_center(l);
+        y += 72;
+    }
+
     // Activation (POTA/SOTA). The label carries the LIVE reference rather than
     // a static word, because "am I still activating?" is the question this
     // feature gets wrong most expensively - a forgotten session stamps every
@@ -17665,14 +17692,34 @@ static void drawer_refresh_activation(void)
     if (!s_activation_lbl || !s_activation_btn) return;
     char desc[32];
     if (activation_describe(desc, sizeof(desc))) {
-        char b[48];
-        snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s", desc);
+        char b[64];
+        /* ⭐ THE COUNT ON THE BUTTON ITSELF (Brian KB9WFS, 2026-10-27).
+         * "X/10" is the number an activator is actually counting in the
+         * field, and it was one tap further in - open the modal, read it,
+         * close it again. The drawer is refreshed on open, so this is
+         * current every time it is seen. SOTA needs 4, POTA 10 - the same
+         * target the Activation window shows, from the same two calls. */
+        char ref[24];
+        if (settings_get_activation_ref(ref, sizeof(ref))) {
+            int n = adif_log_count_activation(ref);
+            int target = (settings_get_activation_type() == 2) ? 4 : 10;
+            snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s  %d/%d", desc, n, target);
+        } else {
+            snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s", desc);
+        }
         lv_label_set_text(s_activation_lbl, b);
         lv_obj_set_style_bg_color(s_activation_btn, lv_color_hex(0x2e8b3a), 0);
     } else {
         lv_label_set_text(s_activation_lbl, "Activation (POTA/SOTA)");
         lv_obj_set_style_bg_color(s_activation_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     }
+}
+
+static void drawer_manlog_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+    manual_log_modal_show();
 }
 
 static void drawer_activation_btn_cb(lv_event_t *e)
@@ -19769,6 +19816,7 @@ static void kbd_sc_timesync(void) { ft8_time_modal_show(); }
 static void kbd_sc_tone(void)     { ft8_tone_modal_show(); }
 static void kbd_sc_pileup(void)   { ft8_pileup_modal_show(); }
 static void kbd_sc_activation(void) { activation_modal_show(); }
+static void kbd_sc_manlog(void)   { manual_log_modal_show(); }
 static void kbd_sc_contents(void) { reader_view_open_index(); }
 
 // ⚠ Opens the Antenna Tune WINDOW; it does not start tuning. Starting is still
@@ -19853,6 +19901,8 @@ static const struct { const char *name; void (*fn)(void); } k_kbd_actions[] = {
     /* 23 */ { "Zoom out",         kbd_sc_zoom_out   },
     /* 24 */ { "Brighter",         kbd_sc_brighter   },
     /* 25 */ { "Dimmer",           kbd_sc_dimmer     },
+    /* --- appended 2026-10-27 --- */
+    /* 26 */ { "Log a contact",   kbd_sc_manlog     },
 };
 #define KBD_ACTION_N ((int)(sizeof(k_kbd_actions)/sizeof(k_kbd_actions[0])))
 

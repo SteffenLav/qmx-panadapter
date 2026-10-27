@@ -18,6 +18,7 @@
 #include "ui.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
+#include "storage/sd_archive.h"   // sd_archive_is_mounted - which refusal to report
 #include "esp_log.h"
 #include <string.h>
 #include <stdio.h>
@@ -121,9 +122,35 @@ static void go_btn_cb(lv_event_t *e)
     if (activation_is_running()) {
         char was[32];
         activation_describe(was, sizeof(was));
+        /* ⭐ THE SESSION GETS ITS OWN FILE (Brian KB9WFS: he activates
+         * more than one park in a day). Taken BEFORE the session is
+         * cleared - settings_set_activation(0, NULL) is what makes the
+         * reference unavailable, so reading it afterwards exports
+         * nothing. The whole-log mirror on the card is untouched; this is
+         * an extra file beside it, not a replacement. */
+        char ref[24], path[96];
+        int exported = -1;
+        if (settings_get_activation_ref(ref, sizeof(ref)))
+            exported = adif_log_export_activation(ref, path, sizeof(path));
         settings_set_activation(0, NULL);
         ESP_LOGI(TAG, "activation stopped (was %s)", was);
-        ui_toast("Activation stopped");
+        if (exported > 0) {
+            /* Name the file. An activator who cannot find it on the card
+             * has not been given anything. */
+            const char *base = strrchr(path, '/');
+            /* 160, not 96: gcc sizes the %s at the whole path buffer and
+             * -Werror=format-truncation refused the smaller one. */
+            char t[160];
+            snprintf(t, sizeof(t), "Activation stopped - %d QSOs saved as %s",
+                     exported, base ? base + 1 : path);
+            ui_toast(t);
+        } else {
+            /* No card, or nothing logged today. Say which rather than
+             * letting the operator assume a file was written. */
+            ui_toast(sd_archive_is_mounted()
+                     ? "Activation stopped - no contacts today, no file written"
+                     : "Activation stopped - no SD card, no file written");
+        }
         refresh();
         return;
     }
