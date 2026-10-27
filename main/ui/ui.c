@@ -61,6 +61,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "resource_mgmt_modal.h"
 #include "activation_modal.h"
 #include "manual_log_modal.h"
+#include "sched_modal.h"
 #include "audio_modal.h"
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
@@ -19820,6 +19821,7 @@ static void kbd_sc_tone(void)     { ft8_tone_modal_show(); }
 static void kbd_sc_pileup(void)   { ft8_pileup_modal_show(); }
 static void kbd_sc_activation(void) { activation_modal_show(); }
 static void kbd_sc_manlog(void)   { manual_log_modal_show(); }
+static void kbd_sc_sched(void)    { sched_modal_show(); }
 static void kbd_sc_contents(void) { reader_view_open_index(); }
 
 // ⚠ Opens the Antenna Tune WINDOW; it does not start tuning. Starting is still
@@ -19906,6 +19908,7 @@ static const struct { const char *name; void (*fn)(void); } k_kbd_actions[] = {
     /* 25 */ { "Dimmer",           kbd_sc_dimmer     },
     /* --- appended 2026-10-27 --- */
     /* 26 */ { "Log a contact",   kbd_sc_manlog     },
+    /* 27 */ { "Scheduled events",kbd_sc_sched      },
 };
 #define KBD_ACTION_N ((int)(sizeof(k_kbd_actions)/sizeof(k_kbd_actions[0])))
 

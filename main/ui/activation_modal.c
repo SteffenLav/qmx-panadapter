@@ -18,6 +18,7 @@
 #include "ui.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
+#include "sched_modal.h"          // the Scheduled events button, below
 #include "storage/sd_archive.h"   // sd_archive_is_mounted - which refusal to report
 #include "esp_log.h"
 #include <string.h>
@@ -213,6 +214,15 @@ static void go_btn_cb(lv_event_t *e)
     refresh();
 }
 
+/* ⭐ NEXT TO THE REFERENCE FIELD, because this is where the operator is when
+ * planning - he has just picked a programme and is about to type a park.
+ * "Which park is somebody already doing tonight" is the same thought. */
+static void sched_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    sched_modal_show();
+}
+
 static void cancel_btn_cb(lv_event_t *e) { (void)e; modal_close(); }
 
 static void ta_focused_cb(lv_event_t *e)
@@ -315,6 +325,13 @@ static void modal_build(void)
     ui_theme_style_textarea(s_ta_ref);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
+
+    {
+        lv_obj_t *b = make_btn(s_panel, "Scheduled events", 300, 60,
+                               LV_ALIGN_TOP_LEFT, 440, 128, sched_btn_cb, NULL, NULL);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x3a4149), 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(0x5a6169), 0);
+    }
 
     s_lbl_desc = lv_label_create(s_panel);
     lv_label_set_long_mode(s_lbl_desc, LV_LABEL_LONG_WRAP);

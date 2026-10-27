@@ -659,6 +659,12 @@ static bool fetch_sota(void)
 // every two with a quiet backoff. Both are due-time driven rather than "sleep
 // the shorter period and count", so adding a third source is a due time and not
 // a rewrite - and a slow SOTA backoff can never delay a POTA fetch.
+/* Scheduled events live at the bottom of this file (they were added long
+ * after), but the task that owns every outbound fetch is here. Two
+ * declarations rather than moving 150 lines around. */
+static void fetch_sched(void);
+static bool sched_take_request(void);
+
 static void spots_task(void *arg)
 {
     (void)arg;
@@ -716,6 +722,14 @@ static void spots_task(void *arg)
         // an update - measured mid-download as "spots: SOTA: 18 spots (23600
         // bytes)" while internal free was 5 KB. Closing three of four doors is
         // not closing the door.
+        /* On demand only - the operator opened the pane. Same net_quiet and
+         * bg_feed gates as the standing feeds: an OTA verify needs the
+         * internal heap a TLS session would take, and this fetch is never
+         * so urgent that it may collide with one. The request stays set,
+         * so it runs on the next pass instead of being dropped. */
+        if (!net_quiet_active() && !bg_feed_gate_active() && sched_take_request())
+            fetch_sched();
+
         if (s.sota_en && now >= next_sota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             bool ok = fetch_sota();
             if (ok) {
@@ -764,7 +778,7 @@ void spots_note_pick(const char *call, uint8_t mode, uint32_t freq_hz)
 
 void spots_clear_pick(void)
 {
-    s_pick_call[0] = ' ';
+    s_pick_call[0] = '\0';
     s_pick_hz = 0;
     s_pick_at = 0;
 }
@@ -772,7 +786,7 @@ void spots_clear_pick(void)
 bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
                      uint32_t dial_hz, uint32_t tol_hz, int max_age_s)
 {
-    if (call_out && call_sz) call_out[0] = ' ';
+    if (call_out && call_sz) call_out[0] = '\0';
     if (!s_pick_at || !s_pick_call[0]) return false;
 
     if (max_age_s > 0) {
@@ -787,3 +801,173 @@ bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
     if (mode_out) *mode_out = s_pick_mode;
     return true;
 }
+
+/* ==========================================================================
+   Scheduled events (T116) - see spots.h.
+
+   Lives here rather than in a module of its own so it reuses http_get_json()
+   and the spots task. A second copy of the fetch would be a second place for
+   the buffer discipline, the User-Agent and the net_quiet gate to drift.
+   ========================================================================== */
+
+/* ⚠ The whole-body cap matters: /alerts records are ~1 kB each (callsign,
+ * country, flag, zones, lat/long and a nested activity_refs array), and
+ * on_data() truncates at RESP_CAP, which would fail cJSON_Parse and cost the
+ * WHOLE list rather than the tail. 60 records is ~60 kB against a 160 kB
+ * buffer, so it fits with room, and 60 upstream yields far more than
+ * SCHED_MAX after the ended ones are dropped. */
+#define SCHED_QUERY  "limit=60"
+
+static sched_event_t    *s_sched;             /* PSRAM, SCHED_MAX entries */
+static int               s_sched_n;
+static uint32_t          s_sched_ver;
+static int64_t           s_sched_at;          /* esp_timer us of last success */
+static volatile bool     s_sched_req;
+static volatile bool     s_sched_busy;
+
+uint32_t sched_events_version(void) { return s_sched_ver; }
+bool     sched_events_busy(void)    { return s_sched_busy; }
+
+int sched_events_age_s(void)
+{
+    if (!s_sched_at) return -1;
+    return (int)((esp_timer_get_time() - s_sched_at) / 1000000);
+}
+
+bool sched_events_request(bool force)
+{
+    if (!wifi_is_connected()) return false;
+    int age = sched_events_age_s();
+    /* Nothing to do when what we hold is still fresh - opening the pane twice
+     * in a minute must not be two fetches on someone else's server. */
+    if (!force && age >= 0 && age < SCHED_TTL_S) return false;
+    s_sched_req = true;
+    return true;
+}
+
+int sched_events_get(sched_event_t *out, int max)
+{
+    if (!out || max <= 0 || !s_sched) return 0;
+    int64_t now = (int64_t)time(NULL);
+    int n = 0;
+    for (int i = 0; i < s_sched_n && n < max; i++) {
+        /* Drop what has already finished. An alert whose end has passed is
+         * history, and the feed carries plenty of them. An event with no
+         * usable end time is kept - better a stale row than a missing one. */
+        if (s_sched[i].end_unix && s_sched[i].end_unix < now) continue;
+        out[n++] = s_sched[i];
+    }
+    return n;
+}
+
+static int sched_cmp(const void *a, const void *b)
+{
+    const sched_event_t *x = a, *y = b;
+    /* Unknown start times sort last rather than to 1970, where they would sit
+     * above everything real. */
+    int64_t xs = x->start_unix ? x->start_unix : INT64_MAX;
+    int64_t ys = y->start_unix ? y->start_unix : INT64_MAX;
+    return (xs > ys) - (xs < ys);
+}
+
+/* Clears the flag only when the caller is going to act on it, so a request
+ * arriving while net_quiet is up survives to the next pass. */
+static bool sched_take_request(void)
+{
+    if (!s_sched_req) return false;
+    s_sched_req = false;
+    return true;
+}
+
+static void fetch_sched(void)
+{
+    s_sched_busy = true;
+    char *buf = NULL;
+    int len = http_get_json(SPOTHOLE_BASE "/alerts?" SCHED_QUERY, &buf);
+    if (len <= 0) {
+        /* ⛔ KEEP WHAT WE HAVE. Ian's own caveat is a design requirement here:
+         * spothole being down is an ordinary state, so a failed fetch must
+         * leave the last good list and say nothing. */
+        s_sched_busy = false;
+        return;
+    }
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!cJSON_IsArray(root)) {
+        if (root) cJSON_Delete(root);
+        s_sched_busy = false;
+        return;
+    }
+
+    if (!s_sched) {
+        s_sched = heap_caps_calloc(SCHED_MAX, sizeof(*s_sched),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_sched) {
+            cJSON_Delete(root);
+            s_sched_busy = false;
+            return;
+        }
+    }
+
+    int64_t now = (int64_t)time(NULL);
+    int n = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, root) {
+        if (n >= SCHED_MAX) break;
+        sched_event_t e = {0};
+
+        cJSON *st = cJSON_GetObjectItem(it, "start_time");
+        cJSON *en = cJSON_GetObjectItem(it, "end_time");
+        if (cJSON_IsNumber(st)) e.start_unix = (int64_t)st->valuedouble;
+        if (cJSON_IsNumber(en)) e.end_unix   = (int64_t)en->valuedouble;
+        /* Already over - skip it here rather than carry it and filter later,
+         * so SCHED_MAX holds forty USEFUL rows. */
+        if (e.end_unix && e.end_unix < now) continue;
+
+        const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(it, "source"));
+        if (src) snprintf(e.src, sizeof(e.src), "%s", src);
+
+        /* A contest has no reference and its name is in the comment; an
+         * activation has a reference and a callsign. The activities array is
+         * the honest test - "Contest" is one of spothole's own activity
+         * names (/options activities), not a guess from the source string. */
+        cJSON *acts = cJSON_GetObjectItem(it, "activities");
+        cJSON *a = NULL;
+        cJSON_ArrayForEach(a, acts) {
+            const char *an = cJSON_GetStringValue(a);
+            if (an && strcasecmp(an, "Contest") == 0) { e.is_contest = true; break; }
+        }
+
+        const char *comment = cJSON_GetStringValue(cJSON_GetObjectItem(it, "comment"));
+        cJSON *calls = cJSON_GetObjectItem(it, "dx_calls");
+        const char *call = (cJSON_IsArray(calls) && cJSON_GetArraySize(calls) > 0)
+                           ? cJSON_GetStringValue(cJSON_GetArrayItem(calls, 0)) : NULL;
+
+        if (e.is_contest) {
+            /* The contest's name. Falls back to the callsign only because an
+             * unnamed row is useless, and a row with a call at least says who. */
+            snprintf(e.what, sizeof(e.what), "%s",
+                     (comment && comment[0]) ? comment : (call ? call : "Contest"));
+        } else {
+            snprintf(e.what, sizeof(e.what), "%s", call ? call : (comment ? comment : "?"));
+            cJSON *refs = cJSON_GetObjectItem(it, "activity_refs");
+            if (cJSON_IsArray(refs) && cJSON_GetArraySize(refs) > 0) {
+                const char *id = cJSON_GetStringValue(
+                    cJSON_GetObjectItem(cJSON_GetArrayItem(refs, 0), "id"));
+                if (id) snprintf(e.ref, sizeof(e.ref), "%s", id);
+            }
+        }
+        if (!e.what[0]) continue;      /* nothing to show - not a row */
+        s_sched[n++] = e;
+    }
+    cJSON_Delete(root);
+
+    qsort(s_sched, (size_t)n, sizeof(*s_sched), sched_cmp);
+    s_sched_n   = n;
+    s_sched_at  = esp_timer_get_time();
+    s_sched_ver++;
+    s_sched_busy = false;
+    ESP_LOGI(TAG, "scheduled events: %d upcoming (%d bytes)", n, len);
+}
+
