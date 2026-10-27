@@ -1910,7 +1910,8 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cat_request_rit_hz((int)argv);
         ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)argv);
     } else if (action && strcmp(action, "set_activation") == 0) {
-        // Start or stop a POTA/SOTA activation. type 0 stops; 1 = POTA, 2 = SOTA
+        // Start or stop an activation. type 0 stops; 1..N-1 are the programmes
+        // in settings.c's k_act[] (POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA)
         // with a reference. Mirrors activation_modal.c's go button, including its
         // refusals: a reference is required to start, and settings_set_activation()
         // is the thing that decides whether one is usable (it trims), so the answer
@@ -1922,13 +1923,17 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (t == 0) {
             settings_set_activation(0, NULL);
             ESP_LOGI(TAG, "web: activation stopped");
-        } else if (t == 1 || t == 2) {
+        } else if (t > 0 && t < (int)settings_activation_type_count()) {
+            /* ⛔ ANY PROGRAMME IN THE TABLE. This was `t == 1 || t == 2`,
+             * so the five added in T115 were answered "Unknown activation
+             * type" from a picker that offered them. */
             if (!ref || !ref[0]) {
                 err = "Enter the park or summit reference first";
             } else {
                 settings_set_activation((uint8_t)t, ref);
                 if (settings_get_activation_type() == 0) err = "That reference is not usable";
-                else ESP_LOGI(TAG, "web: activation started: %s %s", t == 1 ? "POTA" : "SOTA", ref);
+                else ESP_LOGI(TAG, "web: activation started: %s %s",
+                              settings_activation_sig_name_for((uint8_t)t), ref);
             }
         } else {
             err = "Unknown activation type";

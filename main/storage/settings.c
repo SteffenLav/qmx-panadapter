@@ -2571,7 +2571,16 @@ void settings_set_activation(uint8_t type, const char *ref)
         while (n > 0 && clean[n - 1] == ' ') n--;
         clean[n] = '\0';
     }
-    if (type > 2 || !clean[0]) { type = 0; clean[0] = '\0'; }
+    /* ⛔ THE BOUND IS THE TABLE, NOT A LITERAL 2. This read `type > 2` and
+     * silently turned every programme past SOTA into "not activating", so
+     * WWFF, IOTA, GMA, WCA and WWBOTA built, drew their buttons and did
+     * nothing at all. Found by exercising the API after the build passed -
+     * the build could not see it, and neither could reading the UI code.
+     * settings_activation_type_count() rather than ACT_N because the table
+     * is defined further down this file. */
+    if (type >= settings_activation_type_count() || !clean[0]) {
+        type = 0; clean[0] = '\0';
+    }
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool same = (s_pending.act_type == type) && (strcmp(s_pending.act_ref, clean) == 0);
