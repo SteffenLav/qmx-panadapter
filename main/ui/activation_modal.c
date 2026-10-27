@@ -25,6 +25,19 @@
 
 static const char *TAG = "activation";
 
+/* ⛔ THE PANEL IS SIZED TO THE TEXT, NOT THE TEXT TO THE PANEL.
+ * The first cut kept the old 880 px panel and shrank the programme row to
+ * montserrat_20 so "WWBOTA" would fit its 112 px button. That is the wrong
+ * trade on this display - the readers are mostly over 60 at arm's length,
+ * and the whole modal geometry in this project follows from the body font
+ * rather than the other way round (see js8_text_modal.c's header).
+ * 1100 px of a 1280 px screen leaves 90 px either side and gives each of
+ * the seven buttons 143 px, which holds the longest name in k_act[] at
+ * montserrat_24 with room to spare. An eighth programme narrows them to
+ * 125 px, still enough; a ninth needs this number raised again. */
+#define ACT_PANEL_W   1100
+#define ACT_PANEL_PAD 24
+
 static lv_obj_t *s_modal   = NULL;
 static lv_obj_t *s_panel   = NULL;
 static lv_obj_t *s_ta_ref  = NULL;
@@ -242,14 +255,14 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 880, 420);
+    lv_obj_set_size(s_panel, ACT_PANEL_W, 420);
     lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(s_panel, 2, 0);
     lv_obj_set_style_radius(s_panel, 10, 0);
-    lv_obj_set_style_pad_all(s_panel, 24, 0);
+    lv_obj_set_style_pad_all(s_panel, ACT_PANEL_PAD, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
@@ -260,30 +273,22 @@ static void modal_build(void)
 
     /* ⭐ EVERY PROGRAMME IN THE TABLE, one row (operator, 2026-10-27: "our
      * Activation window should have them all"). Seven at 180 px do not fit
-     * 832 px of inner panel, so the width is computed from the count and the
-     * reference field moves to its own line below. Adding an eighth programme
-     * to k_act[] narrows them all rather than overflowing. */
+     * the old 880 px panel, so the panel is wider (ACT_PANEL_W) and the width
+     * is computed from the count. The reference field moves to its own line
+     * below. Adding an eighth programme narrows them all rather than
+     * overflowing. */
     {
         const uint8_t n_types = settings_activation_type_count();   /* incl. index 0 */
         const int     n_btn   = (n_types > 1) ? (n_types - 1) : 0;
-        const int     inner   = 880 - 2 * 24;
+        const int     inner   = ACT_PANEL_W - 2 * ACT_PANEL_PAD;
         const int     gap     = 8;
         const int     bw      = n_btn ? (inner - gap * (n_btn - 1)) / n_btn : inner;
         for (uint8_t t = 1; t < n_types && t < ACT_BTN_MAX; t++) {
             const char *sig = settings_activation_sig_name_for(t);
             if (!sig) continue;
-            lv_obj_t *tl = NULL;
             s_btn_type[t] = make_btn(s_panel, sig, bw, 60, LV_ALIGN_TOP_LEFT,
                                      (int)(t - 1) * (bw + gap), 52,
-                                     type_btn_cb, (void *)(uintptr_t)t, &tl);
-            /* ⛔ MEASURED ON THE GLASS, NOT COUNTED IN CHARACTERS. At
-             * montserrat_24 "WWBOTA" overran its 112 px button and was cut
-             * off at the panel edge - two capital Ws are nearly 40 px of
-             * that width on their own. The row font is 20, and the button's
-             * own default side padding is removed, so the longest name in
-             * the table fits with room to spare. */
-            lv_obj_set_style_pad_hor(s_btn_type[t], 0, 0);
-            if (tl) lv_obj_set_style_text_font(tl, &lv_font_montserrat_20, 0);
+                                     type_btn_cb, (void *)(uintptr_t)t, NULL);
         }
     }
 
