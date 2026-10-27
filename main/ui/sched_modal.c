@@ -47,7 +47,13 @@ static const char *TAG = "sched_modal";
  * aligned against the content width. */
 #define COL_START       0
 #define COL_WHAT        166
-#define COL_SRC         786
+/* ⛔ SOURCE ENDS BEFORE IN STARTS. At 786 with a 200 px label it ran to 986
+ * while IN begins at inner-170 = 882, so the two columns were drawn over
+ * each other - "WA7BNM Contest..." and "1h 17m" in the same pixels on the
+ * bench. 640 + 200 = 840 leaves a clear gap. Any change to one of these
+ * three numbers has to be checked against the other two. */
+#define COL_SRC         640
+#define COL_SRC_W       200
 
 enum { FILT_ALL = 0, FILT_CONTEST, FILT_ACTIVATION };
 
@@ -86,6 +92,16 @@ static void fmt_in(int64_t secs, char *out, size_t n)
         if (h >= 10 || m == 0) snprintf(out, n, "%dh", h);
         else                   snprintf(out, n, "%dh %dm", h, m);
     }
+}
+
+/* Display only - the full name stays in the record. */
+static const char *src_short(const char *src)
+{
+    if (!src || !src[0]) return "";
+    if (strncasecmp(src, "WA7BNM", 6) == 0)   return "WA7BNM";
+    if (strncasecmp(src, "RSGB HF", 7) == 0)  return "RSGB HF";
+    if (strncasecmp(src, "RSGB VHF", 8) == 0) return "RSGB VHF";
+    return src;
 }
 
 static void row_clear(int i)
@@ -142,7 +158,11 @@ static void refresh(void)
         else              snprintf(what, sizeof(what), "%s", ev[i].what);
         lv_label_set_text(s_row_what[row], what);
 
-        lv_label_set_text(s_row_src[row], ev[i].src);
+        /* The feed's names are sentences - "WA7BNM Contest Calendar",
+         * "RSGB HF Contests" - and all three ellipsised to "...Contest...",
+         * which told the reader nothing and was the widest thing in the
+         * column. The distinguishing word is the first one. */
+        lv_label_set_text(s_row_src[row], src_short(ev[i].src));
         lv_obj_set_style_text_color(s_row_src[row],
                                     lv_color_hex(ev[i].is_contest ? 0x9AD0FF : 0xA0E0A0), 0);
 
@@ -315,7 +335,7 @@ static void modal_build(void)
      * not as part of the event's name. */
     lv_label_set_text(mk_label(s_panel, COL_START, 118, 160, &lv_font_montserrat_20, 0x7A7A7A, false), "START");
     lv_label_set_text(mk_label(s_panel, COL_WHAT,  118, 400, &lv_font_montserrat_20, 0x7A7A7A, false), "EVENT");
-    lv_label_set_text(mk_label(s_panel, COL_SRC,   118, 200, &lv_font_montserrat_20, 0x7A7A7A, false), "SOURCE");
+    lv_label_set_text(mk_label(s_panel, COL_SRC,   118, COL_SRC_W, &lv_font_montserrat_20, 0x7A7A7A, false), "SOURCE");
     lv_label_set_text(mk_label(s_panel, inner - 160, 118, 160, &lv_font_montserrat_20, 0x7A7A7A, true), "IN");
 
     /* The rows live in their own scrollable box so the ones below the fold are
@@ -336,7 +356,7 @@ static void modal_build(void)
                                   &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY, false);
         s_row_what[i]  = mk_label(s_list, COL_WHAT,  y, COL_SRC - COL_WHAT - 16,
                                   &lv_font_montserrat_24, UI_COLOR_TEXT, false);
-        s_row_src[i]   = mk_label(s_list, COL_SRC,   y, 200,
+        s_row_src[i]   = mk_label(s_list, COL_SRC,   y, COL_SRC_W,
                                   &lv_font_montserrat_20, 0x9AD0FF, false);
         s_row_in[i]    = mk_label(s_list, inner - 170, y, 170,
                                   &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY, true);
