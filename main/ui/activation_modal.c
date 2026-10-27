@@ -157,41 +157,56 @@ static void type_btn_cb(lv_event_t *e)
     refresh();
 }
 
+/* ⛔ ONE STOP FOR BOTH SURFACES. The per-activation ADIF (T110) was written
+ * here, in the Tab5's button handler, while the web's set_activation(0) went
+ * straight to settings - so stopping from the browser silently skipped the
+ * file. That is the Tab5/web split this project keeps re-finding (T82, T83,
+ * T107, and the activation picker), and the answer is the same every time: one
+ * function, both callers.
+ *
+ * Fills `note` with what to tell the operator, and returns the number of
+ * records exported (0 or -1 when none were). */
+int activation_stop(char *note, size_t note_sz)
+{
+    if (note && note_sz) note[0] = '\0';
+    if (!activation_is_running()) {
+        if (note && note_sz) snprintf(note, note_sz, "No activation was running");
+        return -1;
+    }
+    char was[32];
+    activation_describe(was, sizeof(was));
+
+    /* BEFORE the session is cleared - clearing it is what makes the reference
+     * unavailable, so reading it afterwards exports nothing. */
+    char ref[24], path[96];
+    int exported = -1;
+    if (settings_get_activation_ref(ref, sizeof(ref)))
+        exported = adif_log_export_activation(ref, path, sizeof(path));
+
+    settings_set_activation(0, NULL);
+    ESP_LOGI(TAG, "activation stopped (was %s), exported %d", was, exported);
+
+    if (note && note_sz) {
+        if (exported > 0) {
+            const char *base = strrchr(path, '/');
+            snprintf(note, note_sz, "Activation stopped - %d QSOs saved as %s",
+                     exported, base ? base + 1 : path);
+        } else {
+            snprintf(note, note_sz, sd_archive_is_mounted()
+                     ? "Activation stopped - no contacts today, no file written"
+                     : "Activation stopped - no SD card, no file written");
+        }
+    }
+    return exported;
+}
+
 static void go_btn_cb(lv_event_t *e)
 {
     (void)e;
     if (activation_is_running()) {
-        char was[32];
-        activation_describe(was, sizeof(was));
-        /* ⭐ THE SESSION GETS ITS OWN FILE (Brian KB9WFS: he activates
-         * more than one park in a day). Taken BEFORE the session is
-         * cleared - settings_set_activation(0, NULL) is what makes the
-         * reference unavailable, so reading it afterwards exports
-         * nothing. The whole-log mirror on the card is untouched; this is
-         * an extra file beside it, not a replacement. */
-        char ref[24], path[96];
-        int exported = -1;
-        if (settings_get_activation_ref(ref, sizeof(ref)))
-            exported = adif_log_export_activation(ref, path, sizeof(path));
-        settings_set_activation(0, NULL);
-        ESP_LOGI(TAG, "activation stopped (was %s)", was);
-        if (exported > 0) {
-            /* Name the file. An activator who cannot find it on the card
-             * has not been given anything. */
-            const char *base = strrchr(path, '/');
-            /* 160, not 96: gcc sizes the %s at the whole path buffer and
-             * -Werror=format-truncation refused the smaller one. */
-            char t[160];
-            snprintf(t, sizeof(t), "Activation stopped - %d QSOs saved as %s",
-                     exported, base ? base + 1 : path);
-            ui_toast(t);
-        } else {
-            /* No card, or nothing logged today. Say which rather than
-             * letting the operator assume a file was written. */
-            ui_toast(sd_archive_is_mounted()
-                     ? "Activation stopped - no contacts today, no file written"
-                     : "Activation stopped - no SD card, no file written");
-        }
+        char note[160];
+        activation_stop(note, sizeof(note));
+        ui_toast(note);
         refresh();
         return;
     }

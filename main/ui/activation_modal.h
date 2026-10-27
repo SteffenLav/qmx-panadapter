@@ -23,3 +23,11 @@ bool activation_is_running(void);
 // Copies "POTA DL-0123" (or "SOTA OZ/SJ-001") into out for display. Returns
 // false and empties out when nothing is running.
 bool activation_describe(char *out, size_t out_sz);
+
+/* Stop the running activation AND write its own ADIF to the SD card (T110).
+ * ⛔ Both the Tab5 button and the web's set_activation(type 0) must come
+ * through here: the export used to live in the button handler, so stopping
+ * from the browser skipped the file without saying so.
+ * `note` receives the line to show the operator. Returns records exported,
+ * or -1 when none were (no card, nothing logged today, or nothing running). */
+int activation_stop(char *note, size_t note_sz);

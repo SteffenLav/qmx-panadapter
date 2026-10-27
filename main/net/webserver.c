@@ -47,6 +47,7 @@
 #include "ui/spot_map_view.h" // the /api/cmd "spotmap" dev action
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
+#include "ui/activation_modal.h" // activation_stop - ONE stop for Tab5 and web
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
 #include "adif/adif_check.h"  // #263 "check my log" - completeness pass
 #include "util/dma_owners.h"
@@ -1909,6 +1910,74 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
         cat_request_rit_hz((int)argv);
         ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)argv);
+    } else if (action && strcmp(action, "log_qso") == 0) {
+        /* ⭐ MANUAL CW/SSB LOGGING FROM THE BROWSER (T108 parity). The Tab5 got
+         * this first; Randy N4OPI works from the web, and a feature that exists
+         * on one surface only is the gap class this project keeps re-finding.
+         *
+         * ⛔ THE SAME THREE FIELDS AND NO MORE. Everything else - date, time,
+         * frequency, band, mode, our callsign, our grid, the activation - is
+         * read from the device here exactly as manual_log_modal.c reads it, so
+         * a QSO logged from the browser is indistinguishable from one logged on
+         * the glass. The browser is NOT allowed to supply them: a page with a
+         * stale frequency would write a record on the wrong band. */
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        const char *rs   = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rst_sent"));
+        const char *rr   = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rst_rcvd"));
+        char ucall[32] = "";
+        if (call) {
+            size_t n = 0;
+            while (*call == ' ') call++;
+            while (*call && n + 1 < sizeof(ucall)) {
+                char c = *call++;
+                ucall[n++] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+            }
+            while (n > 0 && ucall[n - 1] == ' ') n--;
+            ucall[n] = '\0';
+        }
+        const char *mode = cat_get_mode_str();
+        const char *err = NULL;
+        if (!ucall[0])            err = "Enter a callsign";
+        else if (!mode || !mode[0]) err = "No CAT - the radio must be connected to log";
+
+        if (!err) {
+            qmx_settings_t cfg;
+            settings_load_all(&cfg);
+            adif_qso_t qso = {
+                .their_call = ucall,
+                .my_call    = cfg.my_callsign,
+                .my_grid    = cfg.my_grid,
+                .freq_hz    = ui_get_dial_freq_hz(),
+                .mode       = mode,
+                .rst_sent   = (rs && rs[0]) ? rs : NULL,
+                .rst_rcvd   = (rr && rr[0]) ? rr : NULL,
+                .qso_time   = time(NULL),
+            };
+            adif_log_record(&qso);
+            ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
+                     (unsigned long)qso.freq_hz);
+        }
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        if (err) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            char msg[96];
+            snprintf(msg, sizeof msg, "{\"ok\":false,\"error\":\"%s\"}", err);
+            return httpd_resp_sendstr(req, msg);
+        }
+        /* Answer with what the activation count now is, so the page can say
+         * "7/10" without a second round trip. */
+        {
+            char ref[24];
+            int n = 0, need = settings_activation_target();
+            if (settings_get_activation_ref(ref, sizeof(ref)))
+                n = adif_log_count_activation(ref);
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     "{\"ok\":true,\"call\":\"%s\",\"act_qsos\":%d,\"act_need\":%d,\"total\":%d}",
+                     ucall, n, need, adif_log_count());
+            return httpd_resp_sendstr(req, msg);
+        }
     } else if (action && strcmp(action, "set_activation") == 0) {
         // Start or stop an activation. type 0 stops; 1..N-1 are the programmes
         // in settings.c's k_act[] (POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA)
@@ -1921,8 +1990,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         int t = cJSON_IsNumber(jt) ? (int)jt->valuedouble : -1;
         const char *err = NULL;
         if (t == 0) {
-            settings_set_activation(0, NULL);
-            ESP_LOGI(TAG, "web: activation stopped");
+            /* ⛔ activation_stop(), NOT settings_set_activation(0): the
+             * per-activation ADIF export lived in the Tab5 button handler,
+             * so stopping from here silently skipped the file. One stop,
+             * both surfaces. */
+            char note[160];
+            activation_stop(note, sizeof(note));
+            ESP_LOGI(TAG, "web: %s", note);
         } else if (t > 0 && t < (int)settings_activation_type_count()) {
             /* ⛔ ANY PROGRAMME IN THE TABLE. This was `t == 1 || t == 2`,
              * so the five added in T115 were answered "Unknown activation
