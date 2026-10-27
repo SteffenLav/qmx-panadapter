@@ -272,9 +272,18 @@ static void modal_build(void)
         for (uint8_t t = 1; t < n_types && t < ACT_BTN_MAX; t++) {
             const char *sig = settings_activation_sig_name_for(t);
             if (!sig) continue;
+            lv_obj_t *tl = NULL;
             s_btn_type[t] = make_btn(s_panel, sig, bw, 60, LV_ALIGN_TOP_LEFT,
                                      (int)(t - 1) * (bw + gap), 52,
-                                     type_btn_cb, (void *)(uintptr_t)t, NULL);
+                                     type_btn_cb, (void *)(uintptr_t)t, &tl);
+            /* ⛔ MEASURED ON THE GLASS, NOT COUNTED IN CHARACTERS. At
+             * montserrat_24 "WWBOTA" overran its 112 px button and was cut
+             * off at the panel edge - two capital Ws are nearly 40 px of
+             * that width on their own. The row font is 20, and the button's
+             * own default side padding is removed, so the longest name in
+             * the table fits with room to spare. */
+            lv_obj_set_style_pad_hor(s_btn_type[t], 0, 0);
+            if (tl) lv_obj_set_style_text_font(tl, &lv_font_montserrat_20, 0);
         }
     }
 
