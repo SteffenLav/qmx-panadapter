@@ -2649,16 +2649,24 @@ static const struct {
     const char *sig;      /* ADIF MY_SIG */
     const char *field;    /* dedicated ADIF field, NULL when the programme has none */
     const char *hint;     /* reference format, for the entry field's placeholder */
+    const char *desc;     /* what the programme is, one line for the Activation window */
     uint8_t     target;   /* contacts for a valid activation, 0 = no published number */
 } k_act[] = {
-    { NULL,     NULL,            NULL,          0  },   /* 0 = not activating */
-    { "POTA",   "MY_POTA_REF",   "DL-0123",     10 },
-    { "SOTA",   "MY_SOTA_REF",   "OZ/SJ-001",   4  },
-    { "WWFF",   "MY_WWFF_REF",   "DLFF-0123",   44 },
-    { "IOTA",   "MY_IOTA",       "EU-005",      0  },
-    { "GMA",    NULL,            "DL/BE-001",   0  },
-    { "WCA",    NULL,            "DL-00123",    0  },
-    { "WWBOTA", NULL,            "DL-00123",    0  },
+    { NULL,     NULL,          NULL,        NULL, 0 },   /* 0 = not activating */
+    { "POTA",   "MY_POTA_REF", "DL-0123",
+      "Parks on the Air - national, state and regional parks.", 10 },
+    { "SOTA",   "MY_SOTA_REF", "OZ/SJ-001",
+      "Summits on the Air - mountain tops, scored by height.", 4 },
+    { "WWFF",   "MY_WWFF_REF", "DLFF-0123",
+      "World Wide Flora & Fauna - nature reserves and protected land.", 44 },
+    { "IOTA",   "MY_IOTA",     "EU-005",
+      "Islands on the Air - islands and island groups, run by the RSGB.", 0 },
+    { "GMA",    NULL,          "DL/BE-001",
+      "Global Mountain Activity - summits, huts and castles worldwide.", 0 },
+    { "WCA",    NULL,          "DL-00123",
+      "World Castles Award - castles and fortifications.", 0 },
+    { "WWBOTA", NULL,          "DL-00123",
+      "Bunkers on the Air - military bunkers and defence works.", 0 },
 };
 #define ACT_N ((uint8_t)(sizeof(k_act) / sizeof(k_act[0])))
 
@@ -2672,6 +2680,11 @@ const char *settings_activation_sig_name_for(uint8_t type)
 const char *settings_activation_ref_hint(uint8_t type)
 {
     return (type > 0 && type < ACT_N) ? k_act[type].hint : NULL;
+}
+
+const char *settings_activation_desc(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].desc : NULL;
 }
 
 const char *settings_activation_adif_field(void)

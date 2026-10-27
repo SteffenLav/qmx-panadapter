@@ -48,6 +48,7 @@ static lv_obj_t *s_keyboard = NULL;
 #define ACT_BTN_MAX 12
 static lv_obj_t *s_btn_type[ACT_BTN_MAX];
 static lv_obj_t *s_lbl_count = NULL;
+static lv_obj_t *s_lbl_desc  = NULL;   /* what the chosen programme is */
 static lv_obj_t *s_btn_go = NULL, *s_lbl_go = NULL;
 static uint8_t   s_sel_type = 1;    // editing state: a k_act[] index
 
@@ -88,6 +89,15 @@ static void refresh(void)
     if (s_ta_ref) {
         const char *hint = settings_activation_ref_hint(s_sel_type);
         lv_textarea_set_placeholder_text(s_ta_ref, hint ? hint : "");
+    }
+    /* ⭐ WHAT THE PROGRAMME IS, under the field (operator, 2026-10-27).
+     * Follows the BUTTON, not the running session: it is there to help
+     * someone choose, and the moment it is most needed is before anything
+     * is running. One line each - the window answers "which of these do I
+     * want", not "teach me the hobby". */
+    if (s_lbl_desc) {
+        const char *d = settings_activation_desc(s_sel_type);
+        lv_label_set_text(s_lbl_desc, d ? d : "");
     }
 
     char running[32];
@@ -306,9 +316,17 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
+    s_lbl_desc = lv_label_create(s_panel);
+    lv_label_set_long_mode(s_lbl_desc, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_desc, ACT_PANEL_W - 2 * ACT_PANEL_PAD);
+    lv_obj_align(s_lbl_desc, LV_ALIGN_TOP_LEFT, 0, 200);
+    lv_obj_set_style_text_font(s_lbl_desc, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_lbl_desc, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(s_lbl_desc, "");
+
     s_lbl_count = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 204);
+    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 244);
     lv_label_set_text(s_lbl_count, "");
 
     lv_obj_t *cancel_btn = make_btn(s_panel, "Close", 200, 72,

@@ -1258,6 +1258,10 @@ uint8_t settings_activation_type_count(void);
 const char *settings_activation_sig_name_for(uint8_t type);
 // An example reference for that programme, for the entry field's placeholder.
 const char *settings_activation_ref_hint(uint8_t type);
+// One line saying what the programme is, for the Activation window. The
+// operator picking WCA for the first time should not have to leave the
+// radio to find out what it covers.
+const char *settings_activation_desc(uint8_t type);
 // The dedicated ADIF field for the RUNNING programme ("MY_POTA_REF",
 // "MY_SOTA_REF", "MY_WWFF_REF", "MY_IOTA"), or NULL where the programme has
 // none and travels as MY_SIG/MY_SIG_INFO alone.
