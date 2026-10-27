@@ -29,7 +29,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
-| **T96** | ⛔ **RF gain does not reach the I/Q stream** - 54 dB out moves the floor 0.06 dB. Stan KC7XE 2026-10-27: `RG` IS the right command and the saved Band Config value is meant to stay put, so the `MM`+`MU;` story is withdrawn (`06c3df19`). One candidate left: RF gain may act only on the radio's own audio, after the quadrature tap. **Asked Stan**; the decision and Sam's promised answer wait on him | Sam W7STF |
+| **T96** | ⛔ **RF gain does not reach the I/Q stream** - 54 dB out moves the floor 0.06 dB, and the FFT tap has no AGC. Stan KC7XE 2026-10-27: `RG` IS the right command and the saved Band Config value is meant to stay put, so the `MM`+`MU;` story is withdrawn (`06c3df19`). ⚠ The AUDIBLE half was never a valid test - our own AGC (`rx_audio.c:1976`, on by default) would cancel a real change. **Asked Stan** whether RF gain acts on I/Q at all; test is AGC off, then listen | Sam W7STF |
 | **T98** | ⚠ Smoothing still looks inert to Sam after v1.21.0 fixed two faults in it. He calls it "alpha", the old name - check he is on v1.21.0 first. Measurable from a capture | Sam W7STF |
 | **T99** | ⛔ **ALREADY PARKED 2026-10-01 AT SAM'S OWN REQUEST - he has re-asked without remembering.** `4b66da08`: *"consider it a super-low enhancement, inquiry moreso than feature request ... probably just not worth trying to cram it in."* That commit parked it so a later session could not read it as outstanding work, and I opened this row anyway. **Ask him whether he is re-opening it before any work** | Sam W7STF |
 | **T100** | WSPR -> Panadapter leaves stale pixels in the waterfall area. His own framing is minor; may be bounded by T99 | Sam W7STF |
