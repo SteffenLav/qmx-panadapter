@@ -33,7 +33,15 @@ static const char *TAG = "sched_modal";
 #define SCHED_PANEL_W   1100
 #define SCHED_PANEL_H   650
 #define SCHED_PAD       24
-#define SCHED_ROWS      8        /* what fits between the header and the buttons */
+/* 8 rows FIT; the list holds twice that and scrolls. 53 of 60 upstream
+ * records are in progress at any moment, so a non-scrolling pane showed one
+ * screenful of NOW and nothing to plan around - the sort now puts upcoming
+ * first, and this is what you scroll into. Not SCHED_MAX: every row is four
+ * LVGL labels, and 40 rows would be 160 objects for a pane that is open for
+ * a few seconds at a time. */
+#define SCHED_ROWS      16
+#define SCHED_ROW_H     48
+#define SCHED_LIST_H    (8 * SCHED_ROW_H)
 
 /* Column x, relative to the panel's content box. The IN column is right
  * aligned against the content width. */
@@ -51,6 +59,7 @@ static lv_obj_t *s_row_start[SCHED_ROWS];
 static lv_obj_t *s_row_what[SCHED_ROWS];
 static lv_obj_t *s_row_src[SCHED_ROWS];
 static lv_obj_t *s_row_in[SCHED_ROWS];
+static lv_obj_t *s_list = NULL;        /* the scrollable row area */
 static lv_obj_t *s_lbl_empty = NULL;
 static lv_timer_t *s_tick = NULL;
 /* LVGL has no lv_timer_get_period(), so the period is tracked here. */
@@ -198,6 +207,9 @@ static void tick_cb(lv_timer_t *t)
 static void filt_cb(lv_event_t *e)
 {
     s_filter = (int)(intptr_t)lv_event_get_user_data(e);
+    /* A new filter is a new list - leaving it scrolled where the last one
+     * was shows an apparently empty pane. */
+    if (s_list) lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
     refresh();
 }
 
@@ -306,19 +318,31 @@ static void modal_build(void)
     lv_label_set_text(mk_label(s_panel, COL_SRC,   118, 200, &lv_font_montserrat_20, 0x7A7A7A, false), "SOURCE");
     lv_label_set_text(mk_label(s_panel, inner - 160, 118, 160, &lv_font_montserrat_20, 0x7A7A7A, true), "IN");
 
+    /* The rows live in their own scrollable box so the ones below the fold are
+     * reachable with a finger. Transparent and borderless - it is a viewport,
+     * not a panel inside a panel. */
+    s_list = lv_obj_create(s_panel);
+    lv_obj_set_size(s_list, inner, SCHED_LIST_H);
+    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 146);
+    lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_list, 0, 0);
+    lv_obj_set_style_pad_all(s_list, 0, 0);
+    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
+
     for (int i = 0; i < SCHED_ROWS; i++) {
-        int y = 150 + i * 48;
-        s_row_start[i] = mk_label(s_panel, COL_START, y, 160,
+        int y = i * SCHED_ROW_H;
+        s_row_start[i] = mk_label(s_list, COL_START, y, 160,
                                   &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY, false);
-        s_row_what[i]  = mk_label(s_panel, COL_WHAT,  y, COL_SRC - COL_WHAT - 16,
+        s_row_what[i]  = mk_label(s_list, COL_WHAT,  y, COL_SRC - COL_WHAT - 16,
                                   &lv_font_montserrat_24, UI_COLOR_TEXT, false);
-        s_row_src[i]   = mk_label(s_panel, COL_SRC,   y, 200,
+        s_row_src[i]   = mk_label(s_list, COL_SRC,   y, 200,
                                   &lv_font_montserrat_20, 0x9AD0FF, false);
-        s_row_in[i]    = mk_label(s_panel, inner - 170, y, 170,
+        s_row_in[i]    = mk_label(s_list, inner - 170, y, 170,
                                   &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY, true);
     }
 
-    s_lbl_empty = mk_label(s_panel, COL_START, 190, inner,
+    s_lbl_empty = mk_label(s_panel, COL_START, 200, inner,
                            &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY, false);
 
     lv_obj_t *close = mk_btn(s_panel, "Close", 200, 72, LV_ALIGN_BOTTOM_LEFT, 40, 0,
@@ -346,6 +370,7 @@ void sched_modal_show(void)
     sched_events_request(false);
 
     s_seen_ver = sched_events_version();
+    if (s_list) lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
     refresh();
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);

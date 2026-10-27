@@ -816,7 +816,22 @@ bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
  * WHOLE list rather than the tail. 60 records is ~60 kB against a 160 kB
  * buffer, so it fits with room, and 60 upstream yields far more than
  * SCHED_MAX after the ended ones are dropped. */
-#define SCHED_QUERY  "limit=60"
+/* ⛔ v3, NOT the v1 the spots feeds use, AND TWO FETCHES. Both were found by
+ * looking at the bytes after the first version shipped to the bench:
+ *
+ * 1. v1 /alerts returns `activities: []` on EVERY record - measured, 60 of 60.
+ *    The contest test below reads that array, so the Contests filter could
+ *    never match anything and the pane showed an empty list. v3 populates it
+ *    (`["Contest"]`, `["POTA"]`). The /spots calls stay on v1 deliberately:
+ *    they work, and moving them is a separate change with its own risk.
+ *
+ * 2. The feed is dominated by activations. An unfiltered limit=60 came back
+ *    POTA 28, NG3K 21, ParksNPeaks 4, SOTA 4, WWFF 2 and exactly ONE contest -
+ *    so a single fetch cannot answer "what contest is on this weekend" however
+ *    large the limit. The contest query is asked for separately and merged. */
+#define SPOTHOLE_ALERTS_BASE "https://spothole.app/api/v3"
+#define SCHED_Q_CONTEST      "/alerts?activity=Contest&limit=24"
+#define SCHED_Q_ALL          "/alerts?limit=40"
 
 static sched_event_t    *s_sched;             /* PSRAM, SCHED_MAX entries */
 static int               s_sched_n;
@@ -860,11 +875,29 @@ int sched_events_get(sched_event_t *out, int max)
     return n;
 }
 
+/* ⭐ UPCOMING FIRST, THEN WHAT IS ALREADY RUNNING.
+ *
+ * A plain sort by start time put every in-progress event at the top, and 53 of
+ * 60 records are in progress at any moment - so the first screenful was eight
+ * rows all reading NOW and nothing you could plan around. The operator saw
+ * exactly that on the bench and assumed it was the data. It was the sort.
+ *
+ * Within each group, soonest first: upcoming by start, running by the end time,
+ * so the one about to finish is not the one you are shown first. */
+static int64_t s_sort_now;      /* set once per sort - time() per compare is silly */
+
 static int sched_cmp(const void *a, const void *b)
 {
     const sched_event_t *x = a, *y = b;
-    /* Unknown start times sort last rather than to 1970, where they would sit
-     * above everything real. */
+    bool xr = x->start_unix && x->start_unix <= s_sort_now;
+    bool yr = y->start_unix && y->start_unix <= s_sort_now;
+    if (xr != yr) return xr ? 1 : -1;          /* running sinks below upcoming */
+    if (xr) {
+        /* Unknown end sorts last within the running group. */
+        int64_t xe = x->end_unix ? x->end_unix : INT64_MAX;
+        int64_t ye = y->end_unix ? y->end_unix : INT64_MAX;
+        return (xe > ye) - (xe < ye);
+    }
     int64_t xs = x->start_unix ? x->start_unix : INT64_MAX;
     int64_t ys = y->start_unix ? y->start_unix : INT64_MAX;
     return (xs > ys) - (xs < ys);
@@ -879,39 +912,15 @@ static bool sched_take_request(void)
     return true;
 }
 
-static void fetch_sched(void)
+/* Parse one /alerts body into s_sched starting at *n. Returns the new count.
+ * Separate from the fetch so the two queries share every parsing rule - the
+ * merge must not become a second place where a contest is recognised. */
+static int sched_parse(const char *buf, int n)
 {
-    s_sched_busy = true;
-    char *buf = NULL;
-    int len = http_get_json(SPOTHOLE_BASE "/alerts?" SCHED_QUERY, &buf);
-    if (len <= 0) {
-        /* ⛔ KEEP WHAT WE HAVE. Ian's own caveat is a design requirement here:
-         * spothole being down is an ordinary state, so a failed fetch must
-         * leave the last good list and say nothing. */
-        s_sched_busy = false;
-        return;
-    }
-
     cJSON *root = cJSON_Parse(buf);
-    heap_caps_free(buf);
-    if (!cJSON_IsArray(root)) {
-        if (root) cJSON_Delete(root);
-        s_sched_busy = false;
-        return;
-    }
-
-    if (!s_sched) {
-        s_sched = heap_caps_calloc(SCHED_MAX, sizeof(*s_sched),
-                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_sched) {
-            cJSON_Delete(root);
-            s_sched_busy = false;
-            return;
-        }
-    }
+    if (!cJSON_IsArray(root)) { if (root) cJSON_Delete(root); return n; }
 
     int64_t now = (int64_t)time(NULL);
-    int n = 0;
     cJSON *it = NULL;
     cJSON_ArrayForEach(it, root) {
         if (n >= SCHED_MAX) break;
@@ -921,23 +930,22 @@ static void fetch_sched(void)
         cJSON *en = cJSON_GetObjectItem(it, "end_time");
         if (cJSON_IsNumber(st)) e.start_unix = (int64_t)st->valuedouble;
         if (cJSON_IsNumber(en)) e.end_unix   = (int64_t)en->valuedouble;
-        /* Already over - skip it here rather than carry it and filter later,
-         * so SCHED_MAX holds forty USEFUL rows. */
-        if (e.end_unix && e.end_unix < now) continue;
+        if (e.end_unix && e.end_unix < now) continue;      /* already over */
 
         const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(it, "source"));
         if (src) snprintf(e.src, sizeof(e.src), "%s", src);
 
-        /* A contest has no reference and its name is in the comment; an
-         * activation has a reference and a callsign. The activities array is
-         * the honest test - "Contest" is one of spothole's own activity
-         * names (/options activities), not a guess from the source string. */
+        /* Two independent tests, because each has failed on its own: the
+         * activities array is empty on v1 (which is what broke the Contests
+         * filter first time), and a source string is a name that can change.
+         * Either one saying "contest" is enough. */
         cJSON *acts = cJSON_GetObjectItem(it, "activities");
         cJSON *a = NULL;
         cJSON_ArrayForEach(a, acts) {
             const char *an = cJSON_GetStringValue(a);
             if (an && strcasecmp(an, "Contest") == 0) { e.is_contest = true; break; }
         }
+        if (!e.is_contest && src && strcasestr(src, "Contest")) e.is_contest = true;
 
         const char *comment = cJSON_GetStringValue(cJSON_GetObjectItem(it, "comment"));
         cJSON *calls = cJSON_GetObjectItem(it, "dx_calls");
@@ -945,8 +953,6 @@ static void fetch_sched(void)
                            ? cJSON_GetStringValue(cJSON_GetArrayItem(calls, 0)) : NULL;
 
         if (e.is_contest) {
-            /* The contest's name. Falls back to the callsign only because an
-             * unnamed row is useless, and a row with a call at least says who. */
             snprintf(e.what, sizeof(e.what), "%s",
                      (comment && comment[0]) ? comment : (call ? call : "Contest"));
         } else {
@@ -958,16 +964,75 @@ static void fetch_sched(void)
                 if (id) snprintf(e.ref, sizeof(e.ref), "%s", id);
             }
         }
-        if (!e.what[0]) continue;      /* nothing to show - not a row */
+        if (!e.what[0]) continue;
+
+        /* The two queries overlap - a contest comes back in both - so drop a
+         * repeat of the same thing at the same time rather than showing it
+         * twice. */
+        bool dup = false;
+        for (int i = 0; i < n && !dup; i++)
+            if (s_sched[i].start_unix == e.start_unix &&
+                strcmp(s_sched[i].what, e.what) == 0) dup = true;
+        if (dup) continue;
+
         s_sched[n++] = e;
     }
     cJSON_Delete(root);
+    return n;
+}
 
+static void fetch_sched(void)
+{
+    s_sched_busy = true;
+
+    if (!s_sched) {
+        s_sched = heap_caps_calloc(SCHED_MAX, sizeof(*s_sched),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_sched) { s_sched_busy = false; return; }
+    }
+
+    /* Contests FIRST, so that if SCHED_MAX fills they are the ones that
+     * survive: activations arrive in bulk from the live feeds anyway, and the
+     * contest calendar is the half that cannot be had any other way. */
+    static const char *const kQueries[2] = { SCHED_Q_CONTEST, SCHED_Q_ALL };
+    int  n = 0;
+    int  total_bytes = 0;
+    bool any = false;
+
+    for (int q = 0; q < 2; q++) {
+        char url[128];
+        snprintf(url, sizeof(url), "%s%s", SPOTHOLE_ALERTS_BASE, kQueries[q]);
+        char *buf = NULL;
+        int len = http_get_json(url, &buf);
+        if (len <= 0) continue;              /* the other query may still work */
+        total_bytes += len;
+        n = sched_parse(buf, n);
+        heap_caps_free(buf);
+        any = true;
+    }
+
+    if (!any) {
+        /* ⛔ KEEP WHAT WE HAVE. Ian's own caveat is a design requirement here:
+         * spothole being down is an ordinary state, so a failed fetch leaves
+         * the last good list and says nothing. */
+        s_sched_busy = false;
+        return;
+    }
+
+    s_sort_now = (int64_t)time(NULL);
     qsort(s_sched, (size_t)n, sizeof(*s_sched), sched_cmp);
     s_sched_n   = n;
     s_sched_at  = esp_timer_get_time();
     s_sched_ver++;
     s_sched_busy = false;
-    ESP_LOGI(TAG, "scheduled events: %d upcoming (%d bytes)", n, len);
+
+    int contests = 0, upcoming = 0;
+    for (int i = 0; i < n; i++) {
+        if (s_sched[i].is_contest) contests++;
+        if (!s_sched[i].start_unix || s_sched[i].start_unix > s_sort_now) upcoming++;
+    }
+    ESP_LOGI(TAG, "scheduled events: %d kept (%d contests, %d upcoming, %d bytes)",
+             n, contests, upcoming, total_bytes);
 }
+
 
