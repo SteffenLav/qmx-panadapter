@@ -86,9 +86,12 @@ on does not also change the volume. It is not a second IF filter — the radio's
 still decides what reaches the Tab5 *(Samuel W7STF)*.
 
 **Audio panel** — One tap on the S-meter opens mute, the Tab5's speaker volume, the radio's
-AF gain, the radio's RF gain (0–99 dB, stored per band by the QMX) and an AGC Fast / Slow /
+AF gain, the radio's RF gain (0–99 dB, stored per band by the QMX — ⚠ measured 2026-10-27 to have
+no effect on the spectrum or the audio, see below) and an AGC Fast / Slow /
 Off row — Fast being a 1 ms attack and 30 ms release for CW, Slow 5 ms and 400 ms, and Off
 pinning the gain at the AGC ceiling. A tap outside closes it *(Samuel W7STF)*.
+
+⚠ **Correction, 2026-10-27: the RF gain slider does not do what this said.** Taking the gain from 54 to 0 moved the spectrum noise floor **0.06 dB** over 81 frames. The radio accepts the command and reads the new value back — Stan KC7XE confirms `RG` is the right command and that the Band Configuration value is separate by design — but it does not reach the I/Q stream the Tab5 receives, and the spectrum, the decoders and the Tab5's own audio all come from that one stream. So it changes nothing you can see or hear on the Tab5. Whether it changes the radio's own audio output is with Stan. The AGC row in the same panel is unaffected and works as described.
 
 **Receive from the 3.5 mm jack** *(beta — Tony, @tony1tf, #17)* — The panadapter can take
 its signal from the Tab5's own headphone jack instead of the radio's USB audio. Tony asked

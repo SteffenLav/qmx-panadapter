@@ -44,7 +44,11 @@ its LCD when you click its volume knob. Read back from the radio when you open t
 drawer, so it agrees with the rig even if you last changed it there.
 
 **QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
-(the QMX default is 54). Because it is **per band**, the Tab5 reads it from the radio
+(the QMX default is 54). ⚠ **Measured 2026-10-27: changing it does not move the
+spectrum or the audio** — 54 dB out shifted the noise floor 0.06 dB. The radio
+accepts the value and reads it back, but it does not reach the I/Q stream the Tab5
+receives, and everything the Tab5 shows or plays comes from that stream. See
+[Audio Features](audio.md#know-which-volume-control-does-what). Because it is **per band**, the Tab5 reads it from the radio
 rather than remembering a number that would belong to whichever band you were on last;
 it shows "reading…" until the radio answers, and **"radio not connected"** if the radio
 is not there at all. Until v1.8.3 it could stick on "reading…" for a whole session:
