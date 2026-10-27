@@ -746,3 +746,44 @@ void spots_init(void)
     psram_task_create(spots_task, "spots", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }
+
+/* ---- the spot the operator last chose to work - see spots.h ----------- */
+static char     s_pick_call[16];
+static uint8_t  s_pick_mode;
+static uint32_t s_pick_hz;
+static int64_t  s_pick_at;        /* esp_timer us, 0 = nothing picked */
+
+void spots_note_pick(const char *call, uint8_t mode, uint32_t freq_hz)
+{
+    if (!call || !call[0] || !freq_hz) { spots_clear_pick(); return; }
+    snprintf(s_pick_call, sizeof(s_pick_call), "%s", call);
+    s_pick_mode = mode;
+    s_pick_hz   = freq_hz;
+    s_pick_at   = esp_timer_get_time();
+}
+
+void spots_clear_pick(void)
+{
+    s_pick_call[0] = ' ';
+    s_pick_hz = 0;
+    s_pick_at = 0;
+}
+
+bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
+                     uint32_t dial_hz, uint32_t tol_hz, int max_age_s)
+{
+    if (call_out && call_sz) call_out[0] = ' ';
+    if (!s_pick_at || !s_pick_call[0]) return false;
+
+    if (max_age_s > 0) {
+        int64_t age_s = (esp_timer_get_time() - s_pick_at) / 1000000;
+        if (age_s > max_age_s) return false;
+    }
+    if (tol_hz > 0 && dial_hz) {
+        uint32_t d = dial_hz > s_pick_hz ? dial_hz - s_pick_hz : s_pick_hz - dial_hz;
+        if (d > tol_hz) return false;
+    }
+    if (call_out && call_sz) snprintf(call_out, call_sz, "%s", s_pick_call);
+    if (mode_out) *mode_out = s_pick_mode;
+    return true;
+}

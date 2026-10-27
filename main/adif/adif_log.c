@@ -524,6 +524,15 @@ void adif_log_record(const adif_qso_t *qso)
         if (my_sig && settings_get_activation_ref(my_ref, sizeof(my_ref))) {
             write_field(f, "MY_SIG",      my_sig);
             write_field(f, "MY_SIG_INFO", my_ref);
+            /* ⛔ AND THE PROGRAMME'S OWN FIELD, where ADIF defines one.
+             * MY_SIG is free text (ADIF 3.1.6 gives it no enumeration) and
+             * POTA's uploader reads it, but SOTA, WWFF and IOTA read
+             * MY_SOTA_REF, MY_WWFF_REF and MY_IOTA instead - a log carrying
+             * only MY_SIG is accepted by one of the four and silently
+             * credits nothing in the others. GMA, WCA and WWBOTA have no
+             * field of their own and correctly get none. */
+            const char *my_field = settings_activation_adif_field();
+            if (my_field) write_field(f, my_field, my_ref);
         }
     }
     if (qso->their_sig_info && qso->their_sig_info[0]) {

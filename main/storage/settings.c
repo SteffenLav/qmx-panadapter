@@ -2615,13 +2615,71 @@ bool settings_get_activation_ref(char *out, size_t out_sz)
     return on;
 }
 
+/* ⭐ THE PROGRAMME TABLE. One place, because three things have to agree about
+ * every entry: the word that goes in ADIF MY_SIG, the dedicated ADIF field
+ * (where one exists), and how many contacts make the activation count.
+ *
+ * ⛔ THE DEDICATED FIELD IS NOT COSMETIC. ADIF 3.1.6 makes MY_SIG a free-text
+ * String with no enumeration, so any programme can be written there - but
+ * POTA, SOTA, WWFF and IOTA ALSO have their own fields (MY_POTA_REF,
+ * MY_SOTA_REF, MY_WWFF_REF, MY_IOTA), and those are what the SOTA, WWFF and
+ * IOTA uploaders read. MY_SIG alone is enough for POTA's own uploader and for
+ * nothing else, so both are written. GMA, WCA and WWBOTA have no ADIF field of
+ * their own and travel as MY_SIG/MY_SIG_INFO only, which is what their log
+ * checkers expect.
+ *
+ * ⚠ The targets are the programme's own rule, not ours: POTA 10, SOTA 4,
+ * WWFF 44. The rest publish no single number, and 0 means the panel shows the
+ * count without claiming a threshold - inventing one would tell an operator he
+ * can go home when the programme says otherwise.
+ *
+ * ⛔ IDS ARE PERSISTED IN NVS (act_type). Append only; never renumber. 1 and 2
+ * were POTA and SOTA before the others existed and must stay where they are,
+ * or a unit updated mid-activation changes programme under the operator. */
+static const struct {
+    const char *sig;      /* ADIF MY_SIG */
+    const char *field;    /* dedicated ADIF field, NULL when the programme has none */
+    const char *hint;     /* reference format, for the entry field's placeholder */
+    uint8_t     target;   /* contacts for a valid activation, 0 = no published number */
+} k_act[] = {
+    { NULL,     NULL,            NULL,          0  },   /* 0 = not activating */
+    { "POTA",   "MY_POTA_REF",   "DL-0123",     10 },
+    { "SOTA",   "MY_SOTA_REF",   "OZ/SJ-001",   4  },
+    { "WWFF",   "MY_WWFF_REF",   "DLFF-0123",   44 },
+    { "IOTA",   "MY_IOTA",       "EU-005",      0  },
+    { "GMA",    NULL,            "DL/BE-001",   0  },
+    { "WCA",    NULL,            "DL-00123",    0  },
+    { "WWBOTA", NULL,            "DL-00123",    0  },
+};
+#define ACT_N ((uint8_t)(sizeof(k_act) / sizeof(k_act[0])))
+
+uint8_t settings_activation_type_count(void) { return ACT_N; }
+
+const char *settings_activation_sig_name_for(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].sig : NULL;
+}
+
+const char *settings_activation_ref_hint(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].hint : NULL;
+}
+
+const char *settings_activation_adif_field(void)
+{
+    uint8_t t = settings_get_activation_type();
+    return (t > 0 && t < ACT_N) ? k_act[t].field : NULL;
+}
+
+uint8_t settings_activation_target(void)
+{
+    uint8_t t = settings_get_activation_type();
+    return (t > 0 && t < ACT_N) ? k_act[t].target : 0;
+}
+
 const char *settings_activation_sig_name(void)
 {
-    switch (settings_get_activation_type()) {
-        case 1:  return "POTA";
-        case 2:  return "SOTA";
-        default: return NULL;
-    }
+    return settings_activation_sig_name_for(settings_get_activation_type());
 }
 
 void settings_set_swr_limit_x10(uint8_t v)

@@ -1571,7 +1571,7 @@
     <button id="tune-stop-btn" class="btn-danger">STOP Tune</button>
   </div>
 
-  <!-- POTA / SOTA activation. Mirrors ui/activation_modal.c: pick the programme,
+  <!-- Activation. Mirrors ui/activation_modal.c: pick the programme,
        type the reference, one button that starts or stops. The reference is what
        POTA and SOTA read out of MY_SIG_INFO to credit the contacts, so the wording
        leans on getting it right and on stopping when you leave. -->
@@ -1587,10 +1587,10 @@
         POTA and SOTA read to credit it. Stop it when you leave.
       </div>
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
-        <select id="act-type" style="font-size:15px; padding:6px 8px;">
-          <option value="1">POTA (park)</option>
-          <option value="2">SOTA (summit)</option>
-        </select>
+        <!-- Filled from /api/status?presets=1 act_types, never written out
+             here: one table on the device, so the two surfaces cannot offer
+             different programmes. -->
+        <select id="act-type" style="font-size:15px; padding:6px 8px;"></select>
         <input id="act-ref-in" type="text" placeholder="DL-0123" maxlength="15"
                style="flex:1; font-size:15px; padding:6px 8px; text-transform:uppercase;">
       </div>
@@ -5039,6 +5039,10 @@ async function ft8LoadPresets() {
        means no JS8 group is offered. */
     window.__ft8Presets = { ft8: d.ft8_presets, ft4: d.ft4_presets || [],
                             js8: d.js8_presets || [] };
+    /* The activation programmes ride the same one-shot fetch - they never
+       change either, and a second round trip for eight short strings is
+       not worth it. */
+    if (d.act_types) window.__actTypes = d.act_types;
     ft8FillPresets();
   } catch (e) { /* offline - the control just stays empty rather than lying */ }
 }
@@ -9036,24 +9040,59 @@ function updateActPill() {
   const running = lastAct && lastAct.type && lastAct.ref;
   pill.style.display = running ? "" : "none";
   if (!running) return;
-  document.getElementById('act-kind').textContent = lastAct.type === 2 ? "SOTA" : "POTA";
+  /* ⛔ THE DEVICE'S OWN WORD. This translated the id here - "type === 2 ?
+     SOTA : POTA" - so every programme beyond those two would have been
+     labelled POTA in the browser while the Tab5 showed the truth. */
+  document.getElementById('act-kind').textContent = lastAct.sig || "";
   document.getElementById('act-ref').textContent =
       lastAct.ref + (lastAct.qsos != null ? "  " + lastAct.qsos + " Q" : "");
 }
 
+function actFillTypes() {
+  const sel = document.getElementById('act-type');
+  const list = window.__actTypes;
+  if (!sel || !list || sel.options.length === list.length) return;
+  const keep = sel.value;
+  sel.innerHTML = "";
+  for (const a of list) {
+    const o = document.createElement("option");
+    o.value = String(a.id);
+    o.textContent = a.sig;
+    o.dataset.hint = a.hint || "";
+    sel.appendChild(o);
+  }
+  if (keep) sel.value = keep;
+}
+
+/* The placeholder is the chosen programme's own reference format - one
+   example for seven schemes would be an example of none of them. */
+function actSyncHint() {
+  const sel = document.getElementById('act-type');
+  const inp = document.getElementById('act-ref-in');
+  const o = sel && sel.selectedOptions && sel.selectedOptions[0];
+  if (inp && o) inp.placeholder = o.dataset.hint || "";
+}
+
 function actOpen() {
   const running = lastAct && lastAct.type && lastAct.ref;
+  actFillTypes();
   document.getElementById('act-type').value = String(running ? lastAct.type : 1);
+  actSyncHint();
   document.getElementById('act-ref-in').value = running ? lastAct.ref : "";
   document.getElementById('act-err').textContent = "";
   document.getElementById('act-state').textContent = running
-      ? "running: " + (lastAct.type === 2 ? "SOTA " : "POTA ") + lastAct.ref +
-        (lastAct.qsos != null ? " - " + lastAct.qsos + " logged" : "")
+      ? "running: " + (lastAct.sig || "") + " " + lastAct.ref +
+        (lastAct.qsos != null ? " - " + lastAct.qsos + " logged"
+           + (lastAct.need ? " of " + lastAct.need : "") : "")
       : "not running";
   document.getElementById('act-stop').style.display = running ? "" : "none";
   document.getElementById('act-go').textContent = running ? "Change reference" : "Start";
   document.getElementById('act-modal').style.display = "block";
 }
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'act-type') actSyncHint();
+});
 
 async function actSend(type, ref) {
   const r = await fetch("/api/cmd", {

@@ -29,10 +29,14 @@ static lv_obj_t *s_modal   = NULL;
 static lv_obj_t *s_panel   = NULL;
 static lv_obj_t *s_ta_ref  = NULL;
 static lv_obj_t *s_keyboard = NULL;
-static lv_obj_t *s_btn_pota = NULL, *s_btn_sota = NULL;
+/* One button per programme in settings.c's k_act[], index 1..N-1. Index 0 is
+ * "not activating" and has no button. Sized from the table rather than
+ * written out, so adding a programme there adds its button here. */
+#define ACT_BTN_MAX 12
+static lv_obj_t *s_btn_type[ACT_BTN_MAX];
 static lv_obj_t *s_lbl_count = NULL;
 static lv_obj_t *s_btn_go = NULL, *s_lbl_go = NULL;
-static uint8_t   s_sel_type = 1;    // editing state: 1 POTA, 2 SOTA
+static uint8_t   s_sel_type = 1;    // editing state: a k_act[] index
 
 bool activation_is_running(void) { return settings_get_activation_type() != 0; }
 
@@ -63,8 +67,15 @@ static void style_type_btn(lv_obj_t *btn, bool on)
 // button describe what is actually running right now.
 static void refresh(void)
 {
-    style_type_btn(s_btn_pota, s_sel_type == 1);
-    style_type_btn(s_btn_sota, s_sel_type == 2);
+    for (uint8_t t = 1; t < settings_activation_type_count() && t < ACT_BTN_MAX; t++)
+        if (s_btn_type[t]) style_type_btn(s_btn_type[t], s_sel_type == t);
+    /* The placeholder is the chosen programme's own reference format. A
+     * single example covering seven schemes would be an example of none of
+     * them, and the format is the part an operator gets wrong. */
+    if (s_ta_ref) {
+        const char *hint = settings_activation_ref_hint(s_sel_type);
+        lv_textarea_set_placeholder_text(s_ta_ref, hint ? hint : "");
+    }
 
     char running[32];
     bool on = activation_describe(running, sizeof(running));
@@ -75,9 +86,11 @@ static void refresh(void)
             settings_get_activation_ref(ref, sizeof(ref));
             int n = adif_log_count_activation(ref);
             char b[160];   // room for the completeness line below
-            // POTA's threshold is 10; SOTA's is 4. Showing the target turns a
-            // bare number into an answer to "can I go home yet".
-            int target = (settings_get_activation_type() == 2) ? 4 : 10;
+            // The programme's own threshold - POTA 10, SOTA 4, WWFF 44 -
+            // which turns a bare number into an answer to "can I go home
+            // yet". 0 where the programme publishes none, and then the line
+            // says the count and claims nothing.
+            int target = settings_activation_target();
             /* #263 (Don WB0LQW): this panel already answers "can I go home
                yet", and "3 of these may not count" is the same question, so
                it belongs on the same line rather than behind another button.
@@ -88,15 +101,19 @@ static void refresh(void)
                cannot give different answers. */
             adif_log_check_t chk;
             adif_log_check(true, &chk, NULL, 0);
-            int off = snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
-                               running, n, n == 1 ? "" : "s", target);
+            int off = target
+                ? snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
+                           running, n, n == 1 ? "" : "s", target)
+                : snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged",
+                           running, n, n == 1 ? "" : "s");
             if (chk.with_problems > 0 && off > 0 && off < (int)sizeof(b))
                 snprintf(b + off, sizeof(b) - (size_t)off,
                          "\n%d may be incomplete - check the log in the web UI",
                          chk.with_problems);
             lv_label_set_text(s_lbl_count, b);
             lv_obj_set_style_text_color(s_lbl_count,
-                                        lv_color_hex(n >= target ? 0x60D060 : 0xFFC864), 0);
+                                        lv_color_hex((target && n >= target) ? 0x60D060
+                                                                             : 0xFFC864), 0);
         } else {
             lv_label_set_text(s_lbl_count, "No activation running.\nQSOs log normally.");
             lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -241,17 +258,35 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    s_btn_pota = make_btn(s_panel, "POTA", 180, 60, LV_ALIGN_TOP_LEFT, 0, 52,
-                          type_btn_cb, (void *)(uintptr_t)1, NULL);
-    s_btn_sota = make_btn(s_panel, "SOTA", 180, 60, LV_ALIGN_TOP_LEFT, 196, 52,
-                          type_btn_cb, (void *)(uintptr_t)2, NULL);
+    /* ⭐ EVERY PROGRAMME IN THE TABLE, one row (operator, 2026-10-27: "our
+     * Activation window should have them all"). Seven at 180 px do not fit
+     * 832 px of inner panel, so the width is computed from the count and the
+     * reference field moves to its own line below. Adding an eighth programme
+     * to k_act[] narrows them all rather than overflowing. */
+    {
+        const uint8_t n_types = settings_activation_type_count();   /* incl. index 0 */
+        const int     n_btn   = (n_types > 1) ? (n_types - 1) : 0;
+        const int     inner   = 880 - 2 * 24;
+        const int     gap     = 8;
+        const int     bw      = n_btn ? (inner - gap * (n_btn - 1)) / n_btn : inner;
+        for (uint8_t t = 1; t < n_types && t < ACT_BTN_MAX; t++) {
+            const char *sig = settings_activation_sig_name_for(t);
+            if (!sig) continue;
+            s_btn_type[t] = make_btn(s_panel, sig, bw, 60, LV_ALIGN_TOP_LEFT,
+                                     (int)(t - 1) * (bw + gap), 52,
+                                     type_btn_cb, (void *)(uintptr_t)t, NULL);
+        }
+    }
 
     s_ta_ref = lv_textarea_create(s_panel);
     lv_obj_set_size(s_ta_ref, 420, 60);
-    lv_obj_align(s_ta_ref, LV_ALIGN_TOP_LEFT, 400, 52);
+    /* Its own row now - the programme buttons take the full width above. */
+    lv_obj_align(s_ta_ref, LV_ALIGN_TOP_LEFT, 0, 128);
     lv_textarea_set_one_line(s_ta_ref, true);
     lv_textarea_set_max_length(s_ta_ref, 15);
-    lv_textarea_set_placeholder_text(s_ta_ref, "DL-0123  /  OZ/SJ-001");
+    /* Set from the chosen programme in refresh(); this is only what shows
+       before the first refresh runs. */
+    lv_textarea_set_placeholder_text(s_ta_ref, "DL-0123");
     lv_obj_set_style_text_font(s_ta_ref, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_ref);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
@@ -259,7 +294,7 @@ static void modal_build(void)
 
     s_lbl_count = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 136);
+    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 204);
     lv_label_set_text(s_lbl_count, "");
 
     lv_obj_t *cancel_btn = make_btn(s_panel, "Close", 200, 72,

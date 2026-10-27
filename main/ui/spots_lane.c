@@ -184,7 +184,10 @@ static work_t *s_w;
 
 // What each drawn callsign points at, so a tap can act on it. The label carries
 // its index here in user_data (stored +1, so 0 means "nothing").
-typedef struct { uint32_t freq_hz; uint8_t mode; uint32_t colour; int16_t x; } tap_target_t;
+/* The callsign rides along so a tap can record WHO is being worked, not just
+ * where - the manual log window pre-fills from it (operator, 2026-10-27). */
+typedef struct { uint32_t freq_hz; uint8_t mode; uint32_t colour; int16_t x;
+                 char call[16]; } tap_target_t;
 static tap_target_t s_label_target[MAX_LABELS];
 static int          s_label_n = 0;      // how many labels are currently drawn
 
@@ -503,6 +506,8 @@ static void repaint(void)
         s_label_target[used].mode    = (uint8_t)sp->mode;
         s_label_target[used].colour  = s_w->colour[si];
         s_label_target[used].x       = (int16_t)s_w->x[i];   // the tick, for drag-snap
+        snprintf(s_label_target[used].call, sizeof(s_label_target[used].call),
+                 "%s", sp->call);
         lv_obj_set_user_data(lb, (void *)(uintptr_t)(used + 1));
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
 
@@ -655,6 +660,10 @@ static void tune_to_spot(const tap_target_t *t, const char *what)
     // Via the poll task: the LVGL thread must never write the CDC pipe directly
     // (it races the FA/MD/FW poll and the QMX answers '?;').
     if (mode) cat_request_mode(mode);
+    /* Remember WHO, so the manual log window opens with the callsign already
+     * in it. Kept in spots.c rather than here because the pick outlives this
+     * lane - the operator tunes, works the station, then opens the log. */
+    spots_note_pick(t->call, t->mode, t->freq_hz);
 }
 
 // Highlight: the callsign inverts - its own colour becomes the fill and the text

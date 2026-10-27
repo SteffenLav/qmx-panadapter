@@ -17702,8 +17702,11 @@ static void drawer_refresh_activation(void)
         char ref[24];
         if (settings_get_activation_ref(ref, sizeof(ref))) {
             int n = adif_log_count_activation(ref);
-            int target = (settings_get_activation_type() == 2) ? 4 : 10;
-            snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s  %d/%d", desc, n, target);
+            /* 0 where the programme publishes no threshold - then the
+             * count stands alone rather than inventing one to divide by. */
+            int target = settings_activation_target();
+            if (target) snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s  %d/%d", desc, n, target);
+            else        snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s  %d", desc, n);
         } else {
             snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s", desc);
         }

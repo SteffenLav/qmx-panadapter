@@ -47,6 +47,8 @@ number when something new arrives; never close a gap.
 | ~~T111~~ | ⛔ **ANSWERED, NOT BUILDABLE.** The Unit GPS LED is on the module and driven by the ATGM336H, and our UART has **no TX pin at all** (`unit_gps.c:496`, `UART_PIN_NO_CHANGE`, deliberate) - the Tab5 cannot send the module any command. Not ours to switch off | Brian KB9WFS |
 | **T112** | ⛔ **DECLINED 2026-10-27** - flashing the QMX's own firmware from the Tab5. A failed write strands the operator with a radio needing a programmer, in the field. Revisit only if QRP Labs publish a recoverable path | Brian KB9WFS |
 | **T113** | The log view's **All / Today** toggle should be sticky until changed. ⭐ He also confirmed v1.21.0's activation UTC-day and CQ-POTA fixes work | Bruce N9JCV |
+| ~~T114~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Tapping a spot now records WHO, and the Log window opens with that callsign in it. Guarded by the dial - `spots_last_pick()` answers only within 500 Hz of where the tap put the radio, so a stale call cannot reach the log | operator |
+| ~~T115~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Activation covers 7 programmes, not 2: POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA. One table in `settings.c`; POTA/SOTA/WWFF/IOTA also get their dedicated ADIF field (`MY_POTA_REF` etc), which is what their uploaders read. Targets 10/4/44, none claimed for the rest. Web picker now served from the same table | operator |
 | **T95** | Waterfall mirroring + a signal that slides as the dial turns, seen once after the T90 crash reboot. UNEXPLAINED, not reproducible | operator |
 | **T96** | RF gain adjustment has no audible or visible effect - popup AND web settings. UNTESTED, radio was wedged | Sam W7STF |
 | **T97** | Tab5 rebooted once at 92% battery while changing QMX+ VFO tuning rates. Not reproducible | Sam W7STF |
@@ -66,6 +68,8 @@ number when something new arrives; never close a gap.
 | **T111** | Option to disable the Unit GPS flashing LED | Brian KB9WFS |
 | **T112** | Idea: update the QMX's own firmware from the Tab5 | Brian KB9WFS |
 | **T113** | Make the log view's All/Today choice sticky | Bruce N9JCV |
+| **T114** | Log window pre-fills the callsign from a tapped spot | operator |
+| **T115** | Activation covers all seven ?OTA programmes, with their ADIF fields | operator |
 | ~~T01~~ | ✅ **DONE 2026-10-18** (`1fab9b2e`) - DTR described in ft8-rx.md, web-ui.md and the v1.17.0 entry | Randy N4OPI |
 | ~~T02~~ | ✅ **CLOSED 2026-10-21 - no longer relevant, his call.** Original: Ask: glyph *as well as* the cyan/green boundary? | Sam W7STF |
 | ~~T03~~ | ✅ **CLOSED 2026-10-21 - no longer relevant, his call.** The drafts in this row date from 10-18 and have been overtaken; replies since are tracked on their own rows. Original: The five replies | Gyula, Randy, Sam, Don, Ryan |

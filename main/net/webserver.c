@@ -1057,6 +1057,25 @@ static esp_err_t status_handler(httpd_req_t *req)
                     cJSON_AddItemToArray(arr, o);
                 }
             }
+            /* ⛔ THE ACTIVATION PROGRAMMES COME FROM THE DEVICE TOO. The page
+             * used to carry its own two-entry list and a `type === 2 ? SOTA :
+             * POTA` test, so a WWFF or IOTA session would have been labelled
+             * POTA in the browser while the Tab5 showed the truth - the same
+             * Tab5/web parity class as T82, T83 and T107. One table, in
+             * settings.c, served here. */
+            {
+                cJSON *acts = cJSON_AddArrayToObject(root, "act_types");
+                for (uint8_t t = 1; t < settings_activation_type_count(); t++) {
+                    const char *sig = settings_activation_sig_name_for(t);
+                    if (!sig) continue;
+                    cJSON *o = cJSON_CreateObject();
+                    cJSON_AddNumberToObject(o, "id",   (double)t);
+                    cJSON_AddStringToObject(o, "sig",  sig);
+                    const char *hint = settings_activation_ref_hint(t);
+                    cJSON_AddStringToObject(o, "hint", hint ? hint : "");
+                    cJSON_AddItemToArray(acts, o);
+                }
+            }
         }
     }
 
@@ -1093,6 +1112,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         char aref[24] = "";
         settings_get_activation_ref(aref, sizeof aref);
         cJSON_AddNumberToObject(act, "type", (double)at);
+        /* The name, not just the id: the browser must never translate one
+         * itself (see act_types above). Empty when nothing is running. */
+        {
+            const char *sig = settings_activation_sig_name_for(at);
+            cJSON_AddStringToObject(act, "sig", sig ? sig : "");
+        }
+        cJSON_AddNumberToObject(act, "need", (double)settings_activation_target());
         cJSON_AddStringToObject(act, "ref", aref);
         if (at != 0 && aref[0]) {
             static const int64_t ACT_COUNT_TTL_US = 10 * 1000 * 1000;

@@ -1239,9 +1239,12 @@ void settings_set_bandplan_region(uint8_t v);
 // ARRL Field Day exchange mode (debounced flush). When enabled, FT8 QSOs
 // exchange class+section (fd_class/fd_section) instead of grid/signal report.
 void settings_set_field_day_en(bool v);
-// Activation session (POTA/SOTA). type: 0 none, 1 POTA, 2 SOTA. Setting a type
-// with an empty reference is treated as "none" - an activation with no
-// reference credits nothing and would only put a meaningless MY_SIG in the log.
+// Activation session. type: 0 none, then one of the programmes in k_act[]
+// (settings.c) - 1 POTA, 2 SOTA, 3 WWFF, 4 IOTA, 5 GMA, 6 WCA, 7 WWBOTA.
+// ⛔ Those ids are persisted in NVS: append to the table, never renumber.
+// Setting a type with an empty reference is treated as "none" - an activation
+// with no reference credits nothing and would only put a meaningless MY_SIG
+// in the log.
 void settings_set_activation(uint8_t type, const char *ref);
 uint8_t settings_get_activation_type(void);
 // Copies the reference into out (always NUL-terminated). Returns false when no
@@ -1249,6 +1252,19 @@ uint8_t settings_get_activation_type(void);
 bool settings_get_activation_ref(char *out, size_t out_sz);
 // "POTA" / "SOTA" / NULL. The exact strings ADIF's MY_SIG expects.
 const char *settings_activation_sig_name(void);
+// How many programmes the table holds, including index 0 ("not activating").
+uint8_t settings_activation_type_count(void);
+// "POTA"/"SOTA"/"WWFF"/"IOTA"/"GMA"/"WCA"/"WWBOTA" for a type id, else NULL.
+const char *settings_activation_sig_name_for(uint8_t type);
+// An example reference for that programme, for the entry field's placeholder.
+const char *settings_activation_ref_hint(uint8_t type);
+// The dedicated ADIF field for the RUNNING programme ("MY_POTA_REF",
+// "MY_SOTA_REF", "MY_WWFF_REF", "MY_IOTA"), or NULL where the programme has
+// none and travels as MY_SIG/MY_SIG_INFO alone.
+const char *settings_activation_adif_field(void);
+// Contacts needed for a valid activation of the RUNNING programme: POTA 10,
+// SOTA 4, WWFF 44. 0 where the programme publishes no single number.
+uint8_t settings_activation_target(void);
 
 void settings_set_fd_class(const char *cls);
 void settings_set_fd_section(const char *section);

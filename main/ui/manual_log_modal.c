@@ -23,6 +23,7 @@
 #include "activation_modal.h"
 #include "adif/adif_log.h"
 #include "cat/cat.h"
+#include "net/spots.h"
 #include "storage/settings.h"
 #include "ui_theme.h"
 #include "ui.h"
@@ -45,6 +46,11 @@ static lv_obj_t *s_note_lbl = NULL;   /* what was just logged, or why not */
 static lv_obj_t *s_btn_log  = NULL;
 static lv_obj_t *s_keyboard = NULL;
 static bool      s_open     = false;
+/* The callsign came from a tapped spot, so logging it should also retire
+ * that pick - the next contact must not be offered a station already in
+ * the log. Only a pick-sourced entry clears it; a hand-typed one leaves
+ * the pick alone, since the operator may still be working that station. */
+static bool      s_from_pick = false;
 
 /* ⛔ THE MODE IS THE RADIO'S, NOT A GUESS FROM THE FREQUENCY. cat_get_mode_str()
  * is what the top bar shows, so the logged mode is the one the operator can see
@@ -191,8 +197,9 @@ static void log_cb(lv_event_t *e)
     char note[96], ref[24];
     if (activation_is_running() && settings_get_activation_ref(ref, sizeof(ref))) {
         int n = adif_log_count_activation(ref);
-        int target = (settings_get_activation_type() == 2) ? 4 : 10;
-        snprintf(note, sizeof(note), "Logged %s - %d/%d for %s", call, n, target, ref);
+        int target = settings_activation_target();
+        if (target) snprintf(note, sizeof(note), "Logged %s - %d/%d for %s", call, n, target, ref);
+        else        snprintf(note, sizeof(note), "Logged %s - %d for %s", call, n, ref);
     } else {
         snprintf(note, sizeof(note), "Logged %s - %d in the log", call, adif_log_count());
     }
@@ -202,6 +209,7 @@ static void log_cb(lv_event_t *e)
      * are the same report every time, and re-typing 599 for each contact is
      * the thing this window exists to avoid. */
     lv_textarea_set_text(s_ta_call, "");
+    if (s_from_pick) { spots_clear_pick(); s_from_pick = false; }
     header_refresh();
     refresh_log_enabled();
     lv_keyboard_set_textarea(s_keyboard, s_ta_call);
@@ -371,7 +379,33 @@ void manual_log_modal_show(void)
     modal_build();
     if (s_open) return;
 
-    lv_textarea_set_text(s_ta_call, "");
+    /* ⭐ OPENS WITH THE STATION ALREADY IN IT when the operator got here by
+     * tapping a spot (operator, 2026-10-27). The tap tuned the radio and set
+     * the mode, so the device already knows who is being worked - asking for
+     * the callsign again is asking for something it was just told.
+     *
+     * ⚠ GUARDED BY THE DIAL, not by a timer alone. spots_last_pick() answers
+     * only while the radio is still within 500 Hz of where the tap put it: an
+     * operator who has turned the dial away is working someone else, and a
+     * stale callsign pre-filled into a log entry is worse than an empty field,
+     * because it is wrong rather than missing. 30 minutes is the outer bound
+     * for a radio left parked on one frequency.
+     *
+     * The MODE needs nothing from the pick in the normal case - the tap set it
+     * on the radio, and this window reads the radio. The pick supplies it only
+     * when CAT has not answered yet. */
+    {
+        char pick[16];
+        uint8_t pmode = 0;
+        if (spots_last_pick(pick, sizeof(pick), &pmode,
+                            ui_get_dial_freq_hz(), 500, 30 * 60)) {
+            lv_textarea_set_text(s_ta_call, pick);
+            s_from_pick = true;
+        } else {
+            lv_textarea_set_text(s_ta_call, "");
+            s_from_pick = false;
+        }
+    }
     /* Re-read on every open: the operator may have changed mode between
      * contacts, and a CW window offering 59 would be re-typed every time. */
     lv_textarea_set_text(s_ta_sent, default_rst());
