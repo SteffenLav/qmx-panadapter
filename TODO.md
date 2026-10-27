@@ -29,7 +29,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
-| **T96** | ⛔ **RF gain does not reach the I/Q stream** - 54 dB out moves the floor 0.06 dB, and the FFT tap has no AGC. Stan KC7XE 2026-10-27: `RG` IS the right command and the saved Band Config value is meant to stay put, so the `MM`+`MU;` story is withdrawn (`06c3df19`). ⚠ The AUDIBLE half was never a valid test - our own AGC (`rx_audio.c:1976`, on by default) would cancel a real change. **Asked Stan** whether RF gain acts on I/Q at all; test is AGC off, then listen | Sam W7STF |
+| ~~T96~~ | ✅ **CLOSED 2026-10-28 - the slider is REAL, just not for the Tab5.** Stan KC7XE: I/Q mode carries the raw 48 kHz PCM1804 stream, taken before the QMX's own DSP, so `RG` cannot reach it - it acts on the radio's own headphone/speaker output. Kept and relabelled "radio's own audio" on Tab5 + web; both doc trees closed. ⛔ His digital-multiply idea DECLINED: scaling samples moves signal and noise together, no SNR change | Sam W7STF |
 | **T98** | ⚠ Smoothing still looks inert to Sam after v1.21.0 fixed two faults in it. He calls it "alpha", the old name - check he is on v1.21.0 first. Measurable from a capture | Sam W7STF |
 | **T99** | ⏸ **STILL PARKED, but the reason improved** - 2026-10-27 Sam says the first 3-10 s of the trace is enough to judge a band and move on. The published cost is unchanged: it needs a second continuous audio path alongside the decode capture. Told him so; stays a listed WSJT-X difference | Sam W7STF |
 | **T100** | WSPR -> Panadapter leaves stale pixels in the waterfall area. His own framing is minor; may be bounded by T99 | Sam W7STF |

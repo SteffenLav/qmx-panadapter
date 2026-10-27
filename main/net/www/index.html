@@ -4754,7 +4754,7 @@ const SET_FIELDS = [
   /* RF gain is read from the radio, not stored here - it is per band, so a
      remembered number would belong to whichever band you were on last. -1 means
      the radio has not answered yet. */
-  ["Radio & display", "qmx_rf_gain_db",    "num",  "QMX RF gain (dB)", "0-99, per band; the radio's default is 54"],
+  ["Radio & display", "qmx_rf_gain_db",    "num",  "QMX RF gain (dB)", "0-99, per band; default 54. Affects the radio's OWN audio only - I/Q is tapped before the QMX's DSP, so it changes nothing the Tab5 shows or plays"],
   ["Radio & display", "cw_tx_offset_hz",   "num",  "CW transmit offset (Hz)",
      "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -300 to +300, and around 100 Hz or less is typical - most CW operators run a 500 Hz filter or narrower (200 Hz is not unusual), and a QRP signal loses energy towards the filter edges (Michael KZ4LY). Roy KI0ER uses +60"],
   ["Radio & display", "still_view",        "bool", "Still spectrum",

@@ -123,12 +123,22 @@ static void refresh(void)
 
     /* RF gain, same read-back rule as AF below, plus one more reason: RF gain
      * is PER BAND on this radio, so a value from the previous band is not
-     * merely stale, it is wrong. */
+     * merely stale, it is wrong.
+     *
+     * ⛔ THE LABEL SAYS WHOSE AUDIO IT IS (T96). Measured 2026-10-27: 54 dB
+     * to 0 moves the spectrum noise floor 0.06 dB. Stan KC7XE explained
+     * why on 2026-10-28 - I/Q mode hands over the raw 48 kHz PCM1804
+     * stream and every adjustment happens further down the radio's own
+     * processing chain, so RG cannot reach what the Tab5 receives. The
+     * control is real and works, for someone listening on the QMX's own
+     * headphones. It is not removed and it is not faked with a digital
+     * multiply, which would scale signal and noise together and change no
+     * SNR - the display floor/ceiling already moves the trace. */
     int rf = cat_get_rf_gain();
     if (s_lbl_rf) {
-        char b[48];
-        if (rf < 0) snprintf(b, sizeof(b), "QMX RF gain  --");
-        else        snprintf(b, sizeof(b), "QMX RF gain  %d dB", rf);
+        char b[64];
+        if (rf < 0) snprintf(b, sizeof(b), "QMX RF gain  --   (radio's own audio)");
+        else        snprintf(b, sizeof(b), "QMX RF gain  %d dB   (radio's own audio)", rf);
         lv_label_set_text(s_lbl_rf, b);
     }
     if (s_sl_rf && rf >= 0 && lv_slider_get_value(s_sl_rf) != rf)

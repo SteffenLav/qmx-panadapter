@@ -47,7 +47,11 @@ drawer, so it agrees with the rig even if you last changed it there.
 (the QMX default is 54). ⚠ **Measured 2026-10-27: changing it does not move the
 spectrum or the audio** — 54 dB out shifted the noise floor 0.06 dB. The radio
 accepts the value and reads it back, but it does not reach the I/Q stream the Tab5
-receives, and everything the Tab5 shows or plays comes from that stream. See
+receives, and everything the Tab5 shows or plays comes from that stream. Stan KC7XE
+(QRP Labs) confirmed the mechanism on 2026-10-28: I/Q mode carries the raw 48 kHz
+PCM1804 samples, taken before the radio's own DSP. **The control still works on the
+QMX's own headphones and speaker**, which is why it is kept and labelled that way
+rather than removed. See
 [Audio Features](audio.md#know-which-volume-control-does-what). Because it is **per band**, the Tab5 reads it from the radio
 rather than remembering a number that would belong to whichever band you were on last;
 it shows "reading…" until the radio answers, and **"radio not connected"** if the radio

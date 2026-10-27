@@ -3450,7 +3450,7 @@ static const drawer_item_t GRP_STATION[] = {
 };
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
-    { DRAWER_SEC_QMXRF, "RF gain", true },
+    { DRAWER_SEC_QMXRF, "RF gain (radio's own audio)", true },
     /* Above CW centre (operator, 2026-09-07). It was filed under Spectrum with
      * the drawing controls, but it is not one: it trims the 12 kHz IF offset so
      * a signal lands where the dial says it is, which is the same conversation
@@ -15135,10 +15135,10 @@ static void drawer_build(void)
     // PER BAND, so anything remembered from another band would be a lie; until
     // the radio answers RG; the label says so.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXRF, y, 96);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXRF, y, 126);
         s_lbl_qmx_rf = lv_label_create(sec);
         int rf_now = cat_get_rf_gain();
-        char rbuf[40];
+        char rbuf[48];
         if (rf_now >= 0)          snprintf(rbuf, sizeof(rbuf), "QMX RF gain: %d dB", rf_now);
         else if (cat_is_ready())  snprintf(rbuf, sizeof(rbuf), "QMX RF gain: reading...");
         else                      snprintf(rbuf, sizeof(rbuf), "QMX RF gain: radio not connected");
@@ -15157,7 +15157,20 @@ static void drawer_build(void)
         // radio.
         lv_obj_add_event_cb(s_slider_qmx_rf, drawer_slider_qmx_rf_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_slider_qmx_rf, drawer_slider_qmx_rf_cb, LV_EVENT_RELEASED, NULL);
-        y += 96;
+
+        /* ⛔ WHOSE AUDIO (T96). The control works, on the radio's own
+         * headphone output - it cannot reach the Tab5, because I/Q mode
+         * carries the raw PCM1804 samples from before the QMX's own DSP
+         * (Stan KC7XE, 2026-10-28). Saying so here is cheaper than the
+         * next operator measuring the same 0.06 dB. */
+        lv_obj_t *cap = lv_label_create(sec);
+        lv_label_set_long_mode(cap, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(cap, DRAWER_W - 32);
+        lv_label_set_text(cap, "Affects the radio's own audio, not the Tab5's");
+        lv_obj_set_style_text_font(cap, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 76);
+        y += 126;
     }
 
     // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.

@@ -120,6 +120,18 @@ default 54. It looks like a fourth control in this chain. It is not:
     who was right; announced in v1.21.0 as a way to change what reaches your
     ears, which was wrong.
 
+    **Why, from QRP Labs.** Stan KC7XE, 2026-10-28: I/Q mode delivers the raw
+    48 kHz sampled stream from the PCM1804 converter, and every adjustment
+    and all the DSP happen further down the radio's own processing chain. So
+    the control is real and it works - on the QMX's own headphone and speaker
+    output. It is kept for that reason rather than removed.
+
+    It is deliberately **not** faked by scaling the samples on the Tab5.
+    Multiplying every sample by the same number scales the signal and the
+    noise together, so the signal-to-noise ratio does not change and nothing
+    becomes audible that was not already there - it would only move the trace
+    up and down the dB scale, which the floor and ceiling controls already do.
+
 
 !!! note "Full volume and still quiet?"
 
