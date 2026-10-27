@@ -698,6 +698,9 @@
   /* A finished contact is good news and the one line here that waits for you,
      so it does not read as dim status. Same green the Tab5 uses for it. */
   #ft8-webr.webr-done { color: #4caf50; font-weight: 600; }
+  /* The device's no-decodes warning, on the same line. Amber, not red: it
+     is a report that nothing is arriving, not a fault in this page. */
+  #ft8-webr.webr-warn { color: #ffb300; font-weight: 600; }
   /* SCALED, not fixed. Every user has a different window and browser zoom, and
      a size picked at one of them is wrong at the others - which is how the same
      panel fitted at 67% and covered its own buttons at 100%. clamp() ties these
@@ -5082,6 +5085,27 @@ function ft8FillPresets() {
   if (!sel.value && cur) sel.value = cur;
 }
 
+/* Move the selection to whatever the device is on now. Mode AND frequency
+   both have to match, for the reason ft8FillPresets gives: JS8 shares two
+   dial frequencies with FT4, so hz alone can select the wrong row.
+   ⚠ Left alone while the control has focus - the operator is reading the
+   open list, and moving it under them would change what they land on. */
+function ft8PresetSync() {
+  const sel = document.getElementById("ft8-preset");
+  if (!sel || !sel.options.length || sel === document.activeElement) return;
+  const proto = ft8Proto();
+  let want = "";
+  for (const o of sel.options) {
+    if (!o.value || !o.dataset || !o.dataset.mode) continue;
+    if (o.dataset.mode.toUpperCase() !== proto) continue;
+    if (Math.abs(parseInt(o.value, 10) - lastFreqHz) < 500) { want = o.value; break; }
+  }
+  /* An off-preset frequency falls back to the "Band..." row rather than
+     leaving the last preset showing, which would claim a position the
+     radio is no longer on. */
+  if (sel.value !== want) sel.value = want;
+}
+
 /* The device's own answer (/api/status ft8.proto), not a scan of the status
    text - that only ever said FT4 while something was being transmitted, so the
    preset list quietly believed FT8 the rest of the time. */
@@ -7721,6 +7745,12 @@ async function tick() {
        here, and the pane must not go on offering a conversation that the
        radio is no longer decoding. */
     js8TabsSync(lastFtProto);
+    /* The preset control is a POSITION, not just a jump list (Randy N4OPI,
+       2026-10-27: it sat at "Band..." and never followed the Tab5). It was
+       marked once, when the list was first filled, so any later retune -
+       from the glass, the drawer or the wheel - left it reading the old
+       value or nothing at all. */
+    ft8PresetSync();
     js8TxInit();
     /* ⛔ `s`, NOT `d`. This read `d.ft8` and shipped in v1.17.0. There is no `d`
        in tick() - the parsed status is `const s` - so every poll threw a
@@ -8117,9 +8147,17 @@ async function tick() {
          line of dim status, and the operator's next action writes over it. */
       {
         const wr = s.ft8.web_r || "";
+        /* ⛔ THE DEVICE'S NO-DECODES WARNING LANDS HERE TOO (Randy N4OPI,
+           2026-10-27): it was a Tab5 toast only, so a browser operator saw
+           an empty decode list and nothing saying why. web_r still wins -
+           it answers a click the operator just made - and the warning shows
+           through whenever that line is otherwise idle. */
+        const stuck = s.ft8.stuck_note || "";
+        const txt = wr || stuck;
         const el = document.getElementById("ft8-webr");
-        el.textContent = wr;
-        el.classList.toggle("webr-done", /QSO complete$/.test(wr));
+        el.textContent = txt;
+        el.classList.toggle("webr-done", /QSO complete$/.test(txt));
+        el.classList.toggle("webr-warn", !wr && !!stuck);
       }
       if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity, true);
       /* The occupancy strip and the slot clock. Redrawn only when the picture

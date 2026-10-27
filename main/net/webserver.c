@@ -243,6 +243,13 @@ static void add_ft8_tx_status(cJSON *root)
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
 
+    /* ⛔ THE SAME WARNING THE TAB5 TOASTS (Randy N4OPI, 2026-10-27). The
+     * "no decodes for over N min" notice reached the glass only, so a
+     * browser operator watched an empty list with nothing to explain it.
+     * Empty while the receiver is decoding, so the page leaves its line
+     * alone rather than printing a blank one. */
+    cJSON_AddStringToObject(f, "stuck_note", ft8_rx_stuck_note());
+
     /* ⭐ THE FREE-TEXT RUN, because it is the one transmission that lasts
      * MINUTES rather than one slot. A browser operator who cannot see how far
      * through it is, and cannot tell whether their send was accepted, has no

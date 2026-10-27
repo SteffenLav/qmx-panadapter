@@ -373,6 +373,14 @@ int ft8_op_mode_slot_ms(void)
 // on normal band conditions. The effective per-mode threshold is FT8_STUCK_RESET_MS / slot_ms.
 #define FT8_STUCK_RESET_MS 600000
 
+/* ⛔ A TAB5 TOAST IS INVISIBLE FROM ANOTHER ROOM (Randy N4OPI, 2026-10-27:
+ * the no-decodes warning showed on the glass and never in the browser).
+ * The toast below also lands here, and /api/status hands it to the page,
+ * so the two surfaces say the same thing. Cleared on the next decode by
+ * the same branch that clears s_stuck_told. */
+static char s_stuck_note[224];
+
+
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
 // measured from the top of decode_slot). Candidates are processed strongest
 // first, so hitting the budget drops only the weakest tail on the busiest
@@ -2899,6 +2907,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                              proto, mins);
                     ESP_LOGW(TAG, "%s", msg);
                     ui_toast_ms(msg, 30000);
+                    snprintf(s_stuck_note, sizeof(s_stuck_note), "%s", msg);
                 }
             }
         } else {
@@ -2911,6 +2920,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             if (n_decoded > 0 || n_js8ev > 0) {
                 s_stuck_fires = 0;
                 s_stuck_told  = false;
+                s_stuck_note[0] = ' ';
             }
         }
     }
@@ -4312,4 +4322,9 @@ void ft8_self_test(void)
 bool ft8_task_is_alive(void)
 {
     return s_ft8_task_alive;
+}
+
+const char *ft8_rx_stuck_note(void)
+{
+    return s_stuck_note;
 }
