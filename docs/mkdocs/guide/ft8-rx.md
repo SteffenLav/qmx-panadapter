@@ -93,7 +93,7 @@ Tap the **Options** button to open the Options modal:
   in the decode list either way, greyed, and you can still tap one to work it.
   Per band: the same call on another band counts as new. (It was called
   "Exclude stations worked before", which read as a promise about the list.)
-- **Hide worked-before** — new in v1.20.2, and the companion to the entry
+- **Hide worked-before** — the companion to the entry
   above rather than part of it. This one *does* change the list: tick it and a
   station already in your log on this band disappears from the decode list
   altogether, on the Tab5 and in the browser. Off by default, so the grey
