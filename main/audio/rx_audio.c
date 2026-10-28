@@ -680,6 +680,11 @@ static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its cla
 static volatile uint32_t s_rate_win_refused = 0; /* T80: rate windows thrown out as starvation */
 static volatile uint32_t s_rate_relocked    = 0; /* T80: forced re-seeds of the rate target */
 static uint32_t          s_rate_rail_run    = 0; /* consecutive frames pinned at the clamp */
+static uint32_t          s_rate_win_refuse_run = 0; /* consecutive rate windows refused */
+/* Two refusals in a row still throw away a starved window; the THIRD is
+ * accepted, because a gap does not last 30 s of continuous windows and a loop
+ * that can never be corrected is worse than one corrected by a bad reading. */
+#define RATE_REFUSE_MAX_RUN  2
 /* ~5 s at the frame rate: long enough that a transient cannot trip it, short
  * enough that the operator is not left listening to a railed loop. */
 #define RATE_RAIL_RELOCK_FRAMES  250
@@ -2380,14 +2385,44 @@ static void rx_audio_task(void *arg)
                  * is an artefact. */
                 const float nom_lo = (float)DSP_SAMPLE_RATE_HZ * 0.95f;
                 const float nom_hi = (float)DSP_SAMPLE_RATE_HZ * 1.05f;
-                if (src_rate < nom_lo || src_rate > nom_hi) {
-                    ESP_LOGW(TAG, "rate window refused: %.0f pairs/s over %lld ms "
-                                  "- starvation, not a rate change",
+                if ((src_rate < nom_lo || src_rate > nom_hi) &&
+                    s_rate_win_refuse_run < RATE_REFUSE_MAX_RUN) {
+                    /* ⛔⛔ THE ESCAPE HATCH, AND IT IS NOT OPTIONAL.
+                     *
+                     * The first cut of this refusal had no run limit, and that
+                     * was a worse fault than the one it fixed: measured on
+                     * bench dev 2026-10-28, three windows in a row read 27762,
+                     * 26287 and 26966 pairs/s and ALL were refused, so
+                     * s_up_target could never be updated by anything. A loop
+                     * that cannot be corrected is deaf, not safe - the
+                     * operator heard it as audio "breaking up big time".
+                     *
+                     * A gap is transient by definition. Three consecutive
+                     * 10 s windows all saying the same out-of-band rate is not
+                     * a gap, it is the source, however unlikely the number
+                     * looks - so it is ACCEPTED and used to re-seed the target
+                     * whole. Refusing the first two still throws away the
+                     * single starved window that started T80. */
+                    ESP_LOGW(TAG, "rate window refused (%u of %u): %.0f pairs/s "
+                                  "over %lld ms - treating as starvation",
+                             (unsigned)(s_rate_win_refuse_run + 1),
+                             (unsigned)RATE_REFUSE_MAX_RUN,
                              src_rate, (long long)(win_us / 1000));
                     s_rate_win_refused++;
+                    s_rate_win_refuse_run++;
                 } else {
-                    s_up_target = (s_up_target <= 0.0f) ? target
-                                                        : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                    if (s_rate_win_refuse_run >= RATE_REFUSE_MAX_RUN) {
+                        /* Persistently out of band: take it whole rather than
+                         * easing toward it, because the EMA would spend ~100 s
+                         * getting there and the audio is wrong for all of it. */
+                        ESP_LOGW(TAG, "rate: %.0f pairs/s persists - accepting it "
+                                      "as the source rate", src_rate);
+                        s_up_target = target;
+                    } else {
+                        s_up_target = (s_up_target <= 0.0f) ? target
+                                                            : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                    }
+                    s_rate_win_refuse_run = 0;
                 }
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
