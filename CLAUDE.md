@@ -185,6 +185,12 @@ branch and must not be assumed present on main: `cw_qso.c`,
 `ui/cw_screen_view.c`, `ui/cw_screen_view_*.c`, and the `s_ky_ts480_compat` KY
 experiment in `cat.c`.
 
+**The way IN to the CW page is the left drawer, not a swipe.** Main replaced
+the 4-stop swipe carousel with the drawer page picker on 2026-10-24, which
+left this branch with an unreachable page until `MODE: CW` was added under
+PANADAPTER (2026-10-28, verified on the glass). `ui_advance_page()` is
+DELETED here and still present on main - expect that in the next merge.
+
 ⭐ **CW TRANSMIT WORKS — CAT `KY` KEYS THE RADIO, confirmed OFF AIR by the
 operator on 2026-09-30:** *"the cw is keyed clearly on the antenna - i have
 tried it and it works"*. It may be described as working.
