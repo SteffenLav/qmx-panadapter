@@ -32,6 +32,8 @@ static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_cq_show_others = NULL;
+static lv_obj_t *s_cb_hide_worked   = NULL;  // hide worked-before rows outright (Randy N4OPI)
+static lv_obj_t *s_cb_skip_directed = NULL;  // robot: pass over a CQ aimed elsewhere (Randy N4OPI)
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
@@ -126,6 +128,8 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
     f.cq_show_others     = lv_obj_has_state(s_cb_cq_show_others, LV_STATE_CHECKED);
+    f.hide_worked_before = lv_obj_has_state(s_cb_hide_worked, LV_STATE_CHECKED);
+    f.robot_skip_directed_cq = lv_obj_has_state(s_cb_skip_directed, LV_STATE_CHECKED);
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
@@ -160,11 +164,11 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d cq_show_others=%d hide_wb=%d skip_directed=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
              f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup,
-             f.cq_show_others);
+             f.cq_show_others, f.hide_worked_before, f.robot_skip_directed_cq);
     modal_close();
 }
 
@@ -389,7 +393,7 @@ static void modal_build(void)
     // 60 px row spacing (was 44) - big-finger touch clearance around the
     // checkboxes was too tight to safely tap just one (field feedback).
     lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_skip_tx1, *lbl_robot;
-    lv_obj_t *lbl_cq_show_others;
+    lv_obj_t *lbl_cq_show_others, *lbl_hide_worked;
 
     /* ⛔ "EXCLUDE" WAS THE WRONG WORD AND IT COST A REPORT. Randy N4OPI,
      * 2026-10-16: "I would expect that with this checked, worked before
@@ -413,10 +417,10 @@ static void modal_build(void)
     s_cb_worked_before = make_labeled_checkbox(panel, "Never auto-call worked-before", 4, 330, &lbl_worked_before);
     lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 390, &lbl_plain_cq);
+    s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 384, &lbl_plain_cq);
     lv_obj_set_style_text_color(lbl_plain_cq, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 450, &lbl_incl_cq_only);
+    s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 438, &lbl_incl_cq_only);
     lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     /* Randy N4OPI, 2026-10-02: while a CQ run is up, every other station's CQ
@@ -433,8 +437,25 @@ static void modal_build(void)
      * ⚠ MEASURED ON THE SCREEN, not guessed: "Show CQs during my run" (22
      * chars) was clipped to "Show CQs during my r". The right column's other
      * labels are 16-19 characters and fit, so 18 is the budget here. */
-    s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs in my run", RIGHT_COL_X, 390, &lbl_cq_show_others);
+    s_cb_cq_show_others = make_labeled_checkbox(panel, "Show CQs in my run", RIGHT_COL_X, 384, &lbl_cq_show_others);
     lv_obj_set_style_text_color(lbl_cq_show_others, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    /* The other half of Randy N4OPI's 2026-10-16 report, as its own switch -
+     * operator's decision 2026-10-20. "Never auto-call worked-before" (left
+     * column, same row) gates the machine; this gates the LIST, on both
+     * screens. Separate because working duplicates by hand while the machine
+     * passes over them is a real way to operate.
+     *
+     * ⚠ Placed at RIGHT_COL_X y=330, beside the switch it is paired with, so
+     * the two worked-before questions read as a pair rather than being found
+     * one at a time.
+     *
+     * ⭐ 244.7 px at montserrat_24, tools/measure_label.py - just under "Show
+     * CQs in my run" (247.7 px) directly below it, which renders unclipped in
+     * this column. Measured, not counted: 18 characters is the same count as
+     * the label that shipped clipped. */
+    s_cb_hide_worked = make_labeled_checkbox(panel, "Hide worked-before", RIGHT_COL_X, 330, &lbl_hide_worked);
+    lv_obj_set_style_text_color(lbl_hide_worked, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Max age in list — same row, in the gap before the right column ---
     // How long a station stays in the LIVE decode list with no fresh decode.
@@ -461,7 +482,7 @@ static void modal_build(void)
     // Pounce shortcut: first TX is a signal report (skip the grid exchange),
     // going straight into the roger/RR73 wait - see ft8_qso_start(). Does not
     // affect CQ-run, which already answers with a report first by default.
-    s_cb_skip_tx1 = make_labeled_checkbox(panel, "Skip TX1 (send report first, no grid)", 4, 510, &lbl_skip_tx1);
+    s_cb_skip_tx1 = make_labeled_checkbox(panel, "Skip TX1 (send report first, no grid)", 4, 492, &lbl_skip_tx1);
     lv_obj_set_style_text_color(lbl_skip_tx1, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Robot (auto-answer) row — LIVE TX ---------------------------
@@ -470,7 +491,7 @@ static void modal_build(void)
     // confirmation. See ft8_robot.h for the safety/scope notes. The warning
     // label is only shown while the checkbox is checked - no need to nag
     // operators who never turn this on.
-    s_cb_robot = make_labeled_checkbox(panel, "Auto-answer CQ with priority:", 4, 570, &lbl_robot);
+    s_cb_robot = make_labeled_checkbox(panel, "Auto-answer CQ with priority:", 4, 546, &lbl_robot);
     lv_obj_set_style_text_color(lbl_robot, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
@@ -505,7 +526,7 @@ static void modal_build(void)
     // unattended-TX warning below. Placed in the right column so the packed
     // left checkbox stack doesn't need a reflow.
     lv_obj_t *lbl_auto_pileup;
-    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", RIGHT_COL_X, 450, &lbl_auto_pileup);
+    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", RIGHT_COL_X, 438, &lbl_auto_pileup);
     lv_obj_set_style_text_color(lbl_auto_pileup, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_add_event_cb(s_cb_auto_pileup, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -514,7 +535,7 @@ static void modal_build(void)
     // it; its rows recolour and a tap offers "Clear from grey-list". The
     // tracked list is RAM-only (reboot clears it). Roy KI0ER field request.
     lv_obj_t *lbl_greylist;
-    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", RIGHT_COL_X, 510, &lbl_greylist);
+    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", RIGHT_COL_X, 492, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Pick callers myself (Eric K3FNB) -----------------------------
@@ -529,15 +550,33 @@ static void modal_build(void)
     // also overrides Auto-work pileup, which would otherwise pick for you a
     // moment later.
     lv_obj_t *lbl_manual_pick;
-    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", RIGHT_COL_X, 570, &lbl_manual_pick);
+    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", RIGHT_COL_X, 546, &lbl_manual_pick);
     lv_obj_set_style_text_color(lbl_manual_pick, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    /* Randy N4OPI, 2026-10-21: pass over a CQ that was aimed at somebody else.
+     * Right column, y=635 - the only free cell in the grid, and the row below
+     * "Pick callers myself", which is the other switch about WHO the robot
+     * works.
+     *
+     * ⭐ 243.2 px at montserrat_24, tools/measure_label.py - under the
+     * 247.7 px of "Show CQs in my run", which renders unclipped in this
+     * column. MEASURED, and it changed the label: "Skip CQs not aimed at me"
+     * reads better and is 317.9 px, which would have shipped clipped exactly
+     * as "Show CQs during my run" did.
+     *
+     * ⚠ The label says SKIP rather than promising "only CQs for me":
+     * ft8_directed_cq.c judges "CQ DX" and US state calls only, and does not
+     * judge continents at all. */
+    lv_obj_t *lbl_skip_directed;
+    s_cb_skip_directed = make_labeled_checkbox(panel, "Skip CQs not for me", RIGHT_COL_X, 600, &lbl_skip_directed);
+    lv_obj_set_style_text_color(lbl_skip_directed, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
     // section are short fixed-format fields, not free text.
     lv_obj_t *lbl_fd;
-    s_cb_field_day = make_labeled_checkbox(panel, "ARRL Field Day mode:", 4, 635, &lbl_fd);
+    s_cb_field_day = make_labeled_checkbox(panel, "ARRL Field Day mode:", 4, 600, &lbl_fd);
     lv_obj_set_style_text_color(lbl_fd, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     s_ta_fd_class = lv_textarea_create(panel);
@@ -568,20 +607,31 @@ static void modal_build(void)
     // busy-station hold, the final re-send, the grey-list), which is exactly why
     // it is a mode the operator turns on deliberately rather than something
     // inferred from a low-frequency CQ.
-    // Placed on the FIELD DAY row's right-hand side, not at (540,578) where it
-    // first went: the "Auto-answer CQ with priority:" label plus its 280 px
-    // dropdown reach to about x=712, so the two overlapped on screen (operator
-    // caught it immediately - the labels ran into each other). The usable gap
-    // here is x 545..840, because the right-edge buttons start at 840
-    // (1040 panel - 20 pad - 180 button), hence the short label and a 150 px
-    // dropdown with short options.
-    // Aligned to the Field Day row and anchored to the SECTION box rather than to
-    // absolute coordinates, so it stays level with that row and clear of the box
-    // even if either moves. Two absolute-position attempts got this wrong: (540,
-    // 578) landed on the priority dropdown, and (545, 648) ran into the "EMA" box.
     //
-    // There is room to the right here because the Save/Cancel/Sync Time buttons
-    // only occupy y 38..324 - below that the panel's full width is free.
+    // ⛔ ON ITS OWN ROW NOW, AND THE THREE EARLIER ATTEMPTS ARE WHY.
+    // (540,578) landed on the priority dropdown. (545,648) ran into the "EMA"
+    // box. Hanging it off the Field Day textarea fixed both and then collided
+    // with "Skip CQs not for me" at RIGHT_COL_X on the SAME ROW once that
+    // checkbox was added - the operator's screenshot, 2026-10-23: "the FT8
+    // Option window now have overlaps bottom right".
+    //
+    // The arithmetic says that row cannot hold all three: Field Day's label
+    // plus its two textareas reach x~610, the right column's checkbox needs
+    // ~300 from x=700, and this label plus a 200 px dropdown needs ~330. That
+    // is more than the 1040 panel has, and widening the panel to the screen's
+    // 1240 still does not fit 610 + 300 + 330 with gaps. "No more space", as
+    // he put it.
+    //
+    // So the grid pitch went 60 -> 54, which buys a SEVENTH row inside the
+    // same 720 px panel (330, 384, 438, 492, 546, 600, 654; the last ends at
+    // 698 against the 700 the padding leaves). Tightening the pitch rather
+    // than shrinking any text is deliberate - Sam W7STF's eyesight is the
+    // reason the fonts on this device are being made bigger, not smaller, and
+    // 6 px of gap is the cheapest thing in the room to spend.
+    //
+    // Anchored to the PANEL now, not to the Field Day textarea: it no longer
+    // shares a row with anything, so hanging it off a neighbour would only
+    // re-create the coupling that moved it three times.
     lv_obj_t *lbl_hound = lv_label_create(panel);
     lv_label_set_text(lbl_hound, "Fox/Hound:");
     lv_obj_set_style_text_font(lbl_hound, &lv_font_montserrat_24, 0);
@@ -600,8 +650,8 @@ static void modal_build(void)
     // dropdown and the textarea have different borders and padding, so their
     // visible middles are not their box middles. The operator's eye is the
     // authority here, and it said five pixels.
-    lv_obj_align_to(s_dd_hound, s_ta_fd_section, LV_ALIGN_OUT_RIGHT_MID, 190, -5);
-    lv_obj_align_to(lbl_hound, s_dd_hound, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_align(lbl_hound, LV_ALIGN_TOP_LEFT, 4, 666);
+    lv_obj_align_to(s_dd_hound, lbl_hound, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
     lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
     lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
     lv_obj_set_style_border_color(s_dd_hound, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -720,6 +770,8 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
     apply_checkbox_state(s_cb_cq_show_others, f->cq_show_others);
+    apply_checkbox_state(s_cb_hide_worked, f->hide_worked_before);
+    apply_checkbox_state(s_cb_skip_directed, f->robot_skip_directed_cq);
     apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,

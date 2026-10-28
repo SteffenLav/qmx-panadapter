@@ -7,6 +7,7 @@
 #include "sd_archive.h"
 
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>   // strncasecmp - band names are matched case-INSENSITIVELY
 #include <stdint.h>
 #include <time.h>   // time(NULL) - power-calibration row timestamp
@@ -35,6 +36,7 @@ static const char *TAG = "settings";
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_MY_CALL     "my_call"
 #define KEY_MY_GRID     "my_grid"
+#define KEY_MY_STATE    "my_state"
 /* Provenance, NOT a user setting: the grid the GPS last wrote into
  * my_grid. gps_autogrid.c needs it to tell "the operator typed over my
  * value" from "we have not written this square yet", and that answer must
@@ -54,6 +56,9 @@ static const char *TAG = "settings";
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
 #define KEY_CW_CAL     "cw_cal"
+#define KEY_SB_LOWCUT  "sb_lowcut"
+#define KEY_FT4_FREQ   "ft4_freq"
+#define KEY_JS8_FREQ   "js8_freq"
 #define KEY_ZOOM       "zoom"
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
@@ -101,6 +106,8 @@ static const char *TAG = "settings";
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_WF_SPEED     "wf_speed"   /* LEGACY 1..4x multiplier - read once, then never written again */
 #define KEY_WF_ROWS      "wf_rows"    /* waterfall rows per second, 1..40 */
+#define KEY_SPEC_PEAK    "spec_peak"  /* spectrum peak-hold window, seconds, 0 = off */
+#define KEY_CW_PEAK      "cw_peak"    /* CW audio peak filter width, Hz, 0 = off */
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_CW_TX_OFF    "cw_tx_off"
@@ -122,6 +129,7 @@ static const char *TAG = "settings";
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_FREQ_SEP       "freq_sep"
 #define KEY_CW_DECODE       "cw_dec_en"
+#define KEY_LOG_VIEW_ALL    "log_vw_all"  /* ADIF window: Today/All, sticky (T113) */
 #define KEY_CW_ROWS         "cw_dec_rows" /* rows of decoded CW drawn, 2 or 4 */
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
@@ -129,6 +137,7 @@ static const char *TAG = "settings";
 #define KEY_SPUR_SUP       "spur_sup"
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
+#define KEY_TXBAND_OFF     "txband_off"
 #define KEY_PSKREP_EN      "pskrep_en"
 #define KEY_PSK_RX_EN      "pskrx_en"
 #define KEY_BT_MOUSE_EN    "btmouse_en"
@@ -174,6 +183,7 @@ static const char *TAG = "settings";
 #define KEY_RELAY_PIN      "relay_pin"
 #define KEY_RELAY_LEVEL    "relay_lvl"
 #define KEY_RELAY_MS       "relay_ms"
+#define KEY_RELAY_SOLO     "relay_solo"
 #define KEY_PORT_A_MODE    "port_a_mode"
 #define KEY_RX_SOURCE      "rx_source"
 #define KEY_LINEIN_GAIN    "linein_gain"
@@ -215,11 +225,14 @@ static const char *TAG = "settings";
 #define DEF_WF_WINDOW     (0)
 #define DEF_CW_ROWS       (4)    /* four since 2026-10-15 (Sam W7STF); Bryan N0LUF may pick 2 */
 #define DEF_WF_ROWS       (10)   /* rows/s - the rate the waterfall has always run at */
+#define DEF_SPEC_PEAK     (0)    /* peak hold OFF until asked for - it costs 25 KB of PSRAM */
+#define DEF_CW_PEAK       (0)    /* CW peak filter OFF - it changes how the radio SOUNDS */
 #define DEF_CHARGE_LIM_EN  (false)
 #define DEF_CHARGE_LIM_PCT (80)
 #define DEF_RELAY_PIN      (53)
 #define DEF_RELAY_LEVEL    (true)   /* active HIGH */
 #define DEF_RELAY_MS       (1000)
+#define DEF_RELAY_SOLO     (false)  /* both pads driven - what every unit has done */
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -462,6 +475,14 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
    DIRTY_PA_CEILING, defined elsewhere in this file. The "spare" counts in
    the comments above had gone stale - the checker is the authority. */
 #define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
+#define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
+#define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
+#define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
+#define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
+#define DIRTY_LOG_VIEW_ALL    147  /* ADIF window Today/All, sticky (T113) */
+#define DIRTY_SB_LOWCUT       148  /* T90 SSB auto-tune low-cut trim */
+#define DIRTY_FT4_FREQ        149  /* T89 per-sub-mode preset frequency */
+#define DIRTY_JS8_FREQ        150  /* T89 per-sub-mode preset frequency */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -479,7 +500,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_OTA_AUTODL,
     DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
     DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
-    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_CW_CAL,
+    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_MY_STATE, DIRTY_CW_CAL,
     DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
@@ -510,6 +531,13 @@ static const uint8_t s_config_export_bits[] = {
      * A config file that silently moved a board back to the QMX would look
      * like the jack had stopped working. */
     DIRTY_RX_SOURCE, DIRTY_LINEIN_GAIN,
+    /* ⛔ DIRTY_LOG_VIEW_ALL is deliberately NOT here, and neither are
+     * DIRTY_CW_DECODE / DIRTY_CW_ROWS, although config_io_export() prints all
+     * three. They are one-tap view preferences, and an SD mirror write per tap
+     * is exactly the unnecessary SDMMC contention the note above is about. The
+     * exported file still carries the current value whenever a mirror happens
+     * for any other reason, so a backup is never wrong - only occasionally
+     * later than the tap. */
 };
 
 // ---- Module state ------------------------------------------------------
@@ -632,11 +660,15 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WIFI_SSID))  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap->wifi_ssid);
         if (dirty_test(&dirty_local, DIRTY_MY_CALL))    nvs_set_str(s_nvs, KEY_MY_CALL,   snap->my_callsign);
         if (dirty_test(&dirty_local, DIRTY_MY_GRID))    nvs_set_str(s_nvs, KEY_MY_GRID,   snap->my_grid);
+        if (dirty_test(&dirty_local, DIRTY_MY_STATE))   nvs_set_str(s_nvs, KEY_MY_STATE,  snap->my_state);
         if (dirty_test(&dirty_local, DIRTY_WIFI_PASS))  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap->wifi_pass);
         if (dirty_test(&dirty_local, DIRTY_LAST_VFO))  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap->last_vfo_hz);
         if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap->ft8_freq_hz);
         if (dirty_test(&dirty_local, DIRTY_CW_PITCH))  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap->cw_pitch_hz);
         if (dirty_test(&dirty_local, DIRTY_CW_CAL))    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap->cw_cal_hz);
+        if (dirty_test(&dirty_local, DIRTY_SB_LOWCUT)) nvs_set_u16(s_nvs, KEY_SB_LOWCUT, snap->sb_lowcut_hz);
+        if (dirty_test(&dirty_local, DIRTY_FT4_FREQ))  nvs_set_u32(s_nvs, KEY_FT4_FREQ,  snap->ft4_freq_hz);
+        if (dirty_test(&dirty_local, DIRTY_JS8_FREQ))  nvs_set_u32(s_nvs, KEY_JS8_FREQ,  snap->js8_freq_hz);
         if (dirty_test(&dirty_local, DIRTY_ZOOM)) {
             uint32_t bits; memcpy(&bits, &snap->zoom_factor, 4);
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
@@ -699,6 +731,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap->wf_floor_blend);
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap->wf_window);
         if (dirty_test(&dirty_local, DIRTY_WF_SPEED))    nvs_set_u8(s_nvs, KEY_WF_ROWS,   snap->wf_rows_per_s);
+        if (dirty_test(&dirty_local, DIRTY_SPEC_PEAK))   nvs_set_u8(s_nvs, KEY_SPEC_PEAK, snap->spec_peak_s);
+        if (dirty_test(&dirty_local, DIRTY_CW_PEAK))     nvs_set_u16(s_nvs, KEY_CW_PEAK,  snap->cw_peak_hz);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap->display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap->qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap->cw_tx_offset_hz);
@@ -721,6 +755,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap->distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap->freq_sep_style);
         if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap->cw_decode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_LOG_VIEW_ALL)) nvs_set_u8(s_nvs, KEY_LOG_VIEW_ALL, snap->log_view_all ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_ROWS))   nvs_set_u8(s_nvs, KEY_CW_ROWS,   snap->cw_decode_rows);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap->rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap->still_view ? 1 : 0);
@@ -728,6 +763,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_SPUR_SUP))      nvs_set_u8(s_nvs, KEY_SPUR_SUP, snap->spur_mode);
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap->ft8_early_decode ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap->greylist_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_TXBAND_OFF))    nvs_set_u8(s_nvs, KEY_TXBAND_OFF,    snap->tx_band_guard_off ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap->pskreporter_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap->psk_rx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap->bt_mouse_en ? 1 : 0);
@@ -799,6 +835,7 @@ static void flush_task(void *arg)
             nvs_set_u8 (s_nvs, KEY_RELAY_PIN,   snap->gpio_relay_pin);
             nvs_set_u8 (s_nvs, KEY_RELAY_LEVEL, snap->gpio_relay_level ? 1 : 0);
             nvs_set_u16(s_nvs, KEY_RELAY_MS,    snap->gpio_relay_ms);
+            nvs_set_u8 (s_nvs, KEY_RELAY_SOLO,  snap->gpio_relay_solo ? 1 : 0);
         }
         if (dirty_test(&dirty_local, DIRTY_PORT_A_MODE))
             nvs_set_u8(s_nvs, KEY_PORT_A_MODE, snap->port_a_mode);
@@ -916,8 +953,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
     out->ft8_freq_hz = 14074000;   // 20m FT8 — sane default so FT8 never opens on an inherited odd VFO
+    out->ft4_freq_hz = 14080000;   // 20m FT4 calling frequency (T89)
+    out->js8_freq_hz = 14078000;   // 20m JS8 calling frequency (T89)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
+    out->sb_lowcut_hz = 300;   /* T90: the common SSB transmit low cut */
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
     /* 500 Hz is today's SSB/digital grid, so an existing unit's behaviour does
        not change when this setting appears. Must be set here, not left zeroed -
@@ -926,6 +966,9 @@ static void load_from_nvs(qmx_settings_t *out)
     /* Decoded CW is ON by default - it is the point of the feature - so like
        rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
     out->cw_decode_en = true;
+    /* log_view_all stays false: the window opens on Today, which is what the
+       10-QSO activation count is for. Left zeroed on purpose and noted here
+       so the next reader does not take the absence for an oversight. */
     out->cw_decode_rows = DEF_CW_ROWS;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
@@ -988,10 +1031,13 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
     out->wf_rows_per_s  = DEF_WF_ROWS;
+    out->spec_peak_s    = DEF_SPEC_PEAK;
+    out->cw_peak_hz     = DEF_CW_PEAK;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
+    out->tx_band_guard_off = false;   // guard ON by default - see settings.h
     // ON by default: contributing reception reports is the norm for FT8
     // software (WSJT-X ships PSK Reporter spotting enabled) and the data is
     // inherently public ham activity. Disclosed in the release notes + manual;
@@ -1076,6 +1122,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->gpio_relay_pin   = DEF_RELAY_PIN;
     out->gpio_relay_level = DEF_RELAY_LEVEL;
     out->gpio_relay_ms    = DEF_RELAY_MS;
+    out->gpio_relay_solo  = DEF_RELAY_SOLO;
     /* Absent key == relay. This is the upgrade guarantee: a board that has
      * never heard of the Unit GPS boots with both pins driven exactly as they
      * were before the setting existed (task 2.4's READ BACK check). */
@@ -1112,8 +1159,11 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
     nvs_get_u32(s_nvs, KEY_FT8_FREQ, &out->ft8_freq_hz);
+    nvs_get_u32(s_nvs, KEY_FT4_FREQ, &out->ft4_freq_hz);
+    nvs_get_u32(s_nvs, KEY_JS8_FREQ, &out->js8_freq_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
     nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
+    nvs_get_u16(s_nvs, KEY_SB_LOWCUT, &out->sb_lowcut_hz);
     { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
@@ -1139,6 +1189,9 @@ static void load_from_nvs(qmx_settings_t *out)
     out->my_grid[0] = '\0';
     sz = sizeof(out->my_grid);
     nvs_get_str(s_nvs, KEY_MY_GRID, out->my_grid, &sz);
+    out->my_state[0] = 0;
+    sz = sizeof(out->my_state);
+    nvs_get_str(s_nvs, KEY_MY_STATE, out->my_state, &sz);
 
     // FT8 CQ presets
     sz = sizeof(out->cq_msg[0]); nvs_get_str(s_nvs, KEY_CQ_MSG0, out->cq_msg[0], &sz);
@@ -1238,7 +1291,17 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
-    if (out->wf_rows_per_s < 1 || out->wf_rows_per_s > 40) out->wf_rows_per_s = DEF_WF_ROWS;
+    /* 0 = off is a legal STORED value too, or the setting would not survive
+     * a reboot - and the waterfall rate already has history there. Only a
+     * value above the range is nonsense worth replacing. */
+    if (out->wf_rows_per_s > 40) out->wf_rows_per_s = DEF_WF_ROWS;
+    if (nvs_get_u8(s_nvs, KEY_SPEC_PEAK, &out->spec_peak_s) != ESP_OK)
+        out->spec_peak_s = DEF_SPEC_PEAK;
+    if (out->spec_peak_s > 60) out->spec_peak_s = DEF_SPEC_PEAK;
+    if (nvs_get_u16(s_nvs, KEY_CW_PEAK, &out->cw_peak_hz) != ESP_OK)
+        out->cw_peak_hz = DEF_CW_PEAK;
+    if (out->cw_peak_hz && (out->cw_peak_hz < 40 || out->cw_peak_hz > 1000))
+        out->cw_peak_hz = DEF_CW_PEAK;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     {
@@ -1255,6 +1318,7 @@ static void load_from_nvs(qmx_settings_t *out)
        one rather than printing something nobody has seen. */
     if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_LOG_VIEW_ALL, &u8v) == ESP_OK) out->log_view_all = (u8v != 0);
     /* Only 2 or 4 are offered; anything else on flash is a value this build
        does not know, so it falls back to the default rather than being
        clamped into a shape the UI cannot show. */
@@ -1266,6 +1330,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPUR_SUP, &u8v) == ESP_OK) out->spur_mode = (u8v <= 2) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_TXBAND_OFF, &u8v) == ESP_OK) out->tx_band_guard_off = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSK_RX_EN, &u8v) == ESP_OK) out->psk_rx_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BT_MOUSE_EN, &u8v) == ESP_OK) out->bt_mouse_en = (u8v != 0);
@@ -1359,7 +1424,28 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_FD_SECTION, out->fd_section, &sz);
 
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
-    { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v; }
+    { uint32_t u32v; if (nvs_get_u32(s_nvs, KEY_WSPR_DIAL, &u32v) == ESP_OK) out->wspr_dial_hz = u32v;
+      /* ⛔ ONE-TIME MIGRATION: the old 60 m WSPR dial transmitted OUT OF BAND.
+       *
+       * 5287200 emits at 5288600-5288800, about 63 kHz below the bottom of 60 m
+       * in every IARU region (Wolfgang DF1KZ, 2026-10-21 - checked against our
+       * own bandplan.c, see main/ui/wspr_screen_view.c's kBands). Correcting
+       * the table alone fixes NOBODY who has already chosen 60 m: their
+       * selection is this stored u32, and WSPR is one of the six sites that
+       * can key the radio with nobody deciding.
+       *
+       * So the stored value is moved, not just the menu. Narrow on purpose -
+       * it matches that one wrong number and nothing else, so an operator who
+       * has deliberately tuned somewhere unusual is untouched.
+       *
+       * ⚠ It is NOT written back here; load must not write. The next save
+       * carries it, and until then the corrected value is what the radio is
+       * tuned to, which is the part that matters. */
+      if (out->wspr_dial_hz == 5287200u) {
+          out->wspr_dial_hz = 5364700u;
+          ESP_LOGW(TAG, "WSPR 60 m dial 5.287200 was out of band in every region "
+                        "- moved to 5.364700 MHz");
+      } }
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
     /* ---- WSPR schedule: two cycle counts, migrated from "1 in N" + bursts ----
      *
@@ -1434,6 +1520,10 @@ static void load_from_nvs(qmx_settings_t *out)
         out->gpio_relay_pin   = (rp == 53 || rp == 54) ? rp : DEF_RELAY_PIN;
         out->gpio_relay_level = (rl != 0);
         if (out->gpio_relay_ms < 50 || out->gpio_relay_ms > 5000) out->gpio_relay_ms = DEF_RELAY_MS;
+        /* Absent key == both pads driven, so an upgrade changes nothing. */
+        uint8_t rs = DEF_RELAY_SOLO ? 1 : 0;
+        nvs_get_u8(s_nvs, KEY_RELAY_SOLO, &rs);
+        out->gpio_relay_solo = (rs != 0);
     }
     {
         // 0 when the key was never written, so "no key" and "relay" are the
@@ -1760,6 +1850,22 @@ void settings_set_my_grid(const char *grid)
     mark_dirty(DIRTY_MY_GRID);
 }
 
+/* Upper-cased and clamped to two letters on the way in, so the comparison in
+ * ft8_cq_direction() never has to care how it was typed. Empty clears it. */
+void settings_set_my_state(const char *st)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.my_state[0] = '\0';
+    if (st && st[0] && st[1]) {
+        s_pending.my_state[0] = (char)toupper((unsigned char)st[0]);
+        s_pending.my_state[1] = (char)toupper((unsigned char)st[1]);
+        s_pending.my_state[2] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_MY_STATE);
+}
+
 void settings_set_cq_msg(uint8_t idx, const char *text)
 {
     if (!s_ready || idx > 2) return;
@@ -1881,6 +1987,48 @@ void settings_set_cw_cal_hz(int16_t hz)
     }
     s_pending.cw_cal_hz = hz;
     mark_dirty(DIRTY_CW_CAL);
+}
+
+/* T89: one place that maps a sub-mode to its slot. Every caller goes through
+ * here, so the three cannot drift apart the way a switch at each call site
+ * would. 1 = FT4, 2 = JS8, anything else = FT8. */
+uint32_t settings_get_ftx_freq_hz(uint8_t op_mode)
+{
+    qmx_settings_t c; settings_load_all(&c);
+    switch (op_mode) {
+        case 1:  return c.ft4_freq_hz;
+        case 2:  return c.js8_freq_hz;
+        default: return c.ft8_freq_hz;
+    }
+}
+void settings_set_ftx_freq_hz(uint8_t op_mode, uint32_t hz)
+{
+    switch (op_mode) {
+        case 1:
+            if (s_pending.ft4_freq_hz == hz) return;
+            s_pending.ft4_freq_hz = hz; mark_dirty(DIRTY_FT4_FREQ); break;
+        case 2:
+            if (s_pending.js8_freq_hz == hz) return;
+            s_pending.js8_freq_hz = hz; mark_dirty(DIRTY_JS8_FREQ); break;
+        default:
+            settings_set_ft8_freq_hz(hz); break;
+    }
+}
+
+uint16_t settings_get_sb_lowcut_hz(void)
+{
+    if (!s_ready || !s_mutex) return 300;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.sb_lowcut_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+void settings_set_sb_lowcut_hz(uint16_t hz)
+{
+    if (hz > 600) hz = 600;
+    if (s_pending.sb_lowcut_hz == hz) return;
+    s_pending.sb_lowcut_hz = hz;
+    mark_dirty(DIRTY_SB_LOWCUT);
 }
 
 void settings_set_ft8_filters(const ft8_filters_t *f)
@@ -2402,10 +2550,70 @@ uint8_t settings_get_wf_rows_per_s(void)
     return v;
 }
 
+float settings_get_ema_alpha(void)
+{
+    if (!s_ready) return DEF_EMA_ALPHA;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    float v = s_pending.ema_alpha;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint8_t settings_get_spec_peak_s(void)
+{
+    if (!s_ready) return DEF_SPEC_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.spec_peak_s;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_spec_peak_s(uint8_t secs)
+{
+    if (!s_ready) return;
+    /* Out of range falls back to OFF rather than to a window nobody asked
+     * for - the same rule the rows/s setter below states, and 0 is a valid
+     * value here too. */
+    if (secs > 60) secs = DEF_SPEC_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spec_peak_s == secs) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spec_peak_s = secs;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPEC_PEAK);
+}
+
+uint16_t settings_get_cw_peak_hz(void)
+{
+    if (!s_ready) return DEF_CW_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.cw_peak_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_cw_peak_hz(uint16_t hz)
+{
+    if (!s_ready) return;
+    if (hz && hz < 40) hz = 40;
+    if (hz > 1000)     hz = DEF_CW_PEAK;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_peak_hz == hz) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_peak_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PEAK);
+}
+
 void settings_set_wf_rows_per_s(uint8_t rows)
 {
     if (!s_ready) return;
-    if (rows < 1 || rows > 40) rows = DEF_WF_ROWS;
+    /* ⛔ 0 = OFF IS VALID. This clamp used to read `rows < 1 || rows > 40`
+     * and silently substituted DEF_WF_ROWS, which is how a POST of 0 came
+     * back `{"ok":true}` with the stored value still 10 - measured on the
+     * bench 2026-10-22, after the clamps in render.c and webserver.c had
+     * already been lifted. Two of four were fixed and the API reported
+     * success for the other two, which is the worst shape a guard can take.
+     * An out-of-range value still falls back rather than being stored. */
+    if (rows > 40) rows = DEF_WF_ROWS;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_pending.wf_rows_per_s == rows) { xSemaphoreGive(s_mutex); return; }
     s_pending.wf_rows_per_s = rows;
@@ -2524,7 +2732,16 @@ void settings_set_activation(uint8_t type, const char *ref)
         while (n > 0 && clean[n - 1] == ' ') n--;
         clean[n] = '\0';
     }
-    if (type > 2 || !clean[0]) { type = 0; clean[0] = '\0'; }
+    /* ⛔ THE BOUND IS THE TABLE, NOT A LITERAL 2. This read `type > 2` and
+     * silently turned every programme past SOTA into "not activating", so
+     * WWFF, IOTA, GMA, WCA and WWBOTA built, drew their buttons and did
+     * nothing at all. Found by exercising the API after the build passed -
+     * the build could not see it, and neither could reading the UI code.
+     * settings_activation_type_count() rather than ACT_N because the table
+     * is defined further down this file. */
+    if (type >= settings_activation_type_count() || !clean[0]) {
+        type = 0; clean[0] = '\0';
+    }
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool same = (s_pending.act_type == type) && (strcmp(s_pending.act_ref, clean) == 0);
@@ -2568,13 +2785,84 @@ bool settings_get_activation_ref(char *out, size_t out_sz)
     return on;
 }
 
+/* ⭐ THE PROGRAMME TABLE. One place, because three things have to agree about
+ * every entry: the word that goes in ADIF MY_SIG, the dedicated ADIF field
+ * (where one exists), and how many contacts make the activation count.
+ *
+ * ⛔ THE DEDICATED FIELD IS NOT COSMETIC. ADIF 3.1.6 makes MY_SIG a free-text
+ * String with no enumeration, so any programme can be written there - but
+ * POTA, SOTA, WWFF and IOTA ALSO have their own fields (MY_POTA_REF,
+ * MY_SOTA_REF, MY_WWFF_REF, MY_IOTA), and those are what the SOTA, WWFF and
+ * IOTA uploaders read. MY_SIG alone is enough for POTA's own uploader and for
+ * nothing else, so both are written. GMA, WCA and WWBOTA have no ADIF field of
+ * their own and travel as MY_SIG/MY_SIG_INFO only, which is what their log
+ * checkers expect.
+ *
+ * ⚠ The targets are the programme's own rule, not ours: POTA 10, SOTA 4,
+ * WWFF 44. The rest publish no single number, and 0 means the panel shows the
+ * count without claiming a threshold - inventing one would tell an operator he
+ * can go home when the programme says otherwise.
+ *
+ * ⛔ IDS ARE PERSISTED IN NVS (act_type). Append only; never renumber. 1 and 2
+ * were POTA and SOTA before the others existed and must stay where they are,
+ * or a unit updated mid-activation changes programme under the operator. */
+static const struct {
+    const char *sig;      /* ADIF MY_SIG */
+    const char *field;    /* dedicated ADIF field, NULL when the programme has none */
+    const char *hint;     /* reference format, for the entry field's placeholder */
+    const char *desc;     /* what the programme is, one line for the Activation window */
+    uint8_t     target;   /* contacts for a valid activation, 0 = no published number */
+} k_act[] = {
+    { NULL,     NULL,          NULL,        NULL, 0 },   /* 0 = not activating */
+    { "POTA",   "MY_POTA_REF", "DL-0123",
+      "Parks on the Air - national, state and regional parks.", 10 },
+    { "SOTA",   "MY_SOTA_REF", "OZ/SJ-001",
+      "Summits on the Air - mountain tops, scored by height.", 4 },
+    { "WWFF",   "MY_WWFF_REF", "DLFF-0123",
+      "World Wide Flora & Fauna - nature reserves and protected land.", 44 },
+    { "IOTA",   "MY_IOTA",     "EU-005",
+      "Islands on the Air - islands and island groups, run by the RSGB.", 0 },
+    { "GMA",    NULL,          "DL/BE-001",
+      "Global Mountain Activity - summits, huts and castles worldwide.", 0 },
+    { "WCA",    NULL,          "DL-00123",
+      "World Castles Award - castles and fortifications.", 0 },
+    { "WWBOTA", NULL,          "DL-00123",
+      "Bunkers on the Air - military bunkers and defence works.", 0 },
+};
+#define ACT_N ((uint8_t)(sizeof(k_act) / sizeof(k_act[0])))
+
+uint8_t settings_activation_type_count(void) { return ACT_N; }
+
+const char *settings_activation_sig_name_for(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].sig : NULL;
+}
+
+const char *settings_activation_ref_hint(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].hint : NULL;
+}
+
+const char *settings_activation_desc(uint8_t type)
+{
+    return (type > 0 && type < ACT_N) ? k_act[type].desc : NULL;
+}
+
+const char *settings_activation_adif_field(void)
+{
+    uint8_t t = settings_get_activation_type();
+    return (t > 0 && t < ACT_N) ? k_act[t].field : NULL;
+}
+
+uint8_t settings_activation_target(void)
+{
+    uint8_t t = settings_get_activation_type();
+    return (t > 0 && t < ACT_N) ? k_act[t].target : 0;
+}
+
 const char *settings_activation_sig_name(void)
 {
-    switch (settings_get_activation_type()) {
-        case 1:  return "POTA";
-        case 2:  return "SOTA";
-        default: return NULL;
-    }
+    return settings_activation_sig_name_for(settings_get_activation_type());
 }
 
 void settings_set_swr_limit_x10(uint8_t v)
@@ -2702,15 +2990,8 @@ uint8_t settings_get_rxaud_pan_ovlp_x100(void)   { RXA_GET_U8(rxaud_pan_ovlp_x10
  * as 100, was clamped to 48, and the operator's 20.0 kHz pick would have come
  * back as 4.8 kHz after the next boot with nothing said. Raised with D=2 on
  * 2026-10-15; found by checking every writer of the ceiling, not by hearing
- * it.
- *
- * ⛔ 2026-10-17: 48 -> 30 (6.0 kHz). 8.0 and 9.6 kHz are withdrawn - NOT
- * because they cost too much (AM 4.0 and 6.0 measured the same CPU duty,
- * so width is free within D=4) but because they were never measured end to
- * end, and T21’s pitch drift is still unexplained. The invariant this
- * comment exists for is unchanged: keep this equal to
- * RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
-void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 30); }
+ * it. 100 = 10000 Hz = RX_AUDIO_AM_HALF_BW_MAX_HZ / 100. */
+void settings_set_rxaud_am_half_bw_h100(uint8_t v) { RXA_SET_U8(rxaud_am_half_bw_h100, DIRTY_RXA_AMBW, 10, 48); }
 
 /* ⛔ CLAMPED ON READ AS WELL AS ON WRITE, and that is the whole point of
  * this not being a bare RXA_GET_U8.
@@ -2732,10 +3013,10 @@ uint8_t settings_get_rxaud_am_half_bw_h100(void)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     uint8_t v = s_pending.rxaud_am_half_bw_h100;
     xSemaphoreGive(s_mutex);
-    if (v > 30) {
-        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 6.0 kHz ceiling "
-                      "(8.0 and above were withdrawn) - using 6.0 kHz", v);
-        v = 30;
+    if (v > 48) {
+        ESP_LOGW(TAG, "stored AM bandwidth %u00 Hz is above the 9.6 kHz ceiling "
+                      "(10.0/20.0 kHz were withdrawn) - using 9.6 kHz", v);
+        v = 48;
     }
     return v;
 }
@@ -3163,6 +3444,25 @@ void settings_set_cw_decode_en(bool v)
     mark_dirty(DIRTY_CW_DECODE);
 }
 
+bool settings_get_log_view_all(void)
+{
+    if (!s_ready || !s_mutex) return false;   // Today, until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.log_view_all;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_log_view_all(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.log_view_all == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.log_view_all = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LOG_VIEW_ALL);
+}
+
 uint8_t settings_get_cw_decode_rows(void)
 {
     if (!s_ready || !s_mutex) return DEF_CW_ROWS;   // default until settings are up
@@ -3232,6 +3532,29 @@ void settings_set_greylist_en(bool v)
     s_pending.greylist_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_GREYLIST_EN);
+}
+
+void settings_set_tx_band_guard_off(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.tx_band_guard_off == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.tx_band_guard_off = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TXBAND_OFF);
+}
+
+/* ⚠ Deliberately FAILS SAFE: with settings not ready the guard is ON, because
+ * the alternative is transmitting unchecked during the one window where
+ * nothing is known. Same reasoning as the 167 setters that return early on
+ * !s_ready, read from the other direction. */
+bool settings_get_tx_band_guard_off(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.tx_band_guard_off;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_pskreporter_en(bool v)
@@ -3876,6 +4199,56 @@ void settings_set_gpio_relay(uint8_t pin, bool level, uint16_t ms)
     gpio_relay_set_polarity(level);
 }
 
+/* Drive only the selected relay pin - see gpio_relay_solo's comment in
+ * settings.h for why this is an option and not simply the behaviour.
+ *
+ * ⭐ RE-CONFIGURES THE PADS HERE, for the same reason the polarity does and
+ * in the same place: turning this on has to RELEASE the other pin, and
+ * turning it off has to start driving it again. Storing it and waiting for a
+ * reboot would be a switch that reads as applied and changes nothing - the
+ * exact failure the settings sweep for T28 went looking for. */
+/* ⛔ CAN THIS DEVICE KEEP ANYTHING AT ALL?
+ *
+ * settings_init() returns early when the `user_nvs` partition is missing or
+ * cannot be opened, leaving s_ready false - and 167 setters begin
+ * `if (!s_ready) return;`. Every one then silently does nothing and every
+ * getter hands back a default. The device receives perfectly and forgets
+ * everything, which is indistinguishable from the operator clicking wrong.
+ *
+ * Sergei AA1SL, issue #21, 2026-10-20: installed with the M5Launcher, whose
+ * partition layout has no user_nvs, and reported "it will not save my
+ * settings, call sign, location... I can't transmit - it shows bunch of error
+ * messages". The transmit errors are the SAME fault: with no callsign stored
+ * every TX path refuses with "Set your callsign first".
+ *
+ * The firmware knew, every time, and said so only on the serial console -
+ * the same shape as the brownout Samuel W7STF lost days to. */
+bool settings_persist_ok(void)
+{
+    return s_ready;
+}
+
+void settings_set_gpio_relay_solo(bool solo)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.gpio_relay_solo == solo) { xSemaphoreGive(s_mutex); return; }
+    s_pending.gpio_relay_solo = solo;
+    bool level = s_pending.gpio_relay_level;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_GPIO_RELAY);
+    gpio_relay_set_polarity(level);
+}
+
+bool settings_get_gpio_relay_solo(void)
+{
+    if (!s_ready) return DEF_RELAY_SOLO;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.gpio_relay_solo;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_get_gpio_relay(uint8_t *pin, bool *level, uint16_t *ms)
 {
     // Defaults first, so a caller running before settings_init() still gets a
@@ -4134,11 +4507,11 @@ void settings_set_lotw_uploaded_n(uint32_t n)
 void settings_get_gps_grid_auto(char *out, size_t cap)
 {
     if (!out || cap == 0) return;
-    out[0] = ' ';
+    out[0] = '\0';
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     size_t sz = cap;
-    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = ' ';
+    if (nvs_get_str(s_nvs, KEY_GPS_GRID_A, out, &sz) != ESP_OK) out[0] = '\0';
     xSemaphoreGive(s_mutex);
 }
 

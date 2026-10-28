@@ -203,6 +203,39 @@ static const char *trusted_source_name(void)
 // resolution over CAT, so a couple of seconds of disagreement is just rounding.
 #define QMX_PUSH_THRESHOLD_SEC 3
 
+/* ---- Overriding the radio's own "I have a GPS" claim (T49) ---------------
+ *
+ * MEASURED 2026-10-21 on the bench. Two of our own lines, 8 ms apart:
+ *
+ *   W QMX tick 11:47:53 off SNTP by 11839762ms - not GPS-disciplined
+ *   I QMX reports a permanent GPS - NOT pushing our time to it, whatever our
+ *     own detection currently thinks
+ *
+ * His QMX+ HAS a GPS and it was NOT LOCKED - GP; answered "no fix" on every
+ * poll - so the radio free-ran on its own software clock, 3 h 17 m behind and
+ * drifting, while we politely declined to correct it. The claim-based gate
+ * below has no exception for a GPS that is FITTED BUT UNLOCKED.
+ *
+ * ⛔ THE GATE ITSELF STAYS, AND THE ERROR MAGNITUDE IS WHAT OVERRIDES IT -
+ * NOT GP;'s answer. Two reasons, and the second is the one that matters:
+ *
+ *   1. The 2026-10-07 trap this gate was built to stop is a SUB-TWO-SECOND
+ *      effect (cat_set_qmx_time() writes whole seconds, the radio reports to
+ *      1 s). 60 s is thirty times clear of it, so a disagreement this large
+ *      cannot be our own push coming back at us, and cannot be rounding.
+ *   2. GP;'s "no fix" is AMBIGUOUS and our own log says so - "no fix, OR THIS
+ *      RADIO ANSWERS GP DIFFERENTLY". Gating on it would mean a GPS-locked
+ *      radio that merely answers GP in an unexpected way gets its clock
+ *      overwritten, which is exactly the 10-07 failure rebuilt. The clock
+ *      error is unambiguous where GP's silence is not.
+ *
+ * TWO CONSECUTIVE observations, because a radio whose GPS has just acquired
+ * can step its clock, and one sample during that step is not a free-running
+ * clock. GP;'s state is logged alongside as corroboration - never as the gate.
+ */
+#define QMX_GPS_CLAIM_OVERRIDE_SEC  60
+#define QMX_GPS_CLAIM_OVERRIDE_HITS 2
+
 // Push UTC time-of-day to the QMX's onboard RTC so it stays in sync for
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
 // better time than anything the Tab5 carries). Never called when the QMX is
@@ -244,9 +277,72 @@ static void push_to_qmx(time_t utc)
         return;
     }
     if (cat_qmx_gps_source_internal()) {
-        ESP_LOGI(TAG, "QMX reports a permanent GPS - NOT pushing our time to it, "
-                      "whatever our own detection currently thinks");
-        return;
+        /* Ask the radio what time IT thinks it is, and believe the number over
+         * the claim when the two cannot be reconciled. One TM; every 5 minutes
+         * (this function's own cadence) - see QMX_GPS_CLAIM_OVERRIDE_SEC. */
+        static int s_claim_override_hits = 0;
+        int qh = 0, qm = 0, qs = 0;
+        if (cat_query_qmx_time(&qh, &qm, &qs) != ESP_OK) {
+            ESP_LOGI(TAG, "QMX reports a permanent GPS and would not tell us its "
+                          "clock - NOT pushing our time to it");
+            s_claim_override_hits = 0;
+            return;
+        }
+        struct tm ours;
+        gmtime_r(&utc, &ours);
+        int d = (qh * 3600 + qm * 60 + qs) - (ours.tm_hour * 3600 + ours.tm_min * 60 + ours.tm_sec);
+        if (d < 0) d = -d;
+        if (d > 43200) d = 86400 - d;          /* midnight-wrap safe, as apply_gps_tick is */
+
+        if (d <= QMX_GPS_CLAIM_OVERRIDE_SEC) {
+            /* Within reach of rounding and of our own truncation - the claim
+             * stands, and this is the case the gate exists for. */
+            s_claim_override_hits = 0;
+            /* ⛔ THIS WAS ESP_LOGD AND THAT LEFT NO INSTRUMENT AT ALL.
+             * The radio's clock error used to be visible in apply_gps_tick()'s
+             * "QMX tick HH:MM:SS off SNTP by Nms" line, but with a locked Unit
+             * GPS that path is no longer taken (T50), so this became the only
+             * place that knows the number - and it was not printing it. Half an
+             * hour of capture after the T50 flash read as "nothing happening",
+             * which is exactly the trap of a silent instrument: a radio whose
+             * clock is right and one we never managed to ask look identical.
+             *
+             * Throttled rather than silent: a 2 s change or 30 minutes. The
+             * QMX free-runs at about 1.7 s/hour (measured 2026-10-21: 7 ms at
+             * 15:18:56 to 2096 ms at 16:34:26), so a healthy radio prints this
+             * roughly hourly and the drift rate is readable straight off the
+             * capture. */
+            static int     s_last_logged_d = -1000;
+            static int64_t s_last_logged_us;
+            int64_t now_us = esp_timer_get_time();
+            if (abs(d - s_last_logged_d) >= 2 ||
+                (now_us - s_last_logged_us) >= 1800LL * 1000000LL) {
+                s_last_logged_d  = d;
+                s_last_logged_us = now_us;
+                ESP_LOGI(TAG, "QMX clock %02d:%02d:%02d is %d s from ours - inside the "
+                              "%d s claim-override window, not pushing",
+                         qh, qm, qs, d, QMX_GPS_CLAIM_OVERRIDE_SEC);
+            }
+            return;
+        }
+        if (++s_claim_override_hits < QMX_GPS_CLAIM_OVERRIDE_HITS) {
+            ESP_LOGW(TAG, "QMX claims a permanent GPS but its clock is %d s out "
+                          "(%02d:%02d:%02d vs %02d:%02d:%02d) - waiting for a second "
+                          "reading before overriding the claim",
+                     d, qh, qm, qs, ours.tm_hour, ours.tm_min, ours.tm_sec);
+            return;
+        }
+        s_claim_override_hits = 0;
+        /* ⚠ No GP; state in this line, deliberately. There is no cheap
+         * accessor for it - cat_gps_gp_sync() is another blocking round
+         * trip - and GP;'s answer is the AMBIGUOUS signal this design
+         * chose not to rely on. The clock error is the evidence; adding a
+         * second, weaker one to the log would only invite someone to gate
+         * on it later. */
+        ESP_LOGW(TAG, "QMX claims a permanent GPS but its clock is %d s out on two "
+                      "readings - its GPS is fitted and NOT disciplining the clock, "
+                      "so setting it from ours", d);
+        /* Deliberately falls through to the push below. */
     }
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
@@ -364,25 +460,50 @@ static void write_to_rtc_and_nvs(time_t utc, const char *source)
     s_last_persist_utc = utc;
 }
 
-static void apply_and_persist(time_t utc, const char *source)
+/* ⛔ usec IS NOT DECORATION - PASSING 0 ACTIVELY THROWS PHASE AWAY.
+ * A source that knows the sub-second must hand it over. SNTP does, and for
+ * years this function was called with whole seconds only: IDF's sync callback
+ * sets the system clock correctly first, including microseconds, and then our
+ * callback set it AGAIN truncated to the second below - undoing the good set
+ * and leaving the clock up to a second SLOW until something else fixed it.
+ *
+ * MEASURED 2026-10-21 in one day's capture, four hourly SNTP syncs:
+ *   W Unit-GPS off SNTP by 894 ms - applying Unit GPS anyway
+ *   I Time set from Unit-GPS: 11:17:23.000 UTC phase-locked (step +893 ms)
+ * and the same at 12:17, 13:17, 14:17 (876, 860, 845 ms). Always POSITIVE -
+ * the satellite always had to push the clock forward, which is truncation and
+ * not noise. On this bench the Unit GPS repaired it within the second. A
+ * WiFi-only Tab5 has nothing to repair it and carries that lag, uniformly
+ * distributed in 0..1 s and re-rolled at every sync, into FT8 slot timing.
+ *
+ * The QMX TM; and manual paths genuinely have no sub-second to give and still
+ * pass 0 through the wrapper below - for them the whole second IS the
+ * information. */
+static void apply_and_persist_us(time_t utc, suseconds_t usec, const char *source)
 {
-    struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
+    struct timeval tv = { .tv_sec = utc, .tv_usec = usec };
     settimeofday(&tv, NULL);
     write_to_rtc_and_nvs(utc, source);
     s_ft8_cum_offset_ms = 0;  // hard sync: any prior FT8 nudge is now baked in
 
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
-    ESP_LOGI(TAG, "Time set from %s: %04d-%02d-%02d %02d:%02d:%02d UTC",
+    ESP_LOGI(TAG, "Time set from %s: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC",
              source,
              tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
-             tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+             tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, (int)(usec / 1000));
+}
+
+/* The sources that have only a whole second to give. */
+static void apply_and_persist(time_t utc, const char *source)
+{
+    apply_and_persist_us(utc, 0, source);
 }
 
 // Priority 1: SNTP — always authoritative. Sets system clock, RTC, and NVS.
-void time_sync_notify_sntp(time_t utc)
+void time_sync_notify_sntp(time_t utc, suseconds_t usec)
 {
-    apply_and_persist(utc, "SNTP");
+    apply_and_persist_us(utc, usec, "SNTP");
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
     s_source = TIME_SOURCE_SNTP;
     s_date_verified = true;
@@ -404,6 +525,20 @@ void time_sync_notify_sntp(time_t utc)
  * GPS-disciplined radio is never pushed to. */
 static time_t s_last_unit_push_utc = 0;
 #define UNIT_GPS_PUSH_INTERVAL_S 300
+
+/* How quiet the per-second Unit-GPS apply is allowed to be - see the log site
+ * further down for why it had to stop printing every second.
+ *
+ * A STEP worth printing: 50 ms. A phase-locked receiver re-applies the same
+ * instant each second, so the step is normally a handful of milliseconds of
+ * carry arithmetic; 50 ms is far above that and far below anything that would
+ * matter to FT8, so it fires on a real jump and not on noise.
+ *
+ * The HEARTBEAT is 10 minutes: enough that a healthy session adds six lines
+ * an hour instead of 3,600, and short enough that a capture still proves the
+ * receiver was alive - which a fully silent version would not. */
+#define UNIT_GPS_LOG_STEP_MS        50
+#define UNIT_GPS_LOG_HEARTBEAT_US   (600LL * 1000000LL)
 
 // Priority 0: Unit GPS on PORT.A - a satellite clock that carries its own DATE,
 // so nothing here asks get_date_anchor() what day it might be (Don WB0LQW's
@@ -459,6 +594,16 @@ bool time_sync_notify_unit_gps(int year, int mon, int mday,
         }
     }
 
+    /* How far the clock actually moved - the only part of this that is news.
+     * Read BEFORE settimeofday(), or the step is always zero. */
+    int64_t step_ms;
+    {
+        struct timeval before;
+        gettimeofday(&before, NULL);
+        int64_t before_us = (int64_t)before.tv_sec * 1000000LL + before.tv_usec;
+        step_ms = (utc_now_us - before_us) / 1000;
+    }
+
     struct timeval tv = { .tv_sec = utc_now,
                           .tv_usec = (suseconds_t)(utc_now_us % 1000000LL) };
     settimeofday(&tv, NULL);
@@ -475,12 +620,50 @@ bool time_sync_notify_unit_gps(int year, int mon, int mday,
     settings_set_date_src(DATE_SRC_UNIT_GPS);
     s_source = TIME_SOURCE_UNIT_GPS;
 
-    struct tm shown;
-    gmtime_r(&utc_now, &shown);
-    ESP_LOGI(TAG, "Time set from Unit-GPS: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC%s",
-             shown.tm_year + 1900, shown.tm_mon + 1, shown.tm_mday,
-             shown.tm_hour, shown.tm_min, shown.tm_sec, (int)(tv.tv_usec / 1000),
-             flip_us > 0 ? " phase-locked" : " (whole second)");
+    /* ⛔ ONCE PER SECOND, FOREVER - AND IT WAS 43% OF THE ENTIRE LOG.
+     *
+     * This ran unconditionally on every GPS sentence. Measured on the bench
+     * 2026-10-20: 4,056 of 9,459 tagged log lines in one window were this one
+     * sentence. It is also what kept the SD card busy - the diag log never
+     * stopped growing, so sd_archive's diag mirror wrote every ~30 s, which
+     * is why the operator saw the bottom-bar SD dot green for the whole
+     * session rather than just at boot. Those writes hold the web stream:
+     * 110 of them stalled it 40.5 s in total, worst single block 3.3 s.
+     *
+     * The clock being set again, correctly, to the same place it already was
+     * is not news. What IS news: the first lock, the phase changing, a real
+     * step, and - at a low rate - proof the receiver is still alive.
+     *
+     * ⚠ IT MUST NOT GO SILENT. A GPS that stopped and a GPS that is working
+     * perfectly would then read identically in a capture, which is the trap
+     * this project has been caught by before (a dead serial capture looking
+     * like a quiet device). Hence the heartbeat: quiet, but never nothing. */
+    {
+        static bool    s_logged_once;
+        static bool    s_last_phase_locked;
+        static int64_t s_last_log_us;
+
+        const bool    phase_locked = (flip_us > 0);
+        const int64_t now_us       = esp_timer_get_time();
+        const bool    heartbeat    = (now_us - s_last_log_us) >= UNIT_GPS_LOG_HEARTBEAT_US;
+        const bool    stepped      = llabs(step_ms) >= UNIT_GPS_LOG_STEP_MS;
+
+        if (!s_logged_once || stepped || phase_locked != s_last_phase_locked || heartbeat) {
+            struct tm shown;
+            gmtime_r(&utc_now, &shown);
+            ESP_LOGI(TAG, "Time set from Unit-GPS: %04d-%02d-%02d %02d:%02d:%02d.%03d UTC%s"
+                          " (step %+lld ms)%s",
+                     shown.tm_year + 1900, shown.tm_mon + 1, shown.tm_mday,
+                     shown.tm_hour, shown.tm_min, shown.tm_sec, (int)(tv.tv_usec / 1000),
+                     phase_locked ? " phase-locked" : " (whole second)",
+                     (long long)step_ms,
+                     (!s_logged_once || stepped || phase_locked != s_last_phase_locked)
+                         ? "" : " [heartbeat]");
+            s_logged_once       = true;
+            s_last_phase_locked = phase_locked;
+            s_last_log_us       = now_us;
+        }
+    }
 
     if (s_last_unit_push_utc == 0 ||
         (utc_now - s_last_unit_push_utc) >= UNIT_GPS_PUSH_INTERVAL_S) {
@@ -650,6 +833,21 @@ bool time_sync_notify_qmx(int h, int m, int s)
     if (sntp_fresh) {
         ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d - SNTP fresh (WiFi up=%d), skipping",
                  h, m, s, (int)wifi_sntp_ok);
+        return false;
+    }
+
+    /* ⛔ A LOCKED RECEIVER OUTRANKS THE RADIO'S WHOLE-SECOND RTC, and this
+     * is the guard's second home ON PURPOSE. qmx_sync_once() already sets the
+     * tick aside while the Unit GPS is locked, but ft8_test.c calls this
+     * function directly on its own schedule, so a guard only there would leave
+     * the FT8 path able to pull a satellite-locked clock onto a free-running
+     * radio RTC - offline, where sntp_fresh is never true and nothing else
+     * stops it. The stale-verdict case is the one that bites: with
+     * s_qmx_gps_confirmed remembered from NVS the trusted-clock branch below
+     * is skipped entirely and TM; is applied outright. */
+    if (time_sync_unit_gps_is_live()) {
+        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d ignored - the Unit GPS is locked",
+                 h, m, s);
         return false;
     }
 
@@ -840,12 +1038,35 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
                      h, m, s, (long long)d_ms);
             return false;
         }
-        // Tight agreement - but if we are the reason for it, it proves nothing.
-        // UNLESS the radio itself says it has a GPS permanently fitted, which is
-        // its own answer rather than our inference and so settles it outright
-        // (#174). This is what stops a genuine QMX+ we have pushed to from being
-        // stuck as "not GPS" until its clock is next seen unset.
-        if (s_qmx_time_pushed && !cat_qmx_gps_source_internal()) {
+        /* Tight agreement - but if we are the reason for it, it proves nothing.
+         * A clock we set cannot be a witness for itself, and that holds however
+         * the radio answers MM.
+         *
+         * â THE CLAIM USED TO BE AN EXCEPTION HERE (#174: "the radio says it
+         * has a GPS permanently fitted, which settles it outright"), so that a
+         * genuine QMX+ we had pushed to would not be stuck at "not GPS" until
+         * its clock was next seen unset. MEASURED 2026-10-21, one tick after
+         * T49's override worked for the first time:
+         *
+         *   W QMX claims a permanent GPS but its clock is 11873 s out on two
+         *     readings ... so setting it from ours
+         *   I Tab5->QMX time push: 15:18:34 UTC
+         *   I Time set from QMX-GPS(tick): 15:18:56.007 UTC phase-locked
+         *   I QMX GPS auto-detect: CONFIRMED (GPS-disciplined)
+         *
+         * The radio's GPS had no fix at all. It was confirmed on a clock we had
+         * written 22 s earlier, the verdict persisted to NVS, and that verdict
+         * makes push_to_qmx() return at its first line - so T49 could never fire
+         * again and the radio would free-run exactly as it had for 3 h 17 m. The
+         * exception rebuilt the bug the override exists to fix.
+         *
+         * â­ The exit #174 lacked now exists and does not need this exception:
+         * GP; answers with a real fix and confirms the radio from its RECEIVER
+         * rather than its claim (see time_sync_try_qmx_gp()). A GPS-equipped
+         * QMX+ that answers GP differently reads as "not GPS" while SNTP or the
+         * Unit GPS keeps its clock correct - the safe direction, and the one the
+         * comment at the bottom of this file already argued for. */
+        if (s_qmx_time_pushed) {
             ESP_LOGW(TAG, "QMX tick %02d:%02d:%02d agrees to %lldms, but WE set this "
                           "radio's clock - not treating that as GPS",
                      h, m, s, (long long)d_ms);
@@ -1028,6 +1249,39 @@ static void qmx_sync_once(void)
     if (gp_answered) {
         s_qmx_detect_done = true;   // settled, and not by inference
         sntp_up = wifi_is_connected() && wifi_time_is_valid();   // GP may have stepped the clock
+    }
+
+    /* â­ A LOCKED RECEIVER OUTRANKS A CLAIMED ONE.
+     *
+     * Two GPS receivers can be present at once - the Unit/Module GPS on the
+     * Tab5 and the one inside a QMX+ - and only one of them is evidence. While
+     * the Tab5's own receiver is LOCKED and fresh (unit_gps_is_live(): an RMC
+     * status-A fix inside UNIT_GPS_FRESH_MS) it is a satellite clock with its
+     * own DATE and a 1 Hz phase lock, so nothing the radio's tick can add is
+     * worth the two risks of taking it:
+     *
+     *   1. It is the weaker signal. MEASURED on the bench 2026-10-21: the QMX
+     *      tick set the clock at 15:23:58.008, and 101 ms later the Unit GPS
+     *      stepped it back 109 ms. Two writers, no arbitration, and the one
+     *      with no fix was dragging the one with a fix.
+     *   2. On a radio whose clock WE set, accepting the tick is how the false
+     *      "GPS-disciplined" verdict above gets made.
+     *
+     * GP; still runs above - it carries the date and the radio's own receiver
+     * verdict - and push_to_qmx() still runs from the Unit-GPS path every
+     * UNIT_GPS_PUSH_INTERVAL_S, so the radio's clock is still corrected. Only
+     * the TICK-AS-CLOCK-SOURCE is set aside, and only while the better
+     * receiver is actually locked. s_qmx_detect_done is deliberately left
+     * alone: unplug the Unit GPS and detection runs on the next pass. */
+    const bool unit_gps_locked = time_sync_unit_gps_is_live();
+    if (unit_gps_locked) {
+        static bool s_said_it;
+        if (!s_said_it) {
+            s_said_it = true;
+            ESP_LOGI(TAG, "Unit GPS is locked - not taking the QMX tick as a clock "
+                          "source while it is (its fix beats the radio's claim)");
+        }
+        return;
     }
 
     // --- Auto-detect (needs SNTP to compare against), retried every periodic

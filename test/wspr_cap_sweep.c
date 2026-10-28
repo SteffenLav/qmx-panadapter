@@ -6,7 +6,7 @@
  *       main/wspr_decode.c main/wspr_subtract.c \
  *       components/ft8_lib/fft/kiss_fft.c \
  *       components/ft8_lib/fft/kiss_fftr.c -lm
- *   ./wspr_cap_sweep test/wav_reference/wspr/260824_1906.wav [max_cands]
+ *   ./wspr_cap_sweep test/wav_reference/wspr/260824_1906.wav [max_cands] [deep]
  *
  * WHY THIS EXISTS
  *   The device ran with WSPR_MAX_CANDS = 8 and every one of its first 127
@@ -41,6 +41,27 @@ int main(int argc, char **argv)
     const char *path = argc > 1 ? argv[1] : "test/wav_reference/wspr/260824_1906.wav";
     int max_c = argc > 2 ? atoi(argv[2]) : 20;
     if (max_c < 1 || max_c > MAX_SWEEP) max_c = 20;
+
+    /* ⛔ THE DEEP RATION DEFAULTS TO 0, AND THAT SILENTLY CHANGED THE ANSWER.
+     *
+     * WSPR_DEEP_MAX_PER_CYCLE is 0 in wspr_decode.c, and this harness never
+     * called the setter - so every cap sweep ever run here measured the
+     * decoder with the deep path OFF, while the device under test runs it at
+     * ration 10. The two-floor scheme (WSPR_MIN_SYNC_DEEP .. WSPR_MIN_SYNC)
+     * exists precisely to catch candidates the cheap gate rejects, so a
+     * deep-off sweep cannot say what the device loses to that gate.
+     *
+     * Third argument, default 0 so the historic numbers still reproduce.
+     *
+     * ⛔ AND THE SETTER ALONE IS NOT ENOUGH. wspr_decode_set_deep_max() only
+     * writes s_deep_max; the per-cycle counter s_deep_left is reloaded from it
+     * by wspr_decode_begin_cycle(), which wspr_rx.c calls and this harness did
+     * not. Setting the ration without that call leaves s_deep_left at 0 and
+     * the deep path never fires - a run that looks identical to deep=0 and
+     * reads as "the deep pass buys nothing". It was measured that way once. */
+    int deep = argc > 3 ? atoi(argv[3]) : 0;
+    wspr_decode_set_deep_max(deep);
+    wspr_decode_begin_cycle();
 
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 1; }

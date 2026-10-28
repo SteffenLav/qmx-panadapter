@@ -222,12 +222,13 @@ Tap any item to open its selector:
 | **14.074** | Frequency. Tap to open the frequency keypad. |
 | **USB** | Mode. Tap to open the picker: USB, LSB, CW, DiGi — plus **AM** once the connected QMX reports 1.04 or newer firmware. |
 | **2.5 kHz** | Bandwidth (SSB only). Tap to choose 2.5, 2.7, 2.9, or 3.2 kHz. |
-| **S7** | S-meter. Shows received signal strength. Display only — there is nothing to tap. |
+| **2.5 kHz**, held | **CW-Tune** — a long press puts the dial on the nearest CW signal within ±400 Hz. See [Settings](settings.md#panadapter-zoom). |
+| **S7** | S-meter. Shows received signal strength. Tap it to open the [audio panel](audio.md#the-audio-panel-one-tap-on-the-s-meter). |
 | **1.0x** | Zoom level. Tap to choose x1, x2, x4, x8, x16 or x24. Pinching sets any value in between. |
 
 ### 4. Spectrum & Waterfall
 
-The **spectrum** shows signal power in dBm (default range −130 to −30 dBm) as a green curve with a dim fill. Each frame is smoothed per-bin with an exponential moving average — α = 0.4 by default, adjustable in the drawer — which balances a stable picture against a snappy response to CW keying and SSB attack transients.
+The **spectrum** shows signal power in dBm (default range −130 to −30 dBm) as a green curve with a dim fill. Each frame is smoothed per-bin with a running average — the **Smoothing** control in the drawer, 60% by default, where 0 is off and higher is smoother — which balances a stable picture against a snappy response to CW keying and SSB attack transients.
 
 The scale labels down the right-hand edge are **worked out from the dB range you set**
 (v1.8.3): the firmware picks round values that fit inside your Min and Max, choosing a
@@ -284,7 +285,13 @@ The background behind the keypad is intentionally semi-transparent (40% dim) so 
 
 32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker.
 
-Each slot shows its **label in large text**, with the mode and frequency dimmed beneath. Mode is also colour-coded — CW (green), DiGi (teal), USB (brick red), LSB (purple) — so the grid is scannable at a glance without reading every label.
+Each slot shows its **label in large text**, with the mode and frequency dimmed beneath. Mode is also colour-coded — CW (blue), DiGi (amber), USB (brick red), LSB (purple) and AM (teal) — so the grid is scannable at a glance without reading every label.
+
+!!! info "New in v1.20.3 — AM can be stored in a memory channel"
+
+    The editor's mode row offered DiGi, USB, LSB and CW only. AM was missing for no reason: the slot could always hold it and recall already sent the right command, there was simply no button. It appears on a QMX running firmware **1.04 or later** — older radios reject the AM mode command, and a channel the radio refuses to recall is worse than no channel. Asked for by Gyula HA3HZ.
+
+    ⚠ The colours above were wrong in earlier versions of this page: CW was listed as green and DiGi as teal.
 
 **To recall a channel:** Tap it. The QMX retunes immediately.
 
@@ -473,7 +480,7 @@ The scale is **S9 = −73 dBm**, 6 dB per S-unit below S9 and 1 dB per unit abov
 
 The reading is the peak level in a ±64-bin window centred on the **IF-shifted VFO bin** — corrected for the QMX's +12 kHz IF offset, so it measures the signal actually under your cursor rather than the DC/local-oscillator spike sitting at the centre of the spectrum. It stays live during FT8 capture.
 
-It is a readout, not a control: there is nothing to tap, and there is no peak-hold mode.
+The bar itself is a readout and holds no peak. Tapping it opens the [audio panel](audio.md#the-audio-panel-one-tap-on-the-s-meter) — the peak-hold line is a **spectrum** control, in the drawer under Smoothing & peak hold.
 
 ### 13. Settings Drawer
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <sys/time.h>   /* suseconds_t, for the SNTP sub-second */
 #include <time.h>
 #include <stdint.h>
 #include "driver/i2c_master.h"
@@ -93,7 +94,9 @@ bool time_sync_unit_gps_is_live(void);
 // Priority 3: called from the SNTP callback with the validated UTC epoch.
 // Always writes to RTC + NVS; only updates system clock when QMX has not synced
 // in the last 5 minutes (so QMX GPS time, if active, is not overridden by SNTP).
-void time_sync_notify_sntp(time_t utc);
+/* usec is the sub-second part of the SAME instant as utc. Pass it; a 0 here
+ * truncates the clock to the second below - see apply_and_persist_us(). */
+void time_sync_notify_sntp(time_t utc, suseconds_t usec);
 
 // Priority 3 (offline/POTA fallback only - see time_sync.c for the real,
 // current priority logic; this header's numbering predates it and is stale).

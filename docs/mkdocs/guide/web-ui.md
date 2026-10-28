@@ -188,7 +188,91 @@ While an exchange is running, a **Mid-QSO** row appears under the FT8 controls:
 - **Re-send** — send the current message again
 - **RR73** / **73** — jump straight to either
 - **Pause** — skip exactly one transmission and keep the exchange
+- **Skip** — give up on *this station* and go back to answering
 - **Cancel** — stop transmitting and end the exchange
+
+**Skip** and **Cancel** are not the same thing, and the difference is
+auto-answer. **Cancel** stops everything, auto-answer included: you are
+cancelling in order to go and do something else, so the Tab5 does not start
+calling again a cycle later. **Skip** means "not this station, carry on" —
+it ends the exchange and leaves **Auto-answer CQ (robot)** running, so the next
+CQ caller is answered as normal.
+
+Two things make it worth having rather than just pressing Cancel and turning
+the robot back on:
+
+- a station calling **CQ DX**, or **CQ** for a state you are not in, was never
+  looking for you, and neither of you wants to spend slots on it;
+- a station that keeps calling CQ while you are calling *it* cannot hear you —
+  which happens to everybody running QRP.
+
+The station you skip is added to the **grey-list** at once, so the automatic
+pickers will not call it again. That is deliberate: without it, the robot would
+answer the same station's very next CQ and you would be back where you started.
+The grey-list is shown in the decode view and lives in memory only — it is
+cleared by a reboot, or you can clear it yourself.
+
+### Switching to a different caller mid-exchange
+
+**Double-click** another station in the decode list and the Tab5 drops the
+exchange it is in and calls that one instead. Auto-answer stays on, and the
+station you dropped is grey-listed so the robot does not go straight back to
+it.
+
+A **single** click still refuses while an exchange is running — it says
+"Busy: working ..." as before. That is deliberate: abandoning a contact in
+progress is destructive, and one stray click on a busy list should not cost
+you one. Double-clicking makes it a decision.
+
+Two cases behave differently on purpose:
+
+- **Double-clicking the station you are already working** does nothing. It is
+  not a re-target, and restarting the exchange you are in is never what was
+  meant.
+- **If the contact is already finished** — your 73 or RR73 is sent and waiting
+  to go out — the pick is queued rather than used to abandon anything. The
+  station is worked; grey-listing them then would be wrong.
+
+If you are calling CQ with nobody answering yet, a double-click simply ends the
+CQ run and calls that station. Nothing is grey-listed, because there was no
+partner to give up on.
+
+*Randy N4OPI asked for this, 21 October 2026.*
+
+### Skipping a CQ before you answer it
+
+**Skip** ends an exchange you are already in. The other half of Randy's request
+is the robot not starting one: **FT8 filters → Auto-answer: skip CQs not aimed
+at me** (off by default, on both screens — "Skip CQs not for me" in the Tab5's
+Options panel).
+
+With it on, while auto-answer is running the Tab5 passes over:
+
+- **CQ DX** from a station in your own country — you cannot be their DX;
+- a **US state call** (`CQ FL`, `CQ TX`) when you are not in the USA.
+
+It is deliberately cautious, and these are the limits:
+
+- **Continent calls are always answered.** `CQ EU`, `CQ NA` — deciding those
+  needs a continent for every DXCC entity, which the Tab5 does not carry.
+- **Contest and activity calls are always answered** — `CQ POTA`, `CQ TEST`,
+  `CQ WW`. Anyone may answer those.
+- **A state call is never skipped if you are in the USA**, because the Tab5
+  knows your country, not your state. A Florida station still answers `CQ FL`.
+- Several state codes are also callsign prefixes elsewhere — `OK` is Oklahoma
+  *and* Czechia, `CA` California *and* Chile, `DE` Delaware *and* Germany. If
+  the code matches your own country as a prefix, the call is answered.
+- It needs **your callsign set**. Without it nothing is judged.
+
+A skipped caller is written to the log with the reason, so a station missing
+from the robot's choices can be explained afterwards rather than guessed at.
+
+!!! note "Skip is in the browser only, for now"
+    The Tab5's own Mid-QSO row is four buttons wide to the pixel, and a fifth
+    needs the row re-measured on the glass rather than re-guessed. Randy asked
+    for the web page, so that is where it is.
+
+*Randy N4OPI asked for Skip, 21 October 2026.*
 
 **Pause** is the one to reach for when you want to listen on your own slot: to
 check the frequency is still clear, or to hear whether the station is really
@@ -289,6 +373,21 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
   IF calibration, SWR protection, the battery charge limit, the 180° screen flip,
   Fox/Hound mode, simulation mode and the spot mode filter.
+- **New in v1.20.3, and the last three that were Tab5-only:** the
+  **SelfSpotter (spot map)** switch under *Spots & reporting*, and **Audio
+  source** and **Line-in gain** under *Radio & display*. The audio pair is
+  worth a word: the browser had always been *able* to set them, but the page
+  had no value to show, so there was no control to set them with.
+
+    ⚠ **Audio source behaves differently here than on the Tab5.** From the
+    browser the change is **stored and takes effect at the next restart**;
+    the Tab5's own *Audio Settings* window restarts for you when you press
+    Save.
+
+    ⛔ Two switches are deliberately **not** on this page. The test-tone
+    controls key the radio, and a transmit control belongs nowhere a stray
+    click can reach it; the resource-monitor overlay is a diagnostic, not an
+    operator switch.
 
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
@@ -406,7 +505,22 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 **Files ▲**:
 
-- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: the `qrz_key`, `eqsl_user` and `eqsl_pass` lines are in there in plain text, and an edited file uploaded back takes effect on the next upload with no restart. Note it holds your WiFi password in plain text too, so treat the file accordingly
+- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: an edited file uploaded back takes effect on the next upload with no restart.
+
+    !!! danger "This file contains secrets in clear text"
+        It holds your **WiFi password**, your **QRZ API key**, your **eQSL
+        password** and your **LoTW certificate and private key** - all
+        readable, none of them obscured. Anyone who has the LoTW key can sign
+        contacts as you.
+
+        Treat it exactly like a password list. In particular, **do not attach
+        it to a forum post, a GitHub issue or an email when asking for
+        help** - that has already happened once. If you need to share
+        settings for diagnosis, delete the `wifi_pass`, `qrz_key`,
+        `eqsl_pass`, `lotw_cert` and `lotw_key` lines first; everything else
+        in the file is harmless.
+
+        The browser asks you to confirm before the download for this reason.
 - **Config upload ↑** — restore settings from a backup file
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 
@@ -416,11 +530,13 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 **Radio ▲** — the things that reach the radio itself:
 
-- **Switch to FT8/FT4** / **Switch to Panadapter** — changes the Tab5's own screen from the browser. The label always says where you are going, and it follows the Tab5 if you switch there instead
+- **Switch to Panadapter / FT8 / FT4 / JS8 / WSPR** — changes the Tab5’s own screen from the browser. The **Radio** menu lists all five pages, so each one is a single click; it no longer steps through them in sequence. Choosing a page is what enables it, and the menu follows the Tab5 if you switch there instead
 - **Memory channels** — your 32 channels: click one to tune to it, drag one onto another slot to move it, or onto the bin to clear it
 - **Let me use the QMX menus** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you hand it back. See [Settings](settings.md#radio)
 - **Antenna Tune** — QMX 1.04+ only; keys a steady carrier with live power and SWR, and stops itself after 60 seconds
 - **Activation** — start or stop a POTA/SOTA session from the browser. While one is running a badge appears in the top bar with the reference and the contact count, so it cannot be forgotten on the drive home
+- **Log a contact** — log a CW or SSB contact you worked by hand. You type the callsign and the two reports; the frequency, mode, band, date, time, your own callsign and grid and the running activation all come from the radio. The reports arrive filled in from the mode — 599 for CW, 59 for phone — and clearing one logs the contact without a report rather than with a wrong one. It **stays open** after Log, with the callsign cleared and the reports kept, because a run of contacts is not one dialog at a time. It is refused if the radio is not connected, since the record would have no frequency *(Gyula HA3HZ, Brian KB9WFS)*
+- **Scheduled events** — the contest calendar and announced POTA/SOTA activations on one timeline, soonest first, with what is on the air now below what is coming. Filter to Contests or ?OTA when you have already decided which kind of evening it is. The list is fetched at most every 15 minutes; Refresh asks for it now. The source being down is normal — the last list stays up and the age line says how old it is
 - **Radio menus** — the QMX's own 80×24 menu system, in the browser. Arrow keys, Enter and Back on screen, and your real keyboard works too. Needs the radio's second USB serial port switched on first. See [Radio Menus](radio-menus.md)
 
 **Miscellaneous ▲**:
@@ -471,7 +587,25 @@ the radio attached always leaves the QMX needing a manual power cycle. That one
 step is what otherwise keeps a remote station from being upgradeable from
 another room — or another country.
 
-![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
+!!! warning "Use G53, not G54 — the drawing below is REV 1.0, corrected"
+    The schematic reproduced here is Randy's **REV 1.0** (2026-09-07) and draws
+    the Grove plug's **`G54`** going to R1. **Wire it to `G53` instead.** The
+    copy below is marked up with that correction — the ring on the P1 pin and
+    the red band along the bottom are added here, not part of his drawing.
+
+    `G54` is the same pin the **M5Stack Unit GPS v1.1** receives on, and both
+    are on PORT.A — the one 4-pin socket. A relay interface on `G54` therefore
+    sits across the GPS's transmitter, and there is no setting that gets you
+    out of it: "Relay: drive only the selected pin" protects the pin you did
+    **not** select. See
+    [Settings ▸ Sharing PORT.A](settings.md#port-mode-porta).
+
+    Nothing else in the drawing changes — same two components, same jack, same
+    patch lead. Randy has issued a revised drawing; look in the
+    [QRPLabs groups.io **Files** area](https://groups.io/g/QRPLabs/files) for
+    his current version, which will carry the change in the artwork itself.
+
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+), REV 1.0 with a correction marked on it — wire G53, not the G54 the drawing shows — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
 
 #### Parts
 
@@ -489,9 +623,11 @@ another room — or another country.
    and wire it internally: **tip to `PWR_ON`, sleeve to `GND`**. This is the
    only irreversible part of the job, and the only part that involves opening
    the QMX. Randy brought his out on the rear panel beside the ATU RF input.
-2. **The interface.** The Tab5 pin you choose — **G53 or G54** — goes through
+2. **The interface.** **`G53`** goes through
    **R1** into the PC817C's LED, with the Grove plug's `GND` completing that
-   side. The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
+   side. (`G54` works electrically and the firmware will pulse it, but it is
+   the Unit GPS's receive pin on the same socket — use `G53` unless you are
+   certain no GPS will ever be fitted.) The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
    a pulse from the Tab5 briefly connects `PWR_ON` to `GND`. **The
    phototransistor side is polarity-sensitive — follow the schematic**, and note
    that the `EXT 5V` pin is not used at all.
@@ -503,10 +639,14 @@ another room — or another country.
 
 #### Settings that work
 
-In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53** or
-**G54**), active level **High**, and **2000 ms** — *"I've found 2000ms to be
+In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53**),
+active level **High**, and **2000 ms** — *"I've found 2000ms to be
 sufficient"*. The firmware's own default is 1000 ms, so this is one to set and
 save; it is remembered from v1.10.9 on.
+
+If a Unit GPS shares the socket, also tick **Relay: drive only the selected
+pin** (v1.20.2) so relay mode stops holding `G54` as a driven output against
+the GPS's transmitter.
 
 !!! note "Why the bottom-edge Dupont pins are not offered"
     A neater cable run would leave the Tab5's bottom edge rather than the side,

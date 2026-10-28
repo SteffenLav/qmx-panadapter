@@ -47,6 +47,15 @@ void rx_audio_preopen(void);
 void rx_audio_set_enabled(bool en);
 bool rx_audio_is_enabled(void);
 
+/* ⭐ Instant speaker mute, RAM only. NOT rx_audio_set_enabled(): that one
+ * cannot be turned on mid-session (the codec is opened at boot or not at all),
+ * which is the "restart required" Samuel W7STF ran into. This gates the
+ * codec's output volume instead, so it takes effect at once and comes back at
+ * once. Deliberately not persisted - a mute surviving a reboot looks exactly
+ * like a broken speaker. */
+void rx_audio_set_muted(bool mute);
+bool rx_audio_is_muted(void);
+
 /* ⛔ TRUE WHEN THE SWITCH IS ON AND IS DOING NOTHING.
  *
  * The ES8388/I2S codec is opened once at boot, and only when the saved enable
@@ -138,6 +147,48 @@ void rx_audio_set_agc_off(bool off);
  * the audio path never hears until the next reboot. */
 void rx_audio_apply_settings(void);
 
+/* ---- CW peak filter (A4 step 3, Sam W7STF) --------------------------------
+ *
+ * A narrow audio peak ON the CW pitch, after the mode filter and BEFORE the
+ * AGC, so the AGC rides the wanted tone instead of the hiss either side of
+ * it. Width in Hz at -3 dB: 0 = off, else about 80..400.
+ *
+ * ⛔ IT IS NOT A SECOND IF FILTER AND MUST NOT BE SOLD AS ONE. The radio's
+ * own CW filter decides what reaches this chain; this shapes what is left,
+ * in the audio, where it costs two biquads and can be switched per ear
+ * instantly. A 100 Hz audio peak behind a 300 Hz IF filter does not give
+ * 100 Hz of IF selectivity - a strong signal 150 Hz away still drives the
+ * AGC in the radio. What it does give is the thing operators ask for: the
+ * wanted note pulled forward out of the band noise.
+ *
+ * Two cascaded identical biquads, not one: a single section wide enough not
+ * to ring has skirts too shallow to hear as a filter. The per-section Q is
+ * derived so the PAIR lands on the requested width - see cw_peak_rebuild().
+ *
+ * CW/CW-R only. Persisted, because it is a listening preference rather than
+ * a bench knob. */
+/* ⭐ SUSPEND THE WHOLE CHAIN, RAM ONLY (T19 server mode).
+ *
+ * ⛔ NOT rx_audio_set_enabled(false): that one is PERSISTED, and a stored
+ * "off" means the codec is not opened at the next boot, which cannot be
+ * undone without another restart. This is a session-only gate - the task
+ * sleeps on the same indefinite block it already uses when nobody is
+ * listening, and resuming wakes it with the same notification.
+ *
+ * ⛔ A WEB LISTENER OVERRIDES IT. The chain runs for `s_web_en` whatever this
+ * says, because audio in the browser is exactly the thing server mode exists
+ * to serve: "ONLY what the web needs" (operator, 2026-10-23). What it stops
+ * is the demodulator running for a speaker nobody is in the room to hear -
+ * measured at 17-20 %% of core 1.
+ *
+ * Muting is not a substitute: a muted chain still filters, demodulates, runs
+ * the AGC and writes the codec. It costs the same and produces silence. */
+void     rx_audio_suspend(bool on);
+bool     rx_audio_is_suspended(void);
+
+void     rx_audio_set_cw_peak_hz(uint16_t bw_hz);
+uint16_t rx_audio_get_cw_peak_hz(void);
+
 void rx_audio_set_binaural_enabled(bool en);
 bool rx_audio_get_binaural_enabled(void);
 
@@ -214,6 +265,8 @@ typedef struct {
     int32_t  resample_ppm_min;  /* lowest and highest seen since the last call, */
     int32_t  resample_ppm_max;  /* so a wander between two samples cannot hide */
     uint32_t resample_railed;   /* times the +/-2% clamp was hit, cumulative */
+    uint32_t rate_win_refused;  /* T80: rate windows thrown out as starvation, cumulative */
+    uint32_t rate_relocked;     /* T80: forced re-seeds of the rate target, cumulative */
 } rx_audio_diag_t;
 
 void rx_audio_take_diag(rx_audio_diag_t *out);
@@ -360,25 +413,10 @@ void rx_audio_take_diag(rx_audio_diag_t *out);
  * W7STF reported, and the operator's rule is that a width which does not play
  * cleanly should not be offered: "it is a ham radio after all".
  *
- * 9.6 kHz was the ceiling D=4 was measured to carry as a FILTER (-1.33 dB at
- * 4800 Hz). That measurement was about the passband, not about what the chain
- * costs to run.
- *
- * ⛔ 2026-10-17: THE LIST NOW STOPS AT 6.0 kHz (half-bw 3000), and the reason
- * is evidence, not cost. Matched 60 s windows measured AM 4.0 and AM 6.0 at
- * the same CPU duty - 455 and 460 ms/s - so width is genuinely FREE within
- * D=4 and 8.0/9.6 would cost the same. But 8.0 and 9.6 have never been run
- * at all: they were put in the list on a filter measurement and a listening
- * report, and the instrument that would have caught trouble did not exist
- * until this week. Sam W7STF's WWV pitch drift is still unexplained
- * (T21/T29), and the honest move while a known symptom is open is to offer
- * only the widths that have actually been measured end to end.
- *
- * ⚠ So this is a RETREAT TO WHAT IS MEASURED, not a statement that the P4
- * cannot do 9.6 kHz. If T29 finds the cost and T21 gets a cause, raising this
- * back is one line - and the -1.33 dB passband evidence for 9.6 still stands.
- * Do not re-derive it. */
-#define RX_AUDIO_AM_HALF_BW_MAX_HZ  3000
+ * 9.6 kHz is the ceiling D=4 was measured to carry (-1.33 dB at 4800 Hz), so
+ * the list stops there. It is 400 Hz short of the 10.0 kHz amateur AM legal
+ * maximum and that difference is inaudible. */
+#define RX_AUDIO_AM_HALF_BW_MAX_HZ  4800
 
 /* The AM half-bandwidth actually in force. Settable, because the figure above
  * is a default and the right choice depends on the band: on a crowded evening

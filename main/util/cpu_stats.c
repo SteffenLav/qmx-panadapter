@@ -4,7 +4,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "display.h"
-#include "ui.h"          // ui_bandplan_call_counts
+#include "render.h"   /* render_push_spacing - the DATA cadence beside the FRAME cadence */
+#include "ui.h"          // ui_bandplan_call_counts, ui_spec_frame_stats
+#include "dsp.h"         // dsp_spectrum_mtx_fails - the drops under the cadence
 #include "esp_timer.h"
 
 #include "psram_task.h"
@@ -78,6 +80,67 @@ static void cpu_stats_task(void *arg)
                  * The total on the line above swings 6-20 Mpx/s on an
                  * unchanged screen, and the two big canvases cannot account
                  * for the high end - so this names the panel. */
+                /* ⭐ THE DATA's cadence, beside the FRAME's. display_frame_spacing
+                 * above says how evenly LVGL refreshes land; this says how evenly
+                 * the spectrum the operator is watching actually CHANGES. The two
+                 * are different questions and the Tab5-vs-web stutter needs both:
+                 * 17.6 fps drawing a trace that only moves unevenly still looks
+                 * stepped. Nominal is 100 ms. */
+                render_push_spacing_t ps;
+                render_push_spacing(&ps);
+                ESP_LOGI(TAG, "push ms: min %u mean %u max %u late %u/%u"
+                              " | in-push ms mean %u max %u",
+                         ps.min_us / 1000, ps.mean_us / 1000, ps.max_us / 1000,
+                         ps.late, ps.n,
+                         ps.push_mean_us / 1000, ps.push_max_us / 1000);
+
+                /* ⭐ THE LAST STAGE: how many FRAMES drew the SAME spectrum.
+                 *
+                 * The two lines above measure the two cadences separately and
+                 * both can read clean while the trace still steps, because
+                 * neither can see the relationship between them. The data
+                 * changes at exactly 10 Hz and LVGL refreshes at an uneven
+                 * ~12 fps, so a spectrum is shown once or twice in an
+                 * irregular pattern. That pattern is this line.
+                 *
+                 * Read it as: 1x steady or 2x steady = smooth; 1x and 2x
+                 * mixed = the stutter. `skip` and `lockfail` are frames that
+                 * were computed or pushed and never reached the glass - both
+                 * were silent until now. */
+                ui_spec_frame_stats_t sfs;
+                ui_spec_frame_stats(&sfs);
+                uint32_t pubfail = 0, getfail = 0;
+                dsp_spectrum_mtx_fails(&pubfail, &getfail);
+                ESP_LOGI(TAG, "spec frames: %u frames showed %u spectra"
+                              " | shown 1x %u 2x %u 3x %u 4x+ %u"
+                              " | skip %u lockfail %u wflockfail %u pubfail %u getfail %u"
+                              " | age ms mean %u max %u",
+                         sfs.frames, sfs.gens,
+                         sfs.repeat[0], sfs.repeat[1], sfs.repeat[2], sfs.repeat[3],
+                         sfs.skipped, sfs.lock_fail, sfs.wf_lock_fail,
+                         (unsigned)pubfail, (unsigned)getfail,
+                         sfs.age_mean_us / 1000, sfs.age_max_us / 1000);
+
+                /* ⭐ THE ONE LINE THAT DESCRIBES THE MOTION. Every other
+                 * counter here measures a stage; this measures the result -
+                 * how long each picture stood still before the next replaced
+                 * it. Nominal 100 ms, and the SD is the stutter in ms. */
+                ESP_LOGI(TAG, "appear ms: n %u min %u mean %u max %u SD %u",
+                         sfs.appear_n, sfs.appear_min_us / 1000,
+                         sfs.appear_mean_us / 1000, sfs.appear_max_us / 1000,
+                         sfs.appear_sd_us / 1000);
+
+                /* Which branch kept the spectrum on the full-canvas
+                 * invalidate. partial should dominate on a quiet band. */
+                ESP_LOGI(TAG, "partial inval: ok %u | rejected: noarr %u stale %u overlay %u wide %u"
+                              " | band %u px",
+                         sfs.pi_partial, sfs.pi_no_array, sfs.pi_stale,
+                         sfs.pi_overlay, sfs.pi_wide, sfs.pi_band_mean_px);
+
+                ESP_LOGI(TAG, "carpet: %u rows -> %u shifts (batch %d)",
+                         sfs.wf_rows_written, sfs.wf_shifts,
+                         ui_wf_get_shift_batch());
+
                 display_inval_bands_t ib;
                 display_inval_bands(&ib);
                 ESP_LOGI(TAG, "inval kpx/s: top %u spec %u lbl %u wf %u bp %u bot %u"

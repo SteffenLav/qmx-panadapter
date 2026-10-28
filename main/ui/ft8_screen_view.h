@@ -2,6 +2,15 @@
 #include "lvgl.h"
 #include "ft8_test.h"   // ft8_op_mode_t - the sub-mode these take and return
 
+// Cyan accent used for everything FT4: the dropdown's FT4 column header, the
+// "MODE: FT4" label, and the left drawer's MODE: FT4 button - so they can
+// never drift apart. FT8 keeps the gold UI_COLOR_ACCENT_GOLD.
+#define FT4_ACCENT_HEX 0x00B4FF
+// Magenta for JS8. Picked to be unmistakable against both gold and cyan at a
+// glance across the room - the mode label is the only thing on the screen that
+// says which protocol is about to be transmitted.
+#define JS8_ACCENT_HEX 0xE040FB
+
 // Step 4c.2 v0.10: FT8 screen LVGL view.
 //
 // Owns the middle-band container shown when ui_mode == UI_MODE_FT8.
@@ -80,6 +89,24 @@ int  ft8_screen_view_get_cq_parity(void);
 // (mid-exchange). The outcome lands in ft8_screen_view_get_web_reply_result(),
 // surfaced through /api/status - a Tab5 toast is invisible from another room.
 void ft8_screen_view_request_reply(const char *call);
+
+/* The same pick, but allowed to ABANDON an exchange already running in order
+ * to take this station instead (Randy N4OPI, 2026-10-21: "enable the ability
+ * to double click a different CQ caller of your choice which would abandon the
+ * one you have determined to be inappropriate or a lost cause and pick someone
+ * specific without exiting the Auto-answer mode. I can already pick a specific
+ * station to respond to in Auto-answer mode, but not if I am already in an
+ * exchange.").
+ *
+ * ⛔ A SEPARATE ENTRY POINT, not a flag on the ordinary pick, because the
+ * ordinary pick MUST keep refusing: starting a second exchange over a live one
+ * is what ft8_qso_start()'s own guard exists to prevent, and a single stray
+ * click should never cost a contact in progress. The browser sends this only
+ * on a DOUBLE click, which is Randy's own suggestion and the right one - it
+ * makes abandoning an exchange deliberate.
+ *
+ * Auto-answer is left running, exactly as the Skip button leaves it. */
+void ft8_screen_view_request_reply_retarget(const char *call);
 
 // Mid-QSO override from the browser (#205): 1=resend 2=RR73 3=73 4=cancel.
 // Deferred to the LVGL task and consumed even when FT8 is not up, so a stale

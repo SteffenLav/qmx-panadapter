@@ -117,7 +117,10 @@ Details worth knowing, each of them load-bearing:
 - **FFT** — 1024-point complex. The **esp-dsp ANSI fallback** is used deliberately: the PIE/vector build crashes under sustained WebSocket load on this silicon.
 - **IF offset** — the QMX presents I/Q at **+12 kHz**, so the spectrum, waterfall *and* S-meter all shift bin selection by `n_bins/4` to put the VFO signal at the visual centre. Miss that shift and the S-meter reads the DC/LO spike instead of the signal.
 - **DC blocker** — a one-pole IIR on the I/Q stream, ahead of the FFT.
-- **Spectrum smoothing** — per-bin EMA, α = 0.4 by default and adjustable in the drawer.
+- **Spectrum smoothing** — per-bin EMA, α = 0.4 by default and adjustable in the
+  drawer. ⚠ The drawer and the web form show **smoothing percent = 100 − α×100**
+  (higher is smoother); α itself is what is stored and what the API's `ema_pct`
+  carries.
 - **dBm calibration** — `DSP_DB_CALIBRATION_OFFSET = −148.0 dB`, measured on a dummy load: the noise floor reads −130 dBm and S9 = −73 dBm.
 - **Waterfall scroll** — a 1280×824 double-height canvas, so a new row costs about **130 µs** instead of the ~92 ms a `memmove` would take.
 - **Audio task** — polling on core 0 with a drain loop, **not** event-driven. Event-driven reads returned truncated UAC chunks that saturated the FFT input and pumped the noise floor on a slow ~13 s cycle.

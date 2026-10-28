@@ -15,6 +15,7 @@ idf_component_register(
         "net/net_quiet.c"
         "net/bg_feed_gate.c"
         "ui/activation_modal.c"
+        "ui/audio_modal.c"
         "ui/identity_config.c"
         "ui/onboarding.c"
         "ui/memory_modal.c"
@@ -29,6 +30,8 @@ idf_component_register(
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
         "ui/js8_text_modal.c"
+        "ui/manual_log_modal.c"
+        "ui/sched_modal.c"
         "ui/ft8_time_modal.c"
         "ui/date_confirm_modal.c"
         "ui/ft8_tone_modal.c"
@@ -85,10 +88,13 @@ idf_component_register(
         "adif/adif_check.c"   # #263 "check my log" - portable, host-tested
         "util/format_freq.c"  # #302 one frequency format, portable
         "cat/cat.c"
+        "cat/cat_keying_cmds.c"  # T64 does runtime CAT text key? host-tested
+        "qmx_term_tx_rows.c"     # T65 which radio-menu rows key? host-tested
         "audio/audio.c"
         "audio/rx_audio.c"
         "audio/line_in.c"
         "dsp/dsp.c"
+    "dsp/sb_tune.c"
         "dsp/iq_balance.c"
         "dsp/spur_map.c"
         "render/render.c"
@@ -144,6 +150,8 @@ idf_component_register(
         "util/geo_coords.c"
         "util/world_map_data.c"
         "ft8_robot.c"
+        "ft8_directed_cq.c"
+        "tx_band_guard.c"
         "ft8_sim.c"
         "wspr_proto.c"
         "wspr_fano.c"
@@ -289,6 +297,23 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E env "IDF_PATH=$ENV{IDF_PATH}"
             ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_patches.py"
     COMMENT "Checking standing patches (managed_components + IDF tree)"
+    VERBATIM
+)
+
+# Refuse to build a firmware that can put RF out without checking the band.
+#
+# Transmitting out of band is the operator's licence on the line, not a
+# cosmetic defect - his words, 2026-10-21: "TX'ing out of band no matter what
+# mode is a legal thing that potentially can fall back on my shoulders if not
+# prohibited by my device". The six sites that exist today are guarded; this is
+# about the seventh, the one added next year. A comment claiming completeness
+# would rot exactly as the standing-patch count and the unattended-TX count
+# both did, so the authority is a script. See tools/check_tx_guard.py for what
+# counts as a keying site and how a genuine exemption is recorded.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_tx_guard.py"
+    COMMENT "Checking every transmit path passes the band guard"
     VERBATIM
 )
 

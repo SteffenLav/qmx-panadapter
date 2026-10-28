@@ -121,9 +121,19 @@ static void worker_task(void *arg)
             qmx_term_close();
             s_status = ST_CLOSED;
             break;
-        case CMD_KEY:
-            qmx_term_key(c.key);
+        case CMD_KEY: {
+            /* ⛔ T65: a refused key must SAY so. Several rows of the radio's
+             * Hardware tests menu key the transmitter, and on the Diagnostics
+             * screen `t` keys at full PA voltage with no SWR protection - so
+             * those keys are refused. Without this the press would simply do
+             * nothing on the glass, which reads as a dead touch screen and
+             * sends the operator looking for a fault that is not there. */
+            char why[128];
+            if (!qmx_term_key_checked(c.key, why, sizeof(why)) && why[0]) {
+                ui_toast_ms(why, 6000);
+            }
             break;
+        }
         case CMD_GOTO_GPS:
             /* Walk to the radio's own GPS viewer. Screen-driven both steps -
              * see qmx_term_select(), and note that this menu's siblings

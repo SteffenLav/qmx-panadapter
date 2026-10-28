@@ -9,6 +9,7 @@
 #include "driver/ledc.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"   /* rate-limiting the PI4IO read warning - see pi4io_read_reg() */
 #include "esp_check.h"
 #include "esp_spiffs.h"
 #include "esp_lcd_panel_ops.h"
@@ -375,8 +376,38 @@ static bool pi4io_read_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *ou
     uint8_t addr = reg;
     esp_err_t err = i2c_master_transmit_receive(dev, &addr, 1, out, 1, I2C_MASTER_TIMEOUT_MS);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "PI4IO read of reg 0x%02x failed (%s) - leaving the port alone",
-                 reg, esp_err_to_name(err));
+        /* ⛔ RATE-LIMITED, BECAUSE THE JACK IS POLLED EVERY SECOND.
+         *
+         * This printed once per failed read, forever. Measured 2026-10-20:
+         * 632 lines in one bench window and 18,631 in a single overnight
+         * capture - second only to the per-second time-sync line, and for
+         * the same reason: a repeated warning that says nothing new after
+         * the first one still fills the diagnostic log, which is then
+         * mirrored to the SD card every 30 s.
+         *
+         * ⚠ NOT SILENCED - COUNTED. These failures are real and are the
+         * evidence behind two users losing audio (Steve N9SZ, Samuel W7STF),
+         * so dropping them would remove the only trace of a live fault. The
+         * first is printed immediately and then one summary a minute carries
+         * how many happened in between, which is strictly MORE information
+         * than a wall of identical lines: a rate is visible, a repeat is
+         * not. */
+        static int64_t s_last_warn_us;
+        static uint32_t s_suppressed;
+        const int64_t now_us = esp_timer_get_time();
+        if (s_last_warn_us == 0 || (now_us - s_last_warn_us) >= 60LL * 1000000LL) {
+            if (s_suppressed)
+                ESP_LOGW(TAG, "PI4IO read of reg 0x%02x failed (%s) - leaving the port "
+                              "alone (+%lu more since the last line)",
+                         reg, esp_err_to_name(err), (unsigned long)s_suppressed);
+            else
+                ESP_LOGW(TAG, "PI4IO read of reg 0x%02x failed (%s) - leaving the port alone",
+                         reg, esp_err_to_name(err));
+            s_last_warn_us = now_us;
+            s_suppressed   = 0;
+        } else {
+            s_suppressed++;
+        }
         return false;
     }
     return true;

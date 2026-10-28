@@ -18,20 +18,40 @@
 #include "ui.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
+#include "sched_modal.h"          // the Scheduled events button, below
+#include "storage/sd_archive.h"   // sd_archive_is_mounted - which refusal to report
 #include "esp_log.h"
 #include <string.h>
 #include <stdio.h>
 
 static const char *TAG = "activation";
 
+/* ⛔ THE PANEL IS SIZED TO THE TEXT, NOT THE TEXT TO THE PANEL.
+ * The first cut kept the old 880 px panel and shrank the programme row to
+ * montserrat_20 so "WWBOTA" would fit its 112 px button. That is the wrong
+ * trade on this display - the readers are mostly over 60 at arm's length,
+ * and the whole modal geometry in this project follows from the body font
+ * rather than the other way round (see js8_text_modal.c's header).
+ * 1100 px of a 1280 px screen leaves 90 px either side and gives each of
+ * the seven buttons 143 px, which holds the longest name in k_act[] at
+ * montserrat_24 with room to spare. An eighth programme narrows them to
+ * 125 px, still enough; a ninth needs this number raised again. */
+#define ACT_PANEL_W   1100
+#define ACT_PANEL_PAD 24
+
 static lv_obj_t *s_modal   = NULL;
 static lv_obj_t *s_panel   = NULL;
 static lv_obj_t *s_ta_ref  = NULL;
 static lv_obj_t *s_keyboard = NULL;
-static lv_obj_t *s_btn_pota = NULL, *s_btn_sota = NULL;
+/* One button per programme in settings.c's k_act[], index 1..N-1. Index 0 is
+ * "not activating" and has no button. Sized from the table rather than
+ * written out, so adding a programme there adds its button here. */
+#define ACT_BTN_MAX 12
+static lv_obj_t *s_btn_type[ACT_BTN_MAX];
 static lv_obj_t *s_lbl_count = NULL;
+static lv_obj_t *s_lbl_desc  = NULL;   /* what the chosen programme is */
 static lv_obj_t *s_btn_go = NULL, *s_lbl_go = NULL;
-static uint8_t   s_sel_type = 1;    // editing state: 1 POTA, 2 SOTA
+static uint8_t   s_sel_type = 1;    // editing state: a k_act[] index
 
 bool activation_is_running(void) { return settings_get_activation_type() != 0; }
 
@@ -62,8 +82,24 @@ static void style_type_btn(lv_obj_t *btn, bool on)
 // button describe what is actually running right now.
 static void refresh(void)
 {
-    style_type_btn(s_btn_pota, s_sel_type == 1);
-    style_type_btn(s_btn_sota, s_sel_type == 2);
+    for (uint8_t t = 1; t < settings_activation_type_count() && t < ACT_BTN_MAX; t++)
+        if (s_btn_type[t]) style_type_btn(s_btn_type[t], s_sel_type == t);
+    /* The placeholder is the chosen programme's own reference format. A
+     * single example covering seven schemes would be an example of none of
+     * them, and the format is the part an operator gets wrong. */
+    if (s_ta_ref) {
+        const char *hint = settings_activation_ref_hint(s_sel_type);
+        lv_textarea_set_placeholder_text(s_ta_ref, hint ? hint : "");
+    }
+    /* ⭐ WHAT THE PROGRAMME IS, under the field (operator, 2026-10-27).
+     * Follows the BUTTON, not the running session: it is there to help
+     * someone choose, and the moment it is most needed is before anything
+     * is running. One line each - the window answers "which of these do I
+     * want", not "teach me the hobby". */
+    if (s_lbl_desc) {
+        const char *d = settings_activation_desc(s_sel_type);
+        lv_label_set_text(s_lbl_desc, d ? d : "");
+    }
 
     char running[32];
     bool on = activation_describe(running, sizeof(running));
@@ -74,9 +110,11 @@ static void refresh(void)
             settings_get_activation_ref(ref, sizeof(ref));
             int n = adif_log_count_activation(ref);
             char b[160];   // room for the completeness line below
-            // POTA's threshold is 10; SOTA's is 4. Showing the target turns a
-            // bare number into an answer to "can I go home yet".
-            int target = (settings_get_activation_type() == 2) ? 4 : 10;
+            // The programme's own threshold - POTA 10, SOTA 4, WWFF 44 -
+            // which turns a bare number into an answer to "can I go home
+            // yet". 0 where the programme publishes none, and then the line
+            // says the count and claims nothing.
+            int target = settings_activation_target();
             /* #263 (Don WB0LQW): this panel already answers "can I go home
                yet", and "3 of these may not count" is the same question, so
                it belongs on the same line rather than behind another button.
@@ -87,15 +125,19 @@ static void refresh(void)
                cannot give different answers. */
             adif_log_check_t chk;
             adif_log_check(true, &chk, NULL, 0);
-            int off = snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
-                               running, n, n == 1 ? "" : "s", target);
+            int off = target
+                ? snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged (need %d)",
+                           running, n, n == 1 ? "" : "s", target)
+                : snprintf(b, sizeof(b), "Running: %s\n%d contact%s logged",
+                           running, n, n == 1 ? "" : "s");
             if (chk.with_problems > 0 && off > 0 && off < (int)sizeof(b))
                 snprintf(b + off, sizeof(b) - (size_t)off,
                          "\n%d may be incomplete - check the log in the web UI",
                          chk.with_problems);
             lv_label_set_text(s_lbl_count, b);
             lv_obj_set_style_text_color(s_lbl_count,
-                                        lv_color_hex(n >= target ? 0x60D060 : 0xFFC864), 0);
+                                        lv_color_hex((target && n >= target) ? 0x60D060
+                                                                             : 0xFFC864), 0);
         } else {
             lv_label_set_text(s_lbl_count, "No activation running.\nQSOs log normally.");
             lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -115,15 +157,56 @@ static void type_btn_cb(lv_event_t *e)
     refresh();
 }
 
+/* ⛔ ONE STOP FOR BOTH SURFACES. The per-activation ADIF (T110) was written
+ * here, in the Tab5's button handler, while the web's set_activation(0) went
+ * straight to settings - so stopping from the browser silently skipped the
+ * file. That is the Tab5/web split this project keeps re-finding (T82, T83,
+ * T107, and the activation picker), and the answer is the same every time: one
+ * function, both callers.
+ *
+ * Fills `note` with what to tell the operator, and returns the number of
+ * records exported (0 or -1 when none were). */
+int activation_stop(char *note, size_t note_sz)
+{
+    if (note && note_sz) note[0] = '\0';
+    if (!activation_is_running()) {
+        if (note && note_sz) snprintf(note, note_sz, "No activation was running");
+        return -1;
+    }
+    char was[32];
+    activation_describe(was, sizeof(was));
+
+    /* BEFORE the session is cleared - clearing it is what makes the reference
+     * unavailable, so reading it afterwards exports nothing. */
+    char ref[24], path[96];
+    int exported = -1;
+    if (settings_get_activation_ref(ref, sizeof(ref)))
+        exported = adif_log_export_activation(ref, path, sizeof(path));
+
+    settings_set_activation(0, NULL);
+    ESP_LOGI(TAG, "activation stopped (was %s), exported %d", was, exported);
+
+    if (note && note_sz) {
+        if (exported > 0) {
+            const char *base = strrchr(path, '/');
+            snprintf(note, note_sz, "Activation stopped - %d QSOs saved as %s",
+                     exported, base ? base + 1 : path);
+        } else {
+            snprintf(note, note_sz, sd_archive_is_mounted()
+                     ? "Activation stopped - no contacts today, no file written"
+                     : "Activation stopped - no SD card, no file written");
+        }
+    }
+    return exported;
+}
+
 static void go_btn_cb(lv_event_t *e)
 {
     (void)e;
     if (activation_is_running()) {
-        char was[32];
-        activation_describe(was, sizeof(was));
-        settings_set_activation(0, NULL);
-        ESP_LOGI(TAG, "activation stopped (was %s)", was);
-        ui_toast("Activation stopped");
+        char note[160];
+        activation_stop(note, sizeof(note));
+        ui_toast(note);
         refresh();
         return;
     }
@@ -144,6 +227,15 @@ static void go_btn_cb(lv_event_t *e)
     snprintf(t, sizeof(t), "Activating %s", now);
     ui_toast(t);
     refresh();
+}
+
+/* ⭐ NEXT TO THE REFERENCE FIELD, because this is where the operator is when
+ * planning - he has just picked a programme and is about to type a park.
+ * "Which park is somebody already doing tonight" is the same thought. */
+static void sched_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    sched_modal_show();
 }
 
 static void cancel_btn_cb(lv_event_t *e) { (void)e; modal_close(); }
@@ -198,14 +290,14 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 880, 420);
+    lv_obj_set_size(s_panel, ACT_PANEL_W, 420);
     lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(s_panel, 2, 0);
     lv_obj_set_style_radius(s_panel, 10, 0);
-    lv_obj_set_style_pad_all(s_panel, 24, 0);
+    lv_obj_set_style_pad_all(s_panel, ACT_PANEL_PAD, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
@@ -214,25 +306,59 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    s_btn_pota = make_btn(s_panel, "POTA", 180, 60, LV_ALIGN_TOP_LEFT, 0, 52,
-                          type_btn_cb, (void *)(uintptr_t)1, NULL);
-    s_btn_sota = make_btn(s_panel, "SOTA", 180, 60, LV_ALIGN_TOP_LEFT, 196, 52,
-                          type_btn_cb, (void *)(uintptr_t)2, NULL);
+    /* ⭐ EVERY PROGRAMME IN THE TABLE, one row (operator, 2026-10-27: "our
+     * Activation window should have them all"). Seven at 180 px do not fit
+     * the old 880 px panel, so the panel is wider (ACT_PANEL_W) and the width
+     * is computed from the count. The reference field moves to its own line
+     * below. Adding an eighth programme narrows them all rather than
+     * overflowing. */
+    {
+        const uint8_t n_types = settings_activation_type_count();   /* incl. index 0 */
+        const int     n_btn   = (n_types > 1) ? (n_types - 1) : 0;
+        const int     inner   = ACT_PANEL_W - 2 * ACT_PANEL_PAD;
+        const int     gap     = 8;
+        const int     bw      = n_btn ? (inner - gap * (n_btn - 1)) / n_btn : inner;
+        for (uint8_t t = 1; t < n_types && t < ACT_BTN_MAX; t++) {
+            const char *sig = settings_activation_sig_name_for(t);
+            if (!sig) continue;
+            s_btn_type[t] = make_btn(s_panel, sig, bw, 60, LV_ALIGN_TOP_LEFT,
+                                     (int)(t - 1) * (bw + gap), 52,
+                                     type_btn_cb, (void *)(uintptr_t)t, NULL);
+        }
+    }
 
     s_ta_ref = lv_textarea_create(s_panel);
     lv_obj_set_size(s_ta_ref, 420, 60);
-    lv_obj_align(s_ta_ref, LV_ALIGN_TOP_LEFT, 400, 52);
+    /* Its own row now - the programme buttons take the full width above. */
+    lv_obj_align(s_ta_ref, LV_ALIGN_TOP_LEFT, 0, 128);
     lv_textarea_set_one_line(s_ta_ref, true);
     lv_textarea_set_max_length(s_ta_ref, 15);
-    lv_textarea_set_placeholder_text(s_ta_ref, "DL-0123  /  OZ/SJ-001");
+    /* Set from the chosen programme in refresh(); this is only what shows
+       before the first refresh runs. */
+    lv_textarea_set_placeholder_text(s_ta_ref, "DL-0123");
     lv_obj_set_style_text_font(s_ta_ref, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_ref);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta_ref, ta_focused_cb, LV_EVENT_CLICKED, NULL);  /* see ui_osk_show() */
 
+    {
+        lv_obj_t *b = make_btn(s_panel, "Scheduled events", 300, 60,
+                               LV_ALIGN_TOP_LEFT, 440, 128, sched_btn_cb, NULL, NULL);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x3a4149), 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(0x5a6169), 0);
+    }
+
+    s_lbl_desc = lv_label_create(s_panel);
+    lv_label_set_long_mode(s_lbl_desc, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_desc, ACT_PANEL_W - 2 * ACT_PANEL_PAD);
+    lv_obj_align(s_lbl_desc, LV_ALIGN_TOP_LEFT, 0, 200);
+    lv_obj_set_style_text_font(s_lbl_desc, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_lbl_desc, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(s_lbl_desc, "");
+
     s_lbl_count = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 136);
+    lv_obj_align(s_lbl_count, LV_ALIGN_TOP_LEFT, 0, 244);
     lv_label_set_text(s_lbl_count, "");
 
     lv_obj_t *cancel_btn = make_btn(s_panel, "Close", 200, 72,

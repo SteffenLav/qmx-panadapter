@@ -84,3 +84,16 @@ Stated plainly, because "beta" on its own tells you nothing:
 ### 7. Signal reports
 
 JS8 signal reports come from the same measurement as FT8's and are calibrated against **`jt9`**, the reference decoder from the WSJT-X family, using 154 paired decodes of the same recordings. A report here should be within a decibel or two of what WSJT-X or JS8Call would say about the same signal.
+
+**If somebody asks you for one** — from v1.20.2. JS8 has an explicit command
+for it, `SNR?`, and a station sending it to you by name used to get silence
+back. The selection chip now reads **? THEIRCALL** on the Tab5, and the
+browser says *"THEIRCALL asks for a report"*, for ten minutes after the
+request. Pressing **SNR** with nothing else selected answers whoever asked.
+
+⛔ **It does not answer by itself**, and that is deliberate: an automatic
+reply is the radio transmitting with nobody deciding to. If you have already
+tapped a station, that selection wins - a request from somebody else cannot
+redirect your report as the button goes down. A request addressed to
+`@ALLCALL` or another group is ignored, because it is not a question to
+you.

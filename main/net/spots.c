@@ -659,6 +659,12 @@ static bool fetch_sota(void)
 // every two with a quiet backoff. Both are due-time driven rather than "sleep
 // the shorter period and count", so adding a third source is a due time and not
 // a rewrite - and a slow SOTA backoff can never delay a POTA fetch.
+/* Scheduled events live at the bottom of this file (they were added long
+ * after), but the task that owns every outbound fetch is here. Two
+ * declarations rather than moving 150 lines around. */
+static void fetch_sched(void);
+static bool sched_take_request(void);
+
 static void spots_task(void *arg)
 {
     (void)arg;
@@ -716,6 +722,14 @@ static void spots_task(void *arg)
         // an update - measured mid-download as "spots: SOTA: 18 spots (23600
         // bytes)" while internal free was 5 KB. Closing three of four doors is
         // not closing the door.
+        /* On demand only - the operator opened the pane. Same net_quiet and
+         * bg_feed gates as the standing feeds: an OTA verify needs the
+         * internal heap a TLS session would take, and this fetch is never
+         * so urgent that it may collide with one. The request stays set,
+         * so it runs on the next pass instead of being dropped. */
+        if (!net_quiet_active() && !bg_feed_gate_active() && sched_take_request())
+            fetch_sched();
+
         if (s.sota_en && now >= next_sota_us && !net_quiet_active() && !bg_feed_gate_active()) {
             bool ok = fetch_sota();
             if (ok) {
@@ -746,3 +760,297 @@ void spots_init(void)
     psram_task_create(spots_task, "spots", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }
+
+/* ---- the spot the operator last chose to work - see spots.h ----------- */
+static char     s_pick_call[16];
+static uint8_t  s_pick_mode;
+static uint32_t s_pick_hz;
+static int64_t  s_pick_at;        /* esp_timer us, 0 = nothing picked */
+
+void spots_note_pick(const char *call, uint8_t mode, uint32_t freq_hz)
+{
+    if (!call || !call[0] || !freq_hz) { spots_clear_pick(); return; }
+    snprintf(s_pick_call, sizeof(s_pick_call), "%s", call);
+    s_pick_mode = mode;
+    s_pick_hz   = freq_hz;
+    s_pick_at   = esp_timer_get_time();
+}
+
+void spots_clear_pick(void)
+{
+    s_pick_call[0] = '\0';
+    s_pick_hz = 0;
+    s_pick_at = 0;
+}
+
+bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
+                     uint32_t dial_hz, uint32_t tol_hz, int max_age_s)
+{
+    if (call_out && call_sz) call_out[0] = '\0';
+    if (!s_pick_at || !s_pick_call[0]) return false;
+
+    if (max_age_s > 0) {
+        int64_t age_s = (esp_timer_get_time() - s_pick_at) / 1000000;
+        if (age_s > max_age_s) return false;
+    }
+    if (tol_hz > 0 && dial_hz) {
+        uint32_t d = dial_hz > s_pick_hz ? dial_hz - s_pick_hz : s_pick_hz - dial_hz;
+        if (d > tol_hz) return false;
+    }
+    if (call_out && call_sz) snprintf(call_out, call_sz, "%s", s_pick_call);
+    if (mode_out) *mode_out = s_pick_mode;
+    return true;
+}
+
+/* ==========================================================================
+   Scheduled events (T116) - see spots.h.
+
+   Lives here rather than in a module of its own so it reuses http_get_json()
+   and the spots task. A second copy of the fetch would be a second place for
+   the buffer discipline, the User-Agent and the net_quiet gate to drift.
+   ========================================================================== */
+
+/* ⚠ The whole-body cap matters: /alerts records are ~1 kB each (callsign,
+ * country, flag, zones, lat/long and a nested activity_refs array), and
+ * on_data() truncates at RESP_CAP, which would fail cJSON_Parse and cost the
+ * WHOLE list rather than the tail. 60 records is ~60 kB against a 160 kB
+ * buffer, so it fits with room, and 60 upstream yields far more than
+ * SCHED_MAX after the ended ones are dropped. */
+/* ⛔ v3, NOT the v1 the spots feeds use, AND TWO FETCHES. Both were found by
+ * looking at the bytes after the first version shipped to the bench:
+ *
+ * 1. v1 /alerts returns `activities: []` on EVERY record - measured, 60 of 60.
+ *    The contest test below reads that array, so the Contests filter could
+ *    never match anything and the pane showed an empty list. v3 populates it
+ *    (`["Contest"]`, `["POTA"]`). The /spots calls stay on v1 deliberately:
+ *    they work, and moving them is a separate change with its own risk.
+ *
+ * 2. The feed is dominated by activations. An unfiltered limit=60 came back
+ *    POTA 28, NG3K 21, ParksNPeaks 4, SOTA 4, WWFF 2 and exactly ONE contest -
+ *    so a single fetch cannot answer "what contest is on this weekend" however
+ *    large the limit. The contest query is asked for separately and merged. */
+#define SPOTHOLE_ALERTS_BASE "https://spothole.app/api/v3"
+#define SCHED_Q_CONTEST      "/alerts?activity=Contest&limit=24"
+#define SCHED_Q_ALL          "/alerts?limit=40"
+
+static sched_event_t    *s_sched;             /* PSRAM, SCHED_MAX entries */
+static int               s_sched_n;
+static uint32_t          s_sched_ver;
+static int64_t           s_sched_at;          /* esp_timer us of last success */
+static volatile bool     s_sched_req;
+static volatile bool     s_sched_busy;
+
+uint32_t sched_events_version(void) { return s_sched_ver; }
+bool     sched_events_busy(void)    { return s_sched_busy; }
+
+int sched_events_age_s(void)
+{
+    if (!s_sched_at) return -1;
+    return (int)((esp_timer_get_time() - s_sched_at) / 1000000);
+}
+
+bool sched_events_request(bool force)
+{
+    if (!wifi_is_connected()) return false;
+    int age = sched_events_age_s();
+    /* Nothing to do when what we hold is still fresh - opening the pane twice
+     * in a minute must not be two fetches on someone else's server. */
+    if (!force && age >= 0 && age < SCHED_TTL_S) return false;
+    s_sched_req = true;
+    return true;
+}
+
+/* Display only - the full name stays in the record. The feed's names are
+ * sentences ("WA7BNM Contest Calendar", "RSGB HF Contests") and all three
+ * ellipsised to "...Contest..." in a column, which told the reader nothing.
+ * The distinguishing word is the first one.
+ *
+ * ⛔ LIVES HERE, NOT IN THE PANE. It was static in ui/sched_modal.c, so
+ * /api/sched would have needed a second copy of the rule - and the browser and
+ * the glass would then have been free to disagree about what a source is
+ * called. One table, both surfaces. */
+const char *sched_src_short(const char *src)
+{
+    if (!src || !src[0]) return "";
+    if (strncasecmp(src, "WA7BNM", 6) == 0)   return "WA7BNM";
+    if (strncasecmp(src, "RSGB HF", 7) == 0)  return "RSGB HF";
+    if (strncasecmp(src, "RSGB VHF", 8) == 0) return "RSGB VHF";
+    return src;
+}
+
+int sched_events_get(sched_event_t *out, int max)
+{
+    if (!out || max <= 0 || !s_sched) return 0;
+    int64_t now = (int64_t)time(NULL);
+    int n = 0;
+    for (int i = 0; i < s_sched_n && n < max; i++) {
+        /* Drop what has already finished. An alert whose end has passed is
+         * history, and the feed carries plenty of them. An event with no
+         * usable end time is kept - better a stale row than a missing one. */
+        if (s_sched[i].end_unix && s_sched[i].end_unix < now) continue;
+        out[n++] = s_sched[i];
+    }
+    return n;
+}
+
+/* ⭐ UPCOMING FIRST, THEN WHAT IS ALREADY RUNNING.
+ *
+ * A plain sort by start time put every in-progress event at the top, and 53 of
+ * 60 records are in progress at any moment - so the first screenful was eight
+ * rows all reading NOW and nothing you could plan around. The operator saw
+ * exactly that on the bench and assumed it was the data. It was the sort.
+ *
+ * Within each group, soonest first: upcoming by start, running by the end time,
+ * so the one about to finish is not the one you are shown first. */
+static int64_t s_sort_now;      /* set once per sort - time() per compare is silly */
+
+static int sched_cmp(const void *a, const void *b)
+{
+    const sched_event_t *x = a, *y = b;
+    bool xr = x->start_unix && x->start_unix <= s_sort_now;
+    bool yr = y->start_unix && y->start_unix <= s_sort_now;
+    if (xr != yr) return xr ? 1 : -1;          /* running sinks below upcoming */
+    if (xr) {
+        /* Unknown end sorts last within the running group. */
+        int64_t xe = x->end_unix ? x->end_unix : INT64_MAX;
+        int64_t ye = y->end_unix ? y->end_unix : INT64_MAX;
+        return (xe > ye) - (xe < ye);
+    }
+    int64_t xs = x->start_unix ? x->start_unix : INT64_MAX;
+    int64_t ys = y->start_unix ? y->start_unix : INT64_MAX;
+    return (xs > ys) - (xs < ys);
+}
+
+/* Clears the flag only when the caller is going to act on it, so a request
+ * arriving while net_quiet is up survives to the next pass. */
+static bool sched_take_request(void)
+{
+    if (!s_sched_req) return false;
+    s_sched_req = false;
+    return true;
+}
+
+/* Parse one /alerts body into s_sched starting at *n. Returns the new count.
+ * Separate from the fetch so the two queries share every parsing rule - the
+ * merge must not become a second place where a contest is recognised. */
+static int sched_parse(const char *buf, int n)
+{
+    cJSON *root = cJSON_Parse(buf);
+    if (!cJSON_IsArray(root)) { if (root) cJSON_Delete(root); return n; }
+
+    int64_t now = (int64_t)time(NULL);
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, root) {
+        if (n >= SCHED_MAX) break;
+        sched_event_t e = {0};
+
+        cJSON *st = cJSON_GetObjectItem(it, "start_time");
+        cJSON *en = cJSON_GetObjectItem(it, "end_time");
+        if (cJSON_IsNumber(st)) e.start_unix = (int64_t)st->valuedouble;
+        if (cJSON_IsNumber(en)) e.end_unix   = (int64_t)en->valuedouble;
+        if (e.end_unix && e.end_unix < now) continue;      /* already over */
+
+        const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(it, "source"));
+        if (src) snprintf(e.src, sizeof(e.src), "%s", src);
+
+        /* Two independent tests, because each has failed on its own: the
+         * activities array is empty on v1 (which is what broke the Contests
+         * filter first time), and a source string is a name that can change.
+         * Either one saying "contest" is enough. */
+        cJSON *acts = cJSON_GetObjectItem(it, "activities");
+        cJSON *a = NULL;
+        cJSON_ArrayForEach(a, acts) {
+            const char *an = cJSON_GetStringValue(a);
+            if (an && strcasecmp(an, "Contest") == 0) { e.is_contest = true; break; }
+        }
+        if (!e.is_contest && src && strcasestr(src, "Contest")) e.is_contest = true;
+
+        const char *comment = cJSON_GetStringValue(cJSON_GetObjectItem(it, "comment"));
+        cJSON *calls = cJSON_GetObjectItem(it, "dx_calls");
+        const char *call = (cJSON_IsArray(calls) && cJSON_GetArraySize(calls) > 0)
+                           ? cJSON_GetStringValue(cJSON_GetArrayItem(calls, 0)) : NULL;
+
+        if (e.is_contest) {
+            snprintf(e.what, sizeof(e.what), "%s",
+                     (comment && comment[0]) ? comment : (call ? call : "Contest"));
+        } else {
+            snprintf(e.what, sizeof(e.what), "%s", call ? call : (comment ? comment : "?"));
+            cJSON *refs = cJSON_GetObjectItem(it, "activity_refs");
+            if (cJSON_IsArray(refs) && cJSON_GetArraySize(refs) > 0) {
+                const char *id = cJSON_GetStringValue(
+                    cJSON_GetObjectItem(cJSON_GetArrayItem(refs, 0), "id"));
+                if (id) snprintf(e.ref, sizeof(e.ref), "%s", id);
+            }
+        }
+        if (!e.what[0]) continue;
+
+        /* The two queries overlap - a contest comes back in both - so drop a
+         * repeat of the same thing at the same time rather than showing it
+         * twice. */
+        bool dup = false;
+        for (int i = 0; i < n && !dup; i++)
+            if (s_sched[i].start_unix == e.start_unix &&
+                strcmp(s_sched[i].what, e.what) == 0) dup = true;
+        if (dup) continue;
+
+        s_sched[n++] = e;
+    }
+    cJSON_Delete(root);
+    return n;
+}
+
+static void fetch_sched(void)
+{
+    s_sched_busy = true;
+
+    if (!s_sched) {
+        s_sched = heap_caps_calloc(SCHED_MAX, sizeof(*s_sched),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_sched) { s_sched_busy = false; return; }
+    }
+
+    /* Contests FIRST, so that if SCHED_MAX fills they are the ones that
+     * survive: activations arrive in bulk from the live feeds anyway, and the
+     * contest calendar is the half that cannot be had any other way. */
+    static const char *const kQueries[2] = { SCHED_Q_CONTEST, SCHED_Q_ALL };
+    int  n = 0;
+    int  total_bytes = 0;
+    bool any = false;
+
+    for (int q = 0; q < 2; q++) {
+        char url[128];
+        snprintf(url, sizeof(url), "%s%s", SPOTHOLE_ALERTS_BASE, kQueries[q]);
+        char *buf = NULL;
+        int len = http_get_json(url, &buf);
+        if (len <= 0) continue;              /* the other query may still work */
+        total_bytes += len;
+        n = sched_parse(buf, n);
+        heap_caps_free(buf);
+        any = true;
+    }
+
+    if (!any) {
+        /* ⛔ KEEP WHAT WE HAVE. Ian's own caveat is a design requirement here:
+         * spothole being down is an ordinary state, so a failed fetch leaves
+         * the last good list and says nothing. */
+        s_sched_busy = false;
+        return;
+    }
+
+    s_sort_now = (int64_t)time(NULL);
+    qsort(s_sched, (size_t)n, sizeof(*s_sched), sched_cmp);
+    s_sched_n   = n;
+    s_sched_at  = esp_timer_get_time();
+    s_sched_ver++;
+    s_sched_busy = false;
+
+    int contests = 0, upcoming = 0;
+    for (int i = 0; i < n; i++) {
+        if (s_sched[i].is_contest) contests++;
+        if (!s_sched[i].start_unix || s_sched[i].start_unix > s_sort_now) upcoming++;
+    }
+    ESP_LOGI(TAG, "scheduled events: %d kept (%d contests, %d upcoming, %d bytes)",
+             n, contests, upcoming, total_bytes);
+}
+
+

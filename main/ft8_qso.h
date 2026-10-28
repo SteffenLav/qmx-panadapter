@@ -91,6 +91,35 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+/* Give up on the station being worked and go back to answering - WITHOUT
+ * standing the robot down (Randy N4OPI, 2026-10-21).
+ *
+ * Two cases he named, and one button covers both: a CQ that was never for us
+ * ("CQ DX", "CQ <a state I am not in>"), and a station that keeps calling CQ
+ * while we call it, because QRP it cannot hear us. Both waste whole slots.
+ *
+ * ⛔ IT IS NOT ft8_qso_abort(). Every UI cancel path pairs abort with
+ * ft8_robot_stand_down("you cancelled a transmission"), which is right for a
+ * cancel - the operator is stopping to do something else - and is exactly why
+ * Randy could not skip a caller without leaving Auto-answer mode. This
+ * deliberately leaves robot_en alone.
+ *
+ * ⛔ IT IS NOT ft8_qso_pause_next_tx() either. That skips ONE transmission and
+ * keeps the exchange; this ends the exchange and keeps the MODE.
+ *
+ * Three things have to happen together or the button does nothing useful:
+ *   1. the exchange ends and TX is disarmed (ft8_qso_abort's job);
+ *   2. the station is grey-listed BY HAND (ft8_greylist_skip_now), or the
+ *      robot answers its very next CQ a slot later;
+ *   3. the resume record for that call is dropped, or the "resume?" offer
+ *      invites the operator straight back into what they just abandoned.
+ *
+ * On success *skipped (if non-NULL) gets the callsign, for the toast.
+ * Returns false + err when there is no exchange to skip - calling CQ with
+ * nobody answering yet is not a skippable exchange. */
+bool ft8_qso_skip_exchange(char *skipped, size_t skipped_len,
+                           char *err, size_t err_len);
+
 /* ---- the sticky timeout expires by itself ---------------------------------
  *
  * FT8_QSO_TIMEOUT is deliberately sticky so an unanswered call is noticed, but
@@ -183,6 +212,9 @@ int             ft8_qso_get_cq_calls_sent(void);
 // overwriting the in-progress exchange.
 bool ft8_qso_is_busy(char *target_buf, size_t len);
 
+// The state as a word, for log lines. Never NULL.
+const char *ft8_qso_state_name(ft8_qso_state_t st);
+
 /* Is this decoded message addressed to US, while a QSO is running?
  *
  * Exists for ONE caller: the decode loop's early-advance (see ft8_test.c). It
@@ -257,6 +289,35 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
 // passing the wrong one (or NULL, which means "73") answers them with a
 // message that does not mean what ours did. See s_final_sent_kind in ft8_qso.c.
 void ft8_qso_notify_manual_final(const char *target_call, const char *final_extra);
+
+/* ---- The contact whose final has gone out but has not been acknowledged ---
+ *
+ * Don WB0LQW: his RR73 was missed and the controls vanished the instant it was
+ * sent, because both surfaces show them only while s_state is one of the WAIT_*
+ * values. The machine keeps watching for 300 s (FINAL_RESEND_WINDOW_SEC) and
+ * re-sends on its own; these let the operator see that and act inside it.
+ *
+ * ft8_qso_final_watch() is true while any just-completed contact is still
+ * inside its window, and names the most recent one. `resends`/`max` are what
+ * the MACHINE has spent of its own budget, for a readout - both may be NULL.
+ * Read-only: it never reaps an expired entry, because a display poll must not
+ * decide when the watch ends.
+ *
+ * ft8_qso_final_resend_now() sends that final again because the operator
+ * asked. It does not spend the machine's budget - see the comment at the
+ * definition.
+ *
+ * ft8_qso_final_watch_clear() is the operator saying the contact is over:
+ * every watch is dropped and the row comes down. Both surfaces call it from
+ * their Cancel. */
+bool ft8_qso_final_watch(char *call, size_t len, int *resends, int *max);
+/* The watched final's third field - "RR73" or "73". "" when nothing is
+ * watched. It is what a re-send would actually put on the air, so a button
+ * that offers one must label itself from this and not from the kind it
+ * assumes. */
+void ft8_qso_final_extra(char *buf, size_t len);
+bool ft8_qso_final_resend_now(char *err, size_t err_len);
+void ft8_qso_final_watch_clear(void);
 
 // Note the station the operator is working MANUALLY (called on every manual
 // Transmit arm). Keeps the partner out of the pileup capture and lets the

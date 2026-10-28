@@ -18,6 +18,7 @@ static const char *TAG = "ft8_grey";
 typedef struct {
     char    call[12];
     uint8_t fails;
+    bool    forced;   // listed by the operator's Skip button, not by timeouts
 } grey_entry_t;
 
 static grey_entry_t      s_tbl[GREY_MAX];
@@ -45,6 +46,25 @@ static void ensure_lock(void)
     portEXIT_CRITICAL(&s_lock_mux);
 }
 
+// Slot for `call`, inserting it if new. Recycles the oldest on a full table,
+// exactly as note_timeout did before this was factored out of it.
+static int find_or_add_locked(const char *call)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (strcmp(s_tbl[i].call, call) == 0) return i;
+    }
+    int i;
+    if (s_count < GREY_MAX) {
+        i = s_count++;
+    } else {
+        memmove(&s_tbl[0], &s_tbl[1], sizeof(s_tbl[0]) * (GREY_MAX - 1));
+        i = GREY_MAX - 1;
+    }
+    memset(&s_tbl[i], 0, sizeof(s_tbl[i]));
+    strncpy(s_tbl[i].call, call, sizeof(s_tbl[i].call) - 1);
+    return i;
+}
+
 static int find_locked(const char *call)
 {
     for (int i = 0; i < s_count; i++) {
@@ -70,18 +90,7 @@ void ft8_greylist_note_timeout(const char *call)
  * either, so running unlocked cannot race anything. spots.c, psk_rx.c,
  * update_check.c and ft8_status.c already guard this way; these did not. */
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
-    int i = find_locked(call);
-    if (i < 0) {
-        if (s_count < GREY_MAX) {
-            i = s_count++;
-        } else {
-            i = 0;   // full: recycle the oldest slot (rare - 24 distinct fails)
-            memmove(&s_tbl[0], &s_tbl[1], sizeof(s_tbl[0]) * (GREY_MAX - 1));
-            i = GREY_MAX - 1;
-        }
-        memset(&s_tbl[i], 0, sizeof(s_tbl[i]));
-        strncpy(s_tbl[i].call, call, sizeof(s_tbl[i].call) - 1);
-    }
+    int i = find_or_add_locked(call);
     if (s_tbl[i].fails < 255) s_tbl[i].fails++;
     uint8_t fails = s_tbl[i].fails;
     if (s_lock) xSemaphoreGive(s_lock);
@@ -97,6 +106,32 @@ bool ft8_greylist_contains(const char *call)
     bool listed = (i >= 0 && s_tbl[i].fails >= GREY_FAIL_LIMIT);
     if (s_lock) xSemaphoreGive(s_lock);
     return listed;
+}
+
+void ft8_greylist_skip_now(const char *call)
+{
+    if (!call || !call[0]) return;
+    ensure_lock();
+    if (!s_lock) return;   // see note_timeout: a missing mutex fails safe, unlocked
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    int i = find_or_add_locked(call);
+    /* Straight to the limit, not +1. The operator pressed Skip; making them
+     * press it twice because the table counts timeouts would be the button
+     * doing nothing the first time, which is how the Pause button first read. */
+    if (s_tbl[i].fails < GREY_FAIL_LIMIT) s_tbl[i].fails = GREY_FAIL_LIMIT;
+    s_tbl[i].forced = true;
+    if (s_lock) xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "%s skipped by the operator - grey-listed (forced)", call);
+}
+
+bool ft8_greylist_skipped_by_hand(const char *call)
+{
+    if (!call || !call[0] || !s_lock) return false;
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    int i = find_locked(call);
+    bool forced = (i >= 0 && s_tbl[i].forced);
+    if (s_lock) xSemaphoreGive(s_lock);
+    return forced;
 }
 
 void ft8_greylist_clear(const char *call)
@@ -125,6 +160,55 @@ void ft8_greylist_clear_all(void)
 // with no way to see WHO was being skipped, which made "why is it ignoring that
 // station?" undiagnosable from another room. Returns entries actually LISTED
 // (i.e. being skipped), not ones merely carrying a first strike.
+/* ⭐ ONLY THE ONES THE OPERATOR SKIPPED BY HAND, newest first.
+ *
+ * Randy N4OPI, 2026-10-22: "a list of skipped stations with the ability to
+ * clear it at the bottom of the screen is a nice touch."
+ *
+ * ⛔ DELIBERATELY NOT ft8_greylist_get_all(). That returns stations the
+ * software set aside after repeated timeouts, which is a different list with
+ * a different meaning: one is "this station cannot hear me", the other is "I
+ * decided against this station". Mixing them would make the Clear button
+ * ambiguous - clearing a deaf station is a retry, clearing a skip is changing
+ * your mind - and would show the operator entries he never made.
+ *
+ * Newest first because the one most likely to be cleared is the one just
+ * added, usually a skip made by mistake.
+ */
+int ft8_greylist_get_skipped(char out[][12], int max)
+{
+    ensure_lock();
+    if (!out || max <= 0 || !s_lock) return 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    int n = 0;
+    for (int i = s_count - 1; i >= 0 && n < max; i--) {
+        if (s_tbl[i].forced) {
+            snprintf(out[n], 12, "%.11s", s_tbl[i].call);
+            n++;
+        }
+    }
+    if (s_lock) xSemaphoreGive(s_lock);
+    return n;
+}
+
+/* Drop every hand skip, leaving timeout entries alone - the Clear button next
+ * to the list above, and the same asymmetry for the same reason. */
+void ft8_greylist_clear_skipped(void)
+{
+    ensure_lock();
+    if (!s_lock) return;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    int w = 0;
+    for (int i = 0; i < s_count; i++) {
+        if (s_tbl[i].forced) continue;      /* drop it */
+        if (w != i) s_tbl[w] = s_tbl[i];
+        w++;
+    }
+    s_count = w;
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "operator cleared the skip list (%d entries remain)", w);
+}
+
 int ft8_greylist_get_all(char out[][12], int max)
 {
     ensure_lock();

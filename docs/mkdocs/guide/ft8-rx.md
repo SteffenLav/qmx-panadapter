@@ -5,7 +5,7 @@ The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectr
 
 ### 1. FT8 & FT4 View
 
-Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter -> FT8/FT4/JS8 -> WSPR). The same decode list and waterfall serve all three modes — FT8, FT4 and **JS8** — switched with the **Preset** dropdown in the left pane (top). JS8 adds a Conversation tab and free-text sending; see [JS8](js8.md).
+Swipe → from the left edge to open the **page picker**, then tap **MODE: FT8** or **MODE: FT4**. The picker lists all five pages - Panadapter, FT8, FT4, JS8 and WSPR - so each one is a single tap rather than a sequence of swipes. The same decode list and waterfall serve all three modes — FT8, FT4 and **JS8** — switched with the **Preset** dropdown in the left pane (top). JS8 adds a Conversation tab and free-text sending; see [JS8](js8.md).
 
 **FT4 notes:**
 - Decodes refresh roughly twice as fast as FT8 because slots are 7.5 seconds
@@ -24,6 +24,24 @@ You'll see:
 ### 2. Decode List
 
 The list shows every decoded FT8 message:
+
+```qmxdiagram
+type: timeline
+title: One FT8 slot - 15 s, and what DT and DTR measure
+span: 15
+seg: 0-12.64 steel a transmission - 12.64 s, 79 symbols
+seg: 12.64-15 dim dead air - 2.36 s
+mark: 0-0.014 red our TX starts at +14 ms
+tick: 0, 5, 10, 15
+note: steel | DTR is the RAW offset of a received signal from the slot boundary. It carries about 0.5 s of receive latency - the QMX SDR plus USB buffering - so it is not comparable with WSJT-X
+note: trace | DT is that same offset corrected against the band consensus, so the shared latency cancels and an on-time station reads about 0.0. This is the WSJT-X-style number
+note: dim | the decode runs after the capture, in the dead air and into the next slot. That is why a reply must be decided before the next boundary, not after it. FT4 is the same shape at 7.5 s - a 5.04 s burst and 2.46 s of dead air
+```
+
+**DT and DTR are two different quantities**, which the table below spells out and the
+picture above shows: DTR is the raw offset from the slot boundary and carries about
+half a second of receive latency, while DT is that offset corrected against the band
+consensus, so the shared latency cancels and an on-time station reads about zero.
 
 | Column | Meaning |
 |---|---|
@@ -75,6 +93,14 @@ Tap the **Options** button to open the Options modal:
   in the decode list either way, greyed, and you can still tap one to work it.
   Per band: the same call on another band counts as new. (It was called
   "Exclude stations worked before", which read as a promise about the list.)
+- **Hide worked-before** — the companion to the entry
+  above rather than part of it. This one *does* change the list: tick it and a
+  station already in your log on this band disappears from the decode list
+  altogether, on the Tab5 and in the browser. Off by default, so the grey
+  behaviour above is what you keep unless you ask for this. The two are
+  separate on purpose - working duplicates by hand while the machine leaves
+  them alone is a perfectly normal way to operate. The station you are
+  mid-exchange with is never hidden.
 - **Show only CQ callers** — hide replies, show only CQ messages
 - **Show CQs in my run** — off by default. While you are running your own CQ, other
   stations' plain CQ calls are hidden so that replies addressed to you are not buried
@@ -87,6 +113,30 @@ Tap the **Options** button to open the Options modal:
 - **Robot mode** — auto-answer CQ (disabled by default; see [FT8 Transmit](ft8-tx.md))
 
 All filters persist across sessions. Toggle any filter on/off to enable or disable it without erasing the criteria.
+
+#### Stations you skipped (v1.20.5)
+
+The **Skip** button ends the exchange in progress and leaves the robot running;
+the station is not called again this session. From v1.20.5 the web FT8 page
+lists those stations under the grey-list line, and each one can be cleared on
+its own or all at once *(Randy N4OPI)*.
+
+It is a **separate list** from the grey-list above: that one is the software
+setting aside a station that never answers, this one is your own decision, and
+one button should not quietly undo both.
+
+#### Your state (v1.20.5)
+
+**Settings → Station → Your state**, beside Your grid. Two letters. With it set,
+the robot passes over a CQ aimed at a different US state. Leave it empty — as
+everyone outside the USA should — and every state call is answered as before,
+because the radio knows which country you are in but not which state.
+
+!!! warning "`CQ DE` is never read as Delaware"
+    On the air `DE` almost always means *from*, not the state. In one operator's
+    log there were fifty-one `CQ DE` decodes, from Florida, New York and
+    California, and none from Delaware — so treating it as a state call would
+    have cost every one of those contacts.
 
 ### 4. Decoding Performance
 

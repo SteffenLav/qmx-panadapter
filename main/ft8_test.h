@@ -255,6 +255,11 @@ const int16_t *ft8_slotcap_data(uint32_t *n, int64_t *slot_sec, int *peak,
  * true, so the socket cannot read a buffer being overwritten. */
 void ft8_slotcap_hold(bool on);
 
+/* The live "No FT8/FT4/JS8 decodes for over N min" warning, or "" when the
+ * receiver is decoding. Same text the Tab5 toasts - the browser shows it
+ * too, because a toast on the glass is invisible from another room. */
+const char *ft8_rx_stuck_note(void);
+
 #ifdef __cplusplus
 }
 #endif

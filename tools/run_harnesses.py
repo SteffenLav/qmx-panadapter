@@ -19,6 +19,7 @@ Usage:  python tools/run_harnesses.py [name-substring]
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,32 @@ GCCDIR = Path(os.environ["LOCALAPPDATA"]) / (
 ) if os.name == "nt" else None
 
 LEADER = re.compile(r"^\s*(\*|//|/\*)\s?")
+
+
+def find_sh():
+    """Absolute path to a POSIX sh, or None.
+
+    ⛔ Run from PowerShell there is no `sh` on PATH, and three script
+    harnesses then reported RUN FAIL with "'sh' is not recognized". Measured
+    2026-10-21: all three PASS when handed a real sh - the suite was reporting
+    its own environment as three broken tests, which is worse than reporting
+    nothing, because a green suite minus three looks like a regression to chase.
+    Git for Windows ships one; so does an MSYS2/WinLibs install.
+    """
+    found = shutil.which("sh")
+    if found:
+        return found
+    for cand in (
+        r"C:\Program Files\Git\bin\sh.exe",
+        r"C:\Program Files\Git\usr\bin\sh.exe",
+        r"C:\Program Files (x86)\Git\bin\sh.exe",
+    ):
+        if Path(cand).exists():
+            return cand
+    return None
+
+
+SH = find_sh()
 
 
 def script_command(src: Path):
@@ -88,14 +115,24 @@ def main():
             continue
         script = script_command(src)
         if script:
+            if not SH:
+                print(f"  {name:<26} SKIP  (no POSIX sh on this machine)")
+                nskip += 1
+                continue
+            # Hand it an absolute sh rather than hoping the parent shell has
+            # one. `label` keeps the ORIGINAL line, because the quoted sh path
+            # contains spaces and script.split()[1] would print a fragment of
+            # "Program Files" as the script name.
+            label = script.split()[1]
+            script = f'"{SH}" ' + script[len("sh "):]
             r = subprocess.run(script, shell=True, cwd=ROOT, env=env,
                                stdin=subprocess.DEVNULL, capture_output=True,
                                text=True, timeout=600)
             if r.returncode == 0:
-                print(f"  {name:<26} pass  (via {script.split()[1]})")
+                print(f"  {name:<26} pass  (via {label})")
                 npass += 1
             else:
-                print(f"  {name:<26} RUN FAIL  (via {script.split()[1]})")
+                print(f"  {name:<26} RUN FAIL  (via {label})")
                 failures.append((name, "script", (r.stdout + r.stderr).strip()))
                 nfail += 1
             continue

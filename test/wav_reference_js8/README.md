@@ -56,7 +56,7 @@ lost on 2026-10-09 by retuning first and starting the recorder afterwards.
 
 Add more:
 
-    python tools/js8_corpus.py 192.168.1.210 --out test/wav_reference_js8
+    python tools/js8_corpus.py 192.168.1.211 --out test/wav_reference_js8
 
 Each slot arrives as `YYMMDD_HHMMSS.wav` (12 kHz, mono, 16-bit, 15.0 s -
 exactly the shape of the FT8 references) plus a `.txt` of what the board

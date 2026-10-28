@@ -151,3 +151,78 @@ bool spots_any_source_enabled(void);
 // Ask for a refresh now (e.g. the operator just enabled the feature or
 // changed band). Coalesced with the periodic cycle.
 void spots_request_refresh(void);
+
+/* ---- the spot the operator last chose to work -------------------------
+ *
+ * Tapping a callsign in the spots lane tunes the radio AND sets the mode, so
+ * from that moment the device knows who is being worked - but nothing kept it,
+ * and the manual log window went on asking the operator to type a callsign
+ * that was on screen a second earlier (operator, 2026-10-27).
+ *
+ * ⚠ THE DIAL IS THE EXPIRY, NOT A TIMER. spots_last_pick() answers only while
+ * the radio is still within `tol_hz` of where the tap put it. Turn the dial
+ * away and the pick stops being the station you are working, however recent it
+ * was - which is exactly the case where pre-filling a callsign would put the
+ * wrong one in the log. `max_age_s` is a second bound for the operator who
+ * leaves the radio parked on a frequency all afternoon.
+ */
+void spots_note_pick(const char *call, uint8_t mode, uint32_t freq_hz);
+
+/* Fills call_out and *mode_out from the last pick and returns true, or returns
+ * false and empties call_out. Pass 0 for either bound to skip that check. */
+bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
+                     uint32_t dial_hz, uint32_t tol_hz, int max_age_s);
+
+/* Forget it - the operator has logged this contact, so the next one starts
+ * from an empty field rather than re-offering a station already in the log. */
+void spots_clear_pick(void);
+
+/* ---- scheduled events (T116) ------------------------------------------
+ *
+ * ⭐ ONE ENDPOINT ANSWERS BOTH QUESTIONS. spothole's /alerts aggregates the
+ * ?OTA schedules (POTA, SOTA, WWFF, BOTA, WOTA) AND the contest calendars
+ * (WA7BNM, RSGB HF, RSGB VHF) and NG3K's DXpeditions - checked against its own
+ * /options alert_providers list, not assumed. So "what activations are coming
+ * up" and "what contest is on tonight" are the same fetch.
+ *
+ * ⚠ FETCHED ON DEMAND, NEVER POLLED. The spots feeds run for ever and their
+ * cost is already measured and argued about in spots.c; this is a pane the
+ * operator opens occasionally, and a schedule that changes over hours does not
+ * deserve a standing fetch on a goodwill server or on the SDIO link. Opening
+ * the pane requests one if the data is older than SCHED_TTL_S.
+ */
+#define SCHED_MAX     40
+#define SCHED_TTL_S   900          /* 15 min - a calendar does not move faster */
+
+typedef struct {
+    char    what[44];     /* contest name, or the activator's callsign */
+    char    ref[16];      /* activation reference, "" for a contest */
+    char    src[18];      /* "POTA", "SOTA", "WA7BNM Contest Calendar", ... */
+    int64_t start_unix;   /* 0 when the feed gave no usable time */
+    int64_t end_unix;
+    bool    is_contest;
+} sched_event_t;
+
+/* Ask for a refresh. Returns false when one is pointless (no WiFi). The fetch
+ * happens on the spots task - never on the caller's - so this returns at once
+ * and the pane redraws when sched_events_version() changes. */
+bool sched_events_request(bool force);
+
+/* Copy up to `max` events, soonest first, already filtered to those that have
+ * not ended. Returns how many were written. */
+int  sched_events_get(sched_event_t *out, int max);
+
+/* The feed's source name, shortened for a column ("WA7BNM Contest Calendar"
+ * -> "WA7BNM"). Returns a pointer into `src` or a literal - never allocates. */
+const char *sched_src_short(const char *src);
+
+/* Bumped on every successful fetch, so a pane can tell "nothing yet" from
+ * "nothing scheduled". 0 = never fetched. */
+uint32_t sched_events_version(void);
+
+/* Seconds since the last SUCCESSFUL fetch, or -1 if there has never been one. */
+int  sched_events_age_s(void);
+
+/* True while a fetch is in flight, for a "checking..." line that is honest
+ * about the difference between slow and empty. */
+bool sched_events_busy(void);

@@ -17,6 +17,7 @@
 #include "util/country.h"
 #include "storage/sd_archive.h"   // "Restore from SD" - card presence + the read
 #include "util/psram_task.h"      // the restore runs OFF taskLVGL; see restore_task()
+#include "storage/settings.h"    // the sticky Today/All choice (T113)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1330,6 +1331,12 @@ static void filter_btn_cb(lv_event_t *e)
 {
     (void)e;
     s_today_only = !s_today_only;
+    /* ⭐ STICKY UNTIL CHANGED (T113, Bruce N9JCV). Only this path stores it -
+       a TAP is the operator choosing. The fallback in render_tick_cb() also
+       writes s_today_only, and it must NOT reach NVS: that one flips to All
+       because Today came out empty, which is the window rescuing itself, not
+       a preference. */
+    settings_set_log_view_all(!s_today_only);
     /* Deferred for the same reason the search box is - see search_ta_cb(). This
        one predates the search and has never crashed, because a single tap is a
        different point in the dispatch from a keystroke with the on-screen
@@ -1657,7 +1664,11 @@ void adif_view_modal_show(void)
     s_query[0] = 0;
     if (s_search_ta) lv_textarea_set_text(s_search_ta, "");
     kb_hide();
-    s_today_only = true;
+    /* Was unconditionally `true`, so the window reopened on Today however it
+       was left (T113). The search box above still resets, for the reason
+       stated there - a stale query hides records silently, where a remembered
+       filter says which one it is on the button. */
+    s_today_only = !settings_get_log_view_all();
 
     /* ⛔ This function is called FROM A BUTTON CALLBACK
      * (adif_or_pileup_btn_cb), so it must not render: list_render_now() does

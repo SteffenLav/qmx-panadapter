@@ -519,6 +519,9 @@ static volatile uint32_t s_loop_count = 0;   // every iteration, success or time
 // ---- Module state ----------------------------------------------------------
 static volatile bool s_enabled = false;
 static volatile uint8_t s_volume = 60;
+/* Instant speaker mute - declared here because rx_audio_set_volume() reads it.
+ * The reasoning is at rx_audio_set_muted(). */
+static volatile bool s_muted;
 
 static esp_codec_dev_handle_t s_codec = NULL;
 static i2s_chan_handle_t s_tx_chan = NULL;   // TX-only I2S channel (no RX/mic)
@@ -651,6 +654,10 @@ static volatile float s_pan_overlap = 0.3f;
 // full reasoning; default picked to noticeably widen the perceived image.
 static volatile float s_pan_width = 1.8f;
 
+/* Server mode's session-only gate on the whole chain - see rx_audio.h.
+ * Declared up here because the audio task below reads it. */
+static volatile bool s_suspended = false;
+
 static float s_agc_env = 1.0f;
 /* Peak limiter (see the block in the per-sample loop). 26000 of 32767 leaves
    about 2 dB of headroom under the hard clamp, so the clamp stops being part
@@ -670,6 +677,17 @@ static float s_lim_gain = 1.0f;
 static float s_up_phase = 0.0f;
 static float s_up_inc   = 1.0f / (float)RX_DECIM_D_NARROW;   /* set_decim_factor() resets it */
 static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its clamp */
+static volatile uint32_t s_rate_win_refused = 0; /* T80: rate windows thrown out as starvation */
+static volatile uint32_t s_rate_relocked    = 0; /* T80: forced re-seeds of the rate target */
+static uint32_t          s_rate_rail_run    = 0; /* consecutive frames pinned at the clamp */
+static uint32_t          s_rate_win_refuse_run = 0; /* consecutive rate windows refused */
+/* Two refusals in a row still throw away a starved window; the THIRD is
+ * accepted, because a gap does not last 30 s of continuous windows and a loop
+ * that can never be corrected is worse than one corrected by a bad reading. */
+#define RATE_REFUSE_MAX_RUN  2
+/* ~5 s at the frame rate: long enough that a transient cannot trip it, short
+ * enough that the operator is not left listening to a railed loop. */
+#define RATE_RAIL_RELOCK_FRAMES  250
 /* T21 instrumentation. Signed, and deliberately NOT reset by the rate loop:
    rx_audio_take_diag() clears the min/max so each reader sees the span since
    ITS last call, while s_resample_ppm stays live. */
@@ -679,6 +697,60 @@ static volatile int32_t s_resample_ppm_max = INT32_MIN;
 static float    s_up_target    = 0.0f;   /* smoothed increment from the measured source rate */
 static uint32_t s_in_pairs_win = 0;      /* input pairs seen in the current measuring window */
 static int64_t  s_in_win_us    = 0;      /* when that window started */
+/* T36 - THE MEASURING WINDOW IS THE PITCH STABILITY. MEASURED, 2026-10-22.
+ *
+ * Sam W7STF heard the WWV 1 s tone change pitch over time on the Tab5 itself.
+ * s_up_inc IS the playback rate, and it is recomputed from a count of delivered
+ * pairs over this window - so the window's measurement noise is pitch noise,
+ * one-for-one.
+ *
+ * The radio does not deliver smoothly. audio.c's own comment has had the
+ * number for a year: one USB transfer is 40 packets = 1920 pairs (40 ms), and
+ * a window catches a whole number of them depending on where its edges fall.
+ * A 1 s window therefore reads 46080 / 48000 / 49920 for a PERFECT 48 kHz
+ * stream - +/-4 %.
+ *
+ * From 113,839 healthy seconds in the bench capture (2026-10-22):
+ *
+ *   window   sd of the rate estimate   full range
+ *   1 s      745 pairs = 1.55 %        -4.16 % .. +4.16 %
+ *   10 s      73 pairs = 0.15 %        -1.02 % .. +0.66 %
+ *
+ * The offset being corrected is 0.24 %. At a 1 s window the instrument was
+ * SIX TIMES noisier than the quantity it measures, and its extremes were twice
+ * the +/-2 % clamp - which is why the rail counter grows in every mode, AM and
+ * USB alike, and why the T21 "AM rails, USB does not" split did not survive a
+ * matched window: the noise was never about the mode.
+ *
+ * Replaying those same 113,833 real seconds through this filter:
+ *
+ *   1 s,  alpha 0.25 (shipped to v1.20.3)  sd 5884 ppm (0.59 %), -2.2 %..+2.5 %
+ *   10 s, alpha 0.25                       sd 1875 ppm
+ *   10 s, alpha 0.10 (this)                sd 1129 ppm (0.11 %), -0.45%..+0.44%
+ *   30 s, alpha 0.10                       sd  639 ppm
+ *
+ * 0.59 % re-rolled every second is +/-6 Hz on WWV's 1000 Hz tone, about 10
+ * cents, moving on a 1 s cadence. That is the report. 0.11 % on a ~100 s
+ * cadence is under 2 cents and drifts rather than wobbles.
+ *
+ * ⚠ The replay is a LOWER BOUND on the shipped figure. It used audio.c's
+ * delivered-pairs counter, which is a different counter over the same stream;
+ * this window counts pairs CONSUMED by this task, so the consumer's own
+ * scheduling adds noise on top. It also used only the 46000..50000 healthy
+ * band, discarding the tails that rail hardest.
+ *
+ * ⛔ Not 30 s, though it measures better: s_up_target is reset to 0 by
+ * set_decim_factor(), and until the first window closes there is NO correction
+ * at all - the 0.24 % deficit feeds zeros into the I2S descriptors, which is
+ * the chirp this corrector exists to remove. 10 s of that after a mode change
+ * is tolerable; 30 s is not. If 10 s still wobbles audibly, the next move is a
+ * 30 s window with a SHORT first window to acquire, not a wider clamp.
+ *
+ * ⛔ The clamp is not the lever. Widening it lets a wrong rate through
+ * quietly instead of pinning it; it makes the symptom less sharp and the audio
+ * no more correct. */
+#define RATE_WIN_US     10000000   /* 10 s - see above */
+#define RATE_SMOOTH_A   0.10f      /* one pole on the window estimate, ~100 s */
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -1039,6 +1111,101 @@ static bool set_decim_factor(int d)
     return true;
 }
 
+/* ---- CW peak filter -------------------------------------------------------
+ *
+ * Two cascaded RBJ band-passes (constant 0 dB peak gain) at the CW pitch.
+ * Transposed direct form II, one state pair per section per ear.
+ *
+ * Why the Q is not simply f0/BW: for ONE section, |H| = 1/sqrt(1 + Q^2 x^2)
+ * with x = f/f0 - f0/f, so -3 dB is at x = 1/Q. Cascading two identical
+ * sections squares the response, so each must be only -1.5 dB at the
+ * requested edge: Q^2 x^2 = sqrt(2) - 1, i.e. x = 0.6436/Q. Designing both
+ * sections at f0/BW would therefore deliver a filter about 36 % narrower
+ * than the number on the label, which is exactly the kind of quiet lie a
+ * control like this must not tell.
+ *
+ * MEASURED against the design, at a 700 Hz pitch and fs 6000:
+ *     label 100 Hz -> -3 dB width  91 Hz, 500 Hz away -32 dB
+ *     label 150 Hz ->             137 Hz,             -25 dB
+ *     label 250 Hz ->             227 Hz,             -18 dB
+ * so the label is honest to about 9 %, the rest being the bilinear warping
+ * and the small-offset approximation in x = f/f0 - f0/f. Peak gain is 0 dB
+ * by construction, which matters: a peak filter that also made things louder
+ * would be judged on the loudness. ⚠ The first run of that check compared
+ * against peak/2 and reported every width 1.41x too wide - the cascade's
+ * amplitude is |H|^2, so -3 dB is peak/sqrt(2), not peak/2. */
+static uint16_t s_cw_peak_hz;            /* 0 = off */
+static volatile bool s_cw_peak_dirty;    /* setter asked for a rebuild       */
+static bool     s_cw_peak_active;        /* built, and the mode is CW        */
+static float    s_cwp_b0, s_cwp_b1, s_cwp_b2, s_cwp_a1, s_cwp_a2;
+static float    s_cwp_z[2][2][2];        /* [ear][section][state]            */
+
+void rx_audio_set_cw_peak_hz(uint16_t bw_hz)
+{
+    if (bw_hz && bw_hz < 40)   bw_hz = 40;
+    if (bw_hz > 1000)          bw_hz = 1000;
+    s_cw_peak_hz = bw_hz;
+    ESP_LOGI(TAG, "CW peak filter: %u Hz%s", (unsigned)bw_hz, bw_hz ? "" : " (off)");
+    /* ⛔ A FLAG, NOT A REBUILD, AND THE FLAG IS THE WHOLE FIX.
+     *
+     * The first version said "rebuilt on the next retune(), which the
+     * mode/width tracker runs within one frame". That was WRONG and the
+     * operator found it by ear: "no difference from off to 100 to 150 to
+     * 250". retune() runs when the MODE, the centre, the width, the
+     * decimation or the panoramic flag change - none of which this setting
+     * touches - so on a radio sitting still in CW it never ran at all. The
+     * capture settles it: seven "CW peak filter: N Hz" lines from the setter
+     * against ONE "built" line, and that one only because something else
+     * retuned at the time.
+     *
+     * Still no filter state touched from this task: the audio task owns the
+     * coefficients and clears the flag. */
+    s_cw_peak_dirty = true;
+}
+
+uint16_t rx_audio_get_cw_peak_hz(void) { return s_cw_peak_hz; }
+
+static void cw_peak_rebuild(int center_hz, float fs_dec, rxaud_mode_t mode)
+{
+    memset(s_cwp_z, 0, sizeof(s_cwp_z));
+    s_cw_peak_active = false;
+    if (mode != RXAUD_MODE_CW || !s_cw_peak_hz) return;
+    if (center_hz <= 0 || fs_dec <= 0.0f) return;
+    /* Nyquist sanity: the pitch has to be well inside the decimated rate, and
+     * it is (700 Hz against 6000). Belt and braces so a future D change
+     * cannot design a filter above Nyquist in silence. */
+    if ((float)center_hz > 0.45f * fs_dec) {
+        ESP_LOGW(TAG, "CW peak filter skipped - %d Hz is too close to fs/2 (%.0f)",
+                 center_hz, (double)fs_dec);
+        return;
+    }
+    const float q_total   = (float)center_hz / (float)s_cw_peak_hz;
+    const float q_section = 0.6436f * q_total;      /* see the note above */
+    const float w0    = 2.0f * (float)M_PI * (float)center_hz / fs_dec;
+    const float alpha = sinf(w0) / (2.0f * q_section);
+    const float a0    = 1.0f + alpha;
+    s_cwp_b0 =  alpha / a0;
+    s_cwp_b1 =  0.0f;
+    s_cwp_b2 = -alpha / a0;
+    s_cwp_a1 = (-2.0f * cosf(w0)) / a0;
+    s_cwp_a2 = ( 1.0f - alpha)    / a0;
+    s_cw_peak_active = true;
+    ESP_LOGI(TAG, "CW peak filter built: %u Hz at %d Hz (Q %.1f per section, fs %.0f)",
+             (unsigned)s_cw_peak_hz, center_hz, (double)q_section, (double)fs_dec);
+}
+
+static inline float cw_peak_step(int ear, float x)
+{
+    for (int sec = 0; sec < 2; sec++) {
+        float *z = s_cwp_z[ear][sec];
+        float y = s_cwp_b0 * x + z[0];
+        z[0] = s_cwp_b1 * x - s_cwp_a1 * y + z[1];
+        z[1] = s_cwp_b2 * x - s_cwp_a2 * y;
+        x = y;
+    }
+    return x;
+}
+
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     /* D FIRST: everything below is computed against fs/D, so the factor has to
@@ -1057,7 +1224,39 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
      * put a step through the AGC. */
     am_demod_reset(&s_am);
     s_am_alpha = am_demod_alpha(fs_dec);
-    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz) / fs;
+    /* Same reset rule as the AM tracker above: a retune changes the pitch the
+     * peak is supposed to sit on, and a biquad carrying state from the old
+     * centre would ring it into the new one. */
+    cw_peak_rebuild(center_hz, fs_dec, mode);
+    /* ⛔ THE CW TRIM BELONGS IN THIS MIX, AND LEAVING IT OUT PUT THE WHOLE
+     * CHAIN 60 Hz OFF THE DISPLAY. MEASURED, not reasoned:
+     *
+     * The display maps the dial to baseband 12000 + cw_offset + cw_cal
+     * (ui_get_if_offset_hz()), and this line mixed 12000 + cw_offset. With
+     * the bench unit's cw_cal of -60, a signal the spectrum showed exactly on
+     * the dial - zero-beat said it was on the peak to within 7 Hz - came out
+     * of the speaker at 564 Hz instead of the 625 Hz CW centre. Recorded off
+     * the device with {"action":"rxcap"} and FFT'd: 569.7 Hz before a 7 Hz
+     * zero-beat nudge, 564.1 Hz after, against a predicted 625 - 60 = 565.
+     *
+     * The operator found it as "the peak filter is not tuned correctly": the
+     * peak is built on the CW centre, the tone was 60 Hz below it, and a
+     * 100 Hz filter is already past -3 dB there. But the filter was only the
+     * messenger - the AUDIO ITSELF was tuned 60 Hz off what the screen said,
+     * on every CW signal, since the trim existed.
+     *
+     * ⚠ ONLY the first mix. w2 below shifts the result back up by center_hz
+     * and that is what sets the PITCH you hear, which must stay the CW centre
+     * the operator chose. RIT is deliberately still absent from both: the
+     * radio moves its own LO for RIT, so the tone is supposed to change. */
+    /* ⛔ CW ONLY, and getting that wrong was a regression of its own. The
+     * display adds the trim inside `if (mode == CW)` (ui_get_if_offset_hz),
+     * so applying it in DiGi/SSB/AM moves the audio 60 Hz the OTHER way on
+     * this unit - which is the same class of fault as the one it was added to
+     * fix, just pointing elsewhere. One rule, in both places: the trim is a
+     * CW thing. */
+    const int if_cal = (mode == RXAUD_MODE_CW) ? (int)ui_get_if_cal_hz() : 0;
+    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz + if_cal) / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
     float half_split = panoramic ? (float)half_bw_hz / 2.0f : 0.0f;
@@ -1346,7 +1545,11 @@ static void rx_audio_task(void *arg)
          * whole point of Sam W7STF's request is listening from another room
          * while the Tab5 sits silent. So the chain runs for `s_enabled ||
          * s_web_en`, and only the esp_codec_dev_write() is conditional. */
-        if (!s_enabled && !s_web_en) {
+        /* s_suspended joins the SAME condition rather than getting a branch
+         * of its own: "nobody is listening" and "the operator told us nobody
+         * is listening" want identical behaviour, and two sleep paths would
+         * be two things to keep in step. The web listener still wins. */
+        if ((!s_enabled || s_suspended) && !s_web_en) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Fully asleep - zero wakeups, zero cost - until
             // rx_audio_set_enabled(true) gives this notification. This is the
@@ -1414,6 +1617,13 @@ static void rx_audio_task(void *arg)
         int want_center, want_half_bw;
         filter_params_for_mode(mode, &want_center, &want_half_bw);
         bool want_binaural = s_binaural_en;
+        /* The CW trim is part of the first mix now (see retune()), so it has
+         * to be part of what triggers one - the same class of bug as the peak
+         * filter's "rebuilt on the next retune()" that never came. Without
+         * this, moving the trim in the drawer would change the display and
+         * leave the audio where it was until the mode or the width happened
+         * to change. */
+        int want_cal = (int)ui_get_if_cal_hz();
         float want_overlap = s_pan_overlap;
         bool half_bw_changed = (want_half_bw != s_half_bw_hz);
         bool overlap_changed = (want_overlap != overlap_prev);
@@ -1425,11 +1635,24 @@ static void rx_audio_task(void *arg)
          * break the first time they did not. Taken BEFORE retune(), because
          * retune() is what applies the new D. */
         bool decim_changed = (decim_for_mode(mode, want_half_bw) != s_decim_d);
+        static int cal_prev = INT32_MIN;
+        bool cal_changed = (want_cal != cal_prev);
         if (mode != mode_prev || want_center != s_center_hz ||
-            want_binaural != binaural_prev || half_bw_changed || decim_changed) {
+            want_binaural != binaural_prev || half_bw_changed || decim_changed ||
+            cal_changed) {
+            cal_prev = want_cal;
             retune(want_center, want_half_bw, mode);
             mode_prev = mode;
             binaural_prev = want_binaural;
+            s_cw_peak_dirty = false;      /* retune() rebuilt it already */
+        } else if (s_cw_peak_dirty) {
+            /* The operator moved the peak-filter control and nothing else
+             * changed. Rebuild just that one filter - a full retune() here
+             * would also reset the AM tracker and both NCOs for a setting
+             * that does not move the passband. */
+            s_cw_peak_dirty = false;
+            cw_peak_rebuild(want_center,
+                            (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, mode);
         }
         if (half_bw_changed || decim_changed) {
             build_lpf(want_half_bw);
@@ -1721,6 +1944,16 @@ static void rx_audio_task(void *arg)
             } else {
                 re_l = s_narrow_re[i] * cl - s_narrow_im[i] * sl;
                 re_r = s_narrow_re[i] * cr - s_narrow_im[i] * sr;
+            }
+
+            /* ⭐ THE CW PEAK FILTER GOES HERE - after the mode filter and
+             * the final NCO, BEFORE the envelope below. Put it after the AGC
+             * and the AGC would still be riding the hiss the filter is about
+             * to remove, which is most of what makes a peak filter feel like
+             * it works. Both ears, so the panoramic split keeps its image. */
+            if (s_cw_peak_active) {
+                re_l = cw_peak_step(0, re_l);
+                re_r = cw_peak_step(1, re_r);
             }
 
             // AGC/squelch are driven from ONE shared envelope, not each
@@ -2129,11 +2362,68 @@ static void rx_audio_task(void *arg)
             s_in_pairs_win += (uint32_t)in_pairs;
             int64_t win_us = now_rm - s_in_win_us;
             if (s_in_win_us == 0) { s_in_win_us = now_rm; s_in_pairs_win = 0; }
-            else if (win_us >= 1000000) {                /* 1 s of measurement */
+            else if (win_us >= RATE_WIN_US) {            /* see RATE_WIN_US - T36 */
                 float src_rate = (float)s_in_pairs_win * 1000000.0f / (float)win_us;
                 float target   = src_rate / ((float)s_decim_d * (float)DSP_SAMPLE_RATE_HZ);
-                s_up_target = (s_up_target <= 0.0f) ? target
-                                                    : s_up_target + (target - s_up_target) * 0.25f;
+                /* ⛔ T80: A STARVED WINDOW IS NOT A RATE MEASUREMENT.
+                 *
+                 * Measured 2026-10-23: a 16 s audio gap (a WSPR deep-search
+                 * pass starving the capture) produced a window with almost no
+                 * pairs in it. src_rate then read far below 48 kHz, the EMA
+                 * swallowed it, and s_up_target walked down until the ±2 %
+                 * clamp pinned the pitch at -6.8 %. With RATE_SMOOTH_A 0.10 on
+                 * 10 s windows the recovery constant is ~100 s per 10 %, so it
+                 * read as "never re-locks": the WSPR page had been closed for
+                 * five minutes, the deep ration was back to 0, and the backlog
+                 * was still growing. A forced retune did not clear it either,
+                 * because nothing in this loop resets the integrator.
+                 *
+                 * The radio's crystal cannot move by 5 %. A window that says
+                 * it did is a gap, not a rate - so it is REFUSED rather than
+                 * averaged, which is the same rule sb_tune and the PA-voltage
+                 * cache already follow: do not feed a cache a reading you know
+                 * is an artefact. */
+                const float nom_lo = (float)DSP_SAMPLE_RATE_HZ * 0.95f;
+                const float nom_hi = (float)DSP_SAMPLE_RATE_HZ * 1.05f;
+                if ((src_rate < nom_lo || src_rate > nom_hi) &&
+                    s_rate_win_refuse_run < RATE_REFUSE_MAX_RUN) {
+                    /* ⛔⛔ THE ESCAPE HATCH, AND IT IS NOT OPTIONAL.
+                     *
+                     * The first cut of this refusal had no run limit, and that
+                     * was a worse fault than the one it fixed: measured on
+                     * bench dev 2026-10-28, three windows in a row read 27762,
+                     * 26287 and 26966 pairs/s and ALL were refused, so
+                     * s_up_target could never be updated by anything. A loop
+                     * that cannot be corrected is deaf, not safe - the
+                     * operator heard it as audio "breaking up big time".
+                     *
+                     * A gap is transient by definition. Three consecutive
+                     * 10 s windows all saying the same out-of-band rate is not
+                     * a gap, it is the source, however unlikely the number
+                     * looks - so it is ACCEPTED and used to re-seed the target
+                     * whole. Refusing the first two still throws away the
+                     * single starved window that started T80. */
+                    ESP_LOGW(TAG, "rate window refused (%u of %u): %.0f pairs/s "
+                                  "over %lld ms - treating as starvation",
+                             (unsigned)(s_rate_win_refuse_run + 1),
+                             (unsigned)RATE_REFUSE_MAX_RUN,
+                             src_rate, (long long)(win_us / 1000));
+                    s_rate_win_refused++;
+                    s_rate_win_refuse_run++;
+                } else {
+                    if (s_rate_win_refuse_run >= RATE_REFUSE_MAX_RUN) {
+                        /* Persistently out of band: take it whole rather than
+                         * easing toward it, because the EMA would spend ~100 s
+                         * getting there and the audio is wrong for all of it. */
+                        ESP_LOGW(TAG, "rate: %.0f pairs/s persists - accepting it "
+                                      "as the source rate", src_rate);
+                        s_up_target = target;
+                    } else {
+                        s_up_target = (s_up_target <= 0.0f) ? target
+                                                            : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                    }
+                    s_rate_win_refuse_run = 0;
+                }
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
@@ -2158,6 +2448,33 @@ static void rx_audio_task(void *arg)
                 if ((s_rate_railed++ % 200) == 0)
                     ESP_LOGW(TAG, "resample rate hit the rail (err=%lld) - audio "
                                   "may be off pitch", (long long)err);
+                /* ⛔ T80, the second half: A RE-LOCK PATH.
+                 *
+                 * Refusing the bad window stops the loop being walked off, but
+                 * it does nothing for a loop ALREADY off - and that was the
+                 * operator's actual complaint, five minutes after the cause had
+                 * gone. Sitting at the clamp for this long is not a radio whose
+                 * crystal is 2 % out; it is a target that no longer describes
+                 * the source. Dropping s_up_target to 0 makes the next good
+                 * window re-seed it WHOLE (the `<= 0` branch above) instead of
+                 * crawling back through a ~100 s pole.
+                 *
+                 * ⚠ One re-lock per railed episode: s_rate_relocked is the
+                 * count, and the condition clears the moment a good window
+                 * lands, so a genuinely out-of-spec unit cannot thrash. */
+                if (++s_rate_rail_run >= RATE_RAIL_RELOCK_FRAMES) {
+                    s_rate_rail_run = 0;
+                    s_up_target     = 0.0f;
+                    s_in_win_us     = 0;
+                    s_in_pairs_win  = 0;
+                    s_rate_relocked++;
+                    ESP_LOGW(TAG, "resample loop re-locking after a starvation "
+                                  "(railed %lu, refused %lu)",
+                             (unsigned long)s_rate_railed,
+                             (unsigned long)s_rate_win_refused);
+                }
+            } else {
+                s_rate_rail_run = 0;    /* off the clamp - the episode is over */
             }
             if (err > 0) s_rate_ins++; else if (err < 0) s_rate_drop++;
             s_rate_written += pairs;
@@ -2647,6 +2964,16 @@ static void preopen_body(void)
              (int)s_volume, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
+void rx_audio_suspend(bool on)
+{
+    if (s_suspended == on) return;
+    s_suspended = on;
+    ESP_LOGW(TAG, "RX audio chain %s (server mode)", on ? "SUSPENDED" : "resumed");
+    if (!on && s_task) xTaskNotifyGive(s_task);   /* same wake as the enable */
+}
+
+bool rx_audio_is_suspended(void) { return s_suspended; }
+
 void rx_audio_set_enabled(bool en)
 {
     s_enabled = en;
@@ -2689,11 +3016,45 @@ void rx_audio_set_volume(uint8_t vol)
 {
     if (vol > 100) vol = 100;
     s_volume = vol;
-    if (s_codec) esp_codec_dev_set_out_vol(s_codec, (int)vol);
+    /* While muted the codec stays at zero; the slider still moves and is still
+     * saved, so unmuting returns to whatever was set meanwhile. */
+    if (s_codec && !s_muted) esp_codec_dev_set_out_vol(s_codec, (int)vol);
     settings_set_rx_audio_vol(vol);
 }
 
 uint8_t rx_audio_get_volume(void) { return s_volume; }
+
+/* ⭐⭐ MUTE IS NOT THE ENABLE SWITCH, AND IT CANNOT BE.
+ *
+ * Samuel W7STF asked for "a 'mute/unmute' capability; a button or a 'hot' area
+ * are IMHO sooooo much better (direct and natural) than a swipe gesture,
+ * followed by a scroll gesture, followed by a gesture to adjust".
+ *
+ * ⛔ rx_audio_set_enabled() CANNOT serve as that button, and Sam is the one
+ * who found out why: the ES8388 is opened once at boot and only when the saved
+ * flag was already set, because it must claim DMA RAM before the USB host
+ * takes the pool. Turning the enable flag on mid-session sets a flag, logs
+ * "restart required" and produces no sound until the next boot - exactly his
+ * 2026-10-02 report, "I had to reboot the Tab5 and QMX/+ for audio to work".
+ * A mute built on that switch would be silent on the way back, which is the
+ * one thing a mute must never be.
+ *
+ * So this is a separate, instant gate on the codec's output volume. The chain
+ * keeps running, the decoders keep decoding, the browser keeps receiving - it
+ * is the SPEAKER that goes quiet, in the time one I2C write takes.
+ *
+ * ⚠ RAM only, never persisted. A mute that survived a reboot would be
+ * indistinguishable from a dead speaker, and the operator would have no reason
+ * to look for a setting he does not remember leaving on. */
+void rx_audio_set_muted(bool mute)
+{
+    if (s_muted == mute) return;
+    s_muted = mute;
+    if (s_codec) esp_codec_dev_set_out_vol(s_codec, mute ? 0 : (int)s_volume);
+    ESP_LOGI(TAG, "speaker %s", mute ? "MUTED" : "unmuted");
+}
+
+bool rx_audio_is_muted(void) { return s_muted; }
 
 // ---- Live tuning ------------------------------------------------------
 // RAM only, deliberately NOT persisted - these are for iterating on the AGC/
@@ -2779,6 +3140,8 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     out->resample_ppm_min = (pmin == INT32_MAX) ? s_resample_ppm : pmin;
     out->resample_ppm_max = (pmax == INT32_MIN) ? s_resample_ppm : pmax;
     out->resample_railed  = s_rate_railed;
+    out->rate_win_refused = s_rate_win_refused;
+    out->rate_relocked    = s_rate_relocked;
     s_resample_ppm_min = INT32_MAX;
     s_resample_ppm_max = INT32_MIN;
     s_frame_us_max       -= s_frame_us_max;

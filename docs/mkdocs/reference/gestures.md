@@ -2,11 +2,18 @@
 
 The entire app is controlled via **one-finger swipes from screen edges** and **taps on the top bar**.
 
+!!! info "This page is the authoritative list"
+    [Step 6 of the Quick Start](../quick-start.md) repeats the three edge
+    swipes as a summary, deliberately — a reader setting the device up should
+    not have to leave that page. Change the gestures **here** first, and check
+    that summary afterwards. The duplication is allowed; the two disagreeing
+    is not.
+
 ## Edge Swipes
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Cycle Panadapter -> FT8/FT4/JS8 -> WSPR |
+| Swipe → | **Left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8 or WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 
@@ -23,13 +30,26 @@ Slim **breathing grip handles** on these three edges show where to swipe.
 
 Tap any item on the top bar to open its selector:
 
+## Audio panel
+
+| Gesture | From | Effect |
+|---|---|---|
+| Tap | **S-meter**, top bar | Open the audio panel |
+
+New in v1.20.5, and extended in v1.21.0. The panel holds **Mute**, the **Tab5
+speaker** volume, the **radio's AF gain**, the **radio's RF gain** and an **AGC
+Fast / Slow / Off** row, and closes on a tap anywhere outside it. It is on the
+S-meter because that is the one thing in the top bar already about what you are
+hearing. Mute is instant and is not remembered across a reboot.
+
 | Item | Selector |
 |---|---|
 | **Frequency** | Numeric keypad (MHz format) |
 | **Mode** | USB / LSB / CW / DiGi buttons |
 | **Bandwidth** | Filter width (SSB) or CW passband |
+| **Bandwidth**, long press | **CW-Tune** — put the dial on the nearest CW signal within ±400 Hz (see [Settings](../guide/settings.md)) |
 | **Band** | Band list (160 m – 10 m + custom) |
-| **S-meter** | Peak-hold toggle |
+| **S-meter** | [Audio panel](../guide/audio.md#the-audio-panel-one-tap-on-the-s-meter) |
 | **Zoom** | x1 / x2 / x4 / x8 / x16 / x24 presets; pinch for anything between |
 
 ## Spectrum / Waterfall
@@ -170,7 +190,7 @@ Appears when you tap a text field:
 
 | Key | Effect |
 |---|---|
-| **Shift** | Toggle case (abc -> ABC) |
+| **Shift** | Three states, shown on the key itself: `abc` → `Abc` → `ABC` → `abc`. **`Abc`** capitalises the NEXT letter only and then returns to `abc`; **`ABC`** is a caps lock that stays until you tap it again |
 | **Backspace** | Delete last character |
 | **Space** | Insert space |
 | **Numbers** | Tap to switch to number row |

@@ -23,6 +23,16 @@ Power the QMX on standalone and check the firmware version displayed on its scre
 
 Download the latest flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases):
 
+!!! warning "Use this flasher, not the M5Stack launcher"
+    Install the panadapter with the flasher below, unpacked onto your computer
+    first. **Do not install it with the M5Launcher.**
+
+    The launcher writes its own partition layout, which has no place for the
+    panadapter's saved settings and no room for its file storage. A unit
+    installed that way can still receive, but your callsign, grid and WiFi
+    will not save - and with no callsign stored, every transmit refuses. The
+    cure is `flash.bat` with **E**, which rewrites the partition table.
+
 === "Windows"
 
     1. Plug Tab5 into your computer with a **USB-C data cable**
@@ -117,12 +127,19 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Cycle Panadapter -> FT8/FT4/JS8 -> WSPR |
+| Swipe → from **left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8 or WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
 
 You'll see faint "breathing" grip handles on the edges — they show you where to swipe.
+
+!!! note "This is the short version"
+    [Gestures & Controls](reference/gestures.md) is the authoritative list and
+    covers the top-bar selectors, the drawer and the spectrum gestures as well.
+    The four rows above are a summary for getting started — **if the two ever
+    disagree, the reference page is right**, and a change to the gestures
+    belongs there first.
 
 ## Step 7: Start Listening
 

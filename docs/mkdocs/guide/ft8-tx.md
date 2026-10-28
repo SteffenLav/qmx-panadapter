@@ -42,6 +42,12 @@ FT4 has full feature parity with FT8, including time-sync from decoded signals (
 
 Your **settings are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
 
+**Each sub-mode keeps its own frequency.** FT8, FT4 and JS8 have different
+calling frequencies on every band, so they are remembered separately: leave JS8
+on 14.078, come back to FT8, and you land on 14.074 rather than on where JS8
+was. Earlier versions shared one memory between the three, so a visit to one
+moved the other two.
+
 The **decode list and pileup are cleared** on the switch (v1.3.3). The two modes use different slot lengths, so stations decoded under the old timing describe a band the new mode cannot hear — and leaving them on screen meant you could tap one and try to work a station that was no longer there.
 
 ### 3. Modes of Transmission
@@ -121,6 +127,26 @@ Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts 
 
 **CQ tone selection** — the panadapter automatically picks a quiet frequency (6.25 Hz tone spacing, 200–2800 Hz audio range, no other stations nearby). If your chosen tone gets busy during a QSO, the panadapter **auto-relocates to the nearest clear frequency** to avoid stepping on other stations.
 
+## Where your transmission sits in the slot
+
+```qmxdiagram
+type: timeline
+title: One FT8 slot - 15 s, and what DT and DTR measure
+span: 15
+seg: 0-12.64 steel a transmission - 12.64 s, 79 symbols
+seg: 12.64-15 dim dead air - 2.36 s
+mark: 0-0.014 red our TX starts at +14 ms
+tick: 0, 5, 10, 15
+note: steel | DTR is the RAW offset of a received signal from the slot boundary. It carries about 0.5 s of receive latency - the QMX SDR plus USB buffering - so it is not comparable with WSJT-X
+note: trace | DT is that same offset corrected against the band consensus, so the shared latency cancels and an on-time station reads about 0.0. This is the WSJT-X-style number
+note: dim | the decode runs after the capture, in the dead air and into the next slot. That is why a reply must be decided before the next boundary, not after it. FT4 is the same shape at 7.5 s - a 5.04 s burst and 2.46 s of dead air
+```
+
+Your burst starts **14 ms after the slot boundary** and runs 12.64 s, so the last
+2.36 s of every slot is dead air. That gap is the whole reason a reply has to be
+decided before the next boundary rather than after it — the decode of the slot you
+just heard is still running in it.
+
 ## What the TX status line is telling you
 
 The left pane carries a persistent status line under the slot countdown. The
@@ -170,6 +196,23 @@ rather than someone else.
 **Pause** sits with Re-send, RR73 and 73 in the mid-QSO row, and it is on the
 browser page as well as the Tab5 (v1.16.2). It skips exactly one transmission
 and leaves the exchange intact — unlike **Cancel**, which ends it.
+
+**The row now stays up until your final is acknowledged (v1.20.2).** Until this
+release it vanished the instant the closing RR73 or 73 was sent - so the one
+window in which a missed final could still be put right was the one window with
+no buttons in it. The machine has always kept watching for five minutes and
+re-sending on its own; now you can see that it is doing so, and act inside it:
+
+- Only **Re-send** and **Cancel** are offered, because RR73 and 73 are built
+  from an exchange that has already closed.
+- **Re-send** puts that same final back on the air - the RR73 if that is what
+  you sent, not a bare 73.
+- **Cancel**, or a tap on the Tab5's TX indicator, says the contact is over and
+  stops the machine re-sending too.
+- Pressing Re-send does not use up the machine's own six tries.
+
+The QSO is logged when the final leaves the air, as it has been since v1.20.0 -
+none of this delays the log entry.
 
 - It shows a **pause** symbol normally and a **play** symbol on yellow while a
   transmission is being skipped, so you can see the state at a glance.
@@ -224,6 +267,13 @@ transmitting when you did not expect it (Roy KI0ER):
 Each of these says on screen why it stood down.
 
 ### 4. FT8 Simulation Mode (Practice QSOs)
+
+!!! info "Also labelled **Test station**"
+    This is **one setting with two checkboxes**. The FT8 settings drawer calls it
+    **Simulation Mode**; the WSPR settings drawer calls it **Test station
+    (simulation)**, because on that page it is the WSPR transmitter it holds down.
+    The web UI calls it **Simulation mode (practice)**. Tick any one of them and
+    all of them move together — there is no separate WSPR simulator.
 
 ⚠️ **For practice only** — no real stations involved, radio never keys up. Since v1.3.0 the simulator needs **no QMX connected at all** — no radio, no antenna, zero RF.
 
@@ -376,6 +426,14 @@ Presets persist across power cycles. Common modifiers:
 - **POTA** — Parks on the Air activation
 - **SOTA** — Summits on the Air activation
 - *(blank)* — standard CQ
+
+!!! tip "From v1.20.5 you do not have to set POTA by hand"
+    While an **activation is running**, your CQ goes out as `CQ POTA` — or
+    `CQ SOTA` for a summit — whatever the preset says, and goes back to normal
+    when you stop the session. Before this, starting an activation left the CQ
+    unchanged, so nobody hunting parks knew you were in one *(Bruce N9JCV)*.
+    Field Day mode has always worked this way and still outranks it: FT8 has
+    room for exactly one modifier.
 
 The preset editor's top-right **CQ stop** button sets the CQ auto-stop limit (see [Call CQ](#2-call-cq) above) — it cycles never / 1–5 / 10 and applies on tap, independent of Save/Cancel.
 

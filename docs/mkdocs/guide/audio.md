@@ -7,6 +7,25 @@
 Silence is usually one of five things, and they are listed here in the order they
 actually catch people out. Work down the list; each step says where the control is.
 
+```qmxdiagram
+type: flow
+title: From the radio to your ears, and where each control acts
+node: QMX / QMX+ - receiving, set to DiGi / IQ mode
+branch: QMX RF gain - per band, 0-99 dB. Measured: does NOT reach the I/Q, so it moves neither the spectrum nor the audio
+branch: QMX volume - the radio's own AF gain. Reaches everything downstream, the browser stream included
+node: USB - 48 000 I/Q pairs per second, one cable
+node: Tab5 DSP - 48 kHz. The same I/Q feeds the spectrum and the demodulator
+node: AGC - ceiling, attack and release, or a fixed gain
+node: the demodulated audio goes to ONE of these at a time
+branch: Tab5 speaker and headphones - I2S codec, 48 kHz stereo. RX Volume acts here, and nowhere else
+branch: a browser - 12 kHz mono mu-law over the WebSocket, 3 s buffer. Your computer's own volume acts here
+note: dim | one listener at a time, deliberately: while a browser holds the stream the Tab5 mutes its own speaker, and hands it back when you stop
+```
+
+**Three controls act at three different places**, which is why "turn it up" is not one
+question. The RF gain is a fourth, and the measurement below is why it is not in that
+list.
+
 ### 1. Check the mode
 
 Only **CW, CW-R, USB, LSB and AM** produce audio. **DiGi and FM produce none, by
@@ -39,9 +58,47 @@ This is the single most-missed step — two users reported "no web audio" in one
 and in both cases the stream was working and the button had never been pressed. See
 [Listen in the browser](#listen-in-the-browser).
 
+### The audio panel - one tap on the S-meter
+
+New in v1.20.5, after Samuel W7STF counted four gestures to change the volume.
+**Tap the S-meter in the top bar.** The panel holds:
+
+- **Mute** - instant, both ways. Not remembered across a reboot, deliberately:
+  a mute that survived one would be indistinguishable from a dead speaker.
+- **Tab5 speaker** - the same volume the drawer's RX Volume sets.
+- **Radio AF gain** - the QMX's own, in the decibels its LCD shows. It is read
+  back from the radio when the panel opens, so it shows what the radio is
+  actually set to, including a change you made on its own knob. A `--` means
+  the radio has not answered yet.
+- **Radio RF gain** *(new in v1.21.0)* - 0-99 dB, the same control as
+  Drawer -> Radio. The QMX stores it **per band**, so it is written when you
+  let go of the slider rather than on every tick of a drag. ⚠ It has **no
+  effect on the spectrum or on the audio** - see the warning below.
+- **AGC Fast / Slow / Off** *(new in v1.21.0)* - the three settings worth
+  having in one tap. **Fast** is a 1 ms attack and a 30 ms release, for CW;
+  **Slow** is 5 ms and 400 ms; **Off** pins the gain at the
+  [AGC Ceiling](#the-agc-controls) rather than running a very slow AGC. The
+  row shows which one is in force, and the drawer's own sliders still hold
+  anything in between.
+
+Both gain figures used to sit at `--`. They were never lost: the panel asked
+the radio and painted once, while the answer arrives on the CAT poll a moment
+later with nothing left running to draw it. It now keeps looking for about ten
+seconds and re-asks if the first query was lost to a busy CAT link.
+
+A tap anywhere outside closes it.
+
+!!! warning "Mute is not the RX audio switch"
+    **Mute** silences the speaker at once and brings it back at once. The
+    drawer's **RX audio** switch is different: the audio hardware is opened
+    when the Tab5 boots, or not at all, so turning that switch on part-way
+    through a session does nothing until you restart. The panel says so when
+    that is the case, rather than letting you move sliders against silence.
+
 ### 4. Know which volume control does what
 
-There are three, and they act in different places:
+There are three, and they act in different places — see
+[the chain above](#getting-audio-start-here-if-you-hear-nothing) for where:
 
 | Control | Where | What it changes |
 |---|---|---|
@@ -49,9 +106,32 @@ There are three, and they act in different places:
 | **RX Volume** | Drawer → Audio Settings | The **Tab5's** speaker and headphone level only. Does not affect the browser stream |
 | Your browser's own volume | The browser or the operating system | The browser stream only |
 
-A fourth control sets the level before any of these: **QMX RF gain** (Drawer → Radio),
-per band, 0–99 dB, QMX default 54. If signals look weak on the waterfall as well as
-sounding weak, this is the one to look at — not the volume.
+**QMX RF gain** (Drawer → Radio, or the audio panel) is per band, 0–99 dB, QMX
+default 54. It looks like a fourth control in this chain. It is not:
+
+!!! warning "RF gain does not change what the Tab5 shows or plays"
+    Measured 2026-10-27: taking the RF gain from 54 to 0 moved the spectrum
+    noise floor by **0.06 dB** over 81 frames. The radio accepts the command
+    and reads the new value back, so it is a real setting in the QMX - it just
+    does not reach the I/Q the Tab5 receives. The spectrum, the waterfall, the
+    decoders and the Tab5's own audio are all derived from that one stream, so
+    none of them can respond to it. If signals sound weak, the control that
+    acts is the [AGC ceiling](#the-agc-controls). Reported by Samuel W7STF,
+    who was right; announced in v1.21.0 as a way to change what reaches your
+    ears, which was wrong.
+
+    **Why, from QRP Labs.** Stan KC7XE, 2026-10-28: I/Q mode delivers the raw
+    48 kHz sampled stream from the PCM1804 converter, and every adjustment
+    and all the DSP happen further down the radio's own processing chain. So
+    the control is real and it works - on the QMX's own headphone and speaker
+    output. It is kept for that reason rather than removed.
+
+    It is deliberately **not** faked by scaling the samples on the Tab5.
+    Multiplying every sample by the same number scales the signal and the
+    noise together, so the signal-to-noise ratio does not change and nothing
+    becomes audible that was not already there - it would only move the trace
+    up and down the dB scale, which the floor and ceiling controls already do.
+
 
 !!! note "Full volume and still quiet?"
 
@@ -104,7 +184,7 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**
-    in the top bar to choose it: **2.0, 3.0, 4.0 or 6.0 kHz**,
+    in the top bar to choose it: **2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz**,
     quoted as the width of the whole signal, the way amateur AM
     figures always are. 6.0 kHz is the default and the standard — 3 kHz per
     sideband, what most commercial rigs hard-code. The same list is on the
@@ -116,21 +196,17 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
     on a clear channel. Broadcast channels are spaced 5 kHz, so 6.0 already
     reaches into the neighbour's carrier on a crowded shortwave evening.
 
-    **6.0 kHz is the widest the Tab5 offers, from v1.20.1.** Four wider
-    settings were available earlier and have been withdrawn, for two
-    different reasons.
+    **9.6 kHz is the widest the Tab5 offers, from v1.20.2.** Two wider
+    settings were available earlier and have been withdrawn: **10.0 and
+    20.0 kHz** ran the receive chain at half the decimation the others use,
+    and measured on the bench that leaves the second CPU core with no idle
+    time at all and the audio stutters.
 
-    **10.0 and 20.0 kHz** ran the receive chain at half the decimation the
-    others use. Measured on the bench, that leaves the second CPU core with
-    no idle time at all and the audio stutters.
-
-    **8.0 and 9.6 kHz cost nothing extra** — matched 60-second windows
+    **8.0 and 9.6 kHz cost nothing extra** - matched 60-second windows
     measured AM at 4.0 and at 6.0 kHz at the same processor load, so width is
-    free up to that point and those two would have been free as well. They
-    are withdrawn because they were never run end to end: they entered the
-    list on a filter measurement and a listening report, and nothing since
-    has confirmed them. The list now holds only widths that have actually
-    been measured playing.
+    free up to that point. They were briefly withdrawn in v1.20.1 as
+    unproven and are back in v1.20.2: one operator runs 9.6 kHz daily and
+    another asked for 8.0 kHz, which settles whether they work.
 
     CW and SSB are untouched at any setting.
 
@@ -328,6 +404,17 @@ The left half of the spectrum is empty and there is a step in the middle. That i
 correct and it is the honest picture: the jack carries one real channel, the second is
 synthesised, and a synthesised channel cannot recover what the missing one would have
 told you. The step sits at audio 0 Hz, which is the centre of the span.
+
+!!! info "New in v1.20.3 — the source and its gain are in the browser too"
+
+    **Audio source** and **Line-in gain** are on the web Settings page, under
+    *Radio & display*. Gain moves in the 3 dB steps the codec actually has, and
+    takes effect immediately while line-in is running.
+
+    ⚠ Changing the **source** from the browser only **stores** the choice — it
+    takes effect at the next restart. The Tab5's own *Audio Settings* window
+    restarts for you; the browser deliberately does not reboot your radio's
+    host from across the house.
 
 ## Listen in the browser
 

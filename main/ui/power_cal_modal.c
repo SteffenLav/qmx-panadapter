@@ -50,6 +50,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include "tx_band_guard.h"   // T48: refuse to key outside the region's allocation
 
 static const char *TAG = "power_cal";
 
@@ -637,6 +638,19 @@ static void timer_cb(lv_timer_t *t)
             // audio-modulated, so it needs the same TA<freq>; tone WSPR/FT8
             // feed it, resent on roughly their own 160 ms cadence for as
             // long as the carrier should stay up.
+            /* ⛔ BAND GUARD (T48). This holds a real carrier for as long as
+             * the step needs, at dial + PWRCAL_TONE_HZ - the TA tone below is
+             * what makes RF at all in DiGi, as the comment above records. */
+            {
+                char gerr[160];
+                uint32_t rf = cat_get_frequency() + (uint32_t)PWRCAL_TONE_HZ;
+                if (!tx_band_guard_allows(rf, rf, "Power calibration",
+                                          gerr, sizeof gerr)) {
+                    ui_toast_ms(gerr, 15000);
+                    enter_state(PC_IDLE);
+                    return;
+                }
+            }
             cat_send_raw_cmd("TX;");
             char ta[24];
             snprintf(ta, sizeof(ta), "TA%.0f;", (double)PWRCAL_TONE_HZ);

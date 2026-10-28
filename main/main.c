@@ -575,6 +575,29 @@ void app_main(void)
                     12000);
     }
 
+    /* ⛔ SAY IT ON THE SCREEN WHEN NOTHING CAN BE SAVED.
+     *
+     * Sergei AA1SL, issue #21: a Tab5 installed with the M5Launcher, whose
+     * partition layout has no `user_nvs`. The firmware opens no settings
+     * store, every setter becomes a no-op, and the device receives perfectly
+     * while forgetting the callsign - at which point every transmit refuses
+     * with "Set your callsign first". He re-flashed twice, the same way, and
+     * had no way to know he was chasing the wrong thing.
+     *
+     * Same reasoning as the brownout toast above: the firmware knew and told
+     * only the serial console. Longer, because this one is not a one-off -
+     * EVERY save this session will fail - and it names the cure, because the
+     * cure is not something an operator would guess. */
+    if (!settings_persist_ok()) {
+        ESP_LOGE(TAG, "SETTINGS CANNOT BE SAVED - the user_nvs partition did not open. "
+                      "Nothing entered this session will be kept. Re-flash with the "
+                      "project flasher and choose E (clean), which rewrites the "
+                      "partition table; the M5Launcher's layout has no user_nvs.");
+        ui_toast_ms("Settings cannot be saved on this unit - nothing you enter will be kept. "
+                    "Re-flash with the QMX-Panadapter flasher and choose E (clean).",
+                    30000);
+    }
+
     // Restore last-known VFO frequency (display only; QMX is source of truth).
     if (cfg->last_vfo_hz != 0) {
         ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg->last_vfo_hz);
@@ -716,6 +739,8 @@ void app_main(void)
     render_waterfall_set_floor_blend((float)cfg->wf_floor_blend / 100.0f);
     dsp_set_window(cfg->wf_window);
     render_set_waterfall_rows_per_s(cfg->wf_rows_per_s);
+    ui_set_peak_hold_s(cfg->spec_peak_s);
+    rx_audio_set_cw_peak_hz(cfg->cw_peak_hz);
     if (cfg != &s_cfg_fallback) heap_caps_free(cfg);  // last read of cfg - see its declaration above
     cfg = NULL;
 

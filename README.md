@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.20.1.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.22.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.20.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.22.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -54,6 +54,13 @@ the view stays centred on the dial, because the view is already the whole 48 kHz
 sends. The band above dial+12 kHz is hatched on both screens — the radio genuinely cannot
 hear it, and drawing something there would be inventing signal.
 
+**Peak hold** — A second line over the spectrum showing the highest each point of the band
+reached in the last 1, 2, 3 or 5 seconds, on the Tab5 and in the browser. It is a sliding
+window rather than a latch, so a peak falls away once it is older than the window and the
+line stays a picture of the band instead of a record of the past. An intermittent signal —
+an FT8 station every 15 seconds, a CW operator between overs — stays visible seconds after
+the live trace has dropped back into the noise *(Samuel W7STF)*.
+
 ### Hear the band
 
 **Audio, and binaural CW** *(beta)* — The I/Q the radio already sends is turned into sound
@@ -71,6 +78,21 @@ on and off. This is a first implementation and is
 **beta**, with the same features planned for the web interface — sending only the I/Q to
 the PC and doing the work there. See [Audio](docs/mkdocs/guide/audio.md).
 
+**CW peak filter** — A narrow audio peak on the CW pitch, 250, 150 or 100 Hz wide at −3 dB,
+in the Tab5's own audio after the mode filter and **before the AGC**, so the automatic gain
+rides the wanted note instead of the hiss either side of it. Measured at a 700 Hz pitch the
+100 Hz setting is 91 Hz wide and 32 dB down 500 Hz away. Peak gain is 0 dB, so switching it
+on does not also change the volume. It is not a second IF filter — the radio's own CW filter
+still decides what reaches the Tab5 *(Samuel W7STF)*.
+
+**Audio panel** — One tap on the S-meter opens mute, the Tab5's speaker volume, the radio's
+AF gain, the radio's RF gain (0–99 dB, stored per band by the QMX — ⚠ measured 2026-10-27 to have
+no effect on the spectrum or the audio, see below) and an AGC Fast / Slow /
+Off row — Fast being a 1 ms attack and 30 ms release for CW, Slow 5 ms and 400 ms, and Off
+pinning the gain at the AGC ceiling. A tap outside closes it *(Samuel W7STF)*.
+
+⚠ **Correction, 2026-10-27: the RF gain slider does not do what this said.** Taking the gain from 54 to 0 moved the spectrum noise floor **0.06 dB** over 81 frames. The radio accepts the command and reads the new value back — Stan KC7XE confirms `RG` is the right command and that the Band Configuration value is separate by design — but it does not reach the I/Q stream the Tab5 receives, and the spectrum, the decoders and the Tab5's own audio all come from that one stream. So it changes nothing you can see or hear on the Tab5. Stan KC7XE has since explained why (2026-10-28): I/Q mode delivers the raw 48 kHz PCM1804 stream, and every adjustment happens further down the radio's own chain. So the control is real and it works — on the QMX's own headphones and speaker. It is kept and relabelled rather than removed, and deliberately not faked by scaling the samples here, which would move signal and noise together and change no signal-to-noise ratio. The AGC row in the same panel is unaffected and works as described.
+
 **Receive from the 3.5 mm jack** *(beta — Tony, @tony1tf, #17)* — The panadapter can take
 its signal from the Tab5's own headphone jack instead of the radio's USB audio. Tony asked
 for an audio input for digital modes and then ran a test build on his own Tab5 to find
@@ -84,7 +106,7 @@ connection is off by design, so CAT, the S-meter and the band/mode display go qu
 Changing the source needs a restart, which the Tab5 performs itself on **Save**.
 See [Audio](docs/mkdocs/guide/audio.md).
 
-**Decoded CW** ** — In CW or CW-R, a line along the bottom of the
+**Decoded CW** — In CW or CW-R, a line along the bottom of the
 panadapter shows the Morse the radio is decoding, with an estimate of the sending
 speed. The **QMX does the decoding itself** and hands the text over CAT, so it costs
 the panadapter no processing at all and does not touch the spectrum or FT8. Works on
@@ -100,6 +122,13 @@ callsign can be resolved afterwards *(Michael K Johnson KZ4LY)*.
 QMX volume in decibels matching the radio's own display, and an Antenna Tune button on
 1.04+. Round-trip CAT latency under 50 ms. Band presets with per-band frequency recall,
 and 32 memory channels in a 4×8 grid holding any frequency and mode.
+
+**CW-Tune** — A long press on the bandwidth in the top bar puts the dial on the nearest CW
+signal, within ±400 Hz either side. A keyed carrier is absent as often as it is present, so
+it works from a per-bin maximum over the last 4 seconds rather than a single frame, keeps
+listening for up to 8 seconds on a quiet band, and takes a peak at +3 dB over the median of
+the search window. ⛔ It moves the dial **once, when you ask it to**, and never
+automatically *(Samuel W7STF)*.
 
 **RIT** — Pull in a caller answering off your frequency without moving transmit: arm it,
 tap the caller, and a marker shows where you are listening while the gold line goes on
@@ -243,6 +272,14 @@ FT8/FT4 mode it shows a live TX status banner and a **Call CQ** button instead o
 stream. Also: the QSO log as a sortable table, config download/upload as an editable text
 file, a microSD file browser, screenshots, and the diagnostic log.
 
+**Server mode** — The Tab5 stops drawing its screen and stops its own audio, and keeps
+serving the web page, for running the radio from another room. Measured with a browser on
+the page throughout: core 0 idle 10–13% → 67%, core 1 idle 42–56% → 72%. The drawing is
+what costs; serving the page is about 1%. The browser is unaffected, because its spectrum
+and waterfall come from the DSP rather than from the Tab5's canvases, and a browser
+listening to the audio overrides the suspend. Touch the Tab5 to come back. It is not
+remembered across a reboot, deliberately: a unit that boots dark looks broken.
+
 ### Know what time it is
 
 **A GPS of your own, and a sky view** — Two receivers work, and both are confirmed on
@@ -352,6 +389,15 @@ Power the QMX on by itself and read the firmware version off its own display at 
 
 ### Step 1 — Flash the Tab5 firmware
 
+> ### Use this flasher, not the M5Stack launcher
+>
+> **Do not install the panadapter with the M5Launcher.** It writes its own
+> partition layout, which has no place for the panadapter's saved settings
+> and no room for its file storage. A unit installed that way can still
+> receive, but your callsign, grid and WiFi will not save - and with no
+> callsign stored, every transmit refuses. The cure is a clean flash
+> (`flash.bat`, type **E**), which rewrites the partition table.
+
 Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadapter%20flasher) (also attached to each [release](https://github.com/SteffenLav/qmx-panadapter/releases)):
 
 1. Plug the Tab5 into your computer with a **USB-C data cable** — charge-only cables will not work.
@@ -396,7 +442,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 
 | Gesture | From | Does |
 |---------|------|------|
-| Swipe → | Left edge | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
+| Swipe → | Left edge | Open the **page picker** — tap Panadapter, FT8, FT4, JS8 or WSPR |
 | Swipe ← | Right edge | Open settings drawer |
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
@@ -559,12 +605,12 @@ halves of the passband hard left and right.
 
 **AM is demodulated here too, from v1.19.0** — on the Tab5, from the raw I/Q,
 which is why its bandwidth is yours to choose and not the radio's fixed 3.2 kHz.
-Pick 2.0, 3.0, 4.0 or 6.0 kHz from the **BW** control in the top bar while the
-radio is in AM. 6.0 kHz is the default and the widest on offer from v1.20.1 —
-wider settings existed earlier and were withdrawn, either because they stuttered
-or because they had never been run end to end. Shortwave channels are spaced
-only 5 kHz apart, so 6.0 kHz already reaches into the neighbour's carrier on a
-crowded band.
+Pick 2.0, 3.0, 4.0, 6.0, 8.0 or 9.6 kHz from the **BW** control in the top bar
+while the radio is in AM. 6.0 kHz is the default; 9.6 kHz is the widest on offer
+from v1.20.2. The 10.0 and 20.0 kHz settings that existed earlier are withdrawn
+for good — they ran the receive chain at half decimation and the audio stutters.
+Shortwave channels are spaced only 5 kHz apart, so 6.0 kHz already reaches into
+the neighbour's carrier on a crowded band.
 
 This is the part of the panadapter that is not a picture. On a crowded CW band
 it does something no amount of screen resolution can.
@@ -748,7 +794,7 @@ hunt for.
 
 A propagation beacon rather than a contact mode: a very slow, very weak signal
 carrying only your callsign, grid and declared power, reported by stations
-worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4/JS8 → WSPR**.
+worldwide. Swipe → from the left edge opens the **page picker**; tap **MODE: WSPR** to go straight there.
 Receiving is the default and worth doing on its own; transmitting is opt-in.
 
 **Calibrate Power measures what your QMX actually does, on your antenna
@@ -830,12 +876,14 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
 | Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
-| Swipe → from left edge | Left edge strip | Cycle Panadapter → FT8/FT4/JS8 → WSPR |
+| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the five pages directly |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |
 | Swipe ↑ from bottom edge | Bottom edge strip | Open memory channel picker |
 | Tap or swipe ↓ | Top-bar item (Band/Mode/BW/Freq/Zoom) | Open that item's selector |
+| Long press | Top-bar **BW** | **CW-Tune** — put the dial on the nearest CW signal within ±400 Hz |
+| Tap | Top-bar **S-meter** | Open the audio panel (mute, speaker volume, AF gain, RF gain, AGC Fast/Slow/Off) |
 | Touch and hold ~250 ms | FT8 decode list row | Dim preview at ~80 ms; full selection at 250 ms (scroll locks, drag moves highlight, lift to confirm) |
 | Quick swipe | FT8 decode list | Scroll the list normally |
 
@@ -1006,7 +1054,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.20.1 is here.** Next on the bench:
+**v1.22.0 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.

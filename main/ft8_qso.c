@@ -1641,11 +1641,38 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // operator must finish or ft8_qso_abort() the current one first.
     char busy_target[FT8_CALL_MAX_LEN];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
-        if (err) {
-            if (busy_target[0]) snprintf(err, err_len, "Busy: working %s", busy_target);
-            else                snprintf(err, err_len, "Busy: calling CQ");
+        if (busy_target[0]) {
+            if (err) snprintf(err, err_len, "Busy: working %s", busy_target);
+            return false;
         }
-        return false;
+        /* CALLING CQ IS NOT A REASON TO REFUSE A CALLER - IT IS THE REASON
+         * THERE IS ONE.
+         *
+         * Don WB0LQW, 2026-10-22, with "Pick callers myself" on: "A CQ is
+         * transmitted and I get 1 or more responders... I tap one and the
+         * window appears where I choose Pounce. However, since I did not
+         * manually stop the CQ, the Tab5 tells me 'Busy Calling CQ.' I have to
+         * close the window and go back to manually stop the CQ; then tap the
+         * responder again... By then my responder has often given up on me."
+         *
+         * He is right and the old behaviour was the radio arguing with the
+         * operator. Answering somebody who came back to your CQ is the entire
+         * purpose of having called it, so the CQ stands down and the pounce
+         * goes ahead.
+         *
+         * An empty busy_target is exactly the FT8_QSO_CQ case: a WAIT_* state
+         * always has a target, so this cannot swallow a real exchange. The
+         * refusal above is kept for that, because dropping a half-finished QSO
+         * without being asked is a different act and should stay deliberate.
+         *
+         * SAFE BY CONSTRUCTION: every caller that reaches this line today gets
+         * `false` back, so nothing that currently succeeds changes behaviour -
+         * only the paths that were failing. The robot does not come through
+         * here to answer its own CQ; if it did, it would already be refused.
+         *
+         * A burst already on the air finishes - clearing the request does not
+         * stop a transmission in progress. */
+        ft8_qso_abort();
     }
 
     if (!load_my_call(err, err_len)) return false;
@@ -2266,6 +2293,12 @@ static pile_skip_t pileup_candidate_skip(const char *call, const qmx_settings_t 
     if (ft8_qso_worked_recently(call, cat_get_frequency()))
         return PILE_SKIP_WORKED_RECENTLY;
     // Grey-listed (repeated failed pounces) - don't auto-drain into them.
+    // A HAND skip is checked first and is NOT gated on greylist_en: the
+    // pileup drain is the other unattended picker, so skipping a station in
+    // robot mode and then having the drain call it anyway would be the same
+    // defect in a second place (Randy N4OPI, 2026-10-21).
+    if (ft8_greylist_skipped_by_hand(call))
+        return PILE_SKIP_GREYLIST;
     if (qs->greylist_en && ft8_greylist_contains(call))
         return PILE_SKIP_GREYLIST;
     return PILE_OK;
@@ -2619,6 +2652,123 @@ static void final_track_add(const char *call, int freq_hz, ft8_tx_kind_t kind,
     f->done_ts = time(NULL);
 }
 
+/* ---- THE CONTACT IS SENT BUT NOT YET ACKNOWLEDGED -------------------------
+ *
+ * Don WB0LQW, 2026-10-16: his RR73 was missed, the partner repeated the
+ * report, and "instead of resending my RR73 the program ends the contact and
+ * logs it". The logging is right (Bruce N9JCV's fix - the final leaves the air
+ * and the QSO is closed), and the machine does keep watching: final_track_add
+ * arms a 300 s watch and re-sends up to FINAL_RESEND_MAX times by itself.
+ *
+ * What was missing is that the OPERATOR could not see or touch any of it. The
+ * moment the final is armed, s_state leaves the WAIT_* set, and both surfaces
+ * hide their Re-send / RR73 / 73 row on exactly that test - so the window in
+ * which the contact can still be saved is the window with no controls in it.
+ *
+ * These three calls are what both surfaces need to keep the row up until the
+ * contact is acknowledged or the operator says it is over. They are the ONLY
+ * readers of s_final[] outside the decode task.
+ *
+ * ⚠ NO LOCK, and deliberately, for the reason js8_chat.h records at length:
+ * s_final[] is written by the decode task WITHOUT the QSO lock (see
+ * final_track_add / final_track_still_asking - neither takes it), so a lock
+ * here would protect nothing and only suggest it did. A torn read costs one
+ * repaint of one callsign on a row the operator is looking at anyway. */
+bool ft8_qso_final_watch(char *call, size_t len, int *resends, int *max)
+{
+    int64_t now_s = (int64_t)time(NULL);
+    int     best  = -1;
+    int64_t newest = 0;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (!s_final[i].call[0]) continue;
+        /* Read-only: the window check here must NOT clear the slot the way
+         * final_track_still_asking() does. That function runs in the decode
+         * task and owns the array; a display poll that reaped entries would
+         * close the watch at whatever rate a browser happened to poll. */
+        if ((now_s - s_final[i].done_ts) > FINAL_RESEND_WINDOW_SEC) continue;
+        if (best < 0 || s_final[i].done_ts > newest) { best = i; newest = s_final[i].done_ts; }
+    }
+    if (best < 0) return false;
+    if (call && len) {
+        strncpy(call, s_final[best].call, len - 1);
+        call[len - 1] = '\0';
+    }
+    if (resends) *resends = s_final[best].resends;
+    if (max)     *max     = FINAL_RESEND_MAX;
+    return true;
+}
+
+void ft8_qso_final_extra(char *buf, size_t len)
+{
+    if (!buf || !len) return;
+    buf[0] = '\0';
+    char call[FT8_CALL_MAX_LEN];
+    if (!ft8_qso_final_watch(call, sizeof(call), NULL, NULL)) return;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (s_final[i].call[0] && strcmp(s_final[i].call, call) == 0) {
+            strncpy(buf, s_final[i].extra, len - 1);
+            buf[len - 1] = '\0';
+            return;
+        }
+    }
+}
+
+void ft8_qso_final_watch_clear(void)
+{
+    for (int i = 0; i < FINAL_TRACK_MAX; i++) {
+        if (!s_final[i].call[0]) continue;
+        ESP_LOGI(TAG, "final watch on %s dropped by the operator", s_final[i].call);
+        s_final[i].call[0] = '\0';
+    }
+    s_final_hold = false;
+    s_final_hold_call[0] = '\0';
+}
+
+bool ft8_qso_final_resend_now(char *err, size_t err_len)
+{
+    char call[FT8_CALL_MAX_LEN];
+    if (!ft8_qso_final_watch(call, sizeof(call), NULL, NULL)) {
+        if (err) snprintf(err, err_len, "Nothing waiting to be acknowledged");
+        return false;
+    }
+    int idx = -1;
+    for (int i = 0; i < FINAL_TRACK_MAX; i++)
+        if (s_final[i].call[0] && strcmp(s_final[i].call, call) == 0) { idx = i; break; }
+    if (idx < 0) {
+        if (err) snprintf(err, err_len, "Nothing waiting to be acknowledged");
+        return false;
+    }
+    final_track_t *f = &s_final[idx];
+
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
+        if (err) snprintf(err, err_len, "Transmitting - try again next slot");
+        return false;
+    }
+
+    ft8_tx_request_t req;
+    char build_err[64];
+    if (!ft8_tx_build_request(f->kind, f->call, f->freq_hz,
+                              (int64_t)time(NULL), f->extra,
+                              &req, build_err, sizeof(build_err))) {
+        if (err) snprintf(err, err_len, "%s", build_err);
+        return false;
+    }
+    char arm_err[64];
+    if (!ft8_tx_arm(&req, arm_err, sizeof(arm_err))) {
+        if (err) snprintf(err, err_len, "%s", arm_err);
+        return false;
+    }
+    /* ⛔ DOES NOT SPEND f->resends. That budget is the MACHINE's - six tries
+     * inside five minutes before it gives up and goes back to calling CQ. A
+     * press of this button is a human deciding to send again, and charging it
+     * to the automatic budget would let the operator exhaust the very fallback
+     * that is meant to keep running after they stop pressing. */
+    ft8_status_set("QSO %s: re-sending %s by hand", f->call, f->extra);
+    ESP_LOGI(TAG, "operator re-sent the final %s to %s (machine has used %d/%d)",
+             f->extra, f->call, f->resends, FINAL_RESEND_MAX);
+    return true;
+}
+
 bool ft8_qso_msg_is_for_us(const char *text)
 {
     if (!text || !text[0]) return false;
@@ -2745,8 +2895,49 @@ void ft8_qso_advance(int64_t slot_sec)
  * `target` is the partner, read under the lock by the caller. */
 static void finish_wait_done(const char *target)
 {
+        /* ⭐ WHY THE FAILING BRANCH IS LOGGED, AND WHY IT IS RATE-LIMITED.
+         *
+         * Randy N4OPI has now reported three times that the web UI says he is
+         * busy with a station he has finished working, and sent a diag every
+         * time: "They RR73, I 73, Exchange is logged and noted on screen as
+         * complete ... I single click a new caller and WebUI indicates that I
+         * am still in an exchange."
+         *
+         * WAIT_DONE is a busy state (ft8_qso_is_busy() admits everything but
+         * IDLE/DONE/TIMEOUT), and the ONLY way out of it is this function
+         * seeing TX idle. Until now the test failed in COMPLETE SILENCE, so a
+         * machine wedged in WAIT_DONE wrote nothing at all - which is why
+         * three separate 300 KB captures of the exact window contain no
+         * ft8_qso line whatsoever and could never have held the answer. His
+         * 2026-10-26 diag has 1031 ft8_test and 886 ft8_screen lines and not
+         * one from this file.
+         *
+         * ⚠ ON CHANGE ONLY. ft8_test.c polls this every slot with >1.2 s to
+         * spare, so logging unconditionally would be four lines a minute for
+         * as long as the wedge lasts and would push the window that matters
+         * out of the 128 KB persist cap - the same reason web_result_logged
+         * exists in ft8_screen_view.c. One line per target per stuck spell.
+         *
+         * ⛔ This is an INSTRUMENT, not a fix. It says which of the two
+         * candidates is real - a TX that never returns to idle, or a state
+         * that never reaches WAIT_DONE at all - and the fix waits for that
+         * answer rather than guessing between them. */
+        /* Reset when TX goes idle, so a wedge that recurs with the same
+         * partner reports again instead of being silent after the first. */
+        static char s_stuck_said[FT8_CALL_MAX_LEN];
+        ft8_tx_state_t txs = ft8_tx_get_status(NULL, 0, NULL);
+        if (txs != FT8_TX_IDLE) {
+            const char *who = target ? target : "?";
+            if (strcmp(s_stuck_said, who) != 0) {
+                snprintf(s_stuck_said, sizeof(s_stuck_said), "%s", who);
+                ESP_LOGW(TAG, "WAIT_DONE cannot close for %s: TX is not idle (status %d) - "
+                              "the exchange stays BUSY and new picks are refused", who, (int)txs);
+            }
+        } else {
+            s_stuck_said[0] = '\0';
+        }
         // Final (73/RR73) armed or fired; once it leaves the air we're done.
-        if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
+        if (txs == FT8_TX_IDLE) {
             /* ⭐ HOW LONG THE WRAP-UP ACTUALLY TAKES - Gyula HA3HZ, 2026-09-25:
              * "You have to wait for the save to be made to the LOG and this is
              * where the controller becomes slow, because the save process is
@@ -4105,6 +4296,53 @@ void ft8_qso_abort(void)
     ESP_LOGI(TAG, "QSO aborted");
 }
 
+bool ft8_qso_skip_exchange(char *skipped, size_t skipped_len,
+                           char *err, size_t err_len)
+{
+    if (skipped && skipped_len) skipped[0] = '\0';
+
+    lock();
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_target, sizeof(target));
+    target[sizeof(target) - 1] = '\0';
+    ft8_qso_state_t st = s_state;
+    unlock();
+
+    /* Only an EXCHANGE can be skipped. Calling CQ with nobody answering has no
+     * station to give up on, and FT8_QSO_CQ is reported with an empty target,
+     * so the target test alone would read as "nothing running" there too -
+     * both are refused here with a message that says which it was. */
+    if (st == FT8_QSO_IDLE || st == FT8_QSO_DONE || st == FT8_QSO_TIMEOUT) {
+        if (err && err_len) snprintf(err, err_len, "No exchange to skip");
+        return false;
+    }
+    if (!target[0]) {
+        if (err && err_len)
+            snprintf(err, err_len, "Calling CQ - nobody to skip yet");
+        return false;
+    }
+
+    /* Order matters. abort() takes the lock itself and saves a resume record,
+     * so the record has to be dropped AFTER it, not before. */
+    ft8_qso_abort();
+
+    lock();
+    if (strcmp(s_resume_call, target) == 0) {
+        s_resume_call[0]  = '\0';
+        s_resume_have_req = false;
+    }
+    unlock();
+
+    /* ⛔ The grey-list entry is what stops the robot answering this station's
+     * very next CQ. Without it the abort above buys exactly one slot. */
+    ft8_greylist_skip_now(target);
+
+    if (skipped && skipped_len) snprintf(skipped, skipped_len, "%s", target);
+    ft8_status_set("Skipped %s - still answering", target);
+    ESP_LOGI(TAG, "operator skipped %s; exchange ended, auto-answer left ON", target);
+    return true;
+}
+
 ft8_qso_state_t ft8_qso_get_state(void)
 {
     lock(); ft8_qso_state_t st = s_state; unlock();
@@ -4228,6 +4466,27 @@ bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len)
     ft8_status_set("TX tone -> %d Hz", hz);
     ESP_LOGI(TAG, "TX tone moved %d Hz -> %d Hz (state=%d)", old_hz, hz, (int)st);
     return true;
+}
+
+/* A state number in a log line is unreadable six months later, and "busy when
+ * it isn't" (Randy N4OPI, 2026-10-25) is exactly the fault where the state is
+ * the whole answer: WAIT_DONE clears itself within a slot or two, a stuck
+ * WAIT_RPT never does, and both print as "Busy: working X" on the browser's
+ * banner. Public rather than a static helper in ft8_screen_view.c because
+ * every caller of ft8_qso_is_busy() that logs a refusal wants the same word. */
+const char *ft8_qso_state_name(ft8_qso_state_t st)
+{
+    switch (st) {
+    case FT8_QSO_IDLE:       return "IDLE";
+    case FT8_QSO_CQ:         return "CQ";
+    case FT8_QSO_WAIT_RPT:   return "WAIT_RPT";
+    case FT8_QSO_WAIT_ROGER: return "WAIT_ROGER";
+    case FT8_QSO_WAIT_RR73:  return "WAIT_RR73";
+    case FT8_QSO_WAIT_DONE:  return "WAIT_DONE";
+    case FT8_QSO_DONE:       return "DONE";
+    case FT8_QSO_TIMEOUT:    return "TIMEOUT";
+    }
+    return "?";
 }
 
 bool ft8_qso_is_busy(char *target_buf, size_t len)

@@ -55,13 +55,51 @@ Get-ChildItem tools/patches/apply_*.ps1 | ForEach-Object { powershell -File $_.F
 python tools/check_patches.py     # the authority - refuses the build if any is missing
 ```
 
+## ⛔ A release is not published until the OTA asset answers 200
+
+```powershell
+python tools/check_release_assets.py vX.Y.Z   # exits non-zero if OTA cannot reach it
+```
+
+The device builds its download URL by hand (`main/net/update_check.c`) and never
+reads the release's asset list, so an upload under any other name is a 404 — and
+a 404 is `esp_https_ota_begin()` → `ESP_FAIL` → **"could not reach the download
+(0xffffffff)"** on every Tab5 in the field.
+
+⛔ **The written warning has failed twice**: v1.12.4 (2026-09-10) and again
+**v1.20.4 (2026-10-22)**, which shipped with no `qmx_panadapter.bin` *and* with
+the merged binary the process explicitly forbids. Both times a user found it,
+not us. Run the checker; do not re-read the prose. See
+[release process](../../../memory/release_process.md) Phase 3.4 and
+[the v1.20.4 fault](../../../memory/project_v1204_ota_asset_was_never_uploaded.md).
+
+⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
+the served bytes with `cmp`, not the upload's exit code.
+
+## ⛔ Every transmit path must pass the band guard
+
+`python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
+out without checking the band**, and it runs PRE_BUILD. Today: 6 keying sites,
+1 exempt (with its reason written in the script, not in prose).
+
+Out-of-band transmission is **his licence**, not a cosmetic defect: *"TX'ing out
+of band no matter what mode is a legal thing that potentially can fall back on
+my shoulders if not prohibited by my device"* (2026-10-21). RX is unrestricted;
+TX is not. See [the guard](../../../memory/project_t48_tx_band_guard.md).
+
+⚠ The guard needs the **IARU region** — set, or from the grid the GPS writes.
+An unknown region REFUSES, exactly as a missing callsign or grid already does.
+
+⛔ Never add a keying site without `tx_band_guard_allows()`, and never silence
+the checker by adding to EXEMPT without writing why.
+
 ## ⛔ What can key the radio is a FILE, not a memory
 
 `python tools/check_unattended_tx.py` is the authority over
 `docs/unattended-tx-inventory.md` — **run it for the number**. This line said
 11 arming sites while the checker and the inventory both said 12 (corrected
 2026-10-17); a count in prose cannot keep up, the same rot the patches section
-above records. Today: 12 sites, **6 unattended**. Run it
+above records. Today: 13 sites, **6 unattended** (12 -> 13 at v1.20.2, where `docs/unattended-tx-inventory.md` last changed - NOT at v1.21.0, as this line claimed; the prose has now been stale three times, which is why the checker is the authority). Run it
 every release; if the table changed, say so in the notes. ⛔ Never call a
 capability "not completed" or "not yet": say implemented or not, then proven or
 not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
@@ -91,6 +129,15 @@ See [patches detail](../../../memory/project_standing_patches.md).
 
 Re-read `TODO.md` first (newest work queue at the top) and reconcile against the
 repo. It is a fresh table every time, never a replay of the last one.
+
+⛔ **RECONCILE MEANS GREP THE CODE, not read the row.** This applies to ANY
+answer about what is open, not only to a table he asked for by name. ⚠
+2026-10-28: I offered E17.2 as open work and he picked it; it had shipped nine
+days earlier as T06 (`ad34fc05`) and the row cited a `NULL` that is not in the
+file. Ten rows in that file were stale the same day, in both directions —
+"not flashed" for commits already on bench dev, and "owed" for promises
+already discharged. **A row that names a `file:line` is a claim to check.**
+And clear the row in the SAME change as the work, never later.
 
 ⛔ **Only work that is NOT IMPLEMENTED.** Leave out anything whose remaining
 work is verifying, flashing or looking at something already built — he does not

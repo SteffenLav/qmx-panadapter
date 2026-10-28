@@ -44,7 +44,15 @@ its LCD when you click its volume knob. Read back from the radio when you open t
 drawer, so it agrees with the rig even if you last changed it there.
 
 **QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
-(the QMX default is 54). Because it is **per band**, the Tab5 reads it from the radio
+(the QMX default is 54). ⚠ **Measured 2026-10-27: changing it does not move the
+spectrum or the audio** — 54 dB out shifted the noise floor 0.06 dB. The radio
+accepts the value and reads it back, but it does not reach the I/Q stream the Tab5
+receives, and everything the Tab5 shows or plays comes from that stream. Stan KC7XE
+(QRP Labs) confirmed the mechanism on 2026-10-28: I/Q mode carries the raw 48 kHz
+PCM1804 samples, taken before the radio's own DSP. **The control still works on the
+QMX's own headphones and speaker**, which is why it is kept and labelled that way
+rather than removed. See
+[Audio Features](audio.md#know-which-volume-control-does-what). Because it is **per band**, the Tab5 reads it from the radio
 rather than remembering a number that would belong to whichever band you were on last;
 it shows "reading…" until the radio answers, and **"radio not connected"** if the radio
 is not there at all. Until v1.8.3 it could stick on "reading…" for a whole session:
@@ -242,7 +250,74 @@ Switching is live — the pins are handed straight over, and a toast confirms wh
 
 **Tip: switch the mode first, then plug the GPS in.** The reverse order works but puts the GPS's transmitter against a driven pin for the moment between the two.
 
+**Sharing PORT.A between the two — "Relay: drive only the selected pin"
+(v1.20.2).** Relay mode normally holds **both** GPIO53 and GPIO54 as driven
+outputs, whichever one is set to pulse, so that changing the pin cannot leave
+the other one resting on its active side with a relay wired to it. If you have
+a Unit GPS on one pin and a relay trigger on the other, that is the wrong
+behaviour: entering Relay mode then drives a pin the GPS is transmitting on,
+and it keeps driving it for as long as you stay in Relay mode - no pulse
+required. Tick this setting and only the pin you selected is driven; the other
+is left floating. A pulse on the floating pin is then refused rather than
+silently doing nothing.
+
+⚠ Only use it when the unused pin is unconnected or biased by its own
+circuit. A floating pin's level is decided by whatever is wired to it, not by
+the Tab5, so this is the wrong choice if you have relays on both pins.
+
+⚠ **It protects the pin you did *not* select, so do not select the one the GPS
+is on.** The setting leaves the *unselected* pin floating — if you pick GPIO54
+as the pin to pulse while the Unit GPS is wired to it, you are back to driving
+the GPS's transmitter and nothing has been gained. Put the relay trigger on
+GPIO53, select GPIO53, and tick the box.
+
+How much it matters, measured by **Randy N4OPI** with a scope on the Unit GPS's
+TX line: in v1.20.1 entering Relay mode pulled that line from **3 V p-p down to
+1.5 V p-p** — the GPS's own driver and the Tab5's output fighting over the same
+pad — and held it there for as long as Relay mode was selected. With this
+setting ticked in v1.20.2 the line is untouched in either mode.
+
 The same control is in the web UI's **Miscellaneous** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
+
+## Transmitting outside the band plan
+
+The Tab5 **refuses to key the radio** if the transmission would fall outside
+your IARU region's allocation, and tells you which frequency and which region
+it judged you against. It checks the frequency actually transmitted, not the
+dial — in a digital mode the carrier is the dial plus the audio tone, so the
+dial on its own is the wrong number.
+
+**You need the IARU region set for this**, under Settings, or a grid for the
+Tab5 to work it out from (the Unit GPS sets one for you). Without either, the
+band cannot be checked and transmission is refused — the region matters as much
+as your callsign and grid, both of which the Tab5 has always required before
+transmitting.
+
+**Allow transmitting outside the band plan** turns the check off. Only tick it
+if your licence gives you access the built-in band plan does not know about —
+an experimental or special allocation, for instance. The table is coarse by
+design, and it has been wrong at a band edge before: until v1.20.3 its 60 m
+upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
+
+!!! info "60 m in the United States changed on 13 February 2026"
+    The Tab5's band plan follows the current FCC rules (order 25-60): the
+    contiguous **5351.5–5366.5 kHz** band at 9.15 W ERP, plus the four legacy
+    channels centred on **5332, 5348, 5373 and 5405 kHz** at 100 W ERP. The old
+    5358.5 kHz channel is gone — it now falls inside the new band. All 60 m
+    emissions are limited to 2.8 kHz.
+
+    The WSPR dial of **5.364700 MHz** transmits at 5366.1–5366.3 kHz, which is
+    inside the new band, so it is the right choice in Region 2 as well as
+    Region 1.
+
+    The power limits are **not** enforced by the Tab5 — it checks frequencies.
+    A QMX at 5 W is inside the 9.15 W figure anyway.
+
+!!! warning "What it does not cover"
+    CW keying and SWR Tune are not checked. They are things you start yourself,
+    where the dial is the transmitted frequency and what you see is what goes
+    out; the guard is aimed at the digital modes, which transmit on a schedule
+    and can do so with nobody watching.
 
 ## Battery Care
 
@@ -269,7 +344,15 @@ then 20, 30 and 40. Before v1.16.12 this was a 1× to 4× multiplier over a fixe
 both to put more history on one screen and to cut the waterfall's share of the
 drawing work. The spectrum and S-meter update rate is unchanged either way.
 
-The same control is in the browser, and the two lists match.
+The same control is in the browser, and the two lists match. **From v1.20.5 it
+moves the browser's waterfall as well.** Before that it only changed the Tab5's
+carpet while the web page drew one row per received frame whatever the setting
+said. Both screens now run the same arithmetic, so they scroll alike.
+
+The picture stream is a fixed ten frames a second, so **10 is the ceiling of
+genuinely new rows**. Above it — 20, 30, 40 — the extra rows repeat the newest
+frame, which scrolls faster but adds no detail, on the Tab5 and in the browser
+alike.
 
 **Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
 drawer.
@@ -299,6 +382,95 @@ teal. You can always see what is being touched.
 
 ## Panadapter & Zoom
 
+**Server mode** *(Device group, off by default; also in the browser menu)* — the
+Tab5 stops drawing its screen and stops its own audio, and keeps serving the web
+page. For running the radio from another room.
+
+Measured with a browser on the page the whole time: **core 0 idle 10–13 % → 67 %,
+core 1 idle 42–56 % → 72 %**. The drawing is what costs — serving the page is
+about 1 % between the WebSocket push and the HTTP server.
+
+The browser is unaffected: its spectrum and waterfall come from the DSP directly,
+not from the Tab5's canvases. If you are listening to the audio in the browser,
+that keeps working too — a web listener overrides the suspend.
+
+**Touch the Tab5 to come back**, or switch it off from the browser. It is not
+remembered across a reboot, deliberately: a unit that boots with a dark screen
+and no explanation looks broken.
+
+**CW-Tune** *(a long press on the bandwidth in the top bar - not a drawer setting)*
+- puts the dial on the nearest CW signal, searching **±400 Hz** either side of where
+you are.
+
+A keyed carrier is absent as often as it is present, so a single spectrum frame would
+decide the answer by luck. It uses a **per-bin maximum over the last 4 seconds**
+instead - the same history the waterfall is drawn from - keeps listening for up to
+8 seconds on a quiet band, and accepts a peak at **+3 dB over the median** of the
+search window.
+
+⛔ **It moves the dial once, when you ask it to, and never by itself.** An aid that
+retuned on its own could not be told apart from a fault.
+
+The gesture is a long press because the top-bar zones open their own selectors on a
+short click, so the two cannot collide. There is no CW-Tune on the spectrum itself: a
+double-tap there already resets zoom and pan, and a long press on that surface is
+tripped by a slow pan.
+
+**CW peak filter** *(drawer: Radio > CW, under CW centre; off by default)* — a
+narrow audio peak **on** the CW pitch: **250, 150 or 100 Hz** wide at -3 dB. It
+sits in the Tab5's own audio, after the mode filter and **before the AGC**, so
+the AGC rides the wanted note instead of the hiss either side of it — which is
+most of what makes a peak filter feel like it works.
+
+⚠ **It is not a second IF filter.** The radio's own CW filter still decides what
+reaches the Tab5, so a strong signal 300 Hz away still works the QMX's AGC even
+when you cannot hear it. What this does is pull the wanted note forward out of
+the band noise.
+
+Measured against the design at a 700 Hz pitch: the 100 Hz setting is 91 Hz wide
+and 32 dB down 500 Hz away; 150 Hz is 137 Hz and -25 dB; 250 Hz is 227 Hz and
+-18 dB. Peak gain is 0 dB, so switching it on does not also change the volume.
+
+The same setting is in the browser as `rxaudio.cw_peak_hz`, where any width from
+40 to 1000 Hz is accepted.
+
+**Smoothing** *(Smoothing & peak hold; 60% by default)* — a running average on
+the spectrum trace. **0 is off and higher is smoother.** The Tab5 slider and the
+browser's `display.smooth_pct` are the same setting, and the browser draws its
+own trace with it too.
+
+The label also prints the time constant, because the scale is linear in the
+underlying coefficient rather than in time: 50% is 0.14 s, 80% is 0.45 s, 90%
+is 0.95 s and 95% is 1.95 s. Most of the change you can see is in the top fifth
+of the travel.
+
+!!! note "It used to run the other way"
+    This was labelled **Alpha** and carried the coefficient itself until
+    2026-10-24, so moving it right made the trace *less* smooth. The stored value is
+    unchanged — `display.ema_pct` is still the coefficient × 100 and still
+    accepted, so an older config file still means what it meant.
+
+**Peak hold** *(Smoothing & peak hold; off by default)* — draws a second line over
+the spectrum showing the highest each point of the band reached in the last
+**1, 2, 3 or 5 seconds**. The browser has the same control and the two screens
+run the same arithmetic. It is dim green on the Tab5 and cyan in the browser:
+the line is context for the live trace and must not out-shout it, and the two
+screens have different backgrounds to sit against.
+
+It is a sliding window, not a latch. A latched maximum keeps the loudest thing
+that ever happened and never lets it go, so after a few minutes the line is a
+record of the past rather than a picture of the band. Here a peak falls on its
+own once it is older than the window, which is what makes an intermittent
+signal — an FT8 station that transmits every 15 seconds, a CW operator between
+overs — visible as a peak that is still there seconds after the trace itself
+has dropped back into the noise.
+
+A retune, a zoom or a pan clears the hold: every column then means a different
+frequency, and a peak carried across would be a peak on the wrong one.
+
+Cost: about 25 KB of PSRAM while it is on, and nothing at all while it is off —
+the buffers are not allocated until you switch it on.
+
 **Still spectrum** *(Radio & display, on by default)* — the spectrum and waterfall hold
 still and the VFO marker moves across them, so a signal stays where you last saw it while
 you tune towards it. Switch it off and the display re-centres on the dial at every step
@@ -322,6 +494,15 @@ offset onto one caller's tone needs resolution rather than tidiness.
 decode list **and on the WSPR page** (off by default). Until v1.12.0 the WSPR
 list and its Best DX panel always printed kilometres regardless of this setting,
 and the control was not reachable from the WSPR page at all.
+
+!!! info "New in v1.20.3 — three more settings reach the browser"
+
+    **SelfSpotter (spot map)** moved into *Spots & reporting*, and **Audio
+    source** and **Line-in gain** into *Radio & display*. These were the last
+    operator switches the Tab5 had and the web page did not.
+
+    ⚠ From the browser, **Audio source** is stored and takes effect at the next
+    restart; on the Tab5 the Audio Settings window restarts for you.
 
 **Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
@@ -496,7 +677,7 @@ only place RBN skimmers more precisely.
 
 **Field Day Mode** — ARRL Field Day mode (on/off, class, section).
 
-**Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
+**Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). The same setting appears in the WSPR drawer as **Test station (simulation)** and in the web UI as **Simulation mode (practice)**; all three are one flag and move together. See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
 
 **Fast pounce (early decode)** — On by default. Decodes surface ~1.8 s *before* the slot boundary (WSJT-X style), so a fresh CQ can be answered in the very next slot and mid-QSO replies land on the beat. Trade-off: the capture window closes early, so a station transmitting late in the slot can occasionally be missed. ⚠️ *Not yet A/B-verified on a live band — if your decodes-per-slot drop with it on, turn it off and please report your numbers.*
 
@@ -718,20 +899,44 @@ it takes you to notice.
 To use it, copy `qso.prev.adi` off the card (**Files ▲ -> SD Files** in the
 browser, or a card reader) and restore it with **ADIF restore ↑**.
 
-## Activation (POTA / SOTA)
+## Activation (POTA / SOTA / WWFF and four more)
 
-When you are activating a park or a summit, every contact you make has to be
-logged as belonging to **that reference** — it is what POTA and SOTA read to
-credit the activation, for you and for the people who worked you.
+When you are activating a park, a summit, a nature reserve or a castle, every
+contact you make has to be logged as belonging to **that reference** — it is
+what the programme reads to credit the activation, for you and for the people
+who worked you.
 
-Open **Activation (POTA/SOTA)** in the settings drawer, pick the scheme, type the
-reference, and tap **Start activation**. From then on every logged QSO carries it
-automatically. There is nothing to remember per contact.
+Open **Activation** in the settings drawer, pick the programme, type the
+reference, and tap **Start activation**. From then on every logged QSO carries
+it automatically. There is nothing to remember per contact.
 
-The screen shows your **contact count against the threshold** — ten for POTA,
-four for SOTA — and turns green when you reach it. That number is read from the
-log itself, so it survives a reboot and can never disagree with what was actually
-written.
+**Seven programmes are supported**, each with its own reference style and its
+own qualifying count:
+
+| Programme | What it is | Example reference | Target |
+|---|---|---|---|
+| **POTA** | Parks on the Air — national, state and regional parks | `DL-0123` | 10 |
+| **SOTA** | Summits on the Air — mountain tops, scored by height | `OZ/SJ-001` | 4 |
+| **WWFF** | World Wide Flora & Fauna — nature reserves and protected land | `DLFF-0123` | 44 |
+| **IOTA** | Islands on the Air — islands and island groups, run by the RSGB | `EU-005` | — |
+| **GMA** | Global Mountain Activity — summits, huts and castles worldwide | `DL/BE-001` | — |
+| **WCA** | World Castles Award — castles and fortifications | `DL-00123` | — |
+| **WWBOTA** | World Wide Bunkers on the Air | `DL-00123` | — |
+
+A dash means that programme has no single qualifying number, so the counter
+just counts.
+
+**The right ADIF field goes in, not just a generic one.** Every record carries
+`MY_SIG` and `MY_SIG_INFO`, and POTA, SOTA, WWFF and IOTA additionally get the
+dedicated field their uploader actually reads — `MY_POTA_REF`, `MY_SOTA_REF`,
+`MY_WWFF_REF`, `MY_IOTA`. Without it an upload can be accepted and still not
+count.
+
+The screen shows your **contact count against that programme's target** and
+turns green when you reach it. That number is read from the log itself, so it
+survives a reboot and can never disagree with what was actually written. The
+same count appears on the Activation button, as `OZ-0001  3/10`, so you can see
+it without opening anything.
 
 **Stopping matters as much as starting.** While a session is running the main
 button is a red **Stop activation**, and the drawer button itself shows the live
@@ -739,9 +944,30 @@ reference rather than a generic label. The failure that actually happens is
 driving home with it still switched on, quietly stamping every later contact with
 a park you have left.
 
+**Stopping also writes that activation's own ADIF file.** When you stop, the
+contacts made during the session are exported to the microSD card on their own,
+named for the reference and the date — `OZFF-0001-20261028.adi`. That is the
+file you submit, without having to cut it out of your whole log afterwards.
+Stopping from the web UI does exactly the same thing as stopping on the Tab5.
+
 The session persists across a restart on purpose — a battery change in the field
 should not lose it — but it is deliberately **not** included in a config backup,
 so restoring an old backup can never re-activate a park you are nowhere near.
+
+### Scheduled events — what is on
+
+The Activation window carries a **Scheduled events** button (keyboard shortcut
+**27**, and **Scheduled** in the web menu). It puts the contest calendar and
+announced POTA/SOTA activations on **one timeline**, soonest first, with what
+is on the air now above what is coming.
+
+Filter to **Contests** or **Activations** when you have already decided what
+kind of evening it is.
+
+It is fetched **on demand, at most every 15 minutes** — never a standing poll,
+because the radio's link and the spot feeds matter more. **Refresh** asks for
+it now. The source being down is not an error: the last list stays up and the
+age line tells you how old it is.
 
 **Chasing** works without any setup: if you work a station the panadapter has
 seen spotted at a park or summit, that reference is written into your log entry
@@ -821,6 +1047,34 @@ Reporter requests.
 
 ## ADIF & Logging
 
+### Log a contact by hand (CW and SSB)
+
+FT8, FT4 and JS8 log themselves — every field is exchanged, so there is nothing
+to type. **CW and phone are not like that**, and until now there was no way to
+get them into the log at all *(Gyula HA3HZ, Brian KB9WFS)*.
+
+Open the settings drawer and tap **Log a contact (CW/SSB)**, or use keyboard
+shortcut **26**. In the browser it is **Log a contact** in the menu.
+
+You type **the callsign and the two reports. Nothing else.** The frequency,
+mode, band, date, time, your own callsign and grid, and the running activation
+reference all come from the radio and the device.
+
+- The reports arrive **filled in from the mode** — `599` for CW, `59` for
+  phone. Clearing one logs the contact *without* a report rather than with a
+  wrong one.
+- The window **stays open** after Log, with the callsign cleared and the
+  reports kept. A run of contacts is not one dialog at a time.
+- **Tapping a spot** in the spots lane opens this window with that callsign
+  already filled in.
+- It is **refused when the radio is not connected**, because the record would
+  have no frequency — and a QSO with no frequency is not a QSO.
+
+The record lands in the same log as everything else, so the ADIF download, the
+activation count and the uploaders all see it immediately.
+
+### Viewing the log
+
 **ADIF Log** — View the QSO log on-device. The viewer shows a proper column table:
 
 | Column | Content |
@@ -855,9 +1109,9 @@ Tapping the field brings up the keyboard, and the window moves up and shortens
 so the matches stay visible while you type. Clear the field to see the whole log
 again; the search also clears itself each time you open the window.
 
-**Today/All filter** — the viewer opens on **Today** (falling back to All when nothing was logged today). The toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts.
+**Today/All filter** — the toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts. **Your choice is remembered**, including across a restart, so the viewer reopens on whichever of the two you last picked *(Bruce N9JCV)*. Out of the box that is **Today**, which is what the activation counter below is for. The fallback is unchanged and is not a choice: if Today comes out empty while there are records, the viewer switches to All for that visit without changing what it reopens on next time.
 
-**POTA activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches 10 QSOs — a valid POTA activation.
+**Activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches the running programme's target: 10 for POTA, 4 for SOTA, 44 for WWFF. With no activation running it counts without a target.
 
 **Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 

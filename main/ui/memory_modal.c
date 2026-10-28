@@ -476,8 +476,11 @@ static void action_save_cb(lv_event_t *e)
         ESP_LOGW(TAG, "save: no freq");
         return;
     }
-    // Band validation already happened in mem_freq_picker_cb, right when the
-    // freq pad was confirmed - s_pending_freq_hz can't reach here out of band.
+    /* ⚠ s_pending_freq_hz MAY BE OUTSIDE THE AMATEUR BANDS, deliberately
+     * since T68 - a memory is a receive target and receive is unrestricted.
+     * The operator was told so when the keypad was confirmed. Out-of-band
+     * TRANSMISSION is refused by T48's guard at the key-down itself, which is
+     * the only place that knows the RF actually emitted. */
     slot.freq_hz = s_pending_freq_hz;
     slot.occupied = 1;
     strncpy(slot.mode, s_pending_mode[0] ? s_pending_mode : "???", sizeof(slot.mode) - 1);
@@ -588,14 +591,34 @@ static bool mem_freq_picker_cb(uint32_t freq_hz, const char *mode, bool accepted
         s_action_idx = -1;
         return true;  // Cancel always closes regardless of this return value
     }
-    // Validate right here, as soon as the freq pad is confirmed - not after
-    // the user has also typed a label and tapped Save.
+    /* ⛔ T68: THIS USED TO REFUSE ANY FREQUENCY OUTSIDE AN AMATEUR BAND, AND
+     * A MEMORY IS A RECEIVE TARGET.
+     *
+     * Gyula HA3HZ, 2026-10-22: "It seems I cannot store an AM reception
+     * frequency in the memory, likely because the frequency falls outside the
+     * allowed band." He had it exactly right.
+     *
+     * The refusal rested on a false premise - that an out-of-band channel
+     * "cannot legally be tuned". RECEIVE IS UNRESTRICTED. The QMX has its own
+     * `System config -> RX outside band` for tuning there (ON on the bench
+     * radio), `Band limits` gates only TRANSMIT, and the Tab5 has never
+     * clamped tuning - legal_band_edges() validates a RECALLED PER-BAND
+     * frequency, which is a different job.
+     *
+     * What stops an out-of-band transmission is T48's band guard, which every
+     * keying site calls immediately before key-down, plus the two runtime
+     * doors (T64, T65). That is the right place for it: it knows the RF that
+     * will actually be emitted, where this check only knew what someone typed
+     * into a keypad.
+     *
+     * So: store it, and say what it is for. Telling the operator is the point -
+     * the alternative, storing it silently, would leave someone to discover at
+     * the moment of transmitting that the channel is receive-only. */
     if (!ui_validate_band_freq_hz(freq_hz, NULL, NULL)) {
-        ESP_LOGW(TAG, "freq pad: %lu Hz is out of band, refusing", (unsigned long)freq_hz);
-        ui_toast("Out of band - not saved");
-        // Keep s_action_idx armed (don't reset to -1) so the next Enter
-        // attempt, once corrected, still targets the same slot.
-        return false;
+        ESP_LOGI(TAG, "freq pad: %lu Hz is outside the amateur bands - storing for RECEIVE",
+                 (unsigned long)freq_hz);
+        ui_toast_ms("Outside the ham bands - stored for receive. "
+                    "Transmitting there is refused.", 6000);
     }
     s_pending_freq_hz = freq_hz;
     strncpy(s_pending_mode, mode && mode[0] ? mode : "???", sizeof(s_pending_mode) - 1);
@@ -1007,32 +1030,28 @@ static void modal_build(void)
     lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
 
     s_action_kb = lv_keyboard_create(s_modal);
-    static lv_style_t style_kb_main;
-    static lv_style_t style_kb_items;
-    static bool kb_inited = false;
-    if (!kb_inited) {
-        /* Match the frequency keypad's look: dark panel, no border on keys,
-         * grey key fill, small radius, even gaps between keys. */
-        lv_style_init(&style_kb_main);
-        lv_style_set_bg_color(&style_kb_main, lv_color_hex(UI_COLOR_SURFACE));
-        lv_style_set_bg_opa(&style_kb_main, LV_OPA_COVER);
-        lv_style_set_border_color(&style_kb_main, lv_color_hex(UI_COLOR_BORDER));
-        lv_style_set_border_width(&style_kb_main, 1);
-        lv_style_set_radius(&style_kb_main, 10);
-        lv_style_set_pad_all(&style_kb_main, 12);
-        lv_style_set_pad_row(&style_kb_main, 8);
-        lv_style_set_pad_column(&style_kb_main, 8);
-
-        lv_style_init(&style_kb_items);
-        lv_style_set_bg_color(&style_kb_items, lv_color_hex(UI_COLOR_KEY_BG));
-        lv_style_set_bg_opa(&style_kb_items, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb_items, lv_color_white());
-        lv_style_set_border_width(&style_kb_items, 0);
-        lv_style_set_radius(&style_kb_items, 6);
-        kb_inited = true;
+    /* ⛔ THIS KEYBOARD USED TO LOOK DIFFERENT FROM EVERY OTHER ONE, and the
+     * operator spotted it: "seems not to follow the on screen keyb format we
+     * use elsewhere". It had its own main-part style (radius 10, pad_all 12,
+     * 8 px between keys) and borderless keys with a 6 px radius, written to
+     * "match the frequency keypad's look" - but the frequency keypad is a
+     * hand-built button grid, not an lv_keyboard, and the five OTHER
+     * lv_keyboards in this firmware (ft8_cq, ft8_filter, identity_config,
+     * js8_text, adif_view, qmx_term) all share one look. Five against one
+     * makes the five the house style, so this now uses the same style_kb_btn
+     * the others do and leaves the main part to ui_theme_style_keyboard(). */
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
     }
-    lv_obj_add_style(s_action_kb, &style_kb_main, 0);
-    lv_obj_add_style(s_action_kb, &style_kb_items, LV_PART_ITEMS);
+    lv_obj_add_style(s_action_kb, &style_kb_btn, LV_PART_ITEMS);
     ui_theme_style_keyboard(s_action_kb);
     lv_obj_set_size(s_action_kb, LV_PCT(100), 280);
     lv_obj_align(s_action_kb, LV_ALIGN_BOTTOM_MID, 0, 0);

@@ -135,12 +135,17 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
 #define UI_COLOR_MODE_USB  0xD9634B  /* brick red/brown — was steel blue, too close to CW's blue */
 #define UI_COLOR_MODE_LSB  0x633079  /* purple */
 #define UI_COLOR_MODE_WSPR 0x3D8C40  /* green     — ui/spot_map_view.c's third self-spotting source, no bandplan analogue to match */
+#define UI_COLOR_MODE_AM   0x1F8A8A  /* teal      — no bandplan analogue either (AM lives inside
+                                        the Phone segments), and the five mode
+                                        colours have to be told apart at a glance
+                                        in a 56 px memory-grid cell: kept clear of
+                                        CW's 0x2477B3 blue and WSPR's green. */
 
 /* Map a mode string (as stored in mem_slot_t.mode / used by the freq pad's
  * mode row) to its colour. Substring match so "DiGi"/"FT8"/"FT4"/"RTTY" all
  * land on the DiGi colour without the caller having to enumerate every
  * digital sub-mode name the QMX reports. Falls back to UI_COLOR_KEY_BG for
- * anything unrecognized (AM/FM and not-yet-seen modes). */
+ * anything unrecognized (FM and not-yet-seen modes). */
 static inline uint32_t ui_theme_mode_color(const char *mode)
 {
     if (!mode || !mode[0]) return UI_COLOR_KEY_BG;
@@ -149,6 +154,8 @@ static inline uint32_t ui_theme_mode_color(const char *mode)
     if (strstr(mode, "USB"))                                    return UI_COLOR_MODE_USB;
     if (strstr(mode, "LSB"))                                    return UI_COLOR_MODE_LSB;
     if (strstr(mode, "CW"))                                     return UI_COLOR_MODE_CW;
+    /* After the rest: no other mode string the QMX reports contains "AM". */
+    if (strstr(mode, "AM"))                                     return UI_COLOR_MODE_AM;
     return UI_COLOR_KEY_BG;
 }
 
@@ -215,14 +222,67 @@ static inline void ui_theme_style_keyboard(lv_obj_t *kb)
     lv_obj_set_style_border_color(kb, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(kb, 1, 0);
 
+    /* KEY LABELS BIG ENOUGH TO READ OUTSIDE.
+     *
+     * Don WB0LQW, 2026-10-22, about the Activation panel: "I love the little
+     * keyboard that appears in Settings--Activation. The only problem is I
+     * have trouble reading the key chars, especially when I am outside."
+     *
+     * Set HERE rather than in activation_modal.c, because the keyboard he is
+     * looking at is the same object every other panel uses - WiFi, FT8 free
+     * text, the lot - and they are all read in the same daylight. Fixing only
+     * the one he happened to name would leave the identical complaint waiting
+     * in the next panel.
+     *
+     * The keys are ~70 px tall at the 280 px keyboard height, so the default
+     * label was small relative to its own key rather than small in absolute
+     * terms - there is room for this without touching any layout.
+     *
+     * He also asked for bold. LVGL's built-in Montserrat ships ONE weight, so
+     * size is the only lever here without adding a font to the binary; saying
+     * so is better than quietly giving him half of what he asked for. */
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, LV_PART_ITEMS);
+
     /* The default theme draws "checked" keys (active mode toggle, shift,
      * etc.) with a bright primary-colour fill - override to keep the same
      * dark key background used everywhere else. CHECKED is repurposed by
      * the shift-cycle below to mark the "Abc" pending-shift state on the
-     * shift key only, shown via gold text rather than a highlight fill. */
+     * shift key only, shown via gold text rather than a highlight fill.
+     *
+     * ⛔ "THE SHIFT KEY ONLY" IS AN INVARIANT WE HAVE TO MAINTAIN, NOT A
+     * FACT ABOUT LVGL. Reported by the operator 2026-10-21: "as soon as i
+     * start using the on screen keyb more than the Abc key turn yellow".
+     * LVGL's own default_kb_ctrl_lc_map / _uc_map / _spec_map set
+     * LV_BUTTONMATRIX_CTRL_CHECKED on the row-4 keys `_` and `-`, on `.` `,`
+     * `:`, and on both arrow keys - so a freshly loaded default map paints
+     * five or seven keys gold before we touch anything.
+     * lv_keyboard_def_event_cb() reloads that map on EVERY mode change, so
+     * clearing the bits once at attach time is not enough; see
+     * ui_theme_kb_clear_stray_checked(). */
     lv_obj_set_style_bg_color(kb, lv_color_hex(UI_COLOR_KEY_BG), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(kb, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
-    lv_obj_set_style_text_color(kb, lv_color_hex(UI_COLOR_ACCENT_GOLD), LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* ⛔ WAS GOLD, AND THAT IS THE WHOLE BUG. LVGL defines
+     *
+     *   #define LV_KEYBOARD_CTRL_BUTTON_FLAGS (LV_BUTTONMATRIX_CTRL_NO_REPEAT |
+     *                                          LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
+     *                                          LV_BUTTONMATRIX_CTRL_CHECKED)
+     *
+     * so EVERY control key - 1#, the shift key, the keyboard icon, OK - is
+     * CHECKED by definition, and the default maps add CHECKED to `_` `-` `.`
+     * `,` `:`, both arrows, backspace and enter on top. Gold on CHECKED paints
+     * all of them, which is what the operator photographed on 2026-10-21.
+     *
+     * ⚠ MY FIRST FIX WAS WRONG AND CHANGED NOTHING ON THE GLASS. It added
+     * more lv_buttonmatrix_clear_button_ctrl_all(CHECKED) calls, on the theory
+     * that a reloaded default map was restoring the bits. But apply_state()
+     * ALREADY cleared them on attach and on every state change - if that call
+     * had the assumed effect the keys would never have been gold in the first
+     * place. Flashed, looked at, unchanged: "No changes at all to the keyb".
+     *
+     * So do not depend on the flag at all. CHECKED keys get the ordinary key
+     * text colour, and the pending-shift state is shown where it always
+     * actually was - the shift key's own label, abc / Abc / ABC. */
+    lv_obj_set_style_text_color(kb, lv_color_white(), LV_PART_ITEMS | LV_STATE_CHECKED);
 }
 
 /* iPad-style 3-state shift key: abc -> Abc -> ABC -> abc, shown via the
@@ -274,6 +334,19 @@ static inline void ui_theme_kb_apply_state(lv_obj_t *kb, int state, uint32_t shi
     }
 
     lv_obj_set_user_data(kb, (void *)(intptr_t)((shift_btn << 3) | ((uint32_t)state << 1) | 1u));
+}
+
+/* Re-assert "CHECKED means the pending shift key, and nothing else".
+ *
+ * Call after anything that may have reloaded a default map - that is, after
+ * lv_keyboard_def_event_cb(), which calls lv_keyboard_set_mode() for the
+ * "abc"/"1#" keys. Cheap: two buttonmatrix calls, no redraw unless a bit
+ * actually changed. */
+static inline void ui_theme_kb_clear_stray_checked(lv_obj_t *kb, int state, uint32_t shift_btn)
+{
+    lv_buttonmatrix_clear_button_ctrl_all(kb, LV_BUTTONMATRIX_CTRL_CHECKED);
+    if (state == 1 && shift_btn != LV_BUTTONMATRIX_BUTTON_NONE)
+        lv_buttonmatrix_set_button_ctrl(kb, shift_btn, LV_BUTTONMATRIX_CTRL_CHECKED);
 }
 
 /* Find the shift key's button-matrix index in the keyboard's CURRENT map
@@ -350,9 +423,17 @@ static inline void ui_theme_kb_shift_cb(lv_event_t *e)
 
     if (state == 1 && btn_id != shift_btn) {
         /* Pending single-shift consumed by a normal key (the default handler
-         * just typed it in upper case): drop back to lowercase for the next. */
+         * just typed it in upper case): drop back to lowercase for the next.
+         * apply_state() re-asserts the CHECKED invariant itself. */
         ui_theme_kb_apply_state(kb, 0, shift_btn);
+        return;
     }
+
+    /* Still in the same state, but the default handler may have reloaded the
+     * map underneath us and with it LVGL's own CHECKED bits on `_ - . , :`
+     * and the arrows. This is the line that keeps the gold on the shift key
+     * alone. */
+    ui_theme_kb_clear_stray_checked(kb, state, shift_btn);
 }
 
 /* Attach the iPad-style shift-cycle behaviour to a keyboard. Removes LVGL's

@@ -199,7 +199,29 @@ static void tx_label_fit(const char *txt)
 static const wspr_band_t kBands[] = {
     { "160", 1836600u },
     { "80", 3568600u },
-    { "60", 5287200u },
+    /* ⛔ WAS 5287200, WHICH TRANSMITS OUT OF BAND IN ALL THREE REGIONS.
+     *
+     * Wolfgang DF1KZ, 2026-10-21: "this frequency is imho not allowed
+     * everywhere in IARU Region1". Checked against this firmware's OWN
+     * bandplan.c rather than taken on trust, and it is worse than he said -
+     * a 5287200 dial emits at 5288600-5288800, and 60 m is
+     * 5351500-5366500 (R1/R3) and 5330500-5366500 (R2). About 63 kHz below
+     * the bottom of the band, in every region.
+     *
+     * ⭐ It is the ONLY band that was wrong. All ten others were checked the
+     * same way and are inside the allocation in all three regions.
+     *
+     * 5364700 emits at 5366100-5366300, inside the allocation everywhere -
+     * but only after bandplan.c's R1/R3 top edge was corrected from 5366.0 to
+     * 5366.5; see the note there, because without it the right frequency
+     * reads as illegal.
+     *
+     * ⚠ OPEN, and it needs a US operator: our R2_60 models a CONTINUOUS
+     * 5330.5-5366.5 segment, where the US allocation is five discrete channels
+     * (5332.0 / 5348.0 / 5358.5 / 5373.0 / 5405.0 kHz). 5366.2 is not one of
+     * them, and neither was 5288.7 - so R2 is no worse than it was, and not
+     * yet right. Do not call this closed for Region 2. */
+    { "60", 5364700u },
     { "40", 7038600u },
     { "30", 10138700u },
     { "20", 14095600u },
@@ -1470,6 +1492,53 @@ static int  s_dial_push_left;
 static bool s_cat_was_ready;
 static bool s_sim_was_on;
 
+/* ⛔ THE PAGE PUSHED THE DIAL AND NEVER THE MODE, AND THAT MADE IT DEAF.
+ *
+ * Found on the bench 2026-10-23 by the operator, in one line: "Claude - the
+ * Mode is CW!!" The page was on 7.038600 with the radio still in CW from the
+ * previous job, so the radio's 300 Hz CW filter sat across a search window at
+ * 1360-1650 Hz. Two cycles ran: 20 candidates (the cap, i.e. noise) and 0
+ * decodes, with a -98 dBm floor that looked like a dead band.
+ *
+ * It was never reachable by accident before because the swipe into WSPR
+ * usually came from a digital mode; the API door this session added makes it
+ * trivial, and the Mode control is REFUSED on this page ("the WSPR page owns
+ * the dial"), so an operator who lands here in CW cannot even fix it from the
+ * UI - they have to leave, change mode, and come back.
+ *
+ * The TX path has done this correctly all along: wspr_tx.c switches to DiGi
+ * for a burst and hands the mode back afterwards, with the empty-string
+ * one-shot that keeps it from fighting a mode the operator chose. This is the
+ * same thing for RX, with the same restore, because WSPR RX needs the wide
+ * filter for exactly as long as the page is up. */
+#define WSPR_RX_MODE "FT8"   /* cat_request_mode() maps it to DiGi, digit 6 -
+                              * the same string wspr_tx.c uses for a burst */
+static char s_rx_mode_before[12] = { 0 };
+
+static void wspr_claim_mode(void)
+{
+    const char *now = cat_get_mode_str();
+    if (!now || !now[0]) return;                  /* CAT has not answered yet */
+    if (strstr(now, "DiGi") || strstr(now, "DIG")) return;   /* already there */
+    snprintf(s_rx_mode_before, sizeof(s_rx_mode_before), "%s", now);
+    ESP_LOGW(TAG, "mode: %s cannot hear WSPR (its filter is narrower than the "
+                  "1360-1650 Hz window) - switching to DiGi, will hand %s back",
+             now, now);
+    cat_request_mode(WSPR_RX_MODE);
+}
+
+static void wspr_release_mode(void)
+{
+    if (!s_rx_mode_before[0]) return;
+    char want[sizeof(s_rx_mode_before)];
+    snprintf(want, sizeof(want), "%s", s_rx_mode_before);
+    s_rx_mode_before[0] = '\0';          /* one shot, like the TX path's */
+    const char *now = cat_get_mode_str();
+    if (now && strcmp(now, want) == 0) return;
+    ESP_LOGI(TAG, "leaving WSPR - handing the radio back to %s", want);
+    cat_request_mode(want);
+}
+
 static void arm_dial_push(const char *why)
 {
     s_dial_push_left = DIAL_PUSH_TRIES;
@@ -1816,7 +1885,12 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * corner of the waterfall, which carries the low (1360 Hz) edge of the window. */
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
     lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    /* GREEN, not the gold every other page uses. WSPR got its own colour on
+     * 2026-10-24 when the left drawer gave each mode a button: the drawer's
+     * MODE: WSPR is UI_COLOR_MODE_WSPR, and the button label and the page it
+     * opens have to agree or the colour means nothing. Gold was never WSPR's
+     * own colour - it was the default every page started from. */
+    lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_MODE_WSPR), 0);
     lv_obj_set_pos(s_lbl_title, 16, 4);
     lv_obj_move_foreground(s_lbl_title);
 
@@ -2131,6 +2205,11 @@ void wspr_screen_view_show(void)
 void wspr_screen_view_hide(void)
 {
     if (!s_container) return;
+    /* Hand the mode back, exactly as the TX path does after a burst. Leaving
+     * the operator in DiGi after a look at the WSPR page is the complaint
+     * wspr_tx.c already records: "the CW (or mode in general) is always waking
+     * up in DiGi mode". */
+    wspr_release_mode();
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -2640,6 +2719,12 @@ void wspr_screen_view_tick(void)
                 } else if (want) {
                     ESP_LOGI(TAG, "dial: radio already on %lu Hz", (unsigned long)want);
                 }
+                /* The mode goes with the dial. Here rather than at page entry
+                 * because this is the branch that has already established CAT
+                 * is up - at entry the radio may not have answered yet, and a
+                 * mode write into a dead link is how the dial push itself used
+                 * to fail. */
+                wspr_claim_mode();
                 s_dial_push_left = 0;    /* one shot - never fight manual tuning */
             }
         }

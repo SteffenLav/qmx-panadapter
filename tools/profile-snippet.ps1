@@ -61,20 +61,32 @@ function qmx {
             }
         }
         "merge" {
-            Push-Location "$tree\build"
-            python -m esptool --chip esp32p4 merge_bin `
-                -o qmx_panadapter_merged.bin `
-                --flash_mode dio --flash_size 16MB --flash_freq 40m `
-                0x2000  bootloader\bootloader.bin `
-                0x8000  partition_table\partition-table.bin `
-                0x10000 qmx_panadapter.bin
-            Pop-Location
-            if ($LASTEXITCODE -eq 0) {
-                $sz = (Get-Item "$tree\build\qmx_panadapter_merged.bin").Length
-                Write-Host ("Merged binary: build\qmx_panadapter_merged.bin ({0:N0} bytes)" -f $sz) -ForegroundColor Green
-            }
+            # REMOVED 2026-10-22, on the operator's instruction: "block the
+            # building of it as it will never be used going forward".
+            #
+            # A merged image is a WHOLE-CHIP file whose byte 0 is flash
+            # address 0x0. Nothing ships it: flash.bat writes bootloader.bin,
+            # partition-table.bin, qmx_panadapter.bin and ota_data_initial.bin
+            # separately at their own offsets, and the flasher zip contains no
+            # merged file. It has only ever caused harm - v0.18.6 shipped one,
+            # flash.bat wrote it at the wrong offset, and it bricked a unit on
+            # every use (memory: project_merged_bin_offset_bug).
+            #
+            # MEASURED on the v1.20.4 file, 2026-10-22: a merge reaching
+            # 0x920000 spans 0x0..0x922000, and its user_nvs (0x810000, 64 KB)
+            # and storage (0x820000, 1 MB) regions are ALL 0xFF - blank
+            # padding, not a copy. esptool erases each sector before writing,
+            # so flashing it wipes WiFi credentials, callsign, memory
+            # channels, the ADIF log and the LoTW private key.
+            #
+            # The v1.20.4 release asset was NOT built by this verb: it was a
+            # hand-typed 4-way esptool command (this one is 3-way and names its
+            # output without a version). Removing the verb is therefore not the
+            # whole guard - check_release_assets.py refuses a merged ASSET.
+            Write-Host "qmx merge is REMOVED - a merged image wipes user_nvs and storage." -ForegroundColor Red
+            Write-Host "Flash the four separate files, as flash.bat does." -ForegroundColor Yellow
         }
-        default { Write-Host "Usage: qmx [b|f|m|fm|bfm|merge] [benchName]" -ForegroundColor Yellow }
+        default { Write-Host "Usage: qmx [b|f|m|fm|bfm] [benchName]" -ForegroundColor Yellow }
     }
 }
 

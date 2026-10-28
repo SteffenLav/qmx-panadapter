@@ -42,6 +42,7 @@ and called it "the automatic reply function", which is exactly what it is.
 | `main/ui/ft8_screen_view.c` | `web_reply_drain` | yes | A reply the browser asked for, drained on the LVGL task. A remote human is still a human. |
 | `main/net/webserver.c` | `cmd_handler` | yes | An `/api/cmd` request. Remote, deliberate. |
 | `main/ft8_qso.c` | `ft8_qso_override_next` | yes | The operator overrode the next message. |
+| `main/ft8_qso.c` | `ft8_qso_final_resend_now` | yes | The operator pressed **Re-send** on a contact whose final has gone out but has not been acknowledged (Don WB0LQW). One message, armed once. It does not spend `final_track_try_resend`'s automatic budget, so pressing it cannot exhaust the machine's own fallback. |
 | `main/js8_ftx.c` | `js8_ftx_start` | yes | The operator pressed Send on a JS8 free-text message, having been shown its frame count and air time first. |
 | `main/ui/ft8_screen_view.c` | `js8_arm_one` | yes | The operator pressed **SNR** in JS8, on the Tab5 or in the browser. One message, armed once; it is deliberately not `ft8_qso_start()`, so nothing follows it. ⭐ This site is why a JS8 row tap no longer transmits at all - Ryan KK6DZB, 2026-10-12: *"anytime I would click on a call it would auto start sending the SNR which is not handy in this mode."* The tap now selects and this button sends. |
 | `main/ft8_qso.c` | `ft8_qso_start` | **no** | ⛔ **THE ONE THAT ANSWERED GYULA'S CALLERS.** Reached from a tap, but ALSO from `ft8_robot_tick()` (`ft8_qso.c:650` says so: *"'reply', not 'manual reply': ft8_robot.c calls this too"*) and from `ft8_hound.c:308`. Gated on `robot_en`, so opt-in. |
@@ -53,7 +54,12 @@ and called it "the automatic reply function", which is exactly what it is.
 
 ## Reading this honestly
 
-- **Six of eleven sites can transmit with nobody deciding at that moment.**
+- ⛔ **DO NOT WRITE THE TOTALS HERE.** This line read "Six of eleven sites"
+  while the table held twelve and then thirteen - the same rot `CLAUDE.md`
+  records for its patch count and its own copy of this number.
+  `python tools/check_unattended_tx.py` prints both figures and is the
+  authority; run it rather than reading a sentence.
+- **Some of these sites can transmit with nobody deciding at that moment.**
   That is not a defect: a beacon, a CQ run and an auto-answer are all features
   somebody asked for. The point is that the number should never be a surprise.
 - ⚠ **The `human` column is read by a person and can rot like any comment.**
