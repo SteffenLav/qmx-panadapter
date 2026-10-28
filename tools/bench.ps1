@@ -977,7 +977,7 @@ switch ($Command.ToLower()) {
     "standdown"    { Cmd-StandDown    $reg (Get-Bench $reg $Name) }
     "release"      { Cmd-StandDown    $reg (Get-Bench $reg $Name) }
     "watchdog"     { Cmd-Watchdog     $reg $Name }
-    "build"        { if (-not $Name) { $Name = "dev" }; Cmd-Build $reg (Get-Bench $reg $Name) }
+    "build"        { if (-not $Name) { $Name = "bench1" }; Cmd-Build $reg (Get-Bench $reg $Name) }
     "flash"        { Cmd-Flash        $reg (Get-Bench $reg $Name) }
     "verify"       { Cmd-Verify       $reg (Get-Bench $reg $Name) }
     "antenna"      { Cmd-Antenna      $reg $Name }

@@ -22,7 +22,7 @@ no flash, and it puts the ration back to 0 when it exits, including on Ctrl-C.
 
 Usage:
     python tools/wspr_deep_ab.py --host 192.168.1.210 \
-        --capture scratchpad/capture-dev.txt --ration 14 --minutes 120
+        --capture scratchpad/capture-bench1.txt --ration 14 --minutes 120
 
 ⚠ READ THE CAPTURE, NOT THE API, for the result: the decode counts are in
 wspr_rx's own per-cycle line and the sample rate is in dsp's. This script
@@ -113,7 +113,7 @@ def main():
     # tools/bench.json is the registry; the board prints its own address in
     # its capture ("sta ip:"), which stays the authority. --host overrides.
     ap.add_argument("--host", default="192.168.1.210")
-    ap.add_argument("--capture", default="scratchpad/capture-dev.txt")
+    ap.add_argument("--capture", default="scratchpad/capture-bench1.txt")
     ap.add_argument("--ration", type=int, default=14)
     ap.add_argument("--minutes", type=int, default=120)
     a = ap.parse_args()

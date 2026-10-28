@@ -19,7 +19,8 @@
   },
   "benches": [
     {
-      "name": "dev",
+      "name": "bench1",
+      "name_note": "WAS CALLED 'dev' until 2026-10-28, and most of the notes, commit messages and memory files in this project still say 'the dev bench' - they mean THIS board, Tab5 #1, MAC 30:ED:A0:EA:DD:57 on COM5. Renamed on the operator's instruction once bench2 arrived and the dev/bench naming collided. Its capture moved with it: scratchpad/capture-dev.txt is now capture-bench1.txt, same file, 783 MB of history carried over by rename, not copy.",
       "role": "MAIN, on v1.20.5-31-g0cf92aeb (flashed 2026-10-24). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
         "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
@@ -48,7 +49,7 @@
       "radio_note": "Swapped 2026-09-05: was the small QMX. That radio's finals were worn down by WSPR TX at FULL power (110 s of key-down every 120 s) until it drew excessive current on plain RX; it is away being re-finalled. This is the real-world case the WSPR PA guard exists for - CLAUDE.md measures the finals at 4.69 W unguarded vs 1.12 W at the 6.0 V target. The QMX+ here reports 'QMX GPS source: QMX+ Internal' at CAT link-up and its second-tick phase-locks to SNTP within ~10 ms, so time_src reads GPS legitimately on this bench (NOT the #173 false-GPS case).",
       "tree": "C:/dev/qmx-panadapter",
       "branch": "main",
-      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-dev.txt",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-bench1.txt",
       "usb_flash": "yes"
     },
     {
@@ -65,7 +66,7 @@
         "other half of the same feature request - that one has NO bench slot",
         "yet either, since neither track has been assigned a physical board."
       ],
-      "board": "Tab5 #3 (new)",
+      "board": "NONE - the Tab5 #3 this slot was holding became bench2 on 2026-10-28",
       "mac": "UNKNOWN - fill in from the first boot line",
       "ip": "UNKNOWN",
       "com": "UNASSIGNED",
@@ -94,6 +95,23 @@
       "usb_flash": "NO",
       "usb_flash_reason": "PREFER OTA on this unit: it is the board that proves the update path a real user takes, so an OTA result here is worth more than on dev. Cable-flash it only when a test needs it, and expect to re-establish the OTA evidence afterwards.",
       "usb_flash_history": "CABLE-FLASHED 2026-10-10 a FIFTH time, to v1.16.12-108-g35dde707 (seven-stack hardening + the JS8 free-text decode-count fixes), at his explicit request after he tore the field station down and before setting it up again. It was on v1.16.12-102-g73e849ba. MAC-verified 80:f1:b2:d1:45:92 BEFORE writing with 'bench verify field' (COM10 is the WAVESHARE socket - this is not optional) and again after. ⛔ IT TOOK TWO DELIBERATE bench.json EDITS, both reverted: usb_flash NO->yes, and tree pointed at the main checkout because tree is PROSE on this bench, so bench.ps1 Push-Location throws on it. ⚠ REVERTING THE TREE BIT ME: a plain string replace of \"C:/dev/qmx-panadapter\" hits DEV first, because dev legitimately has that exact path - so dev and field ended up with each other's tree and the file still looked plausible. That is the silent-wrong-tree trap dev's own role_note warns about. Recovered with git checkout, not by hand. IF YOU FIND usb_flash=yes OR A REAL PATH IN tree ON THIS BENCH, a session died mid-flash - put them back, and verify ALL THREE benches afterwards. ⚠ OTA EVIDENCE STALE - re-establish at the next release. CABLE-FLASHED 2026-10-10 a FOURTH time, to v1.16.12-102-g73e849ba (JS8 free-text TX + the transmission-type fix). MAC-verified 80:f1:b2:d1:45:92 on COM10 first, as com_note demands. ⚠ OTA EVIDENCE STALE - re-establish at the next release. CABLE-FLASHED 2026-10-10 a THIRD time, to v1.16.12-98-g0fa5f7e2 (waterfall window 2/200 + SNR recalibrated to jt9). MAC-verified 80:f1:b2:d1:45:92 on COM10 before writing, as com_note demands. ⚠ THE OTA EVIDENCE ON THIS UNIT IS STALE - re-establish it at the next release. CABLE-FLASHED 2026-10-10 AGAIN to put v1.16.12-96-gf25a9e95 on it (decode-dedup + the 4-char grid fix); MAC-verified 80:f1:b2:d1:45:92 on COM10 before writing, as com_note demands. ⚠ THE OTA EVIDENCE ON THIS UNIT IS NOW STALE - re-establish it at the next release. Earlier: CABLE-FLASHED 2026-10-10 to put v1.16.12-79-g9fc8113e on it for the two-station JS8 test (memory project_js8_j6_tx_decoded_by_second_station). This field used to claim the unit had NEVER been USB-flashed; that was never literally true - every board is cable-flashed to receive its first firmware, as he pointed out when I quoted this line back at him as a reason not to proceed. Prose in a registry is not evidence."
+    },
+    {
+      "name": "bench2",
+      "role": "CW BRANCH. Tab5 #3, unboxed 2026-10-28 and taken straight onto feat/cw-page so dev (COM5) goes back to the main track. The operator named it.",
+      "board": "Tab5 #3",
+      "mac": "80:f1:b2:d1:42:ca",
+      "mac_note": "Read with `esptool -p COM16 read_mac` BEFORE the first write, while the board was factory-fresh and had no boot header to check. Two away from field 80:f1:b2:d1:45:92 - same batch. dev is 30:ED:A0:EA:DD:57 and is NOT this board.",
+      "ip": "192.168.1.15",
+      "ip_note": "DHCP, first seen 2026-10-28 right after the first flash. ⚠ I predicted this unit could NOT reach the network, because the flash was a full erase and NVS should have carried no credentials. It associated with BV50 at -28 dBm anyway, so that prediction was wrong and the credentials came from somewhere I have not identified. It prints its own address as sta ip: in its capture once it associates, and THAT is the authority, not this field.",
+      "com": "COM16",
+      "com_note": "Enumerated as COM16 on first plug 2026-10-28. COM FOLLOWS THE SOCKET, NOT THE BOARD - re-verify by MAC if anything is moved.",
+      "radio": "none attached yet",
+      "tree": "C:/dev/qmx-panadapter-cw",
+      "branch": "feat/cw-page",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-bench2.txt",
+      "usb_flash": "yes",
+      "usb_flash_history": "FIRST FLASH 2026-10-28: erase_flash then write_flash of v1.22.0-90-ge6cdf310 (feat/cw-page, carrying the esp_hosted sync-RPC table lock). MAC-verified 80:f1:b2:d1:42:ca before the erase, since a factory board has no boot header to check afterwards."
     }
   ]
 }
