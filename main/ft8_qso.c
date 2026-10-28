@@ -3475,6 +3475,19 @@ static void ft8_qso_advance_body(int64_t slot_sec)
         } else {
             s_state    = FT8_QSO_IDLE;
             s_have_cur = false;
+            /* ⛔ CLEAR THE PARTNER, exactly as the resume branch above does.
+             * It was left standing here, so after every pounce QSO the engine
+             * sat IDLE with s_target still naming the station just worked -
+             * and nothing on this path ever cleared it, so it survived until
+             * an abort. ft8_qso_is_busy() handed that stale call out to every
+             * caller, and the web reply handler read it as a live exchange:
+             * "Busy: working VE3ABU" on every click, forever (Randy N4OPI,
+             * 2026-10-28).
+             *
+             * It matches the shape of his report exactly. The robot was fine
+             * because the robot has a saved CQ, so it takes the resume branch,
+             * which clears it. */
+            s_target[0] = '\0';
         }
         unlock();
         if (resume) {
