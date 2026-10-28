@@ -210,6 +210,14 @@ $WAIT = @'
 
 '@
 
+# Git rewrites this script to CRLF on checkout, which puts CRLF inside the
+# here-strings above too. Everything below compares against a file normalised
+# to LF, so normalise what we splice in as well - the same guard
+# apply_esp_hosted_rpc_orphan_resp.ps1 applies to its own blocks.
+$HELPERS = $HELPERS -replace "`r`n", "`n"
+$CLAIM   = $CLAIM   -replace "`r`n", "`n"
+$WAIT    = $WAIT    -replace "`r`n", "`n"
+
 $c = (Get-Content -Raw -Path $core) -replace "`r`n", "`n"
 
 if ($c -match "QMX_RPC_TABLE_LOCK") {
@@ -240,22 +248,14 @@ if ($c -match "QMX_RPC_TABLE_LOCK") {
     if (-not $c.Contains($o4)) { Write-Host "anchor 4 missing" -ForegroundColor Red; exit 1 }
     $c = $c.Replace($o4, $p4)
 
-    $re5 = [regex]"(?s)		for \(i = 0; i < MAX_SYNC_RPC_TRANSACTIONS; i\+\+\) \{.*?Symc sem not registered: out of buffer space`"\);
-		return CALLBACK_NOT_REGISTERED;
-"
+    $re5 = [regex]"(?s)\t\tfor \(i = 0; i < MAX_SYNC_RPC_TRANSACTIONS; i\+\+\) \{.*?Symc sem not registered: out of buffer space`"\);\n\t\treturn CALLBACK_NOT_REGISTERED;\n"
     if ($re5.Matches($c).Count -ne 1) { Write-Host ("anchor 5 matched " + $re5.Matches($c).Count + " times") -ForegroundColor Red; exit 1 }
     $c = $re5.Replace($c, $CLAIM)
 
     # Swallows the old loop AND the fallthrough that followed it - after this
     # the function returns above them, and unreachable code in a vendored file
     # is what the next reader trips over.
-    $re6 = [regex]"(?s)	for \(i = 0; i < MAX_SYNC_RPC_TRANSACTIONS; i\+\+\) \{
-		if \(sync_rsp_table\[i\]\.uid == app_req->uid\) \{.*?			return ret;
-		\}
-	\}
-	ESP_LOGW\(TAG, `"Not able to map new request to resp id`"\);
-	return MSG_ID_OUT_OF_ORDER;
-"
+    $re6 = [regex]"(?s)\tfor \(i = 0; i < MAX_SYNC_RPC_TRANSACTIONS; i\+\+\) \{\n\t\tif \(sync_rsp_table\[i\]\.uid == app_req->uid\) \{.*?\t\t\treturn ret;\n\t\t\}\n\t\}\n\tESP_LOGW\(TAG, `"Not able to map new request to resp id`"\);\n\treturn MSG_ID_OUT_OF_ORDER;\n"
     if ($re6.Matches($c).Count -ne 1) { Write-Host ("anchor 6 matched " + $re6.Matches($c).Count + " times") -ForegroundColor Red; exit 1 }
     $c = $re6.Replace($c, $WAIT)
 
