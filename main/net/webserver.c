@@ -2225,6 +2225,30 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (call && call[0]) {
             if (ftx_protocol_is_js8(ft8_op_mode_protocol())) {
                 js8_target_set(call);
+            } else if (!ft8_screen_view_is_active()) {
+                /* ⛔ T94: REFUSE HERE, NOT THROUGH /api/status.
+                 *
+                 * The deferred path writes "Not in FT8 mode" into web_r, and
+                 * web_r is emitted only inside the ft8 block, which
+                 * add_ft8_tx_status() only adds when the FT8 screen IS active -
+                 * so the one refusal that exists to say "you are not in FT8"
+                 * was suppressed by the very condition that produced it
+                 * (measured on v1.20.5-66-ga919752a: {"ok":true}, the device
+                 * log carries it, /api/status carries no ft8 block at all).
+                 * The browser's two reads of web_r sit inside
+                 * `screen === "ft8"` as well, so emitting it would not have
+                 * been enough either.
+                 *
+                 * A POST answer needs neither half: the click is a
+                 * request/response, the condition is known here and now, and
+                 * ft8RowClicked() already owns the line that says what came of
+                 * it. Same class as T82, where the browser threw every
+                 * /api/term refusal away. */
+                cJSON_Delete(root);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_sendstr(req,
+                    "{\"ok\":false,\"err\":\"Not in FT8 mode\"}");
+                return ESP_OK;
             } else {
                 /* "retarget": true is the browser's DOUBLE click - it may
                  * abandon a live exchange to take this station instead
@@ -2322,6 +2346,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                 "what must be resend, rr73, 73, cancel, pause or skip");
             return ESP_FAIL;
+        }
+        /* The same T94 refusal as "reply" above, for the same reason: the
+         * deferred handler's "Not in FT8 mode" goes into web_r, which nothing
+         * off the FT8 screen can read. */
+        if (!ft8_screen_view_is_active()) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req,
+                "{\"ok\":false,\"err\":\"Not in FT8 mode\"}");
+            return ESP_OK;
         }
         ft8_screen_view_request_override(what);
     } else if (action && strcmp(action, "sd_eject") == 0) {

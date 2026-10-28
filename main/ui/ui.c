@@ -19177,6 +19177,24 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // Generalise it: when a fix MOVES logic, delete the original in the
         // same commit. A duplicate that only misbehaves for a third case will
         // outlive everyone's memory of why the fix was needed.
+        /* ⛔ T100 (Sam W7STF): BLANK THE CARPET ON ENTRY, as the WSPR page
+         * already does.
+         *
+         * WSPR and FT8 both take the capture, so nothing wrote a waterfall row
+         * for the whole visit. Re-showing the canvas puts the picture from
+         * before that visit back up, under a dial that has since band-hopped,
+         * and it is indistinguishable from live history. The WSPR page fixed
+         * its own copy of this on 2026-09-11 (wf_clear_for_entry(), see
+         * wspr_screen_view.c's wait-label comment); the panadapter kept the
+         * fault. Same class, both sources now blanked.
+         *
+         * Only when arriving from an overlay page - an ordinary tune or zoom
+         * has its own clear rules in wf_track_viewport(), and this must not
+         * add a fourth clear site to that set. */
+        if (cur == UI_MODE_WSPR || cur == UI_MODE_FT8) {
+            ESP_LOGW(TAG, "wf clear: entering Panadapter from %s", mode_name(cur));
+            wf_clear_all();
+        }
         ui_restore_snapshot(&s_pan_snapshot);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }

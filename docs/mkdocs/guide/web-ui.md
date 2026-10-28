@@ -587,9 +587,11 @@ the radio attached always leaves the QMX needing a manual power cycle. That one
 step is what otherwise keeps a remote station from being upgradeable from
 another room — or another country.
 
-!!! warning "Use G53, not G54 — the drawing below is REV 1.0"
-    The schematic reproduced here is Randy's **REV 1.0** (2026-09-07) and shows
-    the Grove plug's **`G54`** going to R1. **Wire it to `G53` instead.**
+!!! warning "Use G53, not G54 — the drawing below is REV 1.0, corrected"
+    The schematic reproduced here is Randy's **REV 1.0** (2026-09-07) and draws
+    the Grove plug's **`G54`** going to R1. **Wire it to `G53` instead.** The
+    copy below is marked up with that correction — the ring on the P1 pin and
+    the red band along the bottom are added here, not part of his drawing.
 
     `G54` is the same pin the **M5Stack Unit GPS v1.1** receives on, and both
     are on PORT.A — the one 4-pin socket. A relay interface on `G54` therefore
@@ -601,9 +603,9 @@ another room — or another country.
     Nothing else in the drawing changes — same two components, same jack, same
     patch lead. Randy has issued a revised drawing; look in the
     [QRPLabs groups.io **Files** area](https://groups.io/g/QRPLabs/files) for
-    his current version rather than working from the copy below.
+    his current version, which will carry the change in the artwork itself.
 
-![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
+![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+), REV 1.0 with a correction marked on it — wire G53, not the G54 the drawing shows — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
 
 #### Parts
 

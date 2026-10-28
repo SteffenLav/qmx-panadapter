@@ -2708,7 +2708,8 @@ document.getElementById("ft8-status").addEventListener("click", async (e) => {
         return;
       }
       document.getElementById("ft8-webr").textContent = "Asking the Tab5 to " + what + "...";
-      await sendCmd({ action: "qso_override", what: what });
+      ft8ShowRefusal(await sendCmd({ action: "qso_override", what: what }),
+                     document.getElementById("ft8-webr"));
     });
   });
 
@@ -6562,7 +6563,27 @@ async function ft8RowClicked(call, retarget) {
   if (wr) wr.textContent = retarget
     ? ("Dropping this exchange for " + call + "...")
     : ("Asking the Tab5 to reply to " + call + "...");
-  await sendCmd({ action: "reply", call: call, retarget: !!retarget });
+  ft8ShowRefusal(await sendCmd({ action: "reply", call: call, retarget: !!retarget }), wr);
+}
+
+/* ⛔ T94: A REFUSAL THE BROWSER CAN ACTUALLY READ.
+ *
+ * The device's "Not in FT8 mode" used to go only into web_r, which is carried
+ * inside /api/status's ft8 block - and that block is emitted ONLY while the
+ * FT8 screen is up, which is the exact condition being refused. Both reads of
+ * web_r on this page sit inside `screen === "ft8"` too, so it was invisible at
+ * both ends. /api/cmd now answers the POST itself with {ok:false,err}.
+ *
+ * It alerts as well as writing the line: when the Tab5 has left FT8 this page
+ * is about to repaint away from the FT8 view, so the line can disappear with
+ * it. An alert is the page's own convention for "what you asked for did not
+ * happen" - and this path is rare by construction (it needs the glass to leave
+ * FT8 while a cached FT8 view is still being clicked). */
+function ft8ShowRefusal(j, wr) {
+  if (!j || j.ok !== false) return;
+  const msg = j.err || "Refused";
+  if (wr) wr.textContent = msg;
+  alert(msg);
 }
 
 /* Click a decode row to WORK that station - the same intelligent Transmit a
@@ -7938,6 +7959,7 @@ async function tick() {
        swap the canvases for a notice pointing at the buttons below. */
     const screen = s.screen || "panadapter";
     if (screen !== lastScreen) {
+      const wasScreen = lastScreen;
       lastScreen = screen;
       const isFt8  = (screen === "ft8");
       const isWspr = (screen === "wspr");
@@ -7999,6 +8021,18 @@ async function tick() {
       document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
       document.getElementById("split-handle").style.display  = noPan ? "none" : "";
       document.getElementById("wf-wrap").style.display       = noPan ? "none" : "";
+      /* ⛔ T100 (Sam W7STF), the browser's half: BLANK THE CARPET ON ENTRY.
+         Hiding #wf-wrap for FT8/WSPR leaves the canvas pixels untouched, and
+         no row is written for the whole visit (the device pauses the WS stream
+         in those modes), so coming back puts the picture from before the visit
+         straight back up as though it were live history - under a dial that
+         may have band-hopped meanwhile. The Tab5 clears its own canvas on the
+         same transition (ui.c, "wf clear: entering Panadapter from ...").
+         Both surfaces, one rule, or they disagree about what is on the air. */
+      if (!noPan && (wasScreen === "ft8" || wasScreen === "wspr")) {
+        wfctx.fillStyle = "#000";
+        wfctx.fillRect(0, 0, wfPxW, wfPxH);
+      }
       document.getElementById("bandplan-wrap").style.display = noPan ? "none" : "";  // falls back to the .show-class-controlled default when cleared
       document.getElementById("ft8-notice").style.display    = isFt8 ? "flex" : "none";
       if (isFt8) { ft8LoadPresets(); ft8FillPresets();
