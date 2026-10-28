@@ -10667,13 +10667,32 @@ static void sb_tune_feed(const float *bins, int n_bins)
      * answer is up to 23 Hz out. Then the fixed calibration for the far
      * station's low cut, whose SIGN follows the sideband: on USB the occupied
      * band sits above the carrier so the edge reads high and 300 Hz comes off;
-     * on LSB it sits below and the same 300 Hz goes back on. Getting this sign
-     * wrong shows up as a 600 Hz bias, which is what Gate 3 in the harness
-     * guards against. */
+     * on LSB it sits below and the same figure goes back on. Getting this sign
+     * wrong shows up as a doubled bias, which is what Gate 3 in the harness
+     * guards against.
+     *
+     * ⚠ The figure is `sb_lowcut_hz` (default 300), NOT a constant any more:
+     * the filter belongs to the far operator's rig and the on-air run left
+     * ~200 Hz of residual on one station. A trim is the honest shape for a
+     * number we cannot know. */
+    double lowcut = (double)settings_get_sb_lowcut_hz();
     double off_hz = (double)edge - (double)ui_get_if_residual_hz();
-    double est    = (double)s_last_qmx_freq_hz + off_hz - (upper ? 300.0 : -300.0);
+    double est    = (double)s_last_qmx_freq_hz + off_hz - (upper ? lowcut : -lowcut);
     if (est < 1000.0) return;
-    sb_vote_add(sb_tune_snap((unsigned)(est + 0.5), SB_GRID_HZ));
+    unsigned snapped = sb_tune_snap((unsigned)(est + 0.5), SB_GRID_HZ);
+    /* ⭐ THE RAW ESTIMATE, BEFORE THE SNAP - T90's cheapest instrument.
+     *
+     * The on-air run (cc0c179f) could only report the SNAPPED target, so the
+     * bias could be called "roughly 200 Hz" and no better. A station on a .250
+     * boundary is then decided by the snap rather than by the estimator, which
+     * is how a 7155250 station landed on 7155500. This line turns that into a
+     * number at no bench cost: raw minus the station's true dial IS the
+     * residual left by the low-cut trim, and `sb_lowcut_hz` is where it is
+     * taken out. ⛔ Do not set that trim from ONE station - the far rig's
+     * filter is theirs, not a constant. */
+    ESP_LOGI(TAG, "SSB tune: raw=%.0f Hz (edge %+.0f, lowcut %.0f, %s) -> snap %u",
+             est, (double)edge, lowcut, upper ? "USB" : "LSB", snapped);
+    sb_vote_add(snapped);
 }
 
 /* Called once per spectrum push, with the lock held. Closes the window. */
@@ -19115,13 +19134,16 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (s_ft8_snapshot.valid) {
             ui_restore_snapshot(&s_ft8_snapshot);   // restores FT8's freq/zoom
         } else {
-            // First FT8 entry this boot: apply the persisted FT8/FT4 preset
+            // First digital-mode entry this boot: apply the persisted preset
             // frequency rather than inheriting the panadapter's current VFO
             // (which showed up as an "odd" non-FT8 frequency). Seed the snapshot
             // so later mode toggles stay on it.
-            qmx_settings_t fs;
-            settings_load_all(&fs);
-            uint32_t f = fs.ft8_freq_hz ? fs.ft8_freq_hz : 14074000;
+            //
+            // T89: THE SUB-MODE'S OWN SLOT. FT8, FT4 and JS8 each keep their
+            // last frequency now, so entering on JS8 no longer lands on the
+            // FT8 calling frequency.
+            uint32_t f = settings_get_ftx_freq_hz((uint8_t)ft8_op_mode_get());
+            if (!f) f = 14074000;
             cat_set_frequency_forced(f);
             ui_update_frequency(f);
             s_ft8_snapshot.valid           = true;

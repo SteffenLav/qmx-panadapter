@@ -65,6 +65,9 @@ char *config_io_export(size_t *out_len)
     APP("wifi_enabled       = %s\n", yn(c.wifi_enabled));
     APP("cw_pitch_hz        = %u\n", (unsigned)c.cw_pitch_hz);
     APP("if_cal_hz          = %d\n", (int)c.cw_cal_hz);
+    APP("sb_lowcut_hz       = %u\n", (unsigned)c.sb_lowcut_hz);
+    APP("ft4_freq_hz        = %u\n", (unsigned)c.ft4_freq_hz);
+    APP("js8_freq_hz        = %u\n", (unsigned)c.js8_freq_hz);
     APP("iq_balance         = %s\n", yn(c.iq_enabled));
     APP("flat_spectrum      = %s\n", yn(c.flat_mode));
     APP("still_spectrum     = %s\n", yn(c.still_view));
@@ -423,6 +426,9 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wifi_dns"))  { snprintf(sdns,  sizeof sdns,  "%s", val); sip_touched = true; }
             else if (!strcasecmp(key, "cw_pitch_hz"))       settings_set_cw_pitch_hz((uint16_t)atoi(val));
             else if (!strcasecmp(key, "if_cal_hz"))         settings_set_cw_cal_hz((int16_t)atoi(val));
+            else if (!strcasecmp(key, "sb_lowcut_hz"))      settings_set_sb_lowcut_hz((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "ft4_freq_hz"))       settings_set_ftx_freq_hz(1, (uint32_t)strtoul(val, NULL, 10));
+            else if (!strcasecmp(key, "js8_freq_hz"))       settings_set_ftx_freq_hz(2, (uint32_t)strtoul(val, NULL, 10));
             else if (!strcasecmp(key, "iq_balance"))        settings_set_iq_enabled(to_bool(val));
             else if (!strcasecmp(key, "flat_spectrum"))     settings_set_flat_mode(to_bool(val));
             else if (!strcasecmp(key, "still_spectrum"))    { settings_set_still_view(to_bool(val));

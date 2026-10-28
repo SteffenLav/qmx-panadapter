@@ -371,7 +371,14 @@ typedef struct {
     char  wifi_gw[16];     // e.g. "192.168.1.1"
     char  wifi_dns[16];    // e.g. "192.168.1.1"; empty falls back to the gateway
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
-    uint32_t ft8_freq_hz; // last FT8/FT4 preset frequency in Hz (persisted so FT8 mode doesn't inherit the panadapter's VFO; default 14074000)
+    uint32_t ft8_freq_hz; // last FT8 preset frequency in Hz (persisted so FT8 mode doesn't inherit the panadapter's VFO; default 14074000)
+    /* T89: FT4 and JS8 keep their OWN last frequency. One shared slot meant
+     * leaving JS8 on 14.078 and coming back to FT8 landed on 14.078 - the
+     * three sub-modes have different calling frequencies on every band, so one
+     * slot cannot describe where you were. Read and written through
+     * settings_get_ftx_freq_hz()/_set_, never field by field. */
+    uint32_t ft4_freq_hz; // last FT4 preset frequency in Hz, default 14080000
+    uint32_t js8_freq_hz; // last JS8 preset frequency in Hz, default 14078000
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
@@ -382,6 +389,11 @@ typedef struct {
      * alone. Randy N4OPI asked for exactly this field. */
     char     my_state[4];
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
+    /* T90: the far station's own low-cut, in Hz, subtracted from the SSB
+     * edge estimate to reach their suppressed carrier. A trim and not a
+     * constant because the filter belongs to THEIR rig - 300 is common, some
+     * run 200, some 100 - and one on-air station is not a calibration. */
+    uint16_t sb_lowcut_hz;     // SSB auto-tune low-cut trim (Hz), default 300, range 0..600
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
     /* Last UI mode: 0=Panadapter, 1=FT8, 3=WSPR (default 0). All three are
@@ -970,6 +982,11 @@ void settings_set_wifi_pass(const char *pass);
 void settings_set_last_vfo(uint32_t hz);
 // Save last FT8/FT4 preset frequency (debounced flush).
 void settings_set_ft8_freq_hz(uint32_t hz);
+/* T89: the per-sub-mode preset frequency. `op_mode` is an ft8_op_mode_t
+ * (0=FT8 1=FT4 2=JS8) passed as uint8_t so settings.h stays free of ft8_test.h.
+ * An unknown value falls back to the FT8 slot rather than inventing one. */
+uint32_t settings_get_ftx_freq_hz(uint8_t op_mode);
+void     settings_set_ftx_freq_hz(uint8_t op_mode, uint32_t hz);
 // Save CW sidetone pitch in Hz (debounced flush).
 void settings_set_cw_pitch_hz(uint16_t hz);
 // Save waterfall colour-map index (debounced flush).
@@ -1486,6 +1503,8 @@ void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
 void settings_set_cw_cal_hz(int16_t hz);
+uint16_t settings_get_sb_lowcut_hz(void);
+void     settings_set_sb_lowcut_hz(uint16_t hz);
 void settings_set_zoom_factor(float v);
 
 // LCD backlight brightness, 0..100 (debounced flush).

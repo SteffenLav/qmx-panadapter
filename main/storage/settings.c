@@ -55,6 +55,9 @@ static const char *TAG = "settings";
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
 #define KEY_CW_CAL     "cw_cal"
+#define KEY_SB_LOWCUT  "sb_lowcut"
+#define KEY_FT4_FREQ   "ft4_freq"
+#define KEY_JS8_FREQ   "js8_freq"
 #define KEY_ZOOM       "zoom"
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
@@ -469,6 +472,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
 #define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
 #define DIRTY_LOG_VIEW_ALL    147  /* ADIF window Today/All, sticky (T113) */
+#define DIRTY_SB_LOWCUT       148  /* T90 SSB auto-tune low-cut trim */
+#define DIRTY_FT4_FREQ        149  /* T89 per-sub-mode preset frequency */
+#define DIRTY_JS8_FREQ        150  /* T89 per-sub-mode preset frequency */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -632,6 +638,9 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
         if (dirty_test(&dirty_local, DIRTY_CW_PITCH))  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
         if (dirty_test(&dirty_local, DIRTY_CW_CAL))    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
+        if (dirty_test(&dirty_local, DIRTY_SB_LOWCUT)) nvs_set_u16(s_nvs, KEY_SB_LOWCUT, snap.sb_lowcut_hz);
+        if (dirty_test(&dirty_local, DIRTY_FT4_FREQ))  nvs_set_u32(s_nvs, KEY_FT4_FREQ,  snap.ft4_freq_hz);
+        if (dirty_test(&dirty_local, DIRTY_JS8_FREQ))  nvs_set_u32(s_nvs, KEY_JS8_FREQ,  snap.js8_freq_hz);
         if (dirty_test(&dirty_local, DIRTY_ZOOM)) {
             uint32_t bits; memcpy(&bits, &snap.zoom_factor, 4);
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
@@ -907,8 +916,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
     out->ft8_freq_hz = 14074000;   // 20m FT8 — sane default so FT8 never opens on an inherited odd VFO
+    out->ft4_freq_hz = 14080000;   // 20m FT4 calling frequency (T89)
+    out->js8_freq_hz = 14078000;   // 20m JS8 calling frequency (T89)
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
+    out->sb_lowcut_hz = 300;   /* T90: the common SSB transmit low cut */
     out->rit_pill_show = true;   // opt-OUT, so it must be set here and not left zeroed
     /* 500 Hz is today's SSB/digital grid, so an existing unit's behaviour does
        not change when this setting appears. Must be set here, not left zeroed -
@@ -1099,8 +1111,11 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
     nvs_get_u32(s_nvs, KEY_FT8_FREQ, &out->ft8_freq_hz);
+    nvs_get_u32(s_nvs, KEY_FT4_FREQ, &out->ft4_freq_hz);
+    nvs_get_u32(s_nvs, KEY_JS8_FREQ, &out->js8_freq_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
     nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
+    nvs_get_u16(s_nvs, KEY_SB_LOWCUT, &out->sb_lowcut_hz);
     { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
@@ -1882,6 +1897,48 @@ void settings_set_cw_cal_hz(int16_t hz)
     }
     s_pending.cw_cal_hz = hz;
     mark_dirty(DIRTY_CW_CAL);
+}
+
+/* T89: one place that maps a sub-mode to its slot. Every caller goes through
+ * here, so the three cannot drift apart the way a switch at each call site
+ * would. 1 = FT4, 2 = JS8, anything else = FT8. */
+uint32_t settings_get_ftx_freq_hz(uint8_t op_mode)
+{
+    qmx_settings_t c; settings_load_all(&c);
+    switch (op_mode) {
+        case 1:  return c.ft4_freq_hz;
+        case 2:  return c.js8_freq_hz;
+        default: return c.ft8_freq_hz;
+    }
+}
+void settings_set_ftx_freq_hz(uint8_t op_mode, uint32_t hz)
+{
+    switch (op_mode) {
+        case 1:
+            if (s_pending.ft4_freq_hz == hz) return;
+            s_pending.ft4_freq_hz = hz; mark_dirty(DIRTY_FT4_FREQ); break;
+        case 2:
+            if (s_pending.js8_freq_hz == hz) return;
+            s_pending.js8_freq_hz = hz; mark_dirty(DIRTY_JS8_FREQ); break;
+        default:
+            settings_set_ft8_freq_hz(hz); break;
+    }
+}
+
+uint16_t settings_get_sb_lowcut_hz(void)
+{
+    if (!s_ready || !s_mutex) return 300;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.sb_lowcut_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+void settings_set_sb_lowcut_hz(uint16_t hz)
+{
+    if (hz > 600) hz = 600;
+    if (s_pending.sb_lowcut_hz == hz) return;
+    s_pending.sb_lowcut_hz = hz;
+    mark_dirty(DIRTY_SB_LOWCUT);
 }
 
 void settings_set_ft8_filters(const ft8_filters_t *f)

@@ -677,6 +677,12 @@ static float s_lim_gain = 1.0f;
 static float s_up_phase = 0.0f;
 static float s_up_inc   = 1.0f / (float)RX_DECIM_D_NARROW;   /* set_decim_factor() resets it */
 static volatile uint32_t s_rate_railed = 0;   /* times the rate loop hit its clamp */
+static volatile uint32_t s_rate_win_refused = 0; /* T80: rate windows thrown out as starvation */
+static volatile uint32_t s_rate_relocked    = 0; /* T80: forced re-seeds of the rate target */
+static uint32_t          s_rate_rail_run    = 0; /* consecutive frames pinned at the clamp */
+/* ~5 s at the frame rate: long enough that a transient cannot trip it, short
+ * enough that the operator is not left listening to a railed loop. */
+#define RATE_RAIL_RELOCK_FRAMES  250
 /* T21 instrumentation. Signed, and deliberately NOT reset by the rate loop:
    rx_audio_take_diag() clears the min/max so each reader sees the span since
    ITS last call, while s_resample_ppm stays live. */
@@ -2354,8 +2360,35 @@ static void rx_audio_task(void *arg)
             else if (win_us >= RATE_WIN_US) {            /* see RATE_WIN_US - T36 */
                 float src_rate = (float)s_in_pairs_win * 1000000.0f / (float)win_us;
                 float target   = src_rate / ((float)s_decim_d * (float)DSP_SAMPLE_RATE_HZ);
-                s_up_target = (s_up_target <= 0.0f) ? target
-                                                    : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                /* ⛔ T80: A STARVED WINDOW IS NOT A RATE MEASUREMENT.
+                 *
+                 * Measured 2026-10-23: a 16 s audio gap (a WSPR deep-search
+                 * pass starving the capture) produced a window with almost no
+                 * pairs in it. src_rate then read far below 48 kHz, the EMA
+                 * swallowed it, and s_up_target walked down until the ±2 %
+                 * clamp pinned the pitch at -6.8 %. With RATE_SMOOTH_A 0.10 on
+                 * 10 s windows the recovery constant is ~100 s per 10 %, so it
+                 * read as "never re-locks": the WSPR page had been closed for
+                 * five minutes, the deep ration was back to 0, and the backlog
+                 * was still growing. A forced retune did not clear it either,
+                 * because nothing in this loop resets the integrator.
+                 *
+                 * The radio's crystal cannot move by 5 %. A window that says
+                 * it did is a gap, not a rate - so it is REFUSED rather than
+                 * averaged, which is the same rule sb_tune and the PA-voltage
+                 * cache already follow: do not feed a cache a reading you know
+                 * is an artefact. */
+                const float nom_lo = (float)DSP_SAMPLE_RATE_HZ * 0.95f;
+                const float nom_hi = (float)DSP_SAMPLE_RATE_HZ * 1.05f;
+                if (src_rate < nom_lo || src_rate > nom_hi) {
+                    ESP_LOGW(TAG, "rate window refused: %.0f pairs/s over %lld ms "
+                                  "- starvation, not a rate change",
+                             src_rate, (long long)(win_us / 1000));
+                    s_rate_win_refused++;
+                } else {
+                    s_up_target = (s_up_target <= 0.0f) ? target
+                                                        : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                }
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
@@ -2380,6 +2413,33 @@ static void rx_audio_task(void *arg)
                 if ((s_rate_railed++ % 200) == 0)
                     ESP_LOGW(TAG, "resample rate hit the rail (err=%lld) - audio "
                                   "may be off pitch", (long long)err);
+                /* ⛔ T80, the second half: A RE-LOCK PATH.
+                 *
+                 * Refusing the bad window stops the loop being walked off, but
+                 * it does nothing for a loop ALREADY off - and that was the
+                 * operator's actual complaint, five minutes after the cause had
+                 * gone. Sitting at the clamp for this long is not a radio whose
+                 * crystal is 2 % out; it is a target that no longer describes
+                 * the source. Dropping s_up_target to 0 makes the next good
+                 * window re-seed it WHOLE (the `<= 0` branch above) instead of
+                 * crawling back through a ~100 s pole.
+                 *
+                 * ⚠ One re-lock per railed episode: s_rate_relocked is the
+                 * count, and the condition clears the moment a good window
+                 * lands, so a genuinely out-of-spec unit cannot thrash. */
+                if (++s_rate_rail_run >= RATE_RAIL_RELOCK_FRAMES) {
+                    s_rate_rail_run = 0;
+                    s_up_target     = 0.0f;
+                    s_in_win_us     = 0;
+                    s_in_pairs_win  = 0;
+                    s_rate_relocked++;
+                    ESP_LOGW(TAG, "resample loop re-locking after a starvation "
+                                  "(railed %lu, refused %lu)",
+                             (unsigned long)s_rate_railed,
+                             (unsigned long)s_rate_win_refused);
+                }
+            } else {
+                s_rate_rail_run = 0;    /* off the clamp - the episode is over */
             }
             if (err > 0) s_rate_ins++; else if (err < 0) s_rate_drop++;
             s_rate_written += pairs;
@@ -3045,6 +3105,8 @@ void rx_audio_take_diag(rx_audio_diag_t *out)
     out->resample_ppm_min = (pmin == INT32_MAX) ? s_resample_ppm : pmin;
     out->resample_ppm_max = (pmax == INT32_MIN) ? s_resample_ppm : pmax;
     out->resample_railed  = s_rate_railed;
+    out->rate_win_refused = s_rate_win_refused;
+    out->rate_relocked    = s_rate_relocked;
     s_resample_ppm_min = INT32_MAX;
     s_resample_ppm_max = INT32_MIN;
     s_frame_us_max       -= s_frame_us_max;

@@ -265,6 +265,8 @@ typedef struct {
     int32_t  resample_ppm_min;  /* lowest and highest seen since the last call, */
     int32_t  resample_ppm_max;  /* so a wander between two samples cannot hide */
     uint32_t resample_railed;   /* times the +/-2% clamp was hit, cumulative */
+    uint32_t rate_win_refused;  /* T80: rate windows thrown out as starvation, cumulative */
+    uint32_t rate_relocked;     /* T80: forced re-seeds of the rate target, cumulative */
 } rx_audio_diag_t;
 
 void rx_audio_take_diag(rx_audio_diag_t *out);

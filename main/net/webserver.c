@@ -3125,6 +3125,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(resp, "resample_ppm_min", (double)diag.resample_ppm_min);
         cJSON_AddNumberToObject(resp, "resample_ppm_max", (double)diag.resample_ppm_max);
         cJSON_AddNumberToObject(resp, "resample_railed",  (double)diag.resample_railed);
+        /* T80: a railed loop that RECOVERED looks identical to one that never
+         * railed unless the re-lock says so. These two are how that is told. */
+        cJSON_AddNumberToObject(resp, "rate_win_refused", (double)diag.rate_win_refused);
+        cJSON_AddNumberToObject(resp, "rate_relocked",    (double)diag.rate_relocked);
         // frame_us_* excludes the I2S write on purpose - compare against
         // ~21333 (DSP_FFT_SIZE/DSP_SAMPLE_RATE_HZ) to see if the math itself
         // is keeping up. read_timeouts>0 means the forward ring is starved -
@@ -6180,6 +6184,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         }
     }
     cJSON_AddNumberToObject(root, "if_cal_hz",       (double)ui_get_if_cal_hz());
+    cJSON_AddNumberToObject(root, "sb_lowcut_hz",   (double)settings_get_sb_lowcut_hz());
     cJSON_AddBoolToObject  (root, "charge_limit_en",  c.charge_limit_en);
     cJSON_AddNumberToObject(root, "charge_limit_pct", (double)c.charge_limit_pct);
     cJSON_AddBoolToObject(root, "psk_rx_en",         c.psk_rx_en);
@@ -6247,6 +6252,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "ft8_op_mode",
                             c.ft8_op_mode == 1 ? "ft4" : "ft8");
     cJSON_AddNumberToObject(root, "ft8_freq_hz",      (double)c.ft8_freq_hz);
+    cJSON_AddNumberToObject(root, "ft4_freq_hz",      (double)c.ft4_freq_hz);   // T89
+    cJSON_AddNumberToObject(root, "js8_freq_hz",      (double)c.js8_freq_hz);   // T89
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
@@ -7023,6 +7030,10 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "if_cal_hz")))
         ui_set_cw_cal_hz((int16_t)it->valuedouble);
+    /* T90's SSB low-cut trim. No live apply: sb_tune_feed() reads the setting
+     * on every frame, so a change takes effect on the next press. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "sb_lowcut_hz")))
+        settings_set_sb_lowcut_hz((uint16_t)it->valuedouble);   // clamps 0..600
 
     // Battery care. status.c re-reads the config on every poll, so storing it is
     // enough - there is nothing to apply live.

@@ -2007,9 +2007,8 @@ static void t_clock_cb(lv_timer_t *t)
             // screen would have tuned to anyway.
             hz = cat_get_frequency();
             if (!hz) {
-                qmx_settings_t fs;
-                settings_load_all(&fs);
-                hz = fs.ft8_freq_hz;
+                /* T89: this sub-mode's own slot, not one shared with FT8. */
+                hz = settings_get_ftx_freq_hz((uint8_t)mode);
                 ESP_LOGW(TAG, "API preset: no frequency from the radio - using the stored %lu Hz",
                          (unsigned long)hz);
             }
