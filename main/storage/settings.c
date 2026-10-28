@@ -3684,6 +3684,15 @@ void settings_set_field_day_en(bool v)
     mark_dirty(DIRTY_FIELD_DAY_EN);
 }
 
+bool settings_get_field_day_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.field_day_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_fd_class(const char *cls)
 {
     if (!s_ready) return;

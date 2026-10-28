@@ -4493,11 +4493,24 @@ bool ft8_qso_is_busy(char *target_buf, size_t len)
 {
     lock();
     ft8_qso_state_t st = s_state;
+    bool busy = st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT;
     // snprintf, not strncpy: it always terminates, and the strncpy form made GCC
     // warn about a truncated copy that the following assignment already handled.
-    if (target_buf && len) snprintf(target_buf, len, "%s", s_target);
+    /* ⛔ THE TARGET IS WRITTEN ONLY WHEN WE ARE ACTUALLY BUSY. s_target is NOT
+     * cleared when a QSO reaches DONE or TIMEOUT - the final watch still wants
+     * it - so this used to hand back the last partner's call alongside a
+     * `false` return. A caller that kept the buffer across the call and then
+     * tested it ("busy_target[0] || ...") read that as a live exchange.
+     *
+     * Randy N4OPI, 2026-10-28, and it is in his own capture twice: a reply
+     * request at [qso=DONE] answered "Busy: working VE3ABU", and one at
+     * [qso=TIMEOUT] answered "Busy: working W4SWA". Both stations were
+     * finished with. It cleared itself ~20 s later, when the post-QSO hold
+     * dropped the state to IDLE and emptied s_target - which is why it reads
+     * as "stuck, and killing the browser does not help". */
+    if (target_buf && len) snprintf(target_buf, len, "%s", busy ? s_target : "");
     unlock();
-    return st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT;
+    return busy;
 }
 
 void ft8_qso_get_cur_extra(char *buf, size_t len)

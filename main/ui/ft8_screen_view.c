@@ -1660,7 +1660,7 @@ static void web_reply_drain(void)
     for (int i = 0; i < n; i++)
         if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
 
-    char busy_target[24];
+    char busy_target[24] = "";
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
         /* ⭐ RE-TARGET: abandon what is running and take this station instead
          * (Randy N4OPI - the third piece of T43, after Skip and the
@@ -1877,6 +1877,36 @@ static void t_clock_cb(lv_timer_t *t)
      * macro buttons are refreshed on the clock rather than only on a tap -
      * the same "one piece of state, both surfaces" rule as cq_parity. */
     js8_tx_bar_sync();
+
+    /* ⭐ THE CQ BUTTON MUST SAY WHAT IT WILL TRANSMIT. Don WB0LQW, 2026-10-28:
+     * with an activation running the button read "CQ WB0LQW" while the air
+     * carried "CQ POTA WB0LQW". ft8_cq_get_active_text() has always folded the
+     * forced modifier in - the label just was not rewritten afterwards. It is
+     * refreshed on a preset save and on a Field Day toggle from the filter
+     * modal, and an activation starts somewhere else entirely (Settings, on
+     * the glass or over the web), so nothing told the button.
+     *
+     * He also wants it as the reminder that the activation is still running,
+     * which is why this follows the LIVE state rather than being hooked to the
+     * one modal that starts it.
+     *
+     * Polled here, not called from settings_set_activation(): that runs on the
+     * HTTP task for a web change and must not touch an LVGL object. The guard
+     * is two cheap mutex reads; the multi-kilobyte qmx_settings_t that
+     * ft8_cq_get_active_text() puts on taskLVGL's ~8 KB stack is only paid on
+     * a transition. Field Day is in the guard too - the filter modal is not
+     * the only way it is set (webserver.c, config_io.c). */
+    {
+        static uint8_t s_cq_tag_act = 0xff;
+        static uint8_t s_cq_tag_fd  = 0xff;
+        uint8_t act = settings_get_activation_type();
+        uint8_t fd  = settings_get_field_day_en() ? 1 : 0;
+        if (act != s_cq_tag_act || fd != s_cq_tag_fd) {
+            s_cq_tag_act = act;
+            s_cq_tag_fd  = fd;
+            ft8_screen_view_refresh_cq_label();
+        }
+    }
 
     /* ⭐ SAY WHEN A FREE-TEXT RUN FINISHES. Ryan KK6DZB's complaint was that he
      * "could not tell if it had transmitted my full message yet": the TX line

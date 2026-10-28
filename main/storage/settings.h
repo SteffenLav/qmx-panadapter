@@ -1268,6 +1268,10 @@ void settings_set_bandplan_region(uint8_t v);
 // ARRL Field Day exchange mode (debounced flush). When enabled, FT8 QSOs
 // exchange class+section (fd_class/fd_section) instead of grid/signal report.
 void settings_set_field_day_en(bool v);
+/* Narrow read of the Field Day flag. Exists so a 1 Hz UI poll does not have to
+   put a whole qmx_settings_t on taskLVGL's stack - see ft8_screen_view.c's CQ
+   button label refresh. */
+bool settings_get_field_day_en(void);
 // Activation session. type: 0 none, then one of the programmes in k_act[]
 // (settings.c) - 1 POTA, 2 SOTA, 3 WWFF, 4 IOTA, 5 GMA, 6 WCA, 7 WWBOTA.
 // ⛔ Those ids are persisted in NVS: append to the table, never renumber.
