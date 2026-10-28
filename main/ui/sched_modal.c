@@ -94,15 +94,9 @@ static void fmt_in(int64_t secs, char *out, size_t n)
     }
 }
 
-/* Display only - the full name stays in the record. */
-static const char *src_short(const char *src)
-{
-    if (!src || !src[0]) return "";
-    if (strncasecmp(src, "WA7BNM", 6) == 0)   return "WA7BNM";
-    if (strncasecmp(src, "RSGB HF", 7) == 0)  return "RSGB HF";
-    if (strncasecmp(src, "RSGB VHF", 8) == 0) return "RSGB VHF";
-    return src;
-}
+/* ⛔ MOVED TO net/spots.c as sched_src_short(). /api/sched needs the same
+ * shortening, and a second copy here would let the browser and the glass
+ * disagree about what a source is called. */
 
 static void row_clear(int i)
 {
@@ -162,7 +156,7 @@ static void refresh(void)
          * "RSGB HF Contests" - and all three ellipsised to "...Contest...",
          * which told the reader nothing and was the widest thing in the
          * column. The distinguishing word is the first one. */
-        lv_label_set_text(s_row_src[row], src_short(ev[i].src));
+        lv_label_set_text(s_row_src[row], sched_src_short(ev[i].src));
         lv_obj_set_style_text_color(s_row_src[row],
                                     lv_color_hex(ev[i].is_contest ? 0x9AD0FF : 0xA0E0A0), 0);
 

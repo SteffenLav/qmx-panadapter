@@ -914,6 +914,15 @@
   .btn-primary:hover { background: #3367b6; }
   .btn-neutral       { background: #2a3138; border-color: #4a545e; color: #dfe6ee; }
   .btn-neutral:hover { border-color: var(--accent); }
+  /* Scheduled-events filter buttons. The pane styles the selected one with the
+     accent (style_filt_btn() in sched_modal.c); .active is not a generic class
+     on this page, so the rule lives here rather than being borrowed. */
+  .sched-filt {
+    background: #2a3138; border: 1px solid #4a545e; color: #dfe6ee;
+    border-radius: 6px; padding: 5px 14px; font-size: 14px; cursor: pointer;
+  }
+  .sched-filt:hover  { border-color: var(--accent); }
+  .sched-filt.active { background: #2a2a00; border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .btn-ok[disabled], .btn-primary[disabled], .btn-danger[disabled],
   .btn-neutral[disabled] { opacity: .45; cursor: default; }
 
@@ -1547,6 +1556,8 @@
         <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
         <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
+        <a href="#" id="log-btn" title="Log a CW or SSB contact you worked by hand - callsign and the two reports; the radio supplies the frequency, mode, band, date, time and the running activation">Log a contact</a>
+        <a href="#" id="sched-btn" title="What is on: the contest calendar and announced POTA / SOTA activations, on one timeline, soonest first">Scheduled events</a>
         <a href="#" id="term-btn" title="The QMX's own menu system, on its second USB serial port - the whole radio, including everything the front panel can reach. Needed if your QMX has no control panel.">Radio menus</a>
         <a href="#" id="gps-btn" title="The GPS status page - fix, position, grid, satellites and the sky plot. The same page the Tab5 shows when you tap the UTC clock.">GPS status</a>
       </div>
@@ -1600,6 +1611,95 @@
         <button type="button" id="act-stop" style="display:none">Stop activating</button>
         <button type="button" id="act-go">Start</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Log a contact. Mirrors ui/manual_log_modal.c, rule for rule: the reports
+       are pre-filled from the mode (599 for CW, 59 for phone), it STAYS OPEN
+       after logging, and Log clears the callsign while keeping the reports -
+       a run of CW contacts is not one dialog at a time.
+
+       ⛔ ONLY THREE FIELDS, like the Tab5 window. Frequency, mode, band, date,
+       time, our callsign, our grid and the activation come from the device
+       inside /api/cmd log_qso; a page holding a stale frequency must not be
+       able to write a record on the wrong band. -->
+  <div id="log-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:560px; margin:12vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Log a contact</strong>
+        <div style="flex:1"></div>
+        <span id="log-state" style="color:var(--dim); font-size:13px"></span>
+      </div>
+      <div style="color:var(--dim); font-size:13px; margin-bottom:12px;">
+        For CW and SSB contacts you worked by hand. The frequency, mode, band, date,
+        time and the running activation are taken from the radio, so you only type what
+        it cannot know.
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:10px;">
+        <label style="flex:1">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">Callsign</div>
+          <input id="log-call" type="text" maxlength="20" autocomplete="off"
+                 style="width:100%; font-size:17px; padding:6px 8px; text-transform:uppercase;">
+        </label>
+        <label style="width:92px">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">RST sent</div>
+          <input id="log-rst-s" type="text" maxlength="6"
+                 style="width:100%; font-size:17px; padding:6px 8px;">
+        </label>
+        <label style="width:92px">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">RST rcvd</div>
+          <input id="log-rst-r" type="text" maxlength="6"
+                 style="width:100%; font-size:17px; padding:6px 8px;">
+        </label>
+      </div>
+      <!-- Clearing a report logs NO report rather than a wrong one - the same
+           wording the Tab5 window carries, for the same reason. -->
+      <div style="color:var(--dim); font-size:12px; margin-bottom:8px">
+        Clear a report to log the contact without one.
+      </div>
+      <div id="log-err" style="color:#ff6a6a; font-size:13px; min-height:18px;"></div>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <span id="log-ok" style="color:#60D060; font-size:13px"></span>
+        <div style="flex:1"></div>
+        <button type="button" id="log-close">Close</button>
+        <button type="button" id="log-go">Log</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scheduled events. Mirrors ui/sched_modal.c: ONE timeline, contests and
+       announced ?OTA activations sorted together, because they compete for the
+       same evening. The filter buttons are for when that is already decided.
+
+       ⛔ NO ERROR BANNER. Spothole being down is an ordinary state - Ian M0TRT
+       asked for that explicitly - so a failed refresh leaves the last good list
+       up and the age line says how old it is. -->
+  <div id="sched-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:1000px; margin:7vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Scheduled events</strong>
+        <div style="flex:1"></div>
+        <span id="sched-age" style="color:var(--dim); font-size:13px"></span>
+        <button type="button" id="sched-refresh" class="btn-neutral">Refresh</button>
+        <button type="button" id="sched-close">Close</button>
+      </div>
+      <div style="display:flex; gap:6px; margin-bottom:10px;">
+        <button type="button" class="sched-filt" data-filt="0">All</button>
+        <button type="button" class="sched-filt" data-filt="1">Contests</button>
+        <button type="button" class="sched-filt" data-filt="2">&#63;OTA</button>
+      </div>
+      <table id="sched-table" style="width:100%; border-collapse:collapse; font-size:14px">
+        <thead>
+          <tr style="color:var(--dim); text-align:left; font-size:12px">
+            <th style="width:92px; padding:4px 6px">START</th>
+            <th style="padding:4px 6px">WHAT</th>
+            <th style="width:170px; padding:4px 6px">SOURCE</th>
+            <th style="width:110px; padding:4px 6px; text-align:right">IN</th>
+          </tr>
+        </thead>
+        <tbody id="sched-rows"></tbody>
+      </table>
+      <div id="sched-empty" style="color:var(--dim); font-size:13px; padding:10px 6px"></div>
     </div>
   </div>
 
@@ -9044,8 +9144,15 @@ function updateActPill() {
      SOTA : POTA" - so every programme beyond those two would have been
      labelled POTA in the browser while the Tab5 showed the truth. */
   document.getElementById('act-kind').textContent = lastAct.sig || "";
+  /* ⭐ THE TARGET, NOT JUST THE COUNT (T109 parity). "7 Q" does not say whether
+     you may pack up; "7/10" does, which is why the Tab5's activation button
+     shows the target too. /api/status has carried `need` since part 1 and
+     nothing read it. Falls back to the bare count on older firmware, where
+     `need` is absent - never prints "7/0". */
   document.getElementById('act-ref').textContent =
-      lastAct.ref + (lastAct.qsos != null ? "  " + lastAct.qsos + " Q" : "");
+      lastAct.ref + (lastAct.qsos != null
+        ? "  " + lastAct.qsos + (lastAct.need ? "/" + lastAct.need : " Q")
+        : "");
 }
 
 function actFillTypes() {
@@ -9133,6 +9240,238 @@ async function actSend(type, ref) {
   /* No explicit menu close: a click bubbling to document already closes all the
      bottom menus, which is how every other item in them behaves. */
   if (menu) menu.addEventListener('click', (e) => { e.preventDefault(); actOpen(); });
+})();
+
+/* ---- Log a contact (T108 parity) -----------------------------------------
+   Mirrors ui/manual_log_modal.c rule for rule. The device does the work in
+   /api/cmd log_qso; this is only the three fields it cannot know. */
+
+/* "599" for CW, "59" for anything else - the QMX's mode strings are "CW",
+   "CW-R", "USB", "LSB", "DiGi" and "AM", and only the CW pair take the
+   readability-strength-tone triplet. Same test as default_rst() on the Tab5. */
+function logDefaultRst() {
+  const m = (lastMode || "").toUpperCase();
+  return m.startsWith("C") ? "599" : "59";
+}
+
+function logSyncState() {
+  const running = lastAct && lastAct.type && lastAct.ref;
+  document.getElementById('log-state').textContent = running
+      ? (lastAct.sig || "") + " " + lastAct.ref + " - " + (lastAct.qsos || 0)
+        + (lastAct.need ? "/" + lastAct.need : " logged")
+      : "no activation running";
+}
+
+function logOpen() {
+  document.getElementById('log-call').value = "";
+  /* PRE-FILLED FROM THE MODE. A CW window offering 59 would be re-typed for
+     every contact; clearing one logs no report rather than a wrong one. */
+  document.getElementById('log-rst-s').value = logDefaultRst();
+  document.getElementById('log-rst-r').value = logDefaultRst();
+  document.getElementById('log-err').textContent = "";
+  document.getElementById('log-ok').textContent = "";
+  logSyncState();
+  document.getElementById('log-modal').style.display = "block";
+  document.getElementById('log-call').focus();
+}
+
+async function logSend() {
+  const call = document.getElementById('log-call').value.trim().toUpperCase();
+  const err  = document.getElementById('log-err');
+  const ok   = document.getElementById('log-ok');
+  err.textContent = "";
+  /* The device refuses an empty callsign and a missing CAT with its own
+     wording - no client-side rule here that could disagree with it. */
+  const r = await fetch("/api/cmd", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({action: "log_qso", call: call,
+                          rst_sent: document.getElementById('log-rst-s').value.trim(),
+                          rst_rcvd: document.getElementById('log-rst-r').value.trim()})
+  });
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok || j.ok === false) {
+    err.textContent = j.error || ("HTTP " + r.status);
+    ok.textContent = "";
+    return;
+  }
+  /* IT STAYS OPEN. A run of CW contacts is not one dialog at a time: the
+     record is written, the callsign is cleared, the reports are KEPT, and the
+     cursor goes back where the next call is typed. */
+  ok.textContent = "Logged " + (j.call || call)
+      + (j.act_qsos ? "  -  " + j.act_qsos + (j.act_need ? "/" + j.act_need : "")
+                    : "");
+  document.getElementById('log-call').value = "";
+  document.getElementById('log-call').focus();
+  /* The answer already carries the new count, but the pill and everything else
+     reading /api/status should not wait a second to agree with it. */
+  tick();
+}
+
+(function wireLogWindow() {
+  const g = document.getElementById('log-go');
+  if (!g) return;
+  g.addEventListener('click', () => logSend());
+  const close = () => document.getElementById('log-modal').style.display = "none";
+  document.getElementById('log-close').addEventListener('click', close);
+  document.getElementById('log-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'log-modal') close();
+  });
+  /* Enter logs from any of the three fields - the same key the Tab5 window's
+     keyboard action does. */
+  for (const id of ['log-call', 'log-rst-s', 'log-rst-r']) {
+    document.getElementById(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); logSend(); }
+    });
+  }
+  const menu = document.getElementById('log-btn');
+  if (menu) menu.addEventListener('click', (e) => { e.preventDefault(); logOpen(); });
+})();
+
+/* ---- Scheduled events (T116 parity) --------------------------------------
+   Mirrors ui/sched_modal.c. The list, the sort and the source names come from
+   the device; this draws them and computes the "in 2h 10m" column against the
+   DEVICE's clock, which /api/sched sends as `now` - a browser clock minutes
+   out would put rows in NOW that the Tab5 still shows as upcoming. */
+
+let schedFilter = 0;          /* 0 all, 1 contests, 2 ?OTA - same ids as the pane */
+let schedData   = null;       /* the last good answer; a failed poll keeps it */
+let schedTimer  = null;
+
+/* Same thresholds as fmt_in() in sched_modal.c. */
+function schedFmtIn(secs) {
+  if (secs < 60)   return "now";
+  if (secs < 3600) return Math.floor(secs / 60) + "m";
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  return (h >= 10 || m === 0) ? h + "h" : h + "h " + m + "m";
+}
+
+function schedStyleFilters() {
+  for (const b of document.querySelectorAll('.sched-filt'))
+    b.classList.toggle('active', parseInt(b.dataset.filt, 10) === schedFilter);
+}
+
+function schedRender() {
+  schedStyleFilters();
+  const tb    = document.getElementById('sched-rows');
+  const empty = document.getElementById('sched-empty');
+  const age   = document.getElementById('sched-age');
+  if (!tb) return;
+  const d = schedData;
+
+  /* Three different facts, and the operator can act on only one of them -
+     so say which it is rather than printing "nothing". */
+  if (age) {
+    if (!d)                 age.textContent = "";
+    else if (d.busy)        age.textContent = "checking...";
+    else if (d.age_s < 0)   age.textContent = "not fetched yet";
+    else if (d.age_s < 90)  age.textContent = "updated just now";
+    else                    age.textContent = "updated " + Math.floor(d.age_s / 60) + " min ago";
+  }
+
+  tb.innerHTML = "";
+  let rows = 0;
+  const now = d ? d.now : Math.floor(Date.now() / 1000);
+  for (const ev of (d && d.events) || []) {
+    if (schedFilter === 1 && !ev.contest) continue;
+    if (schedFilter === 2 &&  ev.contest) continue;
+    const running = ev.start && ev.start <= now;
+
+    let when = "--:--";
+    if (ev.start) {
+      const t = new Date(ev.start * 1000);
+      when = String(t.getUTCHours()).padStart(2, "0") + ":"
+           + String(t.getUTCMinutes()).padStart(2, "0") + "Z";
+    }
+    let inTxt;
+    if (running) {
+      if (ev.end) {
+        const t = new Date(ev.end * 1000);
+        inTxt = "to " + String(t.getUTCHours()).padStart(2, "0") + ":"
+                      + String(t.getUTCMinutes()).padStart(2, "0");
+      } else {
+        inTxt = "on air";
+      }
+    } else {
+      inTxt = schedFmtIn(ev.start ? ev.start - now : 0);
+    }
+
+    const tr = document.createElement("tr");
+    tr.style.borderTop = "1px solid #2a2a2a";
+    const cell = (txt, colour, extra) => {
+      const td = document.createElement("td");
+      td.textContent = txt;
+      td.style.padding = "6px";
+      if (colour) td.style.color = colour;
+      if (extra) td.style.cssText += extra;
+      return td;
+    };
+    tr.appendChild(cell(running ? "NOW" : when, running ? "#60D060" : "var(--dim)"));
+    /* The reference belongs beside the callsign, not in its own column: it is
+       present on half the rows, and an empty column reads as missing data
+       rather than as "contests have no reference". */
+    tr.appendChild(cell(ev.ref ? ev.what + "   " + ev.ref : ev.what, "#fff"));
+    tr.appendChild(cell(ev.srcs || ev.src, ev.contest ? "#9AD0FF" : "#A0E0A0"));
+    tr.appendChild(cell(inTxt,
+      running ? "#60D060" : ((ev.start - now) < 3 * 3600 ? "#FFC864" : "var(--dim)"),
+      "text-align:right"));
+    tb.appendChild(tr);
+    rows++;
+  }
+
+  if (empty) {
+    let msg = "";
+    if (rows === 0) {
+      if (!d)                     msg = "Loading...";
+      else if (!d.wifi)           msg = "No WiFi - the schedule needs a network.";
+      else if (d.busy)            msg = "Fetching the schedule...";
+      else if (!d.version)        msg = "No schedule yet - press Refresh.";
+      else                        msg = "Nothing scheduled in this filter.";
+    }
+    empty.textContent = msg;
+  }
+}
+
+async function schedFetch(force) {
+  try {
+    const r = await fetch("/api/sched" + (force ? "?force=1" : ""));
+    if (!r.ok) return;                /* keep the last good list - see the markup */
+    schedData = await r.json();
+  } catch (e) { return; }
+  schedRender();
+}
+
+function schedOpen() {
+  document.getElementById('sched-modal').style.display = "block";
+  schedRender();                      /* draw what we hold, then refresh it */
+  schedFetch(false);
+  /* 10 s, and only while it is open: the IN column is the only thing that
+     moves, and it moves slowly. The fetch itself is TTL-limited on the
+     device, so this poll cannot hammer spothole. */
+  if (schedTimer) clearInterval(schedTimer);
+  schedTimer = setInterval(() => {
+    if (document.getElementById('sched-modal').style.display === "none") return;
+    schedFetch(false);
+  }, 10000);
+}
+
+(function wireSched() {
+  const m = document.getElementById('sched-modal');
+  if (!m) return;
+  const close = () => {
+    m.style.display = "none";
+    if (schedTimer) { clearInterval(schedTimer); schedTimer = null; }
+  };
+  document.getElementById('sched-close').addEventListener('click', close);
+  m.addEventListener('click', (e) => { if (e.target.id === 'sched-modal') close(); });
+  document.getElementById('sched-refresh').addEventListener('click', () => schedFetch(true));
+  for (const b of document.querySelectorAll('.sched-filt'))
+    b.addEventListener('click', () => {
+      schedFilter = parseInt(b.dataset.filt, 10);
+      schedRender();
+    });
+  const menu = document.getElementById('sched-btn');
+  if (menu) menu.addEventListener('click', (e) => { e.preventDefault(); schedOpen(); });
 })();
 
 function ritPillClick() {

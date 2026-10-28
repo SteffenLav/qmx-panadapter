@@ -860,6 +860,24 @@ bool sched_events_request(bool force)
     return true;
 }
 
+/* Display only - the full name stays in the record. The feed's names are
+ * sentences ("WA7BNM Contest Calendar", "RSGB HF Contests") and all three
+ * ellipsised to "...Contest..." in a column, which told the reader nothing.
+ * The distinguishing word is the first one.
+ *
+ * ⛔ LIVES HERE, NOT IN THE PANE. It was static in ui/sched_modal.c, so
+ * /api/sched would have needed a second copy of the rule - and the browser and
+ * the glass would then have been free to disagree about what a source is
+ * called. One table, both surfaces. */
+const char *sched_src_short(const char *src)
+{
+    if (!src || !src[0]) return "";
+    if (strncasecmp(src, "WA7BNM", 6) == 0)   return "WA7BNM";
+    if (strncasecmp(src, "RSGB HF", 7) == 0)  return "RSGB HF";
+    if (strncasecmp(src, "RSGB VHF", 8) == 0) return "RSGB VHF";
+    return src;
+}
+
 int sched_events_get(sched_event_t *out, int max)
 {
     if (!out || max <= 0 || !s_sched) return 0;

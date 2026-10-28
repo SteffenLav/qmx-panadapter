@@ -212,6 +212,10 @@ bool sched_events_request(bool force);
  * not ended. Returns how many were written. */
 int  sched_events_get(sched_event_t *out, int max);
 
+/* The feed's source name, shortened for a column ("WA7BNM Contest Calendar"
+ * -> "WA7BNM"). Returns a pointer into `src` or a literal - never allocates. */
+const char *sched_src_short(const char *src);
+
 /* Bumped on every successful fetch, so a pane can tell "nothing yet" from
  * "nothing scheduled". 0 = never fetched. */
 uint32_t sched_events_version(void);

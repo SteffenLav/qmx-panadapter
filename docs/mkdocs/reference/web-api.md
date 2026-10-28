@@ -85,6 +85,7 @@ action names its own parameter key (there is no generic `value`).
 | `set_screen` | `screen: "pan"/"panadapter"/"ft8"/"ft4"/"js8"/"wspr"` | Switch the Tab5's own view. Applied within about a second (handed to the display task). `ft4` and `js8` open the FT8 page **and** select that sub-mode, so one call is enough to put the device into FT4. An unknown name is refused with HTTP 400, not treated as `panadapter` |
 | `set_ft8_mode` | `mode: "ft8"/"ft4"`, optional `freq_hz` | **Switch between FT8 and FT4**, optionally retuning. Omit `freq_hz` to keep the current frequency. This is an action rather than a setting because it also retunes the radio and clears stale decodes — read `ft8_op_mode` back from `/api/settings` to confirm |
 | `set_activation` | `ref` | Set the POTA/SOTA activation reference |
+| `log_qso` | `call`, optional `rst_sent`, `rst_rcvd` | **Log a CW or SSB contact worked by hand**, as the Tab5's own Log window does. Those are the only fields accepted: the frequency, mode, band, date, time, your callsign, your grid and the running activation are read from the device, so a page holding a stale frequency cannot write a record on the wrong band. An empty report logs no report rather than a wrong one. Refused with HTTP 400 and a reason when the callsign is empty or there is no CAT. Answers `{"ok":true,"call":"...","act_qsos":N,"act_need":N,"total":N}`, so the count needs no second request |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
 | `reply` | `call` | Work a decoded station — the same intelligent Transmit a Tab5 row-tap runs. **Keys the radio.** Outcome in `/api/status` `ft8.web_r` |
 | `qso_override` | `what: "resend"/"rr73"/"73"/"cancel"` | Mid-QSO override, as the Tab5's own three buttons do. **Keys the radio** except for `cancel` |
@@ -431,6 +432,44 @@ only the cadence differs.
 ```json
 { "dbm": -83.5 }
 ```
+
+### GET /api/sched
+
+The contest calendar and announced ?OTA activations on **one timeline**, soonest
+first — the same list, sort and source names the Tab5's Scheduled events pane
+draws, because both read `sched_events_get()`.
+
+```json
+{ "age_s": 240, "busy": false, "version": 3, "wifi": true, "now": 1785340050,
+  "events": [
+    { "what": "CQ WW DX SSB", "src": "WA7BNM Contest Calendar",
+      "srcs": "WA7BNM", "start": 1785344400, "end": 1785517200,
+      "contest": true },
+    { "what": "OZ1LAV", "ref": "DL-0123", "src": "POTA", "srcs": "POTA",
+      "start": 1785341000, "end": 0, "contest": false }
+  ] }
+```
+
+`srcs` is the shortened form for a column ("WA7BNM Contest Calendar" →
+"WA7BNM"); `src` is the full name the record carries. `ref` is omitted for a
+contest. `start` or `end` of `0` means the feed gave no usable time.
+
+Events already finished are dropped; one with no usable end time is kept.
+**No filtering here** — `contest` is the flag, and the All / Contests / ?OTA
+choice belongs to whichever surface is drawing.
+
+Requesting this asks for a refresh, but the **15-minute floor** is enforced on
+the device, so polling cannot reach the upstream feed faster than that. Add
+`?force=1` for the pane's own Refresh button. The fetch runs on the spots task,
+so the call returns at once with whatever is already held.
+
+`now` is the **device's** clock, and a countdown should be computed against it:
+a browser clock minutes out would show rows as running that the Tab5 still shows
+as upcoming.
+
+The upstream feed being down is an ordinary state, not an error. There is no
+error field: `busy`, `age_s` (`-1` = never fetched) and `version` (`0` = never
+fetched) are what tell "slow" apart from "nothing scheduled".
 
 ### GET /api/psk_rx
 

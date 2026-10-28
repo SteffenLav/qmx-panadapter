@@ -7536,6 +7536,88 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
 }
 
 
+/* GET /api/sched - the scheduled-events list behind ui/sched_modal.c (T116).
+ *
+ * ⭐ ONE SOURCE, TWO SURFACES. The data layer (sched_events_get) is shared, so
+ * the browser cannot show a different timeline from the glass. Only the pane
+ * was Tab5-only, which is the parity gap class this project keeps re-finding.
+ *
+ * ⛔ THE FILTER IS NOT DONE HERE. The Tab5 pane filters All/Contests/?OTA in
+ * the renderer from `is_contest`, so doing it in the query string would be a
+ * second implementation of the same rule. The browser gets every row and the
+ * same flag.
+ *
+ * sched_events_request(false) respects SCHED_TTL_S, so a page polling this
+ * endpoint cannot hammer spothole - it is the same call the pane makes when it
+ * opens, and it returns at once because the fetch runs on the spots task.
+ *
+ * ⚠ SPOTHOLE BEING DOWN IS AN ORDINARY STATE. There is no error field: the
+ * three facts the page needs to tell "slow" from "empty" are `busy`, `age_s`
+ * (-1 = never) and `version` (0 = never fetched), exactly as refresh() in
+ * sched_modal.c uses them. Ian M0TRT asked for that when he granted API use. */
+static esp_err_t sched_handler(httpd_req_t *req)
+{
+    /* ?force=1 is the pane's Refresh button. Without it the TTL decides, which
+     * is what an ordinary page poll must get. */
+    bool force = false;
+    {
+        char q[32];
+        if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK) {
+            char v[8];
+            if (httpd_query_key_value(q, "force", v, sizeof v) == ESP_OK)
+                force = (v[0] == '1' || v[0] == 't' || v[0] == 'y');
+        }
+    }
+    sched_events_request(force);
+
+    /* SCHED_MAX events are ~3.4 KB - too much for the httpd task's stack, the
+     * same reason psk_rx_handler above goes to PSRAM for its report array. */
+    sched_event_t *ev = heap_caps_malloc(sizeof(sched_event_t) * SCHED_MAX,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!ev) return httpd_resp_send_500(req);
+    int n = sched_events_get(ev, SCHED_MAX);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { heap_caps_free(ev); return httpd_resp_send_500(req); }
+    cJSON_AddNumberToObject(root, "age_s",   sched_events_age_s());
+    cJSON_AddBoolToObject(root,   "busy",    sched_events_busy());
+    cJSON_AddNumberToObject(root, "version", (double)sched_events_version());
+    cJSON_AddBoolToObject(root,   "wifi",    wifi_is_connected());
+    /* The device's clock, so the page's "in 2h 10m" is computed against the
+     * same now the sort used. A browser clock that is minutes out would put
+     * rows in NOW that the Tab5 still shows as upcoming. */
+    cJSON_AddNumberToObject(root, "now",     (double)(int64_t)time(NULL));
+
+    cJSON *arr = cJSON_AddArrayToObject(root, "events");
+    for (int i = 0; i < n && arr; i++) {
+        cJSON *o = cJSON_CreateObject();
+        if (!o) break;
+        cJSON_AddStringToObject(o, "what", ev[i].what);
+        /* Omitted when empty, like psk_rx's optional fields: a contest has no
+         * reference, and "" would read as one that failed to arrive. */
+        if (ev[i].ref[0]) cJSON_AddStringToObject(o, "ref", ev[i].ref);
+        cJSON_AddStringToObject(o, "src", ev[i].src);
+        /* The column form, computed by the SAME function the pane uses, so the
+         * two surfaces cannot name a source differently. */
+        cJSON_AddStringToObject(o, "srcs", sched_src_short(ev[i].src));
+        /* 0 means the feed gave no usable time - sent as 0 rather than omitted
+         * because the pane draws "--:--" for it and the page must do the same. */
+        cJSON_AddNumberToObject(o, "start", (double)ev[i].start_unix);
+        cJSON_AddNumberToObject(o, "end",   (double)ev[i].end_unix);
+        cJSON_AddBoolToObject(o,   "contest", ev[i].is_contest);
+        cJSON_AddItemToArray(arr, o);
+    }
+    heap_caps_free(ev);
+
+    char *txt = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!txt) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, txt);
+    cJSON_free(txt);
+    return e;
+}
+
 /* GET /api/wspr - the spot list and the cycle state, mirroring /api/decodes'
  * shape so the browser side needs no new idioms.
  *
@@ -8448,6 +8530,10 @@ static const httpd_uri_t uri_psk_rx = {
     .uri = "/api/psk_rx", .method = HTTP_GET, .handler = psk_rx_handler,
 };
 
+static const httpd_uri_t uri_sched = {
+    .uri = "/api/sched", .method = HTTP_GET, .handler = sched_handler,
+};
+
 static const httpd_uri_t uri_help = {
     .uri = "/api/help", .method = HTTP_GET, .handler = help_handler,
 };
@@ -8945,6 +9031,7 @@ esp_err_t webserver_start(void)
     reg(&uri_wspr);
     reg(&uri_decodes);
     reg(&uri_psk_rx);
+    reg(&uri_sched);       // T116 scheduled events, same list as the Tab5 pane
     reg(&uri_help);
     reg(&uri_manual);
     reg(&uri_eqsl_creds);
