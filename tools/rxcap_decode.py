@@ -11,7 +11,7 @@ only the diagnostically interesting audio: one reference region of ordinary
 background, plus a window either side of every gap. Each region carries its
 own start sample index, and overlapping windows are merged on the device.
 
-    python tools/rxcap_decode.py scratchpad/capture-dev.txt out.wav
+    python tools/rxcap_decode.py scratchpad/capture-bench1.txt out.wav
 
 Writes out.r00_s<start>.wav ... and out.wav.manifest.txt. Gap offsets in the
 manifest are RELATIVE TO EACH REGION.

@@ -18,7 +18,7 @@ function bench {
 function qmx {
     param(
         [string] $Action = "fm",
-        [string] $Bench  = "dev"
+        [string] $Bench  = "bench1"
     )
 
     $reg = Get-Content "C:\dev\qmx-panadapter\tools\bench.json" -Raw | ConvertFrom-Json
@@ -91,7 +91,7 @@ function qmx {
 }
 
 function ss {
-    param([string] $Bench = "dev")
+    param([string] $Bench = "bench1")
     $reg = Get-Content "C:\dev\qmx-panadapter\tools\bench.json" -Raw | ConvertFrom-Json
     $b   = $reg.benches | Where-Object { $_.name -eq $Bench }
     if (-not $b -or $b.com -eq "UNASSIGNED") { Write-Host "No usable port for bench '$Bench'." -ForegroundColor Yellow; return }

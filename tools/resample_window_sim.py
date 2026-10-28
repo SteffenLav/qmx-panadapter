@@ -11,7 +11,7 @@ Input: any capture containing audio.c's per-second line
     I (12345) audio: RX 47891 pairs/s peak L=20 R=20  (mean 48021 over 10 s)
 
 Usage:
-    python tools/resample_window_sim.py scratchpad/capture-dev.txt
+    python tools/resample_window_sim.py scratchpad/capture-bench1.txt
 
 ⚠ WHAT THIS IS NOT. audio.c's counter counts pairs DELIVERED by the UAC
 driver; rx_audio.c's window counts pairs CONSUMED by rx_audio_task, over a

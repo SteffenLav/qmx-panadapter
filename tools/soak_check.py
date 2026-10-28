@@ -13,7 +13,7 @@
 #   audio OK        : WSPR keeps decoding; rate stays ~12.000 smp/ms
 import re, sys, os, collections
 
-path = sys.argv[1] if len(sys.argv) > 1 else "scratchpad/capture-dev.txt"
+path = sys.argv[1] if len(sys.argv) > 1 else "scratchpad/capture-bench1.txt"
 if not os.path.isfile(path):
     sys.exit("no such capture: " + path)
 
