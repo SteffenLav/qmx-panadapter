@@ -3538,10 +3538,22 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
      * are already on must not kill a contact in progress. */
     if (moved) ft8_band_change_stand_down("preset changed");
 
-    // Persist the chosen FT8/FT4 frequency so it survives a reboot and FT8 mode
-    // never opens on the panadapter's inherited (non-FT8) VFO. (The FT4/FT8
-    // sub-mode itself is already persisted via ft8_op_mode_set() below.)
-    settings_set_ft8_freq_hz(freq_hz);
+    // Persist the chosen frequency so it survives a reboot and the page never
+    // opens on the panadapter's inherited (non-digital) VFO. (The sub-mode
+    // itself is already persisted via ft8_op_mode_set() below.)
+    //
+    // T89: INTO THE SUB-MODE'S OWN SLOT. FT8, FT4 and JS8 have different
+    // calling frequencies on every band, so one shared slot meant a trip
+    // through JS8 overwrote where FT8 was left. `mode` is the one being
+    // applied - deliberately not ft8_op_mode_get(), which is not set until
+    // ft8_op_mode_set() on the next line.
+    //
+    // ⚠ Measured on the bench, v1.21.0-48-g12b30359, with this line still
+    // writing the FT8 slot: entering FT4 set ft8_freq_hz to 14080000 and
+    // entering JS8 set it to 14078000. The end state looked right only
+    // because each entry re-applies that mode's calling frequency; an FT8
+    // dial parked off the calling frequency was lost by the round trip.
+    settings_set_ftx_freq_hz((uint8_t)mode, freq_hz);
 
     ft8_op_mode_set(mode);
     /* ⛔ THE DRAWER HAS TO BE TOLD. FT8, FT4 and JS8 share one ui_mode_t, so
