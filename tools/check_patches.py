@@ -105,6 +105,24 @@ PATCHES = [
      "to dequeue it; rpc_rx_q holds THREE, and the third orphan makes the RX "
      "thread block on itself for ever - the permanent 0x126-times-out wedge"),
 
+    # Layered on the orphan patch above - it edits that script's output, and
+    # refuses to run before it. Alphabetical order already runs them this way.
+    ("apply_esp_hosted_rpc_table_lock.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/rpc/core/rpc_core.c",
+     "QMX_RPC_TABLE_LOCK",
+     "sync_rsp_table[] and the uid counter are read and written by every task "
+     "that makes a synchronous RPC, with no lock; two tasks claiming the same "
+     "slot frees a semaphore the other is about to block on - the "
+     "spinlock_acquire assert on httpd, 2026-10-28, and the tlsf_free assert "
+     "on sdio_process_rx, 2026-10-24, are the same race from both ends"),
+
+    ("apply_esp_hosted_rpc_table_lock.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/rpc/slaveif/rpc_slave_if.h",
+     "QMX_RPC_TABLE_LOCK",
+     "rpc_rx_q held 3 while 5 sync requests may be in flight; the RX thread "
+     "holds the table lock across its enqueue, so a full queue would stall "
+     "every other RPC for the enqueue timeout"),
+
     # Layered on the assert-tolerant patch below, which replaces os_wrapper.c
     # wholesale - the script refuses to run before it.
     ("apply_esp_hosted_task_stacks.ps1", "repo",
