@@ -168,6 +168,7 @@ char *config_io_export(size_t *out_len)
     APP("spur_mode          = %u\n", (unsigned)c.spur_mode);   // 0=off 1=subtract 2=interpolate
     APP("cw_decode          = %s\n", yn(c.cw_decode_en));
     APP("cw_decode_rows     = %u\n", (unsigned)c.cw_decode_rows);
+    APP("log_view_all       = %s\n", yn(c.log_view_all));
     APP("spots_mode_filter  = %s\n", yn(c.spots_mode_filter));
     APP("drawer_expert      = %s\n", yn(c.drawer_expert));
     APP("distance_in_miles  = %s\n", yn(c.distance_in_miles));
@@ -533,6 +534,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "spur_mode"))         settings_set_spur_mode((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_decode"))         settings_set_cw_decode_en(to_bool(val));
             else if (!strcasecmp(key, "cw_decode_rows"))    settings_set_cw_decode_rows((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "log_view_all"))      settings_set_log_view_all(to_bool(val));
             else if (!strcasecmp(key, "spots_mode_filter")) settings_set_spots_mode_filter(to_bool(val));
             else if (!strcasecmp(key, "drawer_expert"))     settings_set_drawer_expert(to_bool(val));
             else if (!strcasecmp(key, "distance_in_miles")) settings_set_distance_in_miles(to_bool(val));

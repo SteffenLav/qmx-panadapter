@@ -559,6 +559,15 @@ typedef struct {
        gives about 66 px of waterfall back. It is the WRAP modulus inside
        cw_decode.c, not a draw count - see cw_decode_set_rows(). */
     uint8_t  cw_decode_rows;
+    /* The ADIF log window's Today/All choice, remembered (T113, Bruce N9JCV:
+       "it should be sticky until changed"). It reopened on Today every time,
+       which is right for an activation and wrong for everyone looking at the
+       whole log. false = Today, the default, because the 10-QSO activation
+       count is what the window was built for.
+       ⛔ Only a TAP on the toggle stores this. The window's own fallback -
+       Today came out empty, so show All - must not rewrite the operator's
+       choice; see adif_view_modal.c. */
+    bool     log_view_all;
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     uint8_t  freq_sep_style;    // #302: 0 = 14.074.000 (default), 1 = 14,074,000 (Don N2VGU)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)
@@ -1126,6 +1135,9 @@ bool    settings_get_hp_mute_en(void);
 // mistake boot-looped the device via sys_evt in #307, and it has now been made
 // four times. Reads the staged copy, so it reflects a change immediately.
 bool settings_get_cw_decode_en(void);
+/* The ADIF log window's remembered Today/All choice. false = Today. */
+bool settings_get_log_view_all(void);
+void settings_set_log_view_all(bool v);
 void settings_set_cw_decode_en(bool v);
 /* Rows of decoded CW to draw, 2 or 4. The setter also applies it to
    cw_decode.c, which WIPES the line - see cw_decode_set_rows(). */

@@ -122,6 +122,7 @@ static const char *TAG = "settings";
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_FREQ_SEP       "freq_sep"
 #define KEY_CW_DECODE       "cw_dec_en"
+#define KEY_LOG_VIEW_ALL    "log_vw_all"  /* ADIF window: Today/All, sticky (T113) */
 #define KEY_CW_ROWS         "cw_dec_rows" /* rows of decoded CW drawn, 2 or 4 */
 #define KEY_RIT_PILL_SHOW  "rit_pill"
 #define KEY_STILL_VIEW     "still_vw"
@@ -467,6 +468,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
 #define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
+#define DIRTY_LOG_VIEW_ALL    147  /* ADIF window Today/All, sticky (T113) */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -513,6 +515,13 @@ static const uint8_t s_config_export_bits[] = {
      * A config file that silently moved a board back to the QMX would look
      * like the jack had stopped working. */
     DIRTY_RX_SOURCE, DIRTY_LINEIN_GAIN,
+    /* ⛔ DIRTY_LOG_VIEW_ALL is deliberately NOT here, and neither are
+     * DIRTY_CW_DECODE / DIRTY_CW_ROWS, although config_io_export() prints all
+     * three. They are one-tap view preferences, and an SD mirror write per tap
+     * is exactly the unnecessary SDMMC contention the note above is about. The
+     * exported file still carries the current value whenever a mirror happens
+     * for any other reason, so a backup is never wrong - only occasionally
+     * later than the tap. */
 };
 
 // ---- Module state ------------------------------------------------------
@@ -700,6 +709,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_SEP))       nvs_set_u8(s_nvs, KEY_FREQ_SEP, snap.freq_sep_style);
         if (dirty_test(&dirty_local, DIRTY_CW_DECODE)) nvs_set_u8(s_nvs, KEY_CW_DECODE, snap.cw_decode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_LOG_VIEW_ALL)) nvs_set_u8(s_nvs, KEY_LOG_VIEW_ALL, snap.log_view_all ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_ROWS))   nvs_set_u8(s_nvs, KEY_CW_ROWS,   snap.cw_decode_rows);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_STILL_VIEW))   nvs_set_u8(s_nvs, KEY_STILL_VIEW,   snap.still_view ? 1 : 0);
@@ -907,6 +917,9 @@ static void load_from_nvs(qmx_settings_t *out)
     /* Decoded CW is ON by default - it is the point of the feature - so like
        rit_pill_show it is an opt-OUT and must be set here, not left zeroed. */
     out->cw_decode_en = true;
+    /* log_view_all stays false: the window opens on Today, which is what the
+       10-QSO activation count is for. Left zeroed on purpose and noted here
+       so the next reader does not take the absence for an oversight. */
     out->cw_decode_rows = DEF_CW_ROWS;
     /* #298: the still display is the DEFAULT. Anyone who prefers the old
      * dial-centred view turns it off in the drawer, and is told once that they
@@ -1234,6 +1247,7 @@ static void load_from_nvs(qmx_settings_t *out)
        one rather than printing something nobody has seen. */
     if (nvs_get_u8(s_nvs, KEY_FREQ_SEP, &u8v) == ESP_OK) out->freq_sep_style = (u8v <= 1) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_CW_DECODE, &u8v) == ESP_OK) out->cw_decode_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_LOG_VIEW_ALL, &u8v) == ESP_OK) out->log_view_all = (u8v != 0);
     /* Only 2 or 4 are offered; anything else on flash is a value this build
        does not know, so it falls back to the default rather than being
        clamped into a shape the UI cannot show. */
@@ -3231,6 +3245,25 @@ void settings_set_cw_decode_en(bool v)
     s_pending.cw_decode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_DECODE);
+}
+
+bool settings_get_log_view_all(void)
+{
+    if (!s_ready || !s_mutex) return false;   // Today, until settings are up
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.log_view_all;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_log_view_all(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.log_view_all == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.log_view_all = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LOG_VIEW_ALL);
 }
 
 uint8_t settings_get_cw_decode_rows(void)

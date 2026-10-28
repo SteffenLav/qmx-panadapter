@@ -6266,6 +6266,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "fd_class",     c.fd_class);
     cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "cw_decode_en", c.cw_decode_en);
+    /* T113. No Today/All filter exists in the browser's log view, so this is
+     * read/write for config export and restore rather than for a web control -
+     * the alternative is a stored preference the API cannot see, which is
+     * exactly the Tab5-only class T27 is a sweep for. */
+    cJSON_AddBoolToObject(root, "log_view_all", c.log_view_all);
     cJSON_AddNumberToObject(root, "cw_decode_rows", (double)c.cw_decode_rows);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddNumberToObject(root, "freq_sep_style", (double)c.freq_sep_style);
@@ -6550,6 +6555,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "cw_decode_en")))
         settings_set_cw_decode_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "log_view_all")))
+        settings_set_log_view_all(cJSON_IsTrue(it));
     /* 2 or 4 only; the setter refuses anything else rather than storing it,
        so a bad value cannot produce a pane nobody has seen. */
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_decode_rows")))
@@ -6899,6 +6906,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
     BOOLTOP("cw_decode_en", settings_set_cw_decode_en);
+    BOOLTOP("log_view_all", settings_set_log_view_all);
     // Rows of decoded CW, 2 or 4 (Bryan N0LUF). A number, not a switch, and
     // the setter refuses anything else.
     {

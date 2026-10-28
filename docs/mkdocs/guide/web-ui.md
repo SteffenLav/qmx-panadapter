@@ -587,6 +587,22 @@ the radio attached always leaves the QMX needing a manual power cycle. That one
 step is what otherwise keeps a remote station from being upgradeable from
 another room — or another country.
 
+!!! warning "Use G53, not G54 — the drawing below is REV 1.0"
+    The schematic reproduced here is Randy's **REV 1.0** (2026-09-07) and shows
+    the Grove plug's **`G54`** going to R1. **Wire it to `G53` instead.**
+
+    `G54` is the same pin the **M5Stack Unit GPS v1.1** receives on, and both
+    are on PORT.A — the one 4-pin socket. A relay interface on `G54` therefore
+    sits across the GPS's transmitter, and there is no setting that gets you
+    out of it: "Relay: drive only the selected pin" protects the pin you did
+    **not** select. See
+    [Settings ▸ Sharing PORT.A](settings.md#port-mode-porta).
+
+    Nothing else in the drawing changes — same two components, same jack, same
+    patch lead. Randy has issued a revised drawing; look in the
+    [QRPLabs groups.io **Files** area](https://groups.io/g/QRPLabs/files) for
+    his current version rather than working from the copy below.
+
 ![Schematic: M5Stack Tab5 power switch for QRP Labs QMX(+) — a 4-pin Grove plug on the Tab5's EXT socket feeds a 100 ohm resistor into a PC817C optoisolator, whose output drives a 3.5 mm stereo jack on the module, reaching a 2.5 mm TRS jack wired to PWR_ON and GND inside the radio through a patch lead](../img/relay-schematic-n4opi.png)
 
 #### Parts
@@ -605,9 +621,11 @@ another room — or another country.
    and wire it internally: **tip to `PWR_ON`, sleeve to `GND`**. This is the
    only irreversible part of the job, and the only part that involves opening
    the QMX. Randy brought his out on the rear panel beside the ATU RF input.
-2. **The interface.** The Tab5 pin you choose — **G53 or G54** — goes through
+2. **The interface.** **`G53`** goes through
    **R1** into the PC817C's LED, with the Grove plug's `GND` completing that
-   side. The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
+   side. (`G54` works electrically and the firmware will pulse it, but it is
+   the Unit GPS's receive pin on the same socket — use `G53` unless you are
+   certain no GPS will ever be fitted.) The PC817C's phototransistor goes across **J1**, the module's 3.5 mm jack, tip and sleeve, so
    a pulse from the Tab5 briefly connects `PWR_ON` to `GND`. **The
    phototransistor side is polarity-sensitive — follow the schematic**, and note
    that the `EXT 5V` pin is not used at all.
@@ -619,10 +637,14 @@ another room — or another country.
 
 #### Settings that work
 
-In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53** or
-**G54**), active level **High**, and **2000 ms** — *"I've found 2000ms to be
+In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53**),
+active level **High**, and **2000 ms** — *"I've found 2000ms to be
 sufficient"*. The firmware's own default is 1000 ms, so this is one to set and
 save; it is remembered from v1.10.9 on.
+
+If a Unit GPS shares the socket, also tick **Relay: drive only the selected
+pin** (v1.20.2) so relay mode stops holding `G54` as a driven output against
+the GPS's transmitter.
 
 !!! note "Why the bottom-edge Dupont pins are not offered"
     A neater cable run would leave the Tab5's bottom edge rather than the side,

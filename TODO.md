@@ -35,7 +35,7 @@ number when something new arrives; never close a gap.
 | **T100** | WSPR -> Panadapter leaves stale pixels in the waterfall area. His own framing is minor; may be bounded by T99 | Sam W7STF |
 | **T97** | ⚠ One unexplained reboot at 92% battery, not reproducible in 45 min. Ask for the crash record on the next boot before changing anything | Sam W7STF |
 | **T101** | Idea: spend the MCU cycles freed by a blanked display. Server mode already measured the headroom (core 0 idle 10-13% -> 67%). Wants a decision on what deserves them | Sam W7STF |
-| **T102** | Randy's remote power dongle schematic moved G54 -> G53 (G54 clashes with Unit GPS). Check both doc trees for G54, and prefer linking the group's files section. GPIO53 meter still owed | Randy N4OPI |
+| **T102** | ▶ **DOCS DONE 2026-10-28** - the build guide now says G53, says why (G54 is the Unit GPS's RX on the same PORT.A socket), and links the groups.io Files area. ⚠ **The embedded drawing is still Randy's REV 1.0 and shows G54** - the page warns that it does; replacing it needs the revised PNG from him. The GPIO53 meter reading he has now taken. Old text: schematic moved G54 -> G53. Check both doc trees for G54, and prefer linking the group's files section. GPIO53 meter still owed | Randy N4OPI |
 | ~~T103~~ | ✅ **FIXED `0c3f6f0c`, not yet seen by him.** Every dial write quantised to 10 Hz in `cat_set_frequency()`; tune snap Off was a 1 Hz grid. ⚠ Not a v1.21.0 regression - the 1 Hz fallback dates from v1.12.0 | Sam W7STF |
 | ~~T104~~ | ✅ **FIXED 2026-10-26 (`0c3f6f0c`), NOT YET SEEN BY HIM.** A consecutive `.` in the frequency keypad is refused, and so is a leading one. The old guard capped the **total** at two dots, so `7..` passed with one dot present and `freq_buf_to_hz()` then read an empty group | Sam W7STF |
 | ~~T105~~ | ✅ **FIXED 2026-10-27 (`531db395`), BUILT NOT FLASHED.** Two faults, one symptom. `set_screen` "ft8" raised the page but never asked for the sub-mode, while "ft4"/"js8" always did - so FT8 kept whatever you were last in. And `screen` answers `"ft8"` for all three sub-modes (9 other tests in `index.html` depend on that), so the menu dimmed whichever of the three you were on. Dimming now asks `ft8Proto()` | Randy N4OPI |
@@ -46,7 +46,7 @@ number when something new arrives; never close a gap.
 | ~~T110~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Stopping an activation writes `<REF>-<YYYYMMDD>.adi` to the SD card - today's contacts for that reference only, so two parks in a day get two files. `adif_log_export_activation()`; the toast names the file, or says why none was written | Brian KB9WFS |
 | ~~T111~~ | ⛔ **ANSWERED, NOT BUILDABLE.** The Unit GPS LED is on the module and driven by the ATGM336H, and our UART has **no TX pin at all** (`unit_gps.c:496`, `UART_PIN_NO_CHANGE`, deliberate) - the Tab5 cannot send the module any command. Not ours to switch off | Brian KB9WFS |
 | **T112** | ⛔ **DECLINED 2026-10-27** - flashing the QMX's own firmware from the Tab5. A failed write strands the operator with a radio needing a programmer, in the field. Revisit only if QRP Labs publish a recoverable path | Brian KB9WFS |
-| **T113** | The log view's **All / Today** toggle should be sticky until changed. ⭐ He also confirmed v1.21.0's activation UTC-day and CQ-POTA fixes work | Bruce N9JCV |
+| **T113** | ✅ **BUILT 2026-10-28** - sticky across reboots in NVS (`log_view_all`), stored only on a TAP so the window's own empty-Today fallback cannot rewrite the choice. ⛔ NOT seen. Original: the log view's **All / Today** toggle should be sticky until changed. ⭐ He also confirmed v1.21.0's activation UTC-day and CQ-POTA fixes work | Bruce N9JCV |
 | ~~T114~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Tapping a spot now records WHO, and the Log window opens with that callsign in it. Guarded by the dial - `spots_last_pick()` answers only within 500 Hz of where the tap put the radio, so a stale call cannot reach the log | operator |
 | ~~T115~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Activation covers 7 programmes, not 2: POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA. One table in `settings.c`; POTA/SOTA/WWFF/IOTA also get their dedicated ADIF field (`MY_POTA_REF` etc), which is what their uploaders read. Targets 10/4/44, none claimed for the rest. Web picker now served from the same table | operator |
 | ~~T116~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Scheduled events pane: one spothole `/alerts` fetch carries the ?OTA schedule AND the WA7BNM/RSGB contest calendars, on one timeline, All/Contests/Activations filter. ⚠ On demand only, 15 min TTL - never a standing poll. Button in the Activation window + keyboard action 27. Web surface NOT done | operator |
@@ -57,7 +57,7 @@ number when something new arrives; never close a gap.
 | **T99** | WSPR: the waterfall waits for the next cycle instead of drawing at once | Sam W7STF |
 | **T100** | WSPR -> Panadapter leaves stale content in the waterfall area | Sam W7STF |
 | **T101** | Idea: spend the MCU cycles freed by a blanked display on other work | Sam W7STF |
-| **T102** | Remote power-on/off dongle schematic revised to G53 - needs a docs home and a link | Randy N4OPI |
+| **T102** | Remote power-on/off dongle schematic revised to G53 - ✅ docs home + link done 2026-10-28; ⚠ still needs the revised PNG from him | Randy N4OPI |
 | **T103** | FIXED: every dial write quantised to 10 Hz; tune snap Off was a 1 Hz grid | Sam W7STF |
 | **T104** | FIXED: a consecutive '.' in the frequency keypad is refused | Sam W7STF |
 | **T105** | FIXED: web Radio menu - picking FT8 landed you in FT4/JS8, and the FT8 entry greyed out | Randy N4OPI |
@@ -68,7 +68,7 @@ number when something new arrives; never close a gap.
 | **T110** | Save a per-activation ADIF when an activation ends, not just the whole log | Brian KB9WFS |
 | **T111** | Option to disable the Unit GPS flashing LED | Brian KB9WFS |
 | **T112** | Idea: update the QMX's own firmware from the Tab5 | Brian KB9WFS |
-| **T113** | Make the log view's All/Today choice sticky | Bruce N9JCV |
+| ~~T113~~ | ✅ Make the log view's All/Today choice sticky - BUILT 2026-10-28, not seen | Bruce N9JCV |
 | **T114** | Log window pre-fills the callsign from a tapped spot | operator |
 | **T115** | Activation covers all seven ?OTA programmes, with their ADIF fields | operator |
 | **T116** | Scheduled events from spothole `/alerts` - ?OTA schedule AND contest calendar | operator |
@@ -327,10 +327,14 @@ when he is back on groups.io.
    to tell them it exists. ⚠ This, and not Firefox, was Bryan's silent audio -
    `f81a8d50` fixed two real gesture defects that he never hit. Needs a design
    decision: label it, move it, or surface it on first use.
-2. **Transmitted morse in its own colour** (Sam W7STF). Cheap: the radio
-   already sends the flag and we discard it - `cw_decode_parse_tb()` parses the
-   `t` field and `cw_decode.c:326` passes `NULL`. Capture it, mark the cells
-   written while t>0, give them a third colour in both renderers.
+2. ~~**Transmitted morse in its own colour** (Sam W7STF).~~ ⛔ **THIS ROW WAS
+   STALE — it is T06, and it was BUILT on 2026-10-19 (`ad34fc05`).** The row
+   said `cw_decode.c:326` passes `NULL`; it does not. `cw_decode_feed()` keeps
+   the `t` flag per cell in `s_line_tx[]`, `cw_decode_line_tx()` serves it, and
+   both renderers draw it — `UI_COLOR_TX_ACTIVE` as a third disjoint label
+   layer on the Tab5 (`ui.c`), `.cw-tx` in the browser. ⛔ **Never seen**, and
+   it needs an actual CW transmission before `t > 0` ever happens. Checked
+   2026-10-28 while picking this up as new work.
 3. **Web/Tab5 option parity**: `ft8_early_decode` is in the web FT8 filters
    group but in the Tab5 *drawer*; "Allow grey-listing" is a Tab5 Options
    checkbox with no web entry. Measured 10-16, nothing done.

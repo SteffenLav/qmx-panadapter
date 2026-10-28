@@ -1036,7 +1036,7 @@ Tapping the field brings up the keyboard, and the window moves up and shortens
 so the matches stay visible while you type. Clear the field to see the whole log
 again; the search also clears itself each time you open the window.
 
-**Today/All filter** — the viewer opens on **Today** (falling back to All when nothing was logged today). The toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts.
+**Today/All filter** — the toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts. **Your choice is remembered**, including across a restart, so the viewer reopens on whichever of the two you last picked *(Bruce N9JCV)*. Out of the box that is **Today**, which is what the 10-QSO activation counter below is for. The fallback is unchanged and is not a choice: if Today comes out empty while there are records, the viewer switches to All for that visit without changing what it reopens on next time.
 
 **POTA activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches 10 QSOs — a valid POTA activation.
 
