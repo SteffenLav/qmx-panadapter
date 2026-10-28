@@ -135,6 +135,38 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
 #define UI_COLOR_MODE_USB  0xD9634B  /* brick red/brown — was steel blue, too close to CW's blue */
 #define UI_COLOR_MODE_LSB  0x633079  /* purple */
 #define UI_COLOR_MODE_WSPR 0x3D8C40  /* green     — ui/spot_map_view.c's third self-spotting source, no bandplan analogue to match */
+
+/* THE SAME COLOUR CANNOT BE BOTH A FILL AND TEXT ON BLACK, and that is what
+ * the left drawer asked UI_COLOR_MODE_CW to be.
+ *
+ * Everywhere the colours above are used - the band-plan strip, the freq
+ * keypad's mode row, the memory grid, the spots-lane tag - they are a FILL,
+ * with a label drawn ON them. The strip's label is bright white, and the
+ * comment where it is created records why: the 2026-06-30 dim pass took the
+ * segment colours far enough down that dark text no longer read on them. A
+ * fill under white text therefore has to stay dark.
+ *
+ * The left drawer uses them the other way round: the label IS the colour and
+ * it sits on the near-black 0x262c34 button. Measured against that
+ * background, CW's fill blue is the dimmest of the six entries at 2.9:1,
+ * which is the same complaint that got USB brightened on 2026-09-16.
+ *
+ * Brightening UI_COLOR_MODE_CW itself does not fix it, it swaps it: the
+ * drawer label goes 2.9 -> 5.0 and the strip's white-on-blue goes 4.8 -> 2.8.
+ * Measured, not estimated. So the text use gets its own constant and the fill
+ * is left exactly where it was. Same hue (204 deg against 205), raised in
+ * value until it reads at 6.2:1 - alongside JS8's 6.0 and FT4's 6.4, so no
+ * one entry in that stack is the dim one.
+ *
+ * WSPR got the same treatment in the same change. It is one row below CW in
+ * that stack at 3.4:1 and is the identical defect - a fill colour asked to be
+ * text - so fixing only the entry that was pointed at would have left the
+ * next-dimmest label in the same drawer for someone to report again. Same
+ * hue (122 deg), same 6.2:1 target. Its fill is likewise untouched: WSPR has
+ * no band-plan segment, but it IS a fill in the spots lane and the memory
+ * grid, and those draw on it exactly as the strip does. */
+#define UI_COLOR_MODE_CW_TEXT   0x5CB4F0  /* CW blue,  for text on a dark button */
+#define UI_COLOR_MODE_WSPR_TEXT 0x5CC060  /* WSPR green, same */
 #define UI_COLOR_MODE_AM   0x1F8A8A  /* teal      — no bandplan analogue either (AM lives inside
                                         the Phone segments), and the five mode
                                         colours have to be told apart at a glance

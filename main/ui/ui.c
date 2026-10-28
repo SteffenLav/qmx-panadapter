@@ -20034,8 +20034,13 @@ static void left_drawer_build(void)
                         LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
     /* CW takes no sub-mode: 0xFF is "leave the dial alone", the same value
      * PANADAPTER and WSPR pass. The page itself picks up the band-plan CW
-     * segment on entry. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW,
+     * segment on entry.
+     *
+     * UI_COLOR_MODE_CW_TEXT, NOT UI_COLOR_MODE_CW: the fill colour measured
+     * 2.9:1 as a label on this button and was the dimmest of the six. The
+     * fill is unchanged - see the note on the constant for why brightening
+     * the shared one only moves the problem onto the band-plan strip. */
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW_TEXT,
                         LD_DEST(UI_MODE_CW, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
     /* UI_COLOR_ACCENT_GOLD, not the 0xFFDD00 that was written here: the FT8
      * page's title is the theme constant (0xFFD700) and this button is meant
@@ -20055,7 +20060,8 @@ static void left_drawer_build(void)
      * by design. A gate carried forward on a misremembered reason hides a
      * finished page from the operator who fixed it. WSPR is a peer mode and
      * gets a door like the rest. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR,
+    /* _TEXT for the same reason CW uses it - see the constants. */
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR_TEXT,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
 }
 
