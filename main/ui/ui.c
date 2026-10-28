@@ -4138,7 +4138,6 @@ void ui_raise_edge_strips(void)
     if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
     if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
 }
-static void ui_advance_page(void);
 static void left_drawer_open(void);   /* the page picker - see its block below */
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
@@ -19875,7 +19874,13 @@ void ui_request_base_mode_m(ui_mode_t m)
 #define LD_MARGIN_X         40   /* halved from 80 on the glass - operator */
 #define LD_BTN_PAD_X        28   /* breathing room each side of the text */
 #define LD_BTN_H           104   /* a 48 pt line needs more than 72 */
-#define LD_BTN_GAP          14
+/* 14 until the CW button made six of them. 6*104 + 5*14 = 694 against 688 of
+ * padded height (720 - 2*16), so the stack overran its box and the centring
+ * below clamped to 0 - 16 px of margin at the top, 10 at the bottom. At 12 it
+ * is 684 and centres properly again. The button height and the 48 pt font are
+ * untouched: the gap is the only quantity here that was not measured from the
+ * text itself. */
+#define LD_BTN_GAP          12
 #define LD_PAD              16
 
 /* Filled by left_drawer_build() once the text has been measured. */
@@ -19959,7 +19964,7 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
  * drawer - a width measured over a different set of strings than the one
  * drawn is a bug that looks like a font problem. */
 static const char *LD_LABELS[] = {
-    "PANADAPTER", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
+    "PANADAPTER", "MODE: CW", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
 };
 
 static void left_drawer_measure(void)
@@ -20012,24 +20017,37 @@ static void left_drawer_build(void)
     lv_obj_add_flag(s_left_drawer, UI_FLAG_NOT_HOT);
 
     /* Panadapter at the top, then the operating modes in the order he listed
-     * them. MODE: CW BELONGS DIRECTLY UNDER PANADAPTER when UI_MODE_CW
-     * arrives from the other branch (ui_mode.h reserves = 2) - his words, so
-     * insert there rather than appending. */
-    /* Centred vertically rather than hung from the top: with five buttons at
-     * 104 the stack is 576 of 720, so top-aligned it sat high with a long
-     * empty tail. Computed from the list length so adding MODE: CW re-centres
-     * itself instead of needing this number edited. */
+     * them. MODE: CW sits DIRECTLY UNDER PANADAPTER - his words, and the slot
+     * this list was written to expect. Added 2026-10-28, when the CW page was
+     * merged up to v1.22.0: the 4-stop swipe carousel that used to reach it
+     * was replaced by this drawer on 2026-10-24, which left the page with no
+     * entrance at all on this branch. */
+    /* Centred vertically rather than hung from the top: with six buttons at
+     * 104 and a 12 gap the stack is 684 of 720, so top-aligned it would sit
+     * high with an empty tail. Computed from the list length, so the count
+     * can change without this number being edited. */
     const int n_btn   = (int)(sizeof(LD_LABELS) / sizeof(LD_LABELS[0]));
     const int stack_h = n_btn * LD_BTN_H + (n_btn - 1) * LD_BTN_GAP;
     int y = (DISPLAY_V_RES - stack_h) / 2 - LD_PAD;
     if (y < 0) y = 0;
     left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
                         LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], 0xFFDD00,
+    /* CW takes no sub-mode: 0xFF is "leave the dial alone", the same value
+     * PANADAPTER and WSPR pass. The page itself picks up the band-plan CW
+     * segment on entry. */
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW,
+                        LD_DEST(UI_MODE_CW, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
+    /* UI_COLOR_ACCENT_GOLD, not the 0xFFDD00 that was written here: the FT8
+     * page's title is the theme constant (0xFFD700) and this button is meant
+     * to BE that title seen from outside. Six units of green apart is nothing
+     * on the glass, but it is a hand-copied colour in a block whose own
+     * comment says the colours are read out of the code - which is how the
+     * other three would have drifted too. */
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], UI_COLOR_ACCENT_GOLD,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], FT4_ACCENT_HEX,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], FT4_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], JS8_ACCENT_HEX,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], JS8_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8)); y += LD_BTN_H + LD_BTN_GAP;
     /* ⛔ NO wspr_feature_enabled() GATE HERE, and the old cycle's gate was not
      * a reason to copy one. I wrote that WSPR was gated "because the page is
@@ -20037,7 +20055,7 @@ static void left_drawer_build(void)
      * by design. A gate carried forward on a misremembered reason hides a
      * finished page from the operator who fixed it. WSPR is a peer mode and
      * gets a door like the rest. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], UI_COLOR_MODE_WSPR,
+    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
 }
 
@@ -20077,37 +20095,15 @@ static void left_drawer_close(void)
     s_left_drawer_open = false;
 }
 
-static void ui_advance_page(void)
-{
-    if (reader_view_is_active()) {
-        reader_view_hide();
-    } else {
-        /* 4-stop carousel: Panadapter -> FT8 -> CW -> WSPR -> Panadapter.
-         * Both pages joined the cycle rather than hiding in the drawer because
-         * they are peer operating modes, not settings - the same reasoning that
-         * gave FT8 its own page.
-         *
-         * WSPR is in the cycle only when it has been enabled. It ships on the
-         * main track unfinished so the update path carries it, and this is what
-         * keeps an operator who never asked for it from swiping into a
-         * half-built page. With it off the cycle is Panadapter -> FT8 -> CW.
-         *
-         * ⚠ The CW page is NOT gated, because on this branch it is the thing
-         * being worked on and has to be reachable. It needs the same kind of
-         * gate as WSPR before this branch merges to main - see the branch
-         * contract in CLAUDE.md. */
-        ui_mode_t m = ui_mode_get();
-        const bool wspr_ok = wspr_feature_enabled();
-        ui_set_base_mode(m == UI_MODE_PANADAPTER ? UI_MODE_FT8
-                       : m == UI_MODE_FT8        ? UI_MODE_CW
-                       : m == UI_MODE_CW         ? (wspr_ok ? UI_MODE_WSPR
-                                                            : UI_MODE_PANADAPTER)
-                                                 : UI_MODE_PANADAPTER, true);
-    }
-    // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
-    // an open drawer keeps LVGL busy enough to starve audio/fft tasks.
-    drawer_close();
-}
+/* ui_advance_page() - the 4-stop swipe carousel - WAS HERE AND IS GONE.
+ *
+ * The left-edge swipe stopped calling it on 2026-10-24 when the page picker
+ * replaced it (see left_drawer_build()); nothing has called it since, and
+ * every build said so with an -Wunused-function warning. It is deleted here
+ * rather than left standing because its cycle was the CW page's only
+ * entrance, so a reader finding it would reasonably conclude the CW page is
+ * still reachable by swiping. It is not. The drawer's MODE: CW button is the
+ * entrance, and it is the only one. */
 
 // Open the docs Reader as a full-screen overlay (from the Settings drawer's
 // "User Manual" button). It's orthogonal to the operating mode — whatever was
