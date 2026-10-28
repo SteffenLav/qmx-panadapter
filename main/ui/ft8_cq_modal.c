@@ -136,13 +136,26 @@ static const char *forced_cq_modifier(bool field_day_en)
          * "CQ POTA" - wrong information on the air, not a cosmetic slip.
          * Found 2026-10-28 while fixing the CQ button label.
          *
-         * ⚠ FT8'S CQ MODIFIER IS AT MOST 4 CHARACTERS. WWFF, IOTA, GMA and
-         * WCA fit; WWBOTA is six and cannot be encoded. A token that does not
-         * fit falls back to a plain CQ rather than to a DIFFERENT programme's
-         * name: calling "CQ POTA" during a bunker activation tells hunters
-         * something untrue, and a plain CQ tells them nothing, which is the
-         * lesser of the two. The on-air token bunker activators actually use
-         * is an operating-practice question and is not decided here. */
+         * ⚠ THE LIMIT IS THE PROTOCOL, NOT A GUESS. The FT4/FT8 QEX paper
+         * (Franke K9AN, Somerville G4WJS, Taylor K1JT) states that a CQ may be
+         * followed by three decimal digits OR ONE TO FOUR LETTERS. WWFF, IOTA,
+         * GMA and WCA fit. WWBOTA is six and cannot be encoded at all.
+         *
+         * ⛔ WWBOTA FALLS BACK TO A PLAIN CQ, and "BOTA" was rejected
+         * deliberately. Checked 2026-10-29: wwbota.net tells activators to
+         * call "CQ Bunkers on the Air" - a voice phrase, with no FT8 token
+         * given - and "BOTA" is already Beaches on the Air, so it would name
+         * the wrong programme. A plain CQ tells hunters nothing; a wrong token
+         * tells them something untrue.
+         *
+         * ⚠ WHAT IS SOURCED AND WHAT IS NOT. POTA and SOTA are everyday
+         * practice. WWFF is the programme's own rule - WWFF Global Rules v5.10
+         * encourages "CQ WWFF" (CQ 44 and CQ FF are also in use). For IOTA,
+         * GMA and WCA I found NO documented FT8 convention; the search was
+         * bounded and that is not evidence that none exists. The programme's
+         * own name is the default for them because it is at worst an
+         * unrecognised token and never a FALSE one, which is what the bug
+         * above actually was. */
         const char *sig = settings_activation_sig_name();
         if (sig && sig[0] && strlen(sig) <= 4) return sig;
         return NULL;
