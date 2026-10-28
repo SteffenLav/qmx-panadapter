@@ -21,6 +21,25 @@ that order still stands.
 ⚠ Status words mean what CLAUDE.md says they mean: **implemented or not**,
 then **proven or not**. "Not yet" is not a status.
 
+⛔ **RECONCILED AGAINST THE CODE 2026-10-28. Ten rows were already done.** The
+operator picked E17.2 off this file as work; it had shipped nine days earlier
+as T06 (`ad34fc05`), and the row still cited a `NULL` that is not there. He
+cannot use a list of outstanding work that contains finished work.
+
+Also corrected the same day: A17.1 (the DTR changelog entry exists),
+B17.2 (power_off measured 10-18), B17.3 (Randy metered GPIO53),
+B17.8 (`cf85f3d2` IS on bench dev), E17.1 (the button says "Listen" now),
+E17.3 (grey-listing HAS a web entry), E17.4 (the audio section shipped), and
+every T103-T116 row that still said **NOT FLASHED** when its commit is an
+ancestor of `66723dab`, which is what bench dev runs.
+
+**The rule this file now carries: a row is cleared in the SAME change as the
+work.** Before quoting this file at him - a todo-table, or any answer about
+what is open - grep the code for each row's claim. A row that names a
+`file:line` is a claim to check, not a fact. When a row turns out to be done,
+correct it visibly with the date and the commit; never delete it, so the next
+reader knows it was checked.
+
 ### ▶ ID INDEX — quote these, they never change
 
 IDs are **permanent and never reused**. They do not encode effort or section, so
@@ -38,18 +57,18 @@ number when something new arrives; never close a gap.
 | **T102** | ▶ **DOCS DONE 2026-10-28** - the build guide now says G53, says why (G54 is the Unit GPS's RX on the same PORT.A socket), and links the groups.io Files area. ⚠ **The embedded drawing is still Randy's REV 1.0 and shows G54** - the page warns that it does; replacing it needs the revised PNG from him. The GPIO53 meter reading he has now taken. Old text: schematic moved G54 -> G53. Check both doc trees for G54, and prefer linking the group's files section. GPIO53 meter still owed | Randy N4OPI |
 | ~~T103~~ | ✅ **FIXED `0c3f6f0c`, not yet seen by him.** Every dial write quantised to 10 Hz in `cat_set_frequency()`; tune snap Off was a 1 Hz grid. ⚠ Not a v1.21.0 regression - the 1 Hz fallback dates from v1.12.0 | Sam W7STF |
 | ~~T104~~ | ✅ **FIXED 2026-10-26 (`0c3f6f0c`), NOT YET SEEN BY HIM.** A consecutive `.` in the frequency keypad is refused, and so is a leading one. The old guard capped the **total** at two dots, so `7..` passed with one dot present and `freq_buf_to_hz()` then read an empty group | Sam W7STF |
-| ~~T105~~ | ✅ **FIXED 2026-10-27 (`531db395`), BUILT NOT FLASHED.** Two faults, one symptom. `set_screen` "ft8" raised the page but never asked for the sub-mode, while "ft4"/"js8" always did - so FT8 kept whatever you were last in. And `screen` answers `"ft8"` for all three sub-modes (9 other tests in `index.html` depend on that), so the menu dimmed whichever of the three you were on. Dimming now asks `ft8Proto()` | Randy N4OPI |
-| ~~T106~~ | ✅ **FIXED 2026-10-27, BUILT NOT FLASHED.** The web FT8 preset `<select>` was marked once, when the list was first filled, so any later retune left it stale or blank. `ft8PresetSync()` now runs on every status poll - mode AND frequency must match, and an off-preset dial falls back to "Band..." | Randy N4OPI |
-| ~~T107~~ | ✅ **FIXED 2026-10-27, BUILT NOT FLASHED.** The "No FT8/FT4/JS8 decodes for over N min" warning was a Tab5 toast only. `ft8_rx_stuck_note()` now carries the same text out through `/api/status` `ft8.stuck_note`, shown amber on the browser's `#ft8-webr` line | Randy N4OPI |
-| ~~T108~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** `main/ui/manual_log_modal.c` - callsign + RST sent/rcvd only; date, time, freq, band, mode, callsign, grid and the activation come from the device. Reports pre-fill 599/59 from the radio's mode. Stays open after Log for a run. Drawer button above Activation, plus keyboard action 26 | Brian KB9WFS |
-| ~~T109~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** The drawer's activation button now reads `POTA DL-0123  7/10`; same two calls the Activation window uses, refreshed when the drawer opens | Brian KB9WFS |
-| ~~T110~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Stopping an activation writes `<REF>-<YYYYMMDD>.adi` to the SD card - today's contacts for that reference only, so two parks in a day get two files. `adif_log_export_activation()`; the toast names the file, or says why none was written | Brian KB9WFS |
+| ~~T105~~ | ✅ **FIXED 2026-10-27 (`531db395`), FLASHED to bench dev 2026-10-28; the server half is PROVEN over the API, the menu has not been clicked.** Two faults, one symptom. `set_screen` "ft8" raised the page but never asked for the sub-mode, while "ft4"/"js8" always did - so FT8 kept whatever you were last in. And `screen` answers `"ft8"` for all three sub-modes (9 other tests in `index.html` depend on that), so the menu dimmed whichever of the three you were on. Dimming now asks `ft8Proto()` | Randy N4OPI |
+| ~~T106~~ | ✅ **FIXED 2026-10-27, FLASHED 2026-10-28; logic proven against the served page, not clicked in a browser.** The web FT8 preset `<select>` was marked once, when the list was first filled, so any later retune left it stale or blank. `ft8PresetSync()` now runs on every status poll - mode AND frequency must match, and an off-preset dial falls back to "Band..." | Randy N4OPI |
+| ~~T107~~ | ✅ **FIXED 2026-10-27, FLASHED 2026-10-28; the field is present and empty, which is correct with decodes arriving.** The "No FT8/FT4/JS8 decodes for over N min" warning was a Tab5 toast only. `ft8_rx_stuck_note()` now carries the same text out through `/api/status` `ft8.stuck_note`, shown amber on the browser's `#ft8-webr` line | Randy N4OPI |
+| ~~T108~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⛔ THE WINDOW HAS NEVER BEEN OPENED.** Web form built 2026-10-28 (`a6889482`), not flashed. `main/ui/manual_log_modal.c` - callsign + RST sent/rcvd only; date, time, freq, band, mode, callsign, grid and the activation come from the device. Reports pre-fill 599/59 from the radio's mode. Stays open after Log for a run. Drawer button above Activation, plus keyboard action 26 | Brian KB9WFS |
+| ~~T109~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⛔ not seen.** The web pill shows `7/10` too from 2026-10-28 (`a6889482`), not flashed. The drawer's activation button now reads `POTA DL-0123  7/10`; same two calls the Activation window uses, refreshed when the drawer opens | Brian KB9WFS |
+| ~~T110~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⛔ never run.** The web stop path skipped the file until `a14e3539`; both surfaces now call `activation_stop()`. Stopping an activation writes `<REF>-<YYYYMMDD>.adi` to the SD card - today's contacts for that reference only, so two parks in a day get two files. `adif_log_export_activation()`; the toast names the file, or says why none was written | Brian KB9WFS |
 | ~~T111~~ | ⛔ **ANSWERED, NOT BUILDABLE.** The Unit GPS LED is on the module and driven by the ATGM336H, and our UART has **no TX pin at all** (`unit_gps.c:496`, `UART_PIN_NO_CHANGE`, deliberate) - the Tab5 cannot send the module any command. Not ours to switch off | Brian KB9WFS |
 | **T112** | ⛔ **DECLINED 2026-10-27** - flashing the QMX's own firmware from the Tab5. A failed write strands the operator with a radio needing a programmer, in the field. Revisit only if QRP Labs publish a recoverable path | Brian KB9WFS |
 | **T113** | ✅ **BUILT 2026-10-28** - sticky across reboots in NVS (`log_view_all`), stored only on a TAP so the window's own empty-Today fallback cannot rewrite the choice. ⛔ NOT seen. Original: the log view's **All / Today** toggle should be sticky until changed. ⭐ He also confirmed v1.21.0's activation UTC-day and CQ-POTA fixes work | Bruce N9JCV |
-| ~~T114~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Tapping a spot now records WHO, and the Log window opens with that callsign in it. Guarded by the dial - `spots_last_pick()` answers only within 500 Hz of where the tap put the radio, so a stale call cannot reach the log | operator |
-| ~~T115~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Activation covers 7 programmes, not 2: POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA. One table in `settings.c`; POTA/SOTA/WWFF/IOTA also get their dedicated ADIF field (`MY_POTA_REF` etc), which is what their uploaders read. Targets 10/4/44, none claimed for the rest. Web picker now served from the same table | operator |
-| ~~T116~~ | ✅ **BUILT 2026-10-27, NOT FLASHED.** Scheduled events pane: one spothole `/alerts` fetch carries the ?OTA schedule AND the WA7BNM/RSGB contest calendars, on one timeline, All/Contests/Activations filter. ⚠ On demand only, 15 min TTL - never a standing poll. Button in the Activation window + keyboard action 27. Web surface NOT done | operator |
+| ~~T114~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⛔ never tried.** No web equivalent, by decision: the lane tap is a Tab5 gesture. Tapping a spot now records WHO, and the Log window opens with that callsign in it. Guarded by the dial - `spots_last_pick()` answers only within 500 Hz of where the tap put the radio, so a stale call cannot reach the log | operator |
+| ~~T115~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⭐ PROVEN - all 7 set and read back.** ⚠ The per-programme ADIF fields (`MY_WWFF_REF` and the rest) still need ONE record logged under a non-POTA programme and the ADIF read back; that decides whether a WWFF/SOTA/IOTA activation uploads for credit. Activation covers 7 programmes, not 2: POTA, SOTA, WWFF, IOTA, GMA, WCA, WWBOTA. One table in `settings.c`; POTA/SOTA/WWFF/IOTA also get their dedicated ADIF field (`MY_POTA_REF` etc), which is what their uploaders read. Targets 10/4/44, none claimed for the rest. Web picker now served from the same table | operator |
+| ~~T116~~ | ✅ **BUILT 2026-10-27, FLASHED 2026-10-28, ⭐ HE SAW IT WORK** (both filters; the SOURCE/IN overlap fixed in `66723dab`). Web panel + `GET /api/sched` built 2026-10-28 (`a6889482`), not flashed. Scheduled events pane: one spothole `/alerts` fetch carries the ?OTA schedule AND the WA7BNM/RSGB contest calendars, on one timeline, All/Contests/Activations filter. ⚠ On demand only, 15 min TTL - never a standing poll. Button in the Activation window + keyboard action 27. Web surface NOT done | operator |
 | **T95** | Waterfall mirroring + a signal that slides as the dial turns, seen once after the T90 crash reboot. UNEXPLAINED, not reproducible | operator |
 | **T96** | RF gain adjustment has no audible or visible effect - popup AND web settings. UNTESTED, radio was wedged | Sam W7STF |
 | **T97** | Tab5 rebooted once at 92% battery while changing QMX+ VFO tuning rates. Not reproducible | Sam W7STF |
@@ -232,10 +251,11 @@ when he is back on groups.io.
 
 ### A17. Announcements and promises
 
-1. ⛔ **The DTR column shipped with NO changelog entry**, while Randy N4OPI was
-   asked to report on it. **Verified still absent 2026-10-17**: no `DTR` in
-   `docs/version-history.md`, the release notes or `README.md`. He was asked to
-   look at a column nothing described. Owed since 10-14.
+1. ✅ **DISCHARGED - the DTR column IS described now.** `docs/version-history.md:4312`
+   carries it and names Randy N4OPI, explains DT against DTR, and adds that DT
+   reads `--` until two stations have been heard. **Re-verified 2026-10-28** by
+   grep, which is what the "still absent 2026-10-17" line below was. Kept so it
+   stops being re-raised.
 2. ✅ **"Never exceed PA voltage" to Bryan N0LUF - CLOSED, it shipped.**
    Present in `docs/mkdocs/releases.md`, `docs/version-history.md` and
    `docs/mkdocs/guide/wspr.md`. Three separate 10-12 handoffs carried it as
@@ -251,12 +271,12 @@ when he is back on groups.io.
    itself.** A clock or resampler symptom, not a web one. Logged 10-16 as
    "Unexplained and NOT investigated" and still untouched. This is the only
    item in this queue that is a possible defect in something already shipped.
-2. ⛔ **Does the board stay off with 5 V still present on USB-C?** Randy
-   N4OPI's exact setup (QMX+ pack → 12→5 V converter → USB-C). `power_off` is
-   built and now surfaced on both screens; whether it *stays* off is UNTESTED,
-   and that measurement gates any release note that claims it.
-3. **Eric Moritz' GPIO53 meter check** - a multimeter on the pin. Owed since
-   2026-10-06, the oldest thing in this file.
+2. ✅ **MEASURED 2026-10-18 - it IS a real off and it STAYS off with 5 V on
+   USB-C.** Randy N4OPI's exact setup. The release note that claims it is
+   therefore earned; see `project_power_off_holds_with_usb_c_5v.md`.
+3. ✅ **METERED by Randy N4OPI** (operator, 2026-10-28). The oldest row in this
+   file is closed; what is still owed from T102 is the revised drawing, not a
+   measurement.
 4. **The web listen soak** - never quantified. Open since 10-16.
 5. **Gyula HA3HZ's QMX+ decodes only "T T T T"** - the decisive
    antenna-disconnect test was never run. He asked for help; nothing in our
@@ -266,11 +286,12 @@ when he is back on groups.io.
 7. **Randy's slot 147** - `ffc6e33b` is on the bench and will now say what the
    pile-up held and why a candidate was refused. Needs a capture to catch it
    again.
-8. ⛔ **Randy N4OPI's "busy when it isn't" (T93)** - the web reply
-   path now logs every refusal with the QSO state, and arrivals separately
-   (`cf85f3d2`). NOT FLASHED, so it buys nothing until he sends another
-   capture on a build that carries it. Until then the 02:56 case - stuck
-   four hours, cleared only by a Tab5 reboot - has no candidate at all.
+8. ⚠ **Randy N4OPI's "busy when it isn't" (T93)** - the web reply path logs
+   every refusal with the QSO state, and arrivals separately (`cf85f3d2`).
+   **That IS flashed to bench dev** (it is an ancestor of `66723dab`; the "NOT
+   FLASHED" this row carried was stale, corrected 2026-10-28). What is still
+   missing is a capture from RANDY, and he runs releases - so it buys nothing
+   until a release carries it. The 02:56 case still has no candidate.
 
 ### C17. Built, flashed, never seen or heard
 
@@ -322,11 +343,11 @@ when he is back on groups.io.
   for the pattern is the whole job.
 
 
-1. ⭐ **The web Listen button is not discoverable.** TWO users never found it
-   (Bryan N0LUF, Randy N4OPI), one of them after reading the manual; Sam had
-   to tell them it exists. ⚠ This, and not Firefox, was Bryan's silent audio -
-   `f81a8d50` fixed two real gesture defects that he never hit. Needs a design
-   decision: label it, move it, or surface it on first use.
+1. ✅ **ADDRESSED - the button says "Listen" now, not a bare triangle**
+   (`index.html:1230`, and the note at :237 records why). Two users never found
+   it (Bryan N0LUF, Randy N4OPI); the manual also gained "Getting audio - start
+   here if you hear nothing" (`guide/audio.md:5`). ⛔ Nobody has confirmed they
+   can find it now - that needs a user, not a grep. Verified 2026-10-28.
 2. ~~**Transmitted morse in its own colour** (Sam W7STF).~~ ⛔ **THIS ROW WAS
    STALE — it is T06, and it was BUILT on 2026-10-19 (`ad34fc05`).** The row
    said `cw_decode.c:326` passes `NULL`; it does not. `cw_decode_feed()` keeps
@@ -335,12 +356,18 @@ when he is back on groups.io.
    layer on the Tab5 (`ui.c`), `.cw-tx` in the browser. ⛔ **Never seen**, and
    it needs an actual CW transmission before `t > 0` ever happens. Checked
    2026-10-28 while picking this up as new work.
-3. **Web/Tab5 option parity**: `ft8_early_decode` is in the web FT8 filters
-   group but in the Tab5 *drawer*; "Allow grey-listing" is a Tab5 Options
-   checkbox with no web entry. Measured 10-16, nothing done.
-4. **A manual section on getting audio** - RF gain, the Listen button, where
-   the volume controls actually act. Two users asked this week and another
-   user answered both times.
+3. ▶ **MOSTLY CLOSED, and this row did not say so.** "Allow grey-listing" HAS
+   a web entry - `greylist_en` in the Spots & reporting group
+   (`index.html:4797`) - so the half that said "no web entry" is wrong. Both
+   settings now exist on both surfaces and all that differs is which GROUP they
+   sit in: the Tab5 has grey-listing in FT8 filters and early-decode in the
+   drawer, the browser has them the other way round. Cosmetic. Re-checked
+   2026-10-28.
+4. ✅ **SHIPPED** - `guide/audio.md` opens with "Getting audio - start here if
+   you hear nothing": mode first (DiGi produces no audio by design), then the
+   restart RX audio needs, then the browser's play button, then which of the
+   three volume controls acts where. Announced in `version-history.md:4312`.
+   Verified 2026-10-28.
 5. **The docs audit covered prose and structure, NOT diagrams.**
 6. **The two gesture tables are still duplicated** - parked deliberately.
 

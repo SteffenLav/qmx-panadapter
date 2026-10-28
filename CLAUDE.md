@@ -130,6 +130,15 @@ See [patches detail](../../../memory/project_standing_patches.md).
 Re-read `TODO.md` first (newest work queue at the top) and reconcile against the
 repo. It is a fresh table every time, never a replay of the last one.
 
+⛔ **RECONCILE MEANS GREP THE CODE, not read the row.** This applies to ANY
+answer about what is open, not only to a table he asked for by name. ⚠
+2026-10-28: I offered E17.2 as open work and he picked it; it had shipped nine
+days earlier as T06 (`ad34fc05`) and the row cited a `NULL` that is not in the
+file. Ten rows in that file were stale the same day, in both directions —
+"not flashed" for commits already on bench dev, and "owed" for promises
+already discharged. **A row that names a `file:line` is a claim to check.**
+And clear the row in the SAME change as the work, never later.
+
 ⛔ **Only work that is NOT IMPLEMENTED.** Leave out anything whose remaining
 work is verifying, flashing or looking at something already built — he does not
 want the unverified list here. An unexplained symptom with no known cause IS new
