@@ -128,9 +128,24 @@ static const char *forced_cq_modifier(bool field_day_en)
 {
     if (field_day_en) return "FD";
     if (activation_is_running()) {
-        /* 1 = POTA, 2 = SOTA (settings.h). Both are the standard on-air
-         * tokens, which is why they need no translation table. */
-        return (settings_get_activation_type() == 2) ? "SOTA" : "POTA";
+        /* ⛔ THE PROGRAMME'S OWN NAME, from the activation table.
+         *
+         * This read `(type == 2) ? "SOTA" : "POTA"`, written when POTA and
+         * SOTA were the only two. v1.22.0 added five more and did not sweep
+         * this site, so a WWFF, IOTA, GMA, WCA or WWBOTA activation called
+         * "CQ POTA" - wrong information on the air, not a cosmetic slip.
+         * Found 2026-10-28 while fixing the CQ button label.
+         *
+         * ⚠ FT8'S CQ MODIFIER IS AT MOST 4 CHARACTERS. WWFF, IOTA, GMA and
+         * WCA fit; WWBOTA is six and cannot be encoded. A token that does not
+         * fit falls back to a plain CQ rather than to a DIFFERENT programme's
+         * name: calling "CQ POTA" during a bunker activation tells hunters
+         * something untrue, and a plain CQ tells them nothing, which is the
+         * lesser of the two. The on-air token bunker activators actually use
+         * is an operating-practice question and is not decided here. */
+        const char *sig = settings_activation_sig_name();
+        if (sig && sig[0] && strlen(sig) <= 4) return sig;
+        return NULL;
     }
     return NULL;
 }
