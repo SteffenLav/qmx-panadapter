@@ -899,20 +899,44 @@ it takes you to notice.
 To use it, copy `qso.prev.adi` off the card (**Files ▲ -> SD Files** in the
 browser, or a card reader) and restore it with **ADIF restore ↑**.
 
-## Activation (POTA / SOTA)
+## Activation (POTA / SOTA / WWFF and four more)
 
-When you are activating a park or a summit, every contact you make has to be
-logged as belonging to **that reference** — it is what POTA and SOTA read to
-credit the activation, for you and for the people who worked you.
+When you are activating a park, a summit, a nature reserve or a castle, every
+contact you make has to be logged as belonging to **that reference** — it is
+what the programme reads to credit the activation, for you and for the people
+who worked you.
 
-Open **Activation (POTA/SOTA)** in the settings drawer, pick the scheme, type the
-reference, and tap **Start activation**. From then on every logged QSO carries it
-automatically. There is nothing to remember per contact.
+Open **Activation** in the settings drawer, pick the programme, type the
+reference, and tap **Start activation**. From then on every logged QSO carries
+it automatically. There is nothing to remember per contact.
 
-The screen shows your **contact count against the threshold** — ten for POTA,
-four for SOTA — and turns green when you reach it. That number is read from the
-log itself, so it survives a reboot and can never disagree with what was actually
-written.
+**Seven programmes are supported**, each with its own reference style and its
+own qualifying count:
+
+| Programme | What it is | Example reference | Target |
+|---|---|---|---|
+| **POTA** | Parks on the Air — national, state and regional parks | `DL-0123` | 10 |
+| **SOTA** | Summits on the Air — mountain tops, scored by height | `OZ/SJ-001` | 4 |
+| **WWFF** | World Wide Flora & Fauna — nature reserves and protected land | `DLFF-0123` | 44 |
+| **IOTA** | Islands on the Air — islands and island groups, run by the RSGB | `EU-005` | — |
+| **GMA** | Global Mountain Activity — summits, huts and castles worldwide | `DL/BE-001` | — |
+| **WCA** | World Castles Award — castles and fortifications | `DL-00123` | — |
+| **WWBOTA** | World Wide Bunkers on the Air | `DL-00123` | — |
+
+A dash means that programme has no single qualifying number, so the counter
+just counts.
+
+**The right ADIF field goes in, not just a generic one.** Every record carries
+`MY_SIG` and `MY_SIG_INFO`, and POTA, SOTA, WWFF and IOTA additionally get the
+dedicated field their uploader actually reads — `MY_POTA_REF`, `MY_SOTA_REF`,
+`MY_WWFF_REF`, `MY_IOTA`. Without it an upload can be accepted and still not
+count.
+
+The screen shows your **contact count against that programme's target** and
+turns green when you reach it. That number is read from the log itself, so it
+survives a reboot and can never disagree with what was actually written. The
+same count appears on the Activation button, as `OZ-0001  3/10`, so you can see
+it without opening anything.
 
 **Stopping matters as much as starting.** While a session is running the main
 button is a red **Stop activation**, and the drawer button itself shows the live
@@ -920,9 +944,30 @@ reference rather than a generic label. The failure that actually happens is
 driving home with it still switched on, quietly stamping every later contact with
 a park you have left.
 
+**Stopping also writes that activation's own ADIF file.** When you stop, the
+contacts made during the session are exported to the microSD card on their own,
+named for the reference and the date — `OZFF-0001-20261028.adi`. That is the
+file you submit, without having to cut it out of your whole log afterwards.
+Stopping from the web UI does exactly the same thing as stopping on the Tab5.
+
 The session persists across a restart on purpose — a battery change in the field
 should not lose it — but it is deliberately **not** included in a config backup,
 so restoring an old backup can never re-activate a park you are nowhere near.
+
+### Scheduled events — what is on
+
+The Activation window carries a **Scheduled events** button (keyboard shortcut
+**27**, and **Scheduled** in the web menu). It puts the contest calendar and
+announced POTA/SOTA activations on **one timeline**, soonest first, with what
+is on the air now above what is coming.
+
+Filter to **Contests** or **Activations** when you have already decided what
+kind of evening it is.
+
+It is fetched **on demand, at most every 15 minutes** — never a standing poll,
+because the radio's link and the spot feeds matter more. **Refresh** asks for
+it now. The source being down is not an error: the last list stays up and the
+age line tells you how old it is.
 
 **Chasing** works without any setup: if you work a station the panadapter has
 seen spotted at a park or summit, that reference is written into your log entry
@@ -1002,6 +1047,34 @@ Reporter requests.
 
 ## ADIF & Logging
 
+### Log a contact by hand (CW and SSB)
+
+FT8, FT4 and JS8 log themselves — every field is exchanged, so there is nothing
+to type. **CW and phone are not like that**, and until now there was no way to
+get them into the log at all *(Gyula HA3HZ, Brian KB9WFS)*.
+
+Open the settings drawer and tap **Log a contact (CW/SSB)**, or use keyboard
+shortcut **26**. In the browser it is **Log a contact** in the menu.
+
+You type **the callsign and the two reports. Nothing else.** The frequency,
+mode, band, date, time, your own callsign and grid, and the running activation
+reference all come from the radio and the device.
+
+- The reports arrive **filled in from the mode** — `599` for CW, `59` for
+  phone. Clearing one logs the contact *without* a report rather than with a
+  wrong one.
+- The window **stays open** after Log, with the callsign cleared and the
+  reports kept. A run of contacts is not one dialog at a time.
+- **Tapping a spot** in the spots lane opens this window with that callsign
+  already filled in.
+- It is **refused when the radio is not connected**, because the record would
+  have no frequency — and a QSO with no frequency is not a QSO.
+
+The record lands in the same log as everything else, so the ADIF download, the
+activation count and the uploaders all see it immediately.
+
+### Viewing the log
+
 **ADIF Log** — View the QSO log on-device. The viewer shows a proper column table:
 
 | Column | Content |
@@ -1036,9 +1109,9 @@ Tapping the field brings up the keyboard, and the window moves up and shortens
 so the matches stay visible while you type. Clear the field to see the whole log
 again; the search also clears itself each time you open the window.
 
-**Today/All filter** — the toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts. **Your choice is remembered**, including across a restart, so the viewer reopens on whichever of the two you last picked *(Bruce N9JCV)*. Out of the box that is **Today**, which is what the 10-QSO activation counter below is for. The fallback is unchanged and is not a choice: if Today comes out empty while there are records, the viewer switches to All for that visit without changing what it reopens on next time.
+**Today/All filter** — the toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts. **Your choice is remembered**, including across a restart, so the viewer reopens on whichever of the two you last picked *(Bruce N9JCV)*. Out of the box that is **Today**, which is what the activation counter below is for. The fallback is unchanged and is not a choice: if Today comes out empty while there are records, the viewer switches to All for that visit without changing what it reopens on next time.
 
-**POTA activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches 10 QSOs — a valid POTA activation.
+**Activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches the running programme's target: 10 for POTA, 4 for SOTA, 44 for WWFF. With no activation running it counts without a target.
 
 **Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 

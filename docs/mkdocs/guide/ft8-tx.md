@@ -42,6 +42,12 @@ FT4 has full feature parity with FT8, including time-sync from decoded signals (
 
 Your **settings are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
 
+**Each sub-mode keeps its own frequency.** FT8, FT4 and JS8 have different
+calling frequencies on every band, so they are remembered separately: leave JS8
+on 14.078, come back to FT8, and you land on 14.074 rather than on where JS8
+was. Earlier versions shared one memory between the three, so a visit to one
+moved the other two.
+
 The **decode list and pileup are cleared** on the switch (v1.3.3). The two modes use different slot lengths, so stations decoded under the old timing describe a band the new mode cannot hear — and leaving them on screen meant you could tap one and try to work a station that was no longer there.
 
 ### 3. Modes of Transmission
