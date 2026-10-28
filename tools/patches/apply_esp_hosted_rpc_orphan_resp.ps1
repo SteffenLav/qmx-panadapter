@@ -95,7 +95,14 @@ if (-not (Test-Path $target)) {
 
 $content = Get-Content -Raw -Path $target
 
-if ($content -match "QMX_RPC_SEM_UAF") {
+# Idempotency marker is QMX_RPC_DROP_UNCLAIMED_RESP, NOT QMX_RPC_SEM_UAF.
+# apply_esp_hosted_rpc_table_lock.ps1 replaces both blocks that carried the
+# SEM_UAF comment, so on a fully-patched tree that string is gone and this
+# script tried to re-apply edits whose stock blocks no longer exist - it
+# failed loudly on every re-run of the patch loop (2026-10-28). The marker
+# now matches the one tools/check_patches.py tests for this file, which is
+# what that file's own header asks for.
+if ($content -match "QMX_RPC_DROP_UNCLAIMED_RESP") {
     Write-Host "Already patched (RPC orphan response + semaphore UAF) - nothing to do." -ForegroundColor Green
     exit 0
 }
