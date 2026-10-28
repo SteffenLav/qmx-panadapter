@@ -33,6 +33,15 @@ E17.3 (grey-listing HAS a web entry), E17.4 (the audio section shipped), and
 every T103-T116 row that still said **NOT FLASHED** when its commit is an
 ancestor of `66723dab`, which is what bench dev runs.
 
+✅✅ **v1.22.0 PUBLISHED AND VERIFIED 2026-10-28** (tag `ffe5f3ef`). Both assets
+200 and sha256-identical to `build/`, site live, old PDF gone, bench dev on
+`v1.22.0` exactly — flashed FROM THE EXTRACTED RELEASE ZIP, four hashes
+verified including otadata. ⛔ Phase 8 announcement DRAFTED, NOT POSTED;
+he posts it. Shipped knowingly unverified: T80's re-lock (never met a real
+starvation) and T90's bias (measured this release as the far rig's own low
+cut, not our estimator). Owed in the notes and carried there: Sam W7STF,
+Gyula HA3HZ, Ralph DL1HR.
+
 ⛔ **A SECOND PASS, 2026-10-28: T92 was stale too.** It was listed to him as a
 promise still owed; the docs had gone in on 2026-10-25 (`75bd321a`), the day it
 was raised. Fifteen rows corrected in all. Also settled the same day by his
