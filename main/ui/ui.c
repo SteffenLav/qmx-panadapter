@@ -9838,15 +9838,27 @@ static int smeter_value_for_units(int s_units)
  * is steady so peak = level, and on SSB an operator reads the meter on speech
  * peaks, which is what a voice report has always meant.
  *
- * ⚠⚠ UNMEASURED, AND IT IS THE ONE THING THAT COULD MAKE THIS WRONG: what the
- * I/Q stream carries while the QMX is TRANSMITTING. There is no CAT TX getter
- * (cat.h has mode, AF gain, RF gain - no PTT), and a hand-keyed CW contact
- * never goes through our own TX path, so this code cannot know. If our own
- * transmission appears in the I/Q at a high level, this hold latches on it and
- * offers S9 for the whole window after we stop sending - exactly when the
- * operator opens the Log window. THE FIRST BENCH TEST IS THAT MEASUREMENT:
- * key the radio, then open Log and read the S. Until it is run, the digit is
- * a convenience that stays editable, not a reading to trust. */
+ * ⭐ MEASURED 2026-10-29, AND IT KILLED THE ONE HYPOTHESIS THAT WOULD HAVE
+ * SUNK THIS. The fear was our own transmission: there is no CAT TX getter
+ * (cat.h has mode, AF gain, RF gain - no PTT) and a hand-keyed contact never
+ * goes through our TX path, so this code cannot know when the radio is keyed.
+ * If the I/Q carried our own carrier at a high level, the hold would latch on
+ * it and offer S9 for ten seconds after we stop - exactly when the operator
+ * reaches for Log.
+ *
+ * It does not. A tune carrier into a dummy load on 40 m, confirmed on the air
+ * by the radio's own reports (mode -> MD8, PC10 = 1.0 W, SW107..113 = SWR 1.1):
+ *
+ *     before   -119.2, -121.7 dBm      S1
+ *     keyed    -116.6, -113.7, -116.2  S2
+ *     after    -120.7, -119.9          S1
+ *
+ * About 6 dB, no overlap between the groups, back to baseline on stop. Even
+ * 20 dB more leakage at full power would reach S5, not S9.
+ *
+ * ⚠ Measured at 1.0 W, which is what Tune keys. 5 W is an extrapolation, not
+ * a measurement - but the margin to a railed reading is far too large for it
+ * to matter. */
 /* ⛔ ONE constant, not a window the caller picks. A decay period in the writer
  * and a different window in the reader disagree: a peak older than the
  * reader's window but younger than the writer's decay still suppresses a newer
