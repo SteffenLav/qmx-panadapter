@@ -2464,6 +2464,40 @@ function sUnitsFromDbm(dbm) {
   return "S" + Math.max(1, Math.min(9, Math.round(9 + (dbm+73)/6)));
 }
 
+/* T120 - the same S-unit number as above, as an integer 1..9 for the Log
+   window's received report. Above S9 clamps to 9: RST has one digit. */
+function sUnitsNumFromDbm(dbm) {
+  if (dbm === null || dbm === undefined) return null;
+  if (dbm >= -73) return 9;
+  return Math.max(1, Math.min(9, Math.round(9 + (dbm+73)/6)));
+}
+
+/* T120 - DECAYING PEAK-HOLD, and it is NOT the meter. The warning at the WS
+   S-meter trailer still stands: no hold or EMA feeds drawSmeter(), because a
+   hold on one screen only re-opens the Tab5-vs-browser disagreement. This
+   variable is read by logOpen() and by nothing else, and it mirrors ui.c's
+   SMETER_HOLD_MS exactly so the two Log windows offer the same digit. */
+const LOG_SMETER_HOLD_MS = 10000;
+let logSmeterPeakUnits = 0;
+let logSmeterPeakAt    = 0;
+
+function logSmeterNote(dbm) {
+  const u = sUnitsNumFromDbm(dbm);
+  if (u === null) return;
+  const now = performance.now();
+  if (!logSmeterPeakAt || now - logSmeterPeakAt > LOG_SMETER_HOLD_MS
+      || u >= logSmeterPeakUnits) {
+    logSmeterPeakUnits = u;
+    logSmeterPeakAt    = now;
+  }
+}
+
+function logSmeterRecentPeak() {
+  if (!logSmeterPeakAt) return null;
+  if (performance.now() - logSmeterPeakAt > LOG_SMETER_HOLD_MS) return null;
+  return logSmeterPeakUnits;
+}
+
 /* =====================================================================
    Dropdown system
    ===================================================================== */
@@ -9301,7 +9335,16 @@ function logOpen() {
   /* PRE-FILLED FROM THE MODE. A CW window offering 59 would be re-typed for
      every contact; clearing one logs no report rather than a wrong one. */
   document.getElementById('log-rst-s').value = logDefaultRst();
-  document.getElementById('log-rst-r').value = logDefaultRst();
+  /* T120 - the RECEIVED report's S digit is measured; R and T are not, and
+     the SENT report is never touched. Same rule as measured_rst_rcvd() on the
+     Tab5: no reading in the hold falls back to the mode default rather than
+     offering S0, because absence of a measurement is not a weak signal. */
+  {
+    const u = logSmeterRecentPeak();
+    const cw = (lastMode || "").toUpperCase().startsWith("C");
+    document.getElementById('log-rst-r').value =
+        (u === null) ? logDefaultRst() : (cw ? "5" + u + "9" : "5" + u);
+  }
   document.getElementById('log-err').textContent = "";
   document.getElementById('log-ok').textContent = "";
   logSyncState();
@@ -12364,6 +12407,7 @@ function connectWs() {
       if (wsSmeterTick === 0) {
         lastSignalDbm = (sq === -32768) ? null : sq / 10;
         lastSignalFromWsAt = performance.now();
+        logSmeterNote(lastSignalDbm);   /* T120 - the Log window's hold, not the meter */
         drawSmeter(lastSignalDbm);
       }
     }

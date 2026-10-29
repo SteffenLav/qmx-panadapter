@@ -9821,11 +9821,84 @@ static int smeter_value_for_units(int s_units)
     return (v > 68) ? 68 : v;
 }
 
+/* T120 - THE RECENT PEAK, so the manual log window can offer a measured S
+ * instead of 599 every time. Gyula HA3HZ: "not every signal can be a 59 or
+ * 599; since the device measures digital signal levels, it should be able to
+ * measure other signals as well." He is right, and the measurement was
+ * already here - only the log window never asked for it.
+ *
+ * A DECAYING PEAK-HOLD, not a sliding window: the peak expires `window_ms`
+ * after the moment it OCCURRED, which is what "the strongest thing heard in
+ * the last few seconds" means to an operator reading a meter. Two words of
+ * state, written at 1.6 Hz by the render task and read once per modal open by
+ * the LVGL task - hence the spinlock, which is for the PAIR (units with its
+ * timestamp), not for either word alone.
+ *
+ * PEAK, not mean, for both modes and for the same reason: on CW the carrier
+ * is steady so peak = level, and on SSB an operator reads the meter on speech
+ * peaks, which is what a voice report has always meant.
+ *
+ * ⚠⚠ UNMEASURED, AND IT IS THE ONE THING THAT COULD MAKE THIS WRONG: what the
+ * I/Q stream carries while the QMX is TRANSMITTING. There is no CAT TX getter
+ * (cat.h has mode, AF gain, RF gain - no PTT), and a hand-keyed CW contact
+ * never goes through our own TX path, so this code cannot know. If our own
+ * transmission appears in the I/Q at a high level, this hold latches on it and
+ * offers S9 for the whole window after we stop sending - exactly when the
+ * operator opens the Log window. THE FIRST BENCH TEST IS THAT MEASUREMENT:
+ * key the radio, then open Log and read the S. Until it is run, the digit is
+ * a convenience that stays editable, not a reading to trust. */
+/* ⛔ ONE constant, not a window the caller picks. A decay period in the writer
+ * and a different window in the reader disagree: a peak older than the
+ * reader's window but younger than the writer's decay still suppresses a newer
+ * lower value, and the reader then reports nothing at all while the meter is
+ * plainly reading something. One number, both sides.
+ *
+ * 10 s is about three CW "TU 73" overs or one sentence of speech - short
+ * enough that it is still the station just worked, long enough that the
+ * operator can finish the exchange before reaching for Log. The render task
+ * samples at 1.6 Hz, so a hold spans ~16 samples. */
+#define SMETER_HOLD_MS 10000
+
+static portMUX_TYPE s_smeter_hold_mux = portMUX_INITIALIZER_UNLOCKED;
+static int64_t      s_smeter_hold_us    = 0;   /* 0 = nothing held */
+static int          s_smeter_hold_units = 0;
+
+bool ui_smeter_recent_peak(int *out_units)
+{
+    if (!out_units) return false;
+    int64_t now = esp_timer_get_time();
+    bool ok = false;
+    portENTER_CRITICAL(&s_smeter_hold_mux);
+    if (s_smeter_hold_us != 0 &&
+        now - s_smeter_hold_us <= (int64_t)SMETER_HOLD_MS * 1000) {
+        *out_units = s_smeter_hold_units;
+        ok = true;
+    }
+    portEXIT_CRITICAL(&s_smeter_hold_mux);
+    return ok;
+}
+
 void ui_update_smeter(int s_units)
 {
-    if (!s_smeter_bar) return;
     if (s_units < 0) s_units = 0;
     if (s_units > 108) s_units = 108;  // clamp at S9+99
+
+    /* ⛔ RECORDED BEFORE THE WIDGET CHECK. The bar does not exist on every
+     * screen, and the early return below would otherwise stop the hold on
+     * exactly the screens where the operator is listening and about to log. */
+    {
+        int64_t now = esp_timer_get_time();
+        portENTER_CRITICAL(&s_smeter_hold_mux);
+        bool stale = (s_smeter_hold_us == 0) ||
+                     (now - s_smeter_hold_us > (int64_t)SMETER_HOLD_MS * 1000);
+        if (stale || s_units >= s_smeter_hold_units) {
+            s_smeter_hold_units = s_units;
+            s_smeter_hold_us    = now;
+        }
+        portEXIT_CRITICAL(&s_smeter_hold_mux);
+    }
+
+    if (!s_smeter_bar) return;
     int value = smeter_value_for_units(s_units);
     if (display_lock(100)) {
         lv_bar_set_value(s_smeter_bar, value, LV_ANIM_ON);

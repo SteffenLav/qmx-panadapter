@@ -30,6 +30,12 @@ void ui_apply_saved_mode_start(void);
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
 void ui_update_smeter(int s_units);
+/* T120 - the strongest S-unit reading of the last few seconds, for the
+ * manual log window's received report. false when nothing was measured in
+ * that time, which is NOT the same as a weak signal: the caller falls back
+ * to its own default rather than offering S0. See ui.c for the hold policy
+ * and for the one thing about it that has not been measured. */
+bool ui_smeter_recent_peak(int *out_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"
 void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll

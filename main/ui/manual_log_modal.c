@@ -72,6 +72,44 @@ static const char *default_rst(void)
     return (m[0] == 'C' || m[0] == 'c') ? "599" : "59";
 }
 
+/* T120 - THE RECEIVED REPORT'S S DIGIT IS MEASURED, THE OTHER TWO ARE NOT.
+ * Gyula HA3HZ: every contact reported 59 or 599 says nothing, and the device
+ * is already measuring the signal. It is, at 1.6 Hz, to draw the S-meter -
+ * ui_smeter_recent_peak() just hands over the strongest reading of the last
+ * few seconds.
+ *
+ * ⛔ ONLY the S. The other two digits are NOT measurable and are left alone:
+ *   R  readability is what the OPERATOR heard. A machine can measure a signal;
+ *      it cannot know whether the call was copied. The CW decoder's error rate
+ *      is a different quantity and printing it as R would be a lie.
+ *   T  tone quality IS measurable in principle - hum sidebands, chirp across a
+ *      key-down, click skirts - but every synthesised transmitter on the air
+ *      today is T9, so the DSP would buy a digit that is already correct.
+ *
+ * ⛔ THE SENT REPORT IS NEVER TOUCHED. What we send is the operator's
+ * judgement of a signal this device cannot hear at all.
+ *
+ * S-units above 9 clamp to 9: RST has one digit, and "S9+20" is not a report.
+ * No reading in the window (meter never sampled, or the screen was under a
+ * full-screen overlay the whole time) falls back to default_rst() rather than
+ * offering S0 - absence of a measurement is not a weak signal. */
+static void measured_rst_rcvd(char *buf, size_t len)
+{
+    int units;
+    if (!ui_smeter_recent_peak(&units)) {
+        snprintf(buf, len, "%s", default_rst());
+        return;
+    }
+    if (units < 1) units = 1;
+    if (units > 9) units = 9;
+
+    const char *m = radio_mode();
+    bool cw = (m[0] == 'C' || m[0] == 'c');
+    /* R stays 5 and T stays 9 - the defaults the operator would have typed. */
+    if (cw) snprintf(buf, len, "5%d9", units);
+    else    snprintf(buf, len, "5%d",  units);
+}
+
 static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
@@ -409,7 +447,13 @@ void manual_log_modal_show(void)
     /* Re-read on every open: the operator may have changed mode between
      * contacts, and a CW window offering 59 would be re-typed every time. */
     lv_textarea_set_text(s_ta_sent, default_rst());
-    lv_textarea_set_text(s_ta_rcvd, default_rst());
+    {
+        /* Measured S for what we RECEIVED; the sent report stays the
+         * operator's own. See measured_rst_rcvd(). */
+        char rcvd[8];
+        measured_rst_rcvd(rcvd, sizeof(rcvd));
+        lv_textarea_set_text(s_ta_rcvd, rcvd);
+    }
     note_set("", UI_COLOR_TEXT_SECONDARY);
     header_refresh();
     refresh_log_enabled();
