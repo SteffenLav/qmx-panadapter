@@ -8735,11 +8735,14 @@ let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
    move the WINDOW was the band-plan strip. The operator asked for the gesture
    the Tab5 has, on the button that was free.
    Left is unchanged, so nothing anybody already does changes meaning.
-   ⛔ The passband STAYS DRAWN throughout, in every mode - unlike the Tab5's own
-   pan, which hides it. The reason the Tab5 hides it is to show that the dial
-   came along with the window; this gesture goes out as view_center and
-   deliberately leaves the dial alone, so there is nothing to show and hiding it
-   would only remove the reference you are panning against. */
+   ⭐ The passband is DIMMED, never hidden, for the length of the gesture -
+   see specPassbandOpa(). It used to stay at FULL here, on the reasoning that
+   this gesture leaves the dial alone so there is nothing to signal and the
+   passband is the reference you are panning against. The operator asked for
+   the two surfaces to read alike, 2026-10-30, and the Tab5 dims. ⚠ The old
+   wording claimed the browser kept it drawn "unlike the Tab5" - true when
+   written, false once the Tab5 moved from hiding to dimming, and it is what
+   made a draft to Gyula claim parity that did not exist. */
 let specPanActive      = false;
 let specPanStartX      = 0;
 /* ⭐ WHAT THE LAST FRAME SAID, not what the 1 Hz poll said. These are the
@@ -9426,6 +9429,30 @@ function drawSpots(ctx, W, H) {
    hover preview still explains the redirection, because both go through here. */
 const SPOT_HIT_HALF_PX = 10;   /* ~400 Hz at zoom x1 */
 
+/* ⭐ TAP THE ARROW TO COME BACK TO THE DIAL. Operator, 2026-10-30: "It could
+   also be clickable so that it would move the bw (and marker) to the middle of
+   the screen if clicked (then no need to drag again to look for it)."
+   Checked BEFORE spotHitTest and before tap-to-tune, because a click on the
+   arrow is navigation, not a tune - and the arrow sits at mid-height where the
+   trace is, so without this it would retune to whatever column it covers. */
+function vfoArrowHit(clientX, clientY, rect) {
+  if (!vfoArrowBox) return false;
+  const cx = (clientX - rect.left) / rect.width  * specPxW;
+  const cy = (clientY - rect.top)  / rect.height * specPxH;
+  const b = vfoArrowBox;
+  return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+}
+/* ⛔ DERIVED FROM THE FRAME, AND FROM THE SAME EXPRESSION THAT DRAWS THE
+   MARKER. freqToPixelX puts the dial at (dial - lo)/span*W, so it lands on the
+   middle exactly when lo is dial - span/2; lo moves one-for-one with the pan,
+   and the frame carries both the live lo and the exact pan. So the click
+   cannot land the marker somewhere the arrow did not promise, and it needs
+   neither the 1 Hz status poll nor a second guess at the IF residual. */
+function vfoArrowRecentre() {
+  if (!(frameViewSpan > 0) || framePanHz === null || !lastFreqHz) return;
+  const desiredLo = lastFreqHz - frameViewSpan / 2;
+  specPanTo(framePanHz + (desiredLo - frameViewLo));
+}
 function spotHitTest(clientX, clientY, rect) {
   const cx = (clientX - rect.left) / rect.width  * specPxW;
   const cy = (clientY - rect.top)  / rect.height * specPxH;
@@ -9999,8 +10026,10 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     if (specPanActive) return;   /* panning, not aiming - no tune cursor */
     // A spot label under the pointer says so, and swallows the tune cursor: the
     // two mean different things and showing both invites a mis-click.
+    const onArrow = vfoArrowHit(e.clientX, e.clientY, getRect());
     const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
-    el.style.cursor = hit ? "pointer" : "";
+    el.style.cursor = (hit || onArrow) ? "pointer" : "";
+    if (onArrow) { spotHover = null; tuneCursorX = -1; return; }
     spotHover = hit;                 // drives the preview in overlayTuneCursor()
     if (hit && !tuneActive) { tuneCursorX = -1; return; }
     handleTuneMove(e.clientX, getRect());
@@ -10078,6 +10107,10 @@ function addTuneListeners(overlayId, getRect, onSpec) {
       return;
     }
     if (e.button !== 0) return;                 // middle does nothing
+    /* The off-view arrow first: navigation, not a tune - see vfoArrowHit(). */
+    if (vfoArrowHit(e.clientX, e.clientY, getRect())) {
+      vfoArrowRecentre(); tuneCursorX = -1; e.preventDefault(); return;
+    }
     // Clicking a spot tunes to THAT station (frequency and mode) instead of to
     // wherever the pixel happened to be - the whole point of drawing them.
     const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
@@ -10094,6 +10127,9 @@ function addTuneListeners(overlayId, getRect, onSpec) {
   // Touch
   el.addEventListener("touchstart", (e) => {
     const t0 = e.touches[0];
+    if (vfoArrowHit(t0.clientX, t0.clientY, getRect())) {
+      vfoArrowRecentre(); tuneCursorX = -1; e.preventDefault(); return;
+    }
     const hit = onSpec ? spotHitTest(t0.clientX, t0.clientY, getRect()) : null;
     if (hit) { tuneToSpot(hit); tuneCursorX = -1; e.preventDefault(); return; }
     tuneActive = true;
@@ -11280,14 +11316,124 @@ function drawRitMarker(ctx, W, H) {
    Recomputed rather than passed in: both spectrum painters want them at the
    same point in their own draw order, and passing three numbers through would
    mean two call sites that can disagree about which passband they mean. */
+/* ⭐ DIMMED WHILE THE WINDOW IS BEING DRAGGED, to match the Tab5.
+ *
+ * Mirrors DRAG_PASSBAND_OPA in ui.c - keep the two numbers in step. The Tab5
+ * used to HIDE its passband during a pan and now dims it instead, because the
+ * passband is the thing being aimed at (Gyula HA3HZ, 2026-10-29: aiming at
+ * ~300 Hz on a 12 kHz span is about 25 px of 1280, and the aim point was what
+ * vanished).
+ *
+ * ⚠ THE BROWSER NEVER HAD THAT FAULT - it kept the passband at FULL through a
+ * drag, which is why the operator found this file's claim of parity false:
+ * "the web does NOT dim while dragging". Matching is his explicit call,
+ * 2026-10-30, so the two surfaces read the same during the gesture. It is not
+ * a bug fix; the previous behaviour was defensible.
+ *
+ * ⛔ DO NOT look for this in DRAG_PB_ALPHA / bpFadeAlpha(). Those are the
+ * BAND-PLAN STRIP (`bp` is the bandplan prefix throughout this file) and apply
+ * while `bpDragging`, a drag of the strip. They are a different object and
+ * mislead anyone grepping for 0.35 - which is exactly what happened. */
+const SPEC_DRAG_PB_OPA = 0.35;
+function specPassbandOpa() {
+  /* While the hand is down AND while the residual settles - the same span the
+     Tab5 covers with s_stroll_active, and the same span the CSS translate is
+     applied over, so the dim starts and ends with the gesture rather than with
+     one of its halves. */
+  return (specPanActive || specPanTrack) ? SPEC_DRAG_PB_OPA : 1;
+}
+/* ⛔ ONE COPY. This tint was duplicated verbatim - comment and all - in
+   drawSpectrumFlat() and drawSpectrumRaw(), so the drag dim would have had to
+   be added twice and the second copy would have been the one that got missed.
+   Behind the trace, which is why it is a separate call from the edges below. */
+function drawPassbandTint(sctx, W, H) {
+  const pb = passbandBins();
+  if (!pb) return;
+  const x1 = Math.round(pb.loBin * W / SPEC_W);
+  const x2 = Math.round(pb.hiBin * W / SPEC_W);
+  const bx1 = Math.max(0, Math.min(W, x1));
+  const bx2 = Math.max(0, Math.min(W, x2));
+  if (bx2 <= bx1) return;
+  const a = 0.38 * specPassbandOpa();
+  sctx.fillStyle = "rgba(74,85,96," + a.toFixed(3) + ")";
+  sctx.fillRect(bx1, 0, bx2 - bx1, H);
+}
+/* The EDGE LINES are drawn AFTER the trace, unlike the tint: they used to sit
+   beside it, and the trace is filled opaque "#003800" and stroked over them
+   immediately afterwards, so the filter edges vanished under any signal
+   (Samuel W7STF: "The filter extents on the Web-view are occluded by the
+   PSD"). They go next to the VFO marker, which was already - correctly -
+   painted after the trace and was therefore always visible. */
+/* ⭐ THE OFF-VIEW ARROW - the Tab5 has had one since #298 phase 4 and this page
+ * had NOTHING: the amber line is drawn with a bare fillRect and no bounds test,
+ * so once the dial left the view the marker was simply painted off-canvas and
+ * vanished. Panned away from the VFO and "something is broken" looked identical,
+ * which is the fault the Tab5's triangle exists to prevent.
+ *
+ * ⛔ THE OPERATOR HAD IT THE OTHER WAY ROUND, and so did I: he asked for "the
+ * same for the Tab5" believing the web had it. It is the web that was missing.
+ * I then searched the history for arrow GLYPHS and "edge arrow" and reported
+ * that neither screen ever had one - wrong, because the Tab5 draws it pixel by
+ * pixel and its comment says "A TRIANGLE". Searching for one vocabulary is not
+ * searching the space.
+ *
+ * Geometry, colour and direction mirror ui.c: 22 px half-height, 14 px of
+ * taper, point AT the edge with the base inwards so the shape says which way
+ * the dial went, in the VFO line's own amber. dpr-scaled, like the spot edge
+ * counters - a literal 14 renders at about 7 CSS px on a 2x display.
+ *
+ * ⛔ BOTH THE MARKER AND THE WHOLE PASSBAND MUST BE OFF VIEW. Operator,
+ * 2026-10-30: "no need for any indication if the bw is for example still half
+ * visible". The passband test is an INTERSECTION, because a filter wider than
+ * the span has both edges off screen while covering every column of it. */
+let vfoArrowBox = null;   /* hit rect in CANVAS px, or null - see the hit test */
+function drawVfoMarker(sctx, W, H) {
+  const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
+  const onScreen = (vfoX >= 0 && vfoX < W);
+  const pb = passbandBins();
+  let pbOff = true;
+  if (pb) {
+    const px1 = pb.loBin * W / SPEC_W, px2 = pb.hiBin * W / SPEC_W;
+    const lo = Math.min(px1, px2), hi = Math.max(px1, px2);
+    pbOff = (hi < 0 || lo >= W);
+  }
+  if (onScreen) {
+    sctx.fillStyle = "#ffb95a";
+    sctx.fillRect(vfoX - 1, 0, 2, H);
+    vfoArrowBox = null;
+    return;
+  }
+  if (!pbOff) { vfoArrowBox = null; return; }   /* the filter is still in sight */
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const th  = Math.round(22 * dpr);
+  const tw  = Math.round(14 * dpr);
+  const mid = Math.round(H / 2);
+  const left = (vfoX < 0);
+  sctx.fillStyle = "#ffb95a";
+  for (let i = 0; i < tw; i++) {
+    const half = Math.round(th * i / tw);
+    const x = left ? i : (W - 1 - i);
+    sctx.fillRect(x, Math.max(0, mid - half), 1, Math.min(H, 2 * half + 1));
+  }
+  /* Generous tap/click target around it, same reasoning as ui.c's 44x80: the
+     taper is too thin to hit. Stored for the hit test, which runs BEFORE
+     tap-to-tune so a click here recentres instead of retuning. */
+  const hw = Math.round(44 * dpr), hh = Math.round(80 * dpr);
+  vfoArrowBox = { x: left ? 0 : (W - hw), y: Math.max(0, mid - hh / 2), w: hw, h: hh,
+                  left: left };
+}
 function drawPassbandEdges(sctx, W, H) {
   const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
   const x2 = Math.round(pb.hiBin * W / SPEC_W);
+  const prev = sctx.globalAlpha;
+  sctx.globalAlpha = prev * specPassbandOpa();
   sctx.fillStyle = "#7a9aaa";
   if (x1 >= 0 && x1 < W) sctx.fillRect(x1 - 1, 0, 2, H);
   if (x2 >= 0 && x2 < W) sctx.fillRect(x2 - 1, 0, 2, H);
+  sctx.globalAlpha = prev;
 }
 
 function drawSpectrumFlat(bytes) {
@@ -11330,22 +11476,7 @@ function drawSpectrumFlat(bytes) {
     if (y >= 0 && y < H) sctx.fillRect(0, y, W, 1);
   }
 
-  const pb = passbandBins();
-  if (pb) {
-    const x1 = Math.round(pb.loBin * W / SPEC_W);
-    const x2 = Math.round(pb.hiBin * W / SPEC_W);
-    const bx1 = Math.max(0, Math.min(W, x1));
-    const bx2 = Math.max(0, Math.min(W, x2));
-    /* The TINT stays here, behind the trace - it is a wash over the band and
-       reads correctly with signals drawn on top of it. The EDGE LINES do not:
-       they were drawn here too, and the trace is filled opaque "#003800" and
-       stroked over them immediately afterwards, so the filter edges vanished
-       under any signal (Samuel W7STF: "The filter extents on the Web-view are
-       occluded by the PSD"). They are now drawn by drawPassbandEdges() next to
-       the VFO marker, which was already - correctly - painted after the trace
-       and was therefore always visible. That inconsistency is the bug. */
-    if (bx2 > bx1) { sctx.fillStyle = "rgba(74,85,96,0.38)"; sctx.fillRect(bx1, 0, bx2-bx1, H); }
-  }
+  drawPassbandTint(sctx, W, H);
 
   /* Zoom: render only windowBins centred on the IF-shifted centre.
      With zoom-FFT the server already mixed to DC; getZoomWindow() applies
@@ -11393,8 +11524,7 @@ function drawSpectrumFlat(bytes) {
   if (peakOnF) { for (let i = 0; i < W; i++) peakFeed(i, yOf(i)); peakStroke(W); }
 
   drawPassbandEdges(sctx, W, H);
-  const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
-  sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+  drawVfoMarker(sctx, W, H);
   drawRitMarker(sctx, W, H);
 
   /* dB-above-floor scale labels at the gridlines (right edge) */
@@ -11421,22 +11551,7 @@ function drawSpectrumRaw(bytes) {
     sctx.fillRect(0, y, W, 1);
   }
 
-  const pb = passbandBins();
-  if (pb) {
-    const x1 = Math.round(pb.loBin * W / SPEC_W);
-    const x2 = Math.round(pb.hiBin * W / SPEC_W);
-    const bx1 = Math.max(0, Math.min(W, x1));
-    const bx2 = Math.max(0, Math.min(W, x2));
-    /* The TINT stays here, behind the trace - it is a wash over the band and
-       reads correctly with signals drawn on top of it. The EDGE LINES do not:
-       they were drawn here too, and the trace is filled opaque "#003800" and
-       stroked over them immediately afterwards, so the filter edges vanished
-       under any signal (Samuel W7STF: "The filter extents on the Web-view are
-       occluded by the PSD"). They are now drawn by drawPassbandEdges() next to
-       the VFO marker, which was already - correctly - painted after the trace
-       and was therefore always visible. That inconsistency is the bug. */
-    if (bx2 > bx1) { sctx.fillStyle = "rgba(74,85,96,0.38)"; sctx.fillRect(bx1, 0, bx2-bx1, H); }
-  }
+  drawPassbandTint(sctx, W, H);
 
   /* Prefer the device's own viewport. The fallback below is the OLD path, kept
      only for a device that is not sending one (older firmware, or the zoom-FFT
@@ -11476,8 +11591,7 @@ function drawSpectrumRaw(bytes) {
   }
 
   drawPassbandEdges(sctx, W, H);
-  const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
-  sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+  drawVfoMarker(sctx, W, H);
   drawRitMarker(sctx, W, H);
 
   /* dBm scale labels at the gridlines (right edge) */

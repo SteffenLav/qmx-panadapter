@@ -4365,6 +4365,30 @@ static void update_db_scale(void);   // positions/labels the gridline values
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
+/* Invisible tap targets over the off-view VFO arrow, one per edge. Only the
+ * side whose arrow is drawn is ever un-hidden - see the arrow in the draw
+ * pass. Same shape as spots_lane.c's edge counters, and for the same reason:
+ * a live target sitting over empty spectrum would steal tap-to-tune. */
+static lv_obj_t *s_vfo_arrow_hit_l = NULL;
+static lv_obj_t *s_vfo_arrow_hit_r = NULL;
+/* Tapping either arrow brings the dial back to the middle of the view.
+ *
+ * ui_request_pan_hz(residual) and not 0: the marker is drawn at
+ * cx = (residual - pan) * W / span + W/2, so cx lands on W/2 exactly when the
+ * pan equals the residual. Derived from the SAME expression that draws the
+ * marker, so the tap cannot put it somewhere the arrow did not promise - the
+ * spectrum is rotated by a whole number of bins and a pan of 0 would be up to
+ * ~23 Hz off, which is half the screen at x16.
+ *
+ * Queued, not applied here: this runs in the LVGL event context and
+ * pan_q_apply() calls dsp_set_zoom(). Same route the web API takes. */
+static void vfo_arrow_click_cb(lv_event_t *e)
+{
+    (void)e;
+    int res = ui_get_if_residual_hz();
+    ui_request_pan_hz((int64_t)res);
+    ESP_LOGI(TAG, "off-view arrow tapped: pan -> %d Hz, dial back to centre", res);
+}
 /* Partial-invalidate state for ui_push_spectrum - declared here, beside the
  * buffer it describes, because build_spectrum() allocates it. The reasoning
  * is at the invalidate itself. */
@@ -5921,6 +5945,36 @@ static void build_spectrum(lv_obj_t *parent)
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
                          DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    /* ⭐ TAP THE OFF-VIEW ARROW TO COME BACK TO THE DIAL.
+     *
+     * Generous targets - 44 px wide, 80 tall, centred on the arrow's own
+     * mid-height - because the arrow itself is 14 px of taper and nobody hits
+     * that with a finger. Created hidden; the draw pass un-hides whichever side
+     * it drew, so the two can never disagree about which edge is live.
+     *
+     * ⛔ ON s_spectrum_obj, NOT the canvas: the canvas is a child with its own
+     * geometry and these must sit above it in the z-order to get the press
+     * before touch_event_cb's tap-to-tune does. */
+    s_vfo_arrow_hit_l = lv_obj_create(s_spectrum_obj);
+    lv_obj_set_size(s_vfo_arrow_hit_l, 44, 80);
+    lv_obj_align(s_vfo_arrow_hit_l, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_bg_opa(s_vfo_arrow_hit_l, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_vfo_arrow_hit_l, 0, 0);
+    lv_obj_set_style_pad_all(s_vfo_arrow_hit_l, 0, 0);
+    lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_vfo_arrow_hit_l, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
+
+    s_vfo_arrow_hit_r = lv_obj_create(s_spectrum_obj);
+    lv_obj_set_size(s_vfo_arrow_hit_r, 44, 80);
+    lv_obj_align(s_vfo_arrow_hit_r, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_opa(s_vfo_arrow_hit_r, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_vfo_arrow_hit_r, 0, 0);
+    lv_obj_set_style_pad_all(s_vfo_arrow_hit_r, 0, 0);
+    lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_vfo_arrow_hit_r, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
 
     // Phase 5.4: dB range labels (top-left and bottom-left of spectrum)
     s_db_max_label = lv_label_create(s_spectrum_obj);
@@ -11215,8 +11269,23 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int edge_x_lo = (int)((int64_t)(pb_low_hz  + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
         int edge_x_hi = (int)((int64_t)(pb_high_hz + pb_res - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
-        if (edge_x_lo < 0) edge_x_lo = 0;
-        if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        /* ⛔ OFF-VIEW MEANS GONE, NOT SQUASHED ONTO THE EDGE.
+         *
+         * This used to clamp both ends unconditionally, so a passband entirely
+         * off the view collapsed to a one-column tint stuck against x=0 or
+         * x=1279 and sat there - saying "the filter is here" about a frequency
+         * that is not on screen. pan_view.h names that exact failure, and the
+         * passband EDGE LINES twelve lines below already avoid it by skipping
+         * when they fall outside. The tint disagreed with the lines it bounds.
+         *
+         * An empty range makes the fill loop below a no-op, which is the whole
+         * fix: clamp only when there is something to clamp INTO. */
+        if (edge_x_hi < 0 || edge_x_lo >= DISPLAY_H_RES) {
+            edge_x_lo = 1; edge_x_hi = 0;          /* empty: nothing is drawn */
+        } else {
+            if (edge_x_lo < 0) edge_x_lo = 0;
+            if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        }
         SPEC_SIG(pb_low_hz); SPEC_SIG(pb_high_hz); SPEC_SIG(rit_pb_hz);
         SPEC_SIG(pan_hz_pb); SPEC_SIG(span_hz_pb); SPEC_SIG(pb_res);
         SPEC_SIG(edge_x_lo); SPEC_SIG(edge_x_hi);
@@ -11679,14 +11748,25 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // see the note there for why it is applied at the drawing and not in
         // compute_passband_edges_hz().
         int32_t rit_edge_hz = cat_get_rit_hz();
-        for (int side = 0; side < 2; side++) {
-            int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
-            /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
+        /* ⭐ BOTH EDGES COMPUTED UP FRONT AND LEFT UNCLAMPED, because the arrow
+         * below needs to know whether ANY PART of the passband is on screen -
+         * not just whether a given edge is. They were worked out inside the
+         * drawing loop and thrown away, so that question could not be asked. */
+        int pb_x[2];
+        {
             int32_t pan_hz = (int32_t)ui_get_pan_offset_hz();   /* exact - see the tint above */
             int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
-            /* Same residual as the tint above and the cursor below - all three
-             * must agree or the edges sit off the block they bound. */
-            int edge_x = (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+            for (int side = 0; side < 2; side++) {
+                int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
+                /* Same residual as the tint above and the cursor below - all three
+                 * must agree or the edges sit off the block they bound. */
+                pb_x[side] = (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz)
+                                   * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+            }
+            if (pb_x[0] > pb_x[1]) { int t = pb_x[0]; pb_x[0] = pb_x[1]; pb_x[1] = t; }
+        }
+        for (int side = 0; side < 2; side++) {
+            int edge_x = pb_x[side];
             if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
@@ -11720,16 +11800,30 @@ void ui_push_spectrum(const float *bins, int n_bins)
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
             }
-        } else {
-            /* ⭐ THE DIAL IS OFF THE VIEW (#298 phase 4). Reachable now that a
-             * swipe pans without retuning, and before this the amber line simply
-             * vanished - leaving no way to tell "panned away from the VFO" from
-             * "something is broken".
-             *
-             * A TRIANGLE, never a line parked on the edge: a line at x=0 reads
-             * as "tuned here", which is precisely the wrong thing to say about a
-             * frequency that is off screen. pan_view.h calls this out, which is
-             * why hz_to_x is deliberately unclamped. */
+        }
+        /* ⭐ THE DIAL IS OFF THE VIEW (#298 phase 4). Reachable now that a
+         * swipe pans without retuning, and before this the amber line simply
+         * vanished - leaving no way to tell "panned away from the VFO" from
+         * "something is broken".
+         *
+         * A TRIANGLE, never a line parked on the edge: a line at x=0 reads
+         * as "tuned here", which is precisely the wrong thing to say about a
+         * frequency that is off screen. pan_view.h calls this out, which is
+         * why hz_to_x is deliberately unclamped.
+         *
+         * ⛔⛔ THE MARKER BEING OFF SCREEN IS NOT ENOUGH. It used to draw
+         * whenever cx fell outside, which meant the arrow appeared while the
+         * passband was still half on screen and plainly visible - an arrow
+         * pointing off-view at something you are already looking at. The
+         * operator's rule, 2026-10-30: "there is no need for any indication if
+         * the bw is for example still half visible on the screen. Only if BOTH
+         * the freq marker and the bw is out of sight THEN i want this solid
+         * arrow". So the test is the marker AND the whole passband, and the
+         * passband test is an INTERSECTION - a filter wider than the span has
+         * both edges off screen while covering every column of it. */
+        const bool vfo_off = (cx < 0 || cx >= DISPLAY_H_RES);
+        const bool pb_off  = (pb_x[1] < 0 || pb_x[0] >= DISPLAY_H_RES);
+        if (vfo_off && pb_off) {
             const int th = 22;                       /* half-height of the arrow */
             const int tw = 14;                       /* how far it juts inwards  */
             int mid = SPECTRUM_H / 2;
@@ -11743,6 +11837,32 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 int x = (cx < 0) ? i : (DISPLAY_H_RES - 1 - i);
                 for (int y = mid - half; y <= mid + half; y++)
                     if (y >= 0 && y < SPECTRUM_H) px[y * DISPLAY_H_RES + x] = center_color;
+            }
+        }
+        /* ⭐ AND IT IS TAPPABLE - the arrow says where the dial went, and the
+         * tap takes you back, so finding it again is not another drag.
+         * Operator, 2026-10-30: "It could also be clickable so that it would
+         * move the bw (and marker) to the middle of the screen if clicked (then
+         * no need to drag again to look for it)."
+         *
+         * Shown and hidden with the arrow, exactly as spots_lane.c does with its
+         * edge counters: an invisible live target left over empty spectrum would
+         * steal tap-to-tune. Guarded on a change so this does not call into LVGL
+         * ten times a second forever - see the label-bar opacity above for why
+         * that matters on core 0. */
+        {
+            static int s_arrow_shown = -1;           /* -1 none, 0 left, 1 right */
+            int want = (vfo_off && pb_off) ? ((cx < 0) ? 0 : 1) : -1;
+            if (want != s_arrow_shown) {
+                if (s_vfo_arrow_hit_l) {
+                    if (want == 0) lv_obj_clear_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+                    else           lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+                }
+                if (s_vfo_arrow_hit_r) {
+                    if (want == 1) lv_obj_clear_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+                    else           lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+                }
+                s_arrow_shown = want;
             }
         }
 
