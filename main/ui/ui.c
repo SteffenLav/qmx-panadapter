@@ -10903,13 +10903,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
     uint64_t now_us = esp_timer_get_time();
     float fade_opacity = 1.0f;  // 0 = invisible, 1 = full opacity
 
-    /* ⛔ IN CW THE PASSBAND IS THE TARGET, SO IT IS DIMMED AND NOT HIDDEN.
+    /* ⛔ THE PASSBAND IS THE TARGET, SO IT IS DIMMED AND NOT HIDDEN.
      *
-     * Hiding it during a drag is deliberate and stays for every other mode -
-     * the operator asked for it on 2026-09-18 because a hidden passband is
-     * what SHOWS that the dial came along with the window.
+     * ⚠ THIS REVERSES A PREFERENCE OF THE OPERATOR'S OWN, deliberately and on
+     * his instruction. He asked for the hide on 2026-09-18 because a hidden
+     * passband is what SHOWS that the dial came along with the window. Having
+     * seen the dimmed version on the glass he overruled it, 2026-10-30:
+     * "this should affect BOTH SSB and CW - in fact ALL modes on the
+     * Panadapter". Dimming carries the same cue - the strip plainly changes on
+     * grab - without taking away the thing being aimed at. ⛔ Do not re-narrow
+     * this to CW; the narrow version was mine, not his.
      *
-     * CW is the one mode where that costs more than it gives. Gyula HA3HZ,
+     * It began as a CW report. Gyula HA3HZ,
      * 2026-10-29: "when adjusting the frequency using the drag-and-drop
      * method, the bandwidth indicator disappears while I am dragging the
      * station into the previously visible reception range. Consequently, the
@@ -10924,12 +10929,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * something to aim at. The band-plan strip's own block is a separate LVGL
      * object and is still hidden outright; this is the spectrum tint, which is
      * the one drawn over the signal he is dragging. */
-    const float CW_DRAG_PASSBAND_OPA = 0.35f;
+    const float DRAG_PASSBAND_OPA = 0.35f;
 
-    // Hide passband during pan and after pan settles
+    // Dim, never hide, while panning and while the pan settles
     if (s_stroll_active) {
-        // While dragging: hide immediately so user doesn't see it move
-        fade_opacity = strstr(s_current_mode, "CW") ? CW_DRAG_PASSBAND_OPA : 0.0f;
+        fade_opacity = DRAG_PASSBAND_OPA;
     } else if (s_hide_passband_now) {
         // Just after pan settles: stay hidden
         fade_opacity = 0.0f;
@@ -10953,13 +10957,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
 
-    /* ⛔ AND THE SAME FLOOR ON THE WAY BACK UP, or CW gets a worse flicker than
-     * the one it just fixed: the release path zeroes the opacity and holds it
-     * there for PASSBAND_FADE_DELAY_MS, so a passband that was dimly visible
-     * for the whole drag would blink out at the exact moment the finger lifts.
-     * In CW it never drops below what the drag showed. */
-    if (fade_opacity < CW_DRAG_PASSBAND_OPA && strstr(s_current_mode, "CW")) {
-        fade_opacity = CW_DRAG_PASSBAND_OPA;
+    /* ⛔ AND THE SAME FLOOR ON THE WAY BACK UP, or the release flickers worse
+     * than the drag ever did: that path zeroes the opacity and holds it there
+     * for PASSBAND_FADE_DELAY_MS, so a passband that was dimly visible for the
+     * whole drag would blink out at the exact moment the finger lifts. It now
+     * never drops below what the drag showed. */
+    if (fade_opacity < DRAG_PASSBAND_OPA) {
+        fade_opacity = DRAG_PASSBAND_OPA;
     }
 
     // Apply fade_opacity to label bar (frequency scale labels). Skip the
@@ -12762,18 +12766,15 @@ static void touch_event_cb(lv_event_t *e)
                 // objects, hidden directly here and faded back in with a
                 // matching lv_obj_fade_in() on release.
                 s_stroll_active = true;
-                /* CW keeps a dim block instead of none - the same rule, and the
-                 * same reason, as the spectrum tint in the render loop: on this
-                 * strip the passband is only ~6 px wide and it is the thing
-                 * being aimed at. Gyula HA3HZ, 2026-10-29 (BLE mouse, so this
-                 * is the same handler a finger takes). */
+                /* A dim block instead of none, in EVERY mode - the same rule
+                 * and the same reason as the spectrum tint in the render loop.
+                 * On this strip the passband is only ~6 px wide and it is the
+                 * thing being aimed at. Gyula HA3HZ, 2026-10-29 (BLE mouse, so
+                 * this is the same handler a finger takes); widened from CW to
+                 * all modes by the operator on 2026-10-30. */
                 if (s_bp_passband) {
-                    if (strstr(s_current_mode, "CW")) {
-                        lv_obj_set_style_opa(s_bp_passband,
-                                             (lv_opa_t)(255 * 35 / 100), 0);
-                    } else {
-                        lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
-                    }
+                    lv_obj_set_style_opa(s_bp_passband,
+                                         (lv_opa_t)(255 * 35 / 100), 0);
                 }
                 for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
                     if (s_bp_seg_lbl[i]) lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
@@ -12884,16 +12885,11 @@ static void touch_event_cb(lv_event_t *e)
                 s_hide_passband_now = true;
                 s_passband_fade_start_us = esp_timer_get_time();
                 if (s_bp_passband && !lv_obj_has_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN)) {
-                    /* ⛔ In CW it was never hidden, so fading it up FROM ZERO
-                     * would blink out the one thing the drag kept visible, at
-                     * the exact moment the finger lifts. Straight back to full
+                    /* ⛔ It was never hidden, so fading it up FROM ZERO would
+                     * blink out the one thing the drag kept visible, at the
+                     * exact moment the finger lifts. Straight back to full
                      * instead - there is nothing to fade in from. */
-                    if (strstr(s_current_mode, "CW")) {
-                        lv_obj_set_style_opa(s_bp_passband, LV_OPA_COVER, 0);
-                    } else {
-                        lv_obj_set_style_opa(s_bp_passband, LV_OPA_TRANSP, 0);
-                        lv_obj_fade_in(s_bp_passband, PASSBAND_FADE_DURATION_MS, PASSBAND_FADE_DELAY_MS);
-                    }
+                    lv_obj_set_style_opa(s_bp_passband, LV_OPA_COVER, 0);
                 }
                 for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
                     if (s_bp_seg_lbl[i] && !lv_obj_has_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN)) {
