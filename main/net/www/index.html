@@ -8830,20 +8830,45 @@ function specPanPreview(px) {
 let specPanHolding   = false;
 let specPanHeldLo    = null;
 let specPanHeldUntil = 0;
-function specPanHoldUntilFrame(loAtRelease) {
+/* ⛔⛔ WAIT FOR THE EXPECTED MOVE, NOT FOR ANY MOVE. "Any change clears the
+   hold" was the first version and it put the flicker straight back: MEASURED in
+   the browser against bench1, the viewport lo is not static between frames, so
+   the first frame after release can differ for a reason that is not our pan.
+   The hold then clears while the pixels are still in the old place - snap back -
+   and the real frame arrives a moment later - jump forward. Exactly what the
+   operator saw twice: "now we are back to the jumping back and forth".
+
+   I rejected predicting the value earlier, on the grounds that the device
+   quantises the pan to whole 46.875 Hz bins and a wrong tolerance would
+   reintroduce the jump. The measurement says the prediction is good: a 150 px
+   drag asked for -3550 Hz and the device delivered -3543, so one bin of
+   tolerance is ample and the argument against it was wrong.
+
+   A pan that lands on its CLAMP never reaches the expected value, so the
+   timeout is what ends those - 700 ms, short enough not to read as a stuck
+   display and long enough to cover a slow frame. */
+const SPEC_PAN_SETTLE_TOL_HZ = 70;    /* ~1.5 FFT bins at 46.875 Hz */
+let specPanExpectLo = null;
+function specPanHoldUntilFrame(loAtRelease, expectedDeltaHz) {
   specPanHolding   = true;
   specPanHeldLo    = loAtRelease;
-  specPanHeldUntil = Date.now() + 2000;
+  specPanExpectLo  = (loAtRelease === null) ? null : loAtRelease + expectedDeltaHz;
+  specPanHeldUntil = Date.now() + 700;
 }
 function specPanReleaseHold() {
-  specPanHolding = false;
-  specPanHeldLo  = null;
+  specPanHolding  = false;
+  specPanHeldLo   = null;
+  specPanExpectLo = null;
   specPanPreview(0);
 }
 /* Called from the WS frame handler, after lastView is updated. */
 function specPanSettleCheck() {
   if (!specPanHolding) return;
-  const moved  = !lastView || lastView.lo !== specPanHeldLo;
+  /* Landed = the viewport is where we asked it to go. With no expectation to
+     measure against (no viewport at release) the timeout is all there is. */
+  const landed = (specPanExpectLo !== null) && lastView &&
+                 Math.abs(lastView.lo - specPanExpectLo) <= SPEC_PAN_SETTLE_TOL_HZ;
+  const moved  = landed;
   /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
      changed nothing the device would report - a drag of a few pixels that
      quantises to the same bin, or a pan already against its clamp - because
@@ -9772,8 +9797,11 @@ function addTuneListeners(overlayId, getRect, onSpec) {
         /* Leave the translate exactly where the hand put it and hand it to
            specPanSettleCheck() - see the note there. Clearing it here is the
            jump the operator reported. */
-        specPanHoldUntilFrame(lastView ? lastView.lo : null);
-        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
+        const wantPan = specPanStartPanHz + dx * specPanHzPerPx(getRect());
+        /* The viewport moves by the same amount the pan does. */
+        specPanHoldUntilFrame(lastView ? lastView.lo : null,
+                              wantPan - specPanStartPanHz);
+        specPanTo(wantPan);
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
