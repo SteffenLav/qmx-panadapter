@@ -68,7 +68,8 @@
 #include "ft8/js8_message.h"
 #include "common/monitor.h"
 
-#include "esp_memory_utils.h"   /* esp_ptr_internal() - T133 placement dump */
+#include "esp_memory_utils.h"   /* T133 placement dump */
+#include "soc/soc.h"            /* SOC_RTC_DRAM_LOW - LP SRAM is not L2 */
 #include "dsp.h"
 #include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
@@ -857,6 +858,24 @@ static void free_shared_fft(void)
  * taskLVGL back on that core at ~74 % - the log showed `idle0 0.0%` at the
  * moment of the fault. A longer bound changes the odds, not the race; this
  * file already records two fixes falsified for exactly that reasoning. */
+/* ⛔ "INTERNAL" IS TWO DIFFERENT MEMORIES ON THIS PART, AND ONE OF THEM IS
+ * SLOW. esp_ptr_internal() is true for both the main L2 DRAM at 0x4ff00000
+ * and the 32 KB LP/RTC SRAM at 0x50108000, and with
+ * CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=y the generic heap hands the
+ * LP block out to any allocation that fits. Reached from the HP core it is
+ * far slower than cached PSRAM - MEASURED at 2.5x on the decoder's hottest
+ * memmove (T133, the note at the last_frame relocation below).
+ *
+ * So a diagnostic that prints "INTERNAL" hides exactly the thing worth
+ * seeing. Three words, not two. */
+static const char *mem_where(const void *p)
+{
+    uintptr_t a = (uintptr_t)p;
+    if (a >= SOC_RTC_DRAM_LOW && a < SOC_RTC_DATA_HIGH) return "LPSRAM";
+    if (a >= SOC_DRAM_LOW     && a < SOC_DRAM_HIGH)     return "L2";
+    return "PSRAM";
+}
+
 static void forget_capture_pool(void)
 {
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) s_mon_pool[i] = NULL;
@@ -1002,14 +1021,57 @@ static bool build_monitor_pool(ftx_protocol_t proto)
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
             return false;
         }
-        // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
-        // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
-        // threshold) - across the pool that starves internal heap (main runs at
-        // ~39 KB free in FT8; without this we drop to ~7 KB). The window is
-        // read-only in monitor_process, so PSRAM costs nothing on the hot path;
-        // last_frame stays internal since it's written every block.
+        /* Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
+         * and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
+         * threshold) - across the pool that starves internal heap (main runs at
+         * ~39 KB free in FT8; without this we drop to ~7 KB). The window is
+         * read-only in monitor_process, so PSRAM costs nothing on the hot path.
+         *
+         * ⛔⛔ last_frame MOVES TOO, AND THE LINE THAT USED TO BE HERE WAS
+         * WRONG. It said "last_frame stays internal since it's written every
+         * block" - the reasoning is sound and the outcome was the opposite,
+         * because "internal" on this part is not one kind of memory.
+         *
+         * MEASURED on bench1 2026-10-30 (T133), read off the board rather than
+         * inferred - the slot line carries the pool index and the pool prints
+         * where each buffer landed:
+         *
+         *     mon 0  last_frame 0x5010c0ac INTERNAL   stft p50 2154 ms
+         *     mon 1  last_frame 0x492a79dc PSRAM      stft p50  873 ms
+         *
+         * No overlap at all between the two populations over 11 slots, and
+         * nothing else differs: both windows and both waterfalls are in PSRAM
+         * and timedata/freqdata/fft_work are the same shared pointers on both.
+         *
+         * ⭐ THE ADDRESS IS THE ANSWER. 0x5010c0ac is inside SOC_RTC_DRAM_LOW
+         * 0x50108000 .. 0x50110000 (soc.h) - that is the 32 KB LP/RTC SRAM,
+         * NOT the main L2 DRAM at 0x4ff00000. esp_ptr_internal() calls it
+         * internal and the generic heap hands it out, but reached from the HP
+         * core it is far slower than cached PSRAM - and monitor_process()
+         * memmoves the whole of last_frame twice per block, 93 x 2 x 15360 B
+         * a slot, which is the most memory-bound loop in the decoder.
+         *
+         * So the monitor that WON the internal-RAM lottery was the loser. The
+         * s_shared_fft_work note above records the opposite case (a PSRAM
+         * spill costing 10x) and that is still true of the FFT work area; it
+         * does not generalise to every buffer, and this is the counter-example.
+         *
+         * ⚠ PSRAM, not "L2 DRAM explicitly". L2 might be faster still, but
+         * this board runs at ~30 KB internal free (#65, the .bss audit) and
+         * 873 ms of a 15 s slot needs no help. Same decision the FFT work
+         * area's own comment already argues. Measure before reconsidering.
+         *
+         * ⭐ It also GIVES BACK 15 KB of internal RAM per monitor. Faster and
+         * cheaper in the scarce pool, which is why there is no trade here. */
         {
             monitor_t *m = s_mon_pool[i];
+            float *lf = heap_caps_malloc((size_t)m->nfft * sizeof(float),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (lf) {
+                memcpy(lf, m->last_frame, (size_t)m->nfft * sizeof(float));
+                heap_caps_free(m->last_frame);
+                m->last_frame = lf;
+            }
             float *w = heap_caps_malloc((size_t)m->nfft * sizeof(float),
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (w) {
@@ -1202,9 +1264,9 @@ static bool build_monitor_pool(ftx_protocol_t proto)
         ESP_LOGI(TAG, "monplace %d: last_frame %p %-8s | window %p %-8s | "
                       "wf.mag %p %-8s | timedata %p | freqdata %p | fft_work %p",
                  i,
-                 (void *)m->last_frame, esp_ptr_internal(m->last_frame) ? "INTERNAL" : "PSRAM",
-                 (void *)m->window,     esp_ptr_internal(m->window)     ? "INTERNAL" : "PSRAM",
-                 (void *)m->wf.mag,     esp_ptr_internal(m->wf.mag)     ? "INTERNAL" : "PSRAM",
+                 (void *)m->last_frame, mem_where(m->last_frame),
+                 (void *)m->window,     mem_where(m->window),
+                 (void *)m->wf.mag,     mem_where(m->wf.mag),
                  (void *)m->timedata, (void *)m->freqdata, (void *)m->fft_work);
     }
     return true;
