@@ -8811,11 +8811,15 @@ function specPanTo(panHz) {
    operator's original requirement is untouched - nothing is sent until the
    button comes up.
 
-   ⚠ TO FINISH THE SMOOTH VERSION, the missing measurement is which frame after
-   release carries the moved content. That needs a STRONG CARRIER on the band so
-   the correlation locks - on noise it cannot. Do not re-enable this by
-   reasoning about it; it has been reasoned about six times. */
-const SPEC_PAN_PREVIEW_ENABLED = false;
+   ⭐ IT IS BACK ON, and not by reasoning - the device now TELLS us. Turning it
+   off was not a fix either: "the whole idea of dragging is to see real time how
+   much you dragged - with this build i only see the hand-grip mouse moving"
+   (operator). But that build established the one fact that was missing: with no
+   translate there is NO jump, so the device's arrival is a single clean step
+   and the only thing ever wrong was WHEN we dropped the preview.
+   That moment is now read from a view-sequence byte in the frame trailer. See
+   specPanSettleCheck(). */
+const SPEC_PAN_PREVIEW_ENABLED = true;
 function specPanPreview(px) {
   if (!SPEC_PAN_PREVIEW_ENABLED) return;
   const t = px ? ("translateX(" + Math.round(px) + "px)") : "";
@@ -8891,9 +8895,10 @@ let specPanHeldUntil = 0;
    frames. Quiet means the device has stopped moving, whatever it was doing and
    however many stages it took, and the preview can be dropped into a picture
    that is no longer changing. */
+let specPanHeldSeq = null;
 function specPanHoldUntilFrame(loAtRelease) {
   specPanHolding     = true;
-  specPanFramesSince = 0;
+  specPanHeldSeq     = lastViewSeq;
   specPanHeldLo      = loAtRelease;
   /* Generous: this is the backstop for a device that never goes quiet, not the
      mechanism. Three quiet frames at ~10 fps is ~300 ms, so 2 s leaves room for
@@ -8902,6 +8907,7 @@ function specPanHoldUntilFrame(loAtRelease) {
 }
 function specPanReleaseHold() {
   specPanHolding = false;
+  specPanHeldSeq = null;
   specPanHeldLo  = null;
   specPanPreview(0);
 }
@@ -8924,14 +8930,22 @@ function specPanReleaseHold() {
    With a viewport we clear on the first frame whose lo differs. Without one
    the frame cannot say where it is, but it IS new content drawn after the pan
    went out, so two of them is the signal. */
-const SPEC_PAN_BLIND_FRAMES = 2;
-let specPanFramesSince = 0;
+/* ⭐⭐ THE DEVICE SAYS WHEN, so nothing here has to guess.
+   lastViewSeq is the trailer byte webserver_ws.c samples beside the bins; it
+   steps whenever the view actually moves. The frame whose sequence differs from
+   the one held at release IS the first frame drawn on the new window, at every
+   zoom, with no viewport needed and no tolerance.
+   The viewport comparison below is kept as the fallback for firmware older than
+   this byte - that page still works, it just drops the preview on the first
+   frame whose lo differs, which is what it did before. */
+let lastViewSeq = null;
 function specPanSettleCheck(hadViewport) {
   if (!specPanHolding) return;
-  if (!hadViewport) {
-    if (++specPanFramesSince >= SPEC_PAN_BLIND_FRAMES) specPanReleaseHold();
+  if (specPanHeldSeq !== null && lastViewSeq !== null) {
+    if (lastViewSeq !== specPanHeldSeq) specPanReleaseHold();
     return;
   }
+  if (!hadViewport) return;   /* no seq, no viewport: the timeout ends it */
   /* ⛔ THE FIRST FRAME THAT MOVES, not three quiet ones. Waiting for quiet was
      the previous cut and it is wrong now, and was WORSE than wrong: the content
      moves on the first new-viewport frame, so holding the translate for three
@@ -12663,6 +12677,16 @@ function connectWs() {
        span === 0 means the device had no viewport for this frame (the zoom-FFT
        path); the browser then keeps its own centred mapping. */
     const u32 = (o) => (buf[o] | (buf[o+1] << 8) | (buf[o+2] << 16) | (buf[o+3] << 24)) >>> 0;
+    /* ⛔ READ BEFORE THE BRANCH BELOW, because specPanSettleCheck() is called
+       from inside it. Read after, and the settle test sees the PREVIOUS frame's
+       sequence and drops the preview one frame early - an off-by-one of exactly
+       the kind this byte exists to remove.
+       One byte after the S-meter's two. Appended rather than put in the header
+       for the reason stated in webserver_ws.c: the header is full, and growing
+       it would shift the payload under any cached page. Length-checked, so
+       firmware without it never sets lastViewSeq and the preview falls back to
+       the viewport comparison. */
+    if (buf.length >= HEADER_LEN + SPEC_W + 3) lastViewSeq = buf[HEADER_LEN + SPEC_W + 2];
     const spanF = u32(10);
     if (spanF > 0) {
       let ifo = buf[22] | (buf[23] << 8);

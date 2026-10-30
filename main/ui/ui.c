@@ -1776,8 +1776,29 @@ static int     s_sv_side    = 0;     /* +1 right, -1 left, 0 none */
 
 static int64_t s_sv_pan_hz = 0;
 
+/* ⛔⛔ THE ONE PLACE THAT CAN SAY "THE VIEW MOVED", AND THE BROWSER NEEDS IT.
+ *
+ * The web right-drag previews its pan locally and must drop that preview on
+ * the exact frame whose bins were captured after the pan landed. Six attempts
+ * to infer that moment in the browser failed in front of the operator: above
+ * zoom x1 the frame carries no viewport to compare (span = 0, the zoom-FFT
+ * path), and correlating the bins needs a carrier the band did not have.
+ *
+ * This counter is the answer, and it is free. It steps whenever the view
+ * actually moves; webserver_ws.c puts it in the frame trailer beside the bins
+ * it describes, and a frame whose sequence differs from the one held at release
+ * IS the first frame on the new window. No inference and no tolerance.
+ *
+ * ⚠ It must step HERE rather than at the callers. Every pan - touch, BLE mouse,
+ * band-plan strip, the API - funnels through this function, and a counter
+ * maintained at the call sites would miss the next one added. */
+static volatile uint8_t s_view_seq = 0;
+
+uint8_t ui_view_seq8(void) { return s_view_seq; }
+
 static void sv_apply_pan_hz(int64_t hz)
 {
+    if (hz != s_sv_pan_hz) s_view_seq++;
     s_sv_pan_hz       = hz;
     s_pan_offset_bins = (int)llround((double)hz * (double)DSP_FFT_SIZE
                                                 / (double)DSP_SAMPLE_RATE_HZ);

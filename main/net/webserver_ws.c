@@ -146,7 +146,29 @@
  * and jammed httpd with extra connections, so it was reverted. This frame is
  * already going out 10 times a second; two more bytes on 1026 is 1.6 kbit/s
  * and costs no new connection. */
-#define WS_TRAILER_LEN          2
+/* VIEW SEQUENCE - one more trailer byte, appended for the same reason the
+ * S-meter was: the header is full at 24 and growing it would shift the payload
+ * under any cached page.
+ *
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN + 2]    view sequence, uint8, wraps
+ *
+ * ⛔ WHY IT EXISTS. The browser's right-drag previews the pan locally and has
+ * to drop that preview on the exact frame whose bins were captured AFTER the
+ * pan was applied. Six attempts to infer that moment from the browser alone
+ * failed in front of the operator, because above zoom x1 the frame carries no
+ * viewport (span = 0, the zoom-FFT path) and there is nothing in it to compare.
+ * Correlating the bins was tried and the band was noise.
+ *
+ * The device knows the answer exactly and costs one byte to say it: this
+ * counter steps every time the view actually moves. A frame whose sequence
+ * differs from the one the browser saw at release is, by construction, the
+ * first frame drawn on the new window. No inference, no tolerance, works at
+ * every zoom.
+ *
+ * uint8 and wrapping is deliberate - the browser only ever asks "is this
+ * different from the one I held", never "how many", so 256 is ample and a
+ * wrap costs nothing. */
+#define WS_TRAILER_LEN          3
 #define WS_SIGNAL_NONE          ((int16_t)0x8000)
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN + WS_TRAILER_LEN)
 
@@ -721,6 +743,11 @@ static void ws_push_task(void *arg)
             s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN]     = (uint8_t)((uint16_t)sig_q);
             s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 1] = (uint8_t)(((uint16_t)sig_q) >> 8);
         }
+        /* Sampled HERE, beside the bins it describes, not when the frame is
+         * queued: the two must name the same instant or the browser drops its
+         * preview one frame early or late, which is the whole of the fault this
+         * byte exists to end. */
+        s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 2] = ui_view_seq8();
 
         // Budget for finishing a frame we are already committed to. Deliberately
         // longer than one push period: dropping the session costs the browser a

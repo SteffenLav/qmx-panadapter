@@ -126,6 +126,10 @@ void ui_request_bandplan_view(int64_t view_center_hz);
  * ui_pan_is_available() is false when the still view is off, because then the
  * spectrum follows the dial and there is no independent window to move. */
 void ui_request_pan_hz(int64_t pan_hz);
+/* Steps whenever the spectrum's view actually moves. Carried in the WS frame
+ * trailer so the browser can tell, exactly and at any zoom, which frame is the
+ * first one drawn on the new window - see the note at sv_apply_pan_hz(). */
+uint8_t ui_view_seq8(void);
 bool ui_pan_is_available(void);
 
 void ui_set_still_view(bool on);
