@@ -9003,7 +9003,13 @@ function specPanSettleCheck(hadViewport) {
   }
   if (!specPanHolding) return;
   if (specPanHeldSeq !== null && lastViewSeq !== null) {
-    if (lastViewSeq !== specPanHeldSeq) specPanReleaseHold();
+    if (lastViewSeq !== specPanHeldSeq) {
+      /* The draw for THIS frame has not happened yet - specPanSettleCheck runs
+         before it in the same handler - so re-seeding here makes the content
+         step and the preview vanish in one paint. */
+      specEmaReseed = true;
+      specPanReleaseHold();
+    }
     return;
   }
   if (!hadViewport) return;   /* no seq, no viewport: the timeout ends it */
@@ -11592,8 +11598,37 @@ function peakStroke(W) {
 const specStage1 = new Float32Array(SPEC_W);
 let specStage1Ready = false;
 
+/* ⛔⛔ SET WHEN THE VIEW MOVES, AND IT IS WHY THE PAN FLICKERED.
+   MEASURED from the page's own trace in the serial capture, one right-drag of
+   150 px:
+
+     +98ms   content=189px tx=150px net=339px   <- content already moving
+     +199ms  content=168px tx=150px net=318px   <- preview cleared here
+     +340ms  content=134px tx=0px   net=134px
+     +515ms  content=137px tx=0px   net=137px
+
+   net is where a signal actually sits on the glass. It went 150 -> 339 -> 134:
+   two jumps, +189 then -204, which is exactly what the operator kept seeing.
+
+   And the content does not MOVE, it CROSSFADES - 189, 168, 134, 137 - over
+   about three frames, because this EMA blends the new window into the old one
+   sample by sample. A ramp cannot be cancelled by a binary transform, so no
+   choice of clearing instant was ever going to work. That is what eight
+   attempts at the TIMING were really up against.
+
+   So the smoothing is RE-SEEDED when the view moves: the first frame on the new
+   window replaces the trace instead of blending into it. The content then steps
+   once, on one frame, and the preview is dropped on that same frame - both in
+   the same paint. Consistent by construction rather than by timing.
+
+   It is also correct on its own terms: an EMA exists to average successive looks
+   at the SAME thing, and after a pan the old samples describe different
+   frequencies. Blending them was never meaningful. */
+let specEmaReseed = false;
+
 function applyDeviceEma(bytes) {
-  if (!specStage1Ready) {
+  if (!specStage1Ready || specEmaReseed) {
+    specEmaReseed = false;
     for (let i = 0; i < SPEC_W; i++) specStage1[i] = bytes[i];
     specStage1Ready = true;
   } else {
@@ -12754,7 +12789,17 @@ function connectWs() {
        it would shift the payload under any cached page. Length-checked, so
        firmware without it never sets lastViewSeq and the preview falls back to
        the viewport comparison. */
-    if (buf.length >= HEADER_LEN + SPEC_W + 3) lastViewSeq = buf[HEADER_LEN + SPEC_W + 2];
+    if (buf.length >= HEADER_LEN + SPEC_W + 3) {
+      const sq = buf[HEADER_LEN + SPEC_W + 2];
+      /* ⛔ ANY view move re-seeds the smoothing, not just one the browser asked
+         for. A pan from the Tab5, the band-plan strip or a band change smears
+         exactly the same way - the EMA blends two different sets of frequencies
+         - and that smear has been there since the device EMA was mirrored here.
+         Nobody reported it because without a drag to compare against it just
+         looked like the waterfall settling. */
+      if (lastViewSeq !== null && sq !== lastViewSeq) specEmaReseed = true;
+      lastViewSeq = sq;
+    }
     const spanF = u32(10);
     if (spanF > 0) {
       let ifo = buf[22] | (buf[23] << 8);
