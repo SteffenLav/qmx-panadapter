@@ -8791,11 +8791,33 @@ function specPanHzPerPx(rect) {
 function specPanTo(panHz) {
   sendCmd({ action: "set_pan", hz: Math.round(panHz) });
 }
-/* The local half: slide both canvases by the pointer delta so the gesture has
-   feedback without a round trip. Cleared on release, at which point the device
-   has been told and its next frame draws the real thing. A canvas keeps its CSS
-   transform across redraws, so the 10 Hz trace updates do not fight this. */
+/* ⛔⛔ THE LOCAL PREVIEW IS OFF. It translated both canvases under the pointer
+   so the drag had feedback with no round trip, and the operator liked that part
+   - "it moves super nicely on the web". What could never be made to work was
+   ENDING it: the release flickered, and SIX attempts at the moment to drop it
+   all failed in front of him.
+
+   The last one found the real reason the first five changed nothing - the
+   settle check was never executed above zoom x1 - and the flicker survived even
+   that. What is left is a mapping question I could not measure: at zoom > 1 the
+   frame carries no viewport, so the browser draws the new bins on its own axis
+   and I have no way to say WHEN the drawn content moves relative to the
+   translate. The instrument for it was a cross-correlation of the raw bins
+   across the release; the band was noise and the answer came back incoherent
+   (-141, -161, -196, -150, +200 ...).
+
+   So: no translate. The picture holds still during the drag and moves ONCE,
+   when the device's own frames arrive. One movement cannot flicker. The
+   operator's original requirement is untouched - nothing is sent until the
+   button comes up.
+
+   ⚠ TO FINISH THE SMOOTH VERSION, the missing measurement is which frame after
+   release carries the moved content. That needs a STRONG CARRIER on the band so
+   the correlation locks - on noise it cannot. Do not re-enable this by
+   reasoning about it; it has been reasoned about six times. */
+const SPEC_PAN_PREVIEW_ENABLED = false;
 function specPanPreview(px) {
+  if (!SPEC_PAN_PREVIEW_ENABLED) return;
   const t = px ? ("translateX(" + Math.round(px) + "px)") : "";
   for (const id of ["spec", "waterfall"]) {
     const el = document.getElementById(id);
