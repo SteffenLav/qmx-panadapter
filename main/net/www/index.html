@@ -8819,6 +8819,45 @@ function specPanTo(panHz) {
    and the only thing ever wrong was WHEN we dropped the preview.
    That moment is now read from a view-sequence byte in the frame trailer. See
    specPanSettleCheck(). */
+/* ⛔⛔ THE PAGE WRITES INTO THE DEVICE'S SERIAL CAPTURE.
+   Operator, 2026-10-30: "I am NOT your instrument! Then hurry up implementing
+   web screen logs to the capture so that you can see exactly what happens."
+   Every other subsystem logs there; the browser did not, so the only way to
+   learn what the page had done was to ask him to watch it eight times.
+   Fire-and-forget: a logger that can fail or block its caller is one people
+   stop calling. */
+function weblog(msg) {
+  try {
+    fetch("/api/weblog", { method: "POST", body: String(msg) }).catch(() => {});
+  } catch (e) { /* never let logging break the page */ }
+}
+/* The per-frame pan trace is heavy (a cross-correlation per frame), so it is
+   OFF unless the page is opened with #pandebug. The release/clear lines below
+   are always logged - they are two lines per gesture and they are what makes a
+   report answerable without asking anybody. */
+const PAN_DEBUG = location.hash.indexOf("pandebug") >= 0;
+/* Where the drawn trace has moved to, in BINS, against a snapshot. Correlates
+   specSmooth - the smoothed trace actually drawn - and NOT the raw frame: raw
+   bins on a quiet band are a fresh noise realisation every frame and correlate
+   with nothing, which is exactly why my first attempt at this measurement
+   returned incoherent lags. */
+function panCorrShift(ref, cur) {
+  let best = 0, bs = -Infinity;
+  for (let sft = -250; sft <= 250; sft += 1) {
+    let sum = 0, n = 0;
+    for (let i = 200; i < 824; i += 2) {
+      const j = i + sft;
+      if (j < 0 || j >= SPEC_W) continue;
+      sum += ref[i] * cur[j]; n++;
+    }
+    if (n < 100) continue;
+    const v = sum / n;
+    if (v > bs) { bs = v; best = sft; }
+  }
+  return best;
+}
+let panRef = null, panRefAt = 0, panRefTx = 0;
+
 const SPEC_PAN_PREVIEW_ENABLED = true;
 function specPanPreview(px) {
   if (!SPEC_PAN_PREVIEW_ENABLED) return;
@@ -8906,6 +8945,11 @@ function specPanHoldUntilFrame(loAtRelease) {
   specPanHeldUntil = Date.now() + 2000;
 }
 function specPanReleaseHold() {
+  if (specPanHolding) {
+    weblog("PAN clear  +" + (Date.now() - panRefAt) + "ms seq=" + lastViewSeq +
+           " heldSeq=" + specPanHeldSeq +
+           " lo=" + (lastView ? lastView.lo : "-"));
+  }
   specPanHolding = false;
   specPanHeldSeq = null;
   specPanHeldLo  = null;
@@ -8940,6 +8984,23 @@ function specPanReleaseHold() {
    frame whose lo differs, which is what it did before. */
 let lastViewSeq = null;
 function specPanSettleCheck(hadViewport) {
+  /* ⭐ WHAT THE SCREEN IS ACTUALLY DOING, into the capture.
+     contentPx is where the drawn trace has moved to since the release frame;
+     txPx is the translate still applied. Their SUM is where a given signal
+     sits on the glass relative to the release. If that sum steps between
+     frames, THAT is the jump - with its size and its direction, and no need to
+     ask anyone to watch for it. */
+  if (PAN_DEBUG && panRef && specSmooth && (Date.now() - panRefAt) < 2500) {
+    const binsShift = panCorrShift(panRef, specSmooth);
+    const contentPx = -binsShift * (specPxW / SPEC_W);
+    const m = /translateX\((-?\d+)px\)/.exec(
+                (document.getElementById("spec").style.transform) || "");
+    const txPx = m ? +m[1] : 0;
+    weblog("PAN frame +" + (Date.now() - panRefAt) + "ms seq=" + lastViewSeq +
+           " content=" + contentPx.toFixed(0) + "px tx=" + txPx +
+           "px net=" + (contentPx + txPx).toFixed(0) + "px hold=" +
+           (specPanHolding ? 1 : 0));
+  }
   if (!specPanHolding) return;
   if (specPanHeldSeq !== null && lastViewSeq !== null) {
     if (lastViewSeq !== specPanHeldSeq) specPanReleaseHold();
@@ -9883,6 +9944,13 @@ function addTuneListeners(overlayId, getRect, onSpec) {
            specPanSettleCheck() - see the note there. Clearing it here is the
            jump the operator reported. */
         specPanHoldUntilFrame(lastView ? lastView.lo : null);
+        /* Snapshot the drawn trace so every frame after this can be measured
+           against it - this is the reference the shift is relative to. */
+        panRef   = specSmooth ? Float32Array.from(specSmooth) : null;
+        panRefAt = Date.now();
+        panRefTx = dx;
+        weblog("PAN release dx=" + dx + "px seq=" + lastViewSeq +
+               " lo=" + (lastView ? lastView.lo : "-") + " zoom=" + lastZoom);
         specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);

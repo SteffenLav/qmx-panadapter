@@ -8774,6 +8774,44 @@ static esp_err_t term_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
 }
 
+/* ⛔⛔ THE BROWSER'S OWN LOG, INTO THE SERIAL CAPTURE.
+ *
+ * Operator, 2026-10-30, after I had asked him eight times whether a web
+ * gesture still misbehaved: "Why are you asking me time after time if its
+ * still jumping - is it because you cannot check it your self? I am NOT your
+ * instrument! Then hurry up implementing web screen logs to the capture so
+ * that you can see exactly what happens."
+ *
+ * He is right. Every other subsystem on this board writes to the capture and
+ * the one that runs in a browser did not, so the only way to learn what the
+ * page did was to ask a person to watch it - which is slow, lossy, and not
+ * his job. The capture is the diagnostic record; the browser belongs in it.
+ *
+ * Deliberately plain: a POST of text, logged at INFO under "weblog" with the
+ * page's own millisecond stamp preserved. No JSON schema to keep in step, and
+ * no reply body worth parsing - a logger that can fail the caller is a logger
+ * people stop calling. It answers 204 whatever happens. */
+static esp_err_t weblog_handler(httpd_req_t *req)
+{
+    char buf[512];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = 0;
+        /* One line per message: a newline from the page would otherwise forge
+         * log lines in the capture, which is the one file that has to be
+         * trustworthy. */
+        for (int i = 0; i < len; i++)
+            if (buf[i] == 0x0A || buf[i] == 0x0D) buf[i] = ' ';
+        ESP_LOGI("weblog", "%s", buf);
+    }
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+static const httpd_uri_t uri_weblog = {
+    .uri = "/api/weblog", .method = HTTP_POST, .handler = weblog_handler,
+};
+
 static const httpd_uri_t uri_term_get = {
     .uri = "/api/term", .method = HTTP_GET, .handler = term_get_handler,
 };
@@ -9120,6 +9158,7 @@ esp_err_t webserver_start(void)
     reg(&uri_config_post);
     reg(&uri_term_get);
     reg(&uri_term_post);
+    reg(&uri_weblog);
     filebrowser_register(s_server);   // /files + /api/files + /api/file
     webserver_ws_start(s_server);
 
