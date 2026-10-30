@@ -68,6 +68,7 @@
 #include "ft8/js8_message.h"
 #include "common/monitor.h"
 
+#include "esp_memory_utils.h"   /* esp_ptr_internal() - T133 placement dump */
 #include "dsp.h"
 #include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
@@ -1161,6 +1162,51 @@ static bool build_monitor_pool(ftx_protocol_t proto)
                   " - all %d monitors share it",
              (unsigned)fft_work_size, s_shared_fft_internal ? "INTERNAL" : "PSRAM",
              s_mon_pool[0]->nfft, (unsigned)int_lblk, FT8_NUM_BUFFERS);
+
+    /* ⛔⛔ T133 DIAGNOSTIC - WHERE EACH MONITOR'S PRIVATE BUFFERS LANDED.
+     *
+     * MEASURED on bench1 2026-10-30: the per-slot stft_ms is BIMODAL, ~905 ms
+     * and ~1915 ms, alternating STRICTLY slot by slot (71 flips in 80 adjacent
+     * pairs over 81 slots). FT8_NUM_BUFFERS is 2 and find_free_buffer() hands
+     * them out alternately while a decode is still running, so the pattern IS
+     * this pool: one monitor costs twice the STFT of the other for identical
+     * work - same nfft, same config, same block count.
+     *
+     * That makes 6ace379c's "JS8 stft p50 1872 ms" the SLOW monitor's number,
+     * and the whole T132 budget was scaled off it.
+     *
+     * THE HYPOTHESIS THIS LINE EXISTS TO KILL OR CONFIRM. After the shared
+     * FFT work area and the shared STFT pair, `last_frame` is the ONLY hot
+     * per-monitor allocation left, and monitor_process() memmoves the whole
+     * thing twice per block - 93 blocks x 2 x 15360 B a slot. It is 15360 B
+     * at this nfft, just under the 16 KB PSRAM-spill threshold, so plain
+     * malloc() puts it in INTERNAL RAM while there is room and in PSRAM once
+     * there is not. The s_shared_fft_work comment above records exactly this
+     * failure for fft_work: "only the first won the scarce-internal-RAM
+     * lottery and the second spilled to PSRAM, making its STFT ~10x slower
+     * (measured)". That was fixed for fft_work and last_frame was left.
+     *
+     * ⚠ AND THERE IS A READING THAT POINTS THE OTHER WAY, which is why this
+     * is a diagnostic and not a fix. T132's alternate monitor has ALL of its
+     * buffers explicitly in PSRAM and measured stft 558 ms over 100 blocks at
+     * nfft 2400; scaled to 93 blocks at nfft 3840 that is ~880 ms, which is
+     * the FAST monitor, not the slow one. If all-PSRAM is fast, spilling to
+     * PSRAM cannot be the penalty. One of those two readings is wrong and
+     * this line says which.
+     *
+     * Addresses, not just a verdict: internal SRAM and PSRAM are different
+     * ranges on this part, so the raw pointer is the evidence and the
+     * INTERNAL/PSRAM word is the convenience. */
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
+        const monitor_t *m = s_mon_pool[i];
+        ESP_LOGI(TAG, "monplace %d: last_frame %p %-8s | window %p %-8s | "
+                      "wf.mag %p %-8s | timedata %p | freqdata %p | fft_work %p",
+                 i,
+                 (void *)m->last_frame, esp_ptr_internal(m->last_frame) ? "INTERNAL" : "PSRAM",
+                 (void *)m->window,     esp_ptr_internal(m->window)     ? "INTERNAL" : "PSRAM",
+                 (void *)m->wf.mag,     esp_ptr_internal(m->wf.mag)     ? "INTERNAL" : "PSRAM",
+                 (void *)m->timedata, (void *)m->freqdata, (void *)m->fft_work);
+    }
     return true;
 }
 
@@ -2577,8 +2623,8 @@ static void ft8_decode_worker_task(void *arg)
 // advance the QSO state machine.
 static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
                         const decode_ctx_t *dc, int64_t slot_sec,
-                        int slot_idx, int cap_ms, int stft_ms, int start_off_ms,
-                        int arm_backlog, int drop_delta)
+                        int slot_idx, int mon_idx, int cap_ms, int stft_ms,
+                        int start_off_ms, int arm_backlog, int drop_delta)
 {
     int64_t t_start = esp_timer_get_time();
     /* Shorthand, used often enough below that spelling it out every time
@@ -3185,9 +3231,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
      * read 0 on a perfectly good primary slot. */
     ft8_status_set("RX: %d decoded", n_shown);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
+        "slot %d UTC %lld: mon=%d off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
-        slot_idx, (long long)slot_sec, start_off_ms,
+        slot_idx, (long long)slot_sec, mon_idx, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_js8ev, n_dup, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
@@ -3420,7 +3466,7 @@ static void decode_alt_job(worker_ctx_t *wctx, const decode_job_t *job)
         }
         int stft_ms = (int)((esp_timer_get_time() - t_stft) / 1000);
 
-        decode_slot(wctx, mon, &dc, job->slot_sec, job->slot_idx,
+        decode_slot(wctx, mon, &dc, job->slot_sec, job->slot_idx, job->mon_idx,
                     0 /* cap_ms: there was no capture, this is a replay */,
                     stft_ms, 0 /* start_off_ms */, 0, 0);
     }
@@ -3526,7 +3572,7 @@ static void ft8_decode_task(void *arg)
                                    ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS,
             };
             decode_slot(wctx, s_mon_pool[job.mon_idx], &dc, job.slot_sec, job.slot_idx,
-                        job.cap_ms, job.stft_ms, job.start_off_ms,
+                        job.mon_idx, job.cap_ms, job.stft_ms, job.start_off_ms,
                         job.arm_backlog, job.drop_delta);
         }
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool

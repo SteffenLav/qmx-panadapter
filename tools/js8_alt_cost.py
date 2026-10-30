@@ -5,60 +5,78 @@ the instrument 6ace379c measured the budget with) and `altslot` (the alternate
 window). They must not be mixed - a second line in the slot format would have
 halved the apparent median of the first.
 
-The regex is MUTATION-TESTED below before it is trusted on 800 MB of capture,
-the same discipline 6ace379c used: a scraper that matched a corrupted line, or
-silently matched nothing, reads exactly like a healthy quiet result.
+⛔ NAMED GROUPS, NOT NUMBERED. The first cut used numbered groups, and adding
+the optional `mon=` field for T133 shifted every index by one while every
+regex still matched - the scraper would have reported cap_ms as stft_ms with
+no error anywhere. A capture scraper that silently reads the wrong column is
+the same class of failure as a decoder fed the wrong window: it produces a
+plausible number, not a complaint.
+
+The regexes are MUTATION-TESTED below before they are trusted on 800 MB of
+capture, the same discipline 6ace379c used.
+
+Usage:  python tools/js8_alt_cost.py <capture.txt> [since_utc]
 """
 import re, sys, statistics
 
 PRIMARY = re.compile(
-    r"slot (\d+) UTC (\d+): off=([-+]\d+)ms cap=(\d+)ms stft=(\d+)ms dec=(\d+)ms "
-    r"cand=(\d+) dec=(\d+)")
+    r"slot (?P<slot>\d+) UTC (?P<utc>\d+): (?:mon=(?P<mon>\d+) )?"
+    r"off=(?P<off>[-+]\d+)ms cap=(?P<cap>\d+)ms stft=(?P<stft>\d+)ms "
+    r"dec=(?P<dec>\d+)ms cand=(?P<cand>\d+) dec=(?P<decoded>\d+)")
 ALT = re.compile(
-    r"altslot (\d+) UTC (\d+) (JS8 \w+): stft=(\d+)ms dec=(\d+)ms "
-    r"cand=(\d+) dec=(\d+) js8f=(\d+)")
+    r"altslot (?P<slot>\d+) UTC (?P<utc>\d+) (?P<proto>JS8 \w+): "
+    r"stft=(?P<stft>\d+)ms dec=(?P<dec>\d+)ms cand=(?P<cand>\d+) "
+    r"dec=(?P<decoded>\d+) js8f=(?P<js8f>\d+)")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+GOOD_P_OLD = ("I (220477) ft8_test: slot 322 UTC 1793387145: off=+1ms cap=13371ms "
+              "stft=1930ms dec=1813ms cand=140 dec=0 js8f=0 dup=0 skip=0")
+GOOD_P_NEW = ("I (220477) ft8_test: slot 322 UTC 1793387145: mon=1 off=+1ms cap=13371ms "
+              "stft=1930ms dec=1813ms cand=140 dec=0 js8f=0 dup=0 skip=0")
+GOOD_A = ("I (220477) ft8_test: altslot 4 UTC 1793387400 JS8 Fast: stft=555ms "
+          "dec=1671ms cand=140 dec=0 js8f=0 dup=0 skip=0")
 
 
 def mutation_test():
-    good_p = ("I (220477) ft8_test: slot 322 UTC 1793387145: off=+1ms cap=13371ms "
-              "stft=1930ms dec=1813ms cand=140 dec=0 js8f=0 dup=0 skip=0")
-    good_a = ("I (220477) ft8_test: altslot 4 UTC 1793387400 JS8 Fast: stft=555ms "
-              "dec=1671ms cand=140 dec=0 js8f=0 dup=0 skip=0")
-    assert PRIMARY.search(good_p), "primary regex misses a real slot line"
-    assert ALT.search(good_a), "alt regex misses a real altslot line"
-    # ⛔ THE ONE THAT MATTERS: the two must not match each other's lines, or the
-    # alternate's cost is folded into the baseline and the comparison is void.
-    assert not ALT.search(good_p), "alt regex matched a PRIMARY slot line"
-    assert not PRIMARY.search(good_a), "primary regex matched an altslot line"
-    bad = [
-        good_a.replace("stft=555ms", "stft=ms"),
-        good_a.replace("dec=1671ms", "dec=-1671ms"),
-        good_a.replace("altslot 4", "altslot"),
-        good_a.replace("JS8 Fast:", ":"),
-        good_p.replace("cap=13371ms", "cap=13371"),
-    ]
+    for name, line in (("pre-T133 slot", GOOD_P_OLD), ("post-T133 slot", GOOD_P_NEW)):
+        m = PRIMARY.search(line)
+        assert m, f"primary regex misses a real {name} line"
+        # ⛔ THE COLUMNS, NOT JUST THE MATCH. This is the check that would have
+        # caught the index shift that adding mon= caused.
+        assert m.group("cap") == "13371" and m.group("stft") == "1930" \
+            and m.group("dec") == "1813" and m.group("cand") == "140", \
+            f"primary regex read the wrong columns on the {name} line: {m.groupdict()}"
+    assert PRIMARY.search(GOOD_P_NEW).group("mon") == "1", "mon= not read"
+    assert PRIMARY.search(GOOD_P_OLD).group("mon") is None, "mon= invented"
+    m = ALT.search(GOOD_A)
+    assert m and m.group("stft") == "555" and m.group("dec") == "1671" \
+        and m.group("proto") == "JS8 Fast", f"alt regex columns: {m.groupdict() if m else None}"
+    # ⛔ THE ONE THAT MATTERS: neither may match the other's line, or the
+    # alternate's cost folds into its own baseline and the comparison is void.
+    assert not ALT.search(GOOD_P_NEW), "alt regex matched a PRIMARY slot line"
+    assert not PRIMARY.search(GOOD_A), "primary regex matched an altslot line"
+    bad = [GOOD_A.replace("stft=555ms", "stft=ms"),
+           GOOD_A.replace("dec=1671ms", "dec=-1671ms"),
+           GOOD_A.replace("altslot 4", "altslot"),
+           GOOD_A.replace("JS8 Fast:", ":")]
     for i, b in enumerate(bad):
-        assert not (ALT.search(b) and PRIMARY.search(b)), f"mutation {i} matched both"
-        if i < 4:
-            assert not ALT.search(b), f"alt regex accepted corruption {i}: {b}"
-        else:
-            assert not PRIMARY.search(b), f"primary regex accepted corruption {i}"
-    print("regex mutation test: 2 good accepted, 2 cross-matches rejected, "
-          "5 corruptions rejected")
+        assert not ALT.search(b), f"alt regex accepted corruption {i}: {b}"
+    assert not PRIMARY.search(GOOD_P_NEW.replace("cap=13371ms", "cap=13371"))
+    print("regex mutation test: 3 good lines accepted with the right columns, "
+          "2 cross-matches rejected, 5 corruptions rejected")
 
 
 def stats(name, vals):
     if not vals:
-        print(f"  {name}: NO SAMPLES")
-        return
-    vals = sorted(vals)
-    p = lambda q: vals[min(len(vals) - 1, int(q * len(vals)))]
-    print(f"  {name:<18} n={len(vals):<6} p50={statistics.median(vals):<8.0f} "
-          f"p90={p(0.90):<8.0f} p99={p(0.99):<8.0f} max={vals[-1]}")
+        print(f"  {name}: NO SAMPLES"); return None
+    v = sorted(vals)
+    p = lambda q: v[min(len(v) - 1, int(q * len(v)))]
+    print(f"  {name:<18} n={len(v):<6} p50={statistics.median(v):<8.0f} "
+          f"p90={p(0.90):<8.0f} p99={p(0.99):<8.0f} max={v[-1]}")
+    return statistics.median(v)
 
 
-def main(path, since_utc=0):
+def main(path, since=0):
     mutation_test()
     prim, alt = [], []
     with open(path, "rb") as f:
@@ -66,42 +84,42 @@ def main(path, since_utc=0):
             line = ANSI.sub("", raw.decode("utf-8", "replace").replace("\0", ""))
             m = ALT.search(line)
             if m:
-                if int(m.group(2)) >= since_utc:
-                    alt.append((int(m.group(2)), m.group(3), int(m.group(4)),
-                                int(m.group(5)), int(m.group(6)), int(m.group(7))))
+                if int(m.group("utc")) >= since: alt.append(m.groupdict())
                 continue
             m = PRIMARY.search(line)
-            if m and int(m.group(2)) >= since_utc:
-                prim.append((int(m.group(2)), int(m.group(4)), int(m.group(5)),
-                             int(m.group(6)), int(m.group(7)), int(m.group(8))))
+            if m and int(m.group("utc")) >= since: prim.append(m.groupdict())
 
-    print(f"\nslots since UTC {since_utc}: primary {len(prim)}, alternate {len(alt)}")
-    print("\nPRIMARY (JS8 Normal, 15 s slot):")
-    stats("stft_ms", [x[2] for x in prim])
-    stats("dec_ms", [x[3] for x in prim])
-    stats("stft+dec", [x[2] + x[3] for x in prim])
+    print(f"\nslots since UTC {since}: primary {len(prim)}, alternate {len(alt)}")
+    print("\nPRIMARY (15 s slot):")
+    stats("stft_ms", [int(x["stft"]) for x in prim])
+    stats("dec_ms", [int(x["dec"]) for x in prim])
+    pm = stats("stft+dec", [int(x["stft"]) + int(x["dec"]) for x in prim])
+
+    # T133: split by pool index when the firmware reports it.
+    by_mon = {}
+    for x in prim:
+        if x["mon"] is not None:
+            by_mon.setdefault(x["mon"], []).append(int(x["stft"]))
+    if by_mon:
+        print("\n  stft_ms BY POOL INDEX (T133):")
+        for k in sorted(by_mon):
+            stats(f"    mon {k}", by_mon[k])
+
     print("\nALTERNATE window:")
-    if alt:
-        print(f"  submodes seen: {sorted(set(x[1] for x in alt))}")
-    stats("stft_ms", [x[2] for x in alt])
-    stats("dec_ms", [x[3] for x in alt])
-    stats("stft+dec", [x[2] + x[3] for x in alt])
+    if alt: print(f"  submodes seen: {sorted(set(x['proto'] for x in alt))}")
+    stats("stft_ms", [int(x["stft"]) for x in alt])
+    stats("dec_ms", [int(x["dec"]) for x in alt])
+    am = stats("stft+dec", [int(x["stft"]) + int(x["dec"]) for x in alt])
 
-    if prim and alt:
-        pm = statistics.median([x[2] + x[3] for x in prim])
-        am = statistics.median([x[2] + x[3] for x in alt])
-        base = pm / 15000.0
-        add = am / (15000.0 * 5)          # one window per JS8_ALT_DUTY_EVERY slots
+    if pm and am:
+        base, add = pm / 15000.0, am / (15000.0 * 5)
         print(f"\nCPU, one core, from these medians:")
-        print(f"  primary alone        {base*100:5.1f}%")
-        print(f"  + alternate at 1-in-5{add*100:5.1f}%  added")
-        print(f"  = total              {(base+add)*100:5.1f}%   "
-              f"(predicted 29%, the T132 row's original figure 48%)")
-        # Phase coverage: the whole reason the duty is 5 and not 4.
-        phases = sorted(set((x[0] % 60) // 15 for x in alt))
-        print(f"\n  phases of the minute visited: {phases}  "
-              f"({len(phases)} of 4 - fewer than 4 means the duty cycle is "
-              f"phase-locked and most of the band is unreachable)")
+        print(f"  primary alone          {base*100:5.1f}%")
+        print(f"  + alternate at 1-in-5  {add*100:5.1f}%  added")
+        print(f"  = total                {(base+add)*100:5.1f}%")
+        phases = sorted(set((int(x['utc']) % 60) // 15 for x in alt))
+        print(f"\n  phases of the minute visited: {phases} ({len(phases)} of 4 - "
+              f"fewer than 4 means the duty cycle is phase-locked)")
 
 
 if __name__ == "__main__":
