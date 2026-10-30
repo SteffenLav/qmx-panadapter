@@ -60,6 +60,8 @@ hearing. Mute is instant and is not remembered across a reboot.
 | **Drag (1 finger)** | Pan left/right. The passband marker **dims to about a third while you drag** rather than disappearing, so you keep something to aim at, and returns to full when you let go. It does this in every mode |
 | **Hold ~250 ms, then drag** | Precise tune: a cyan cursor appears and snaps grid-to-grid as you move, and the radio follows when you lift. The hold is what separates it from a pan - a quick drag pans, a held drag tunes |
 | **Pinch (2 fingers)** | Zoom in/out |
+| **Right-drag** (BLE mouse) | **Pan the window** without moving the dial — the same gesture as the browser, and the same direction: drag right to bring lower frequencies into view. The picture slides under the pointer while the button is down and the pan is applied when you let go. Left-drag is unchanged |
+| **Wheel** (BLE mouse) | Tune in steps, using your **Tune snap** setting — as in the browser |
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 

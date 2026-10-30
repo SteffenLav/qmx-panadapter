@@ -7915,9 +7915,99 @@ static bool wheel_tune_take(int clicks)
     return true;
 }
 
+/* ⭐⭐ RIGHT-DRAG PANS THE SPECTRUM, exactly as it does in the browser.
+ *
+ * Operator, 2026-10-30: "Then on Tab5 only: Please implement the same web mouse
+ * gesture on the BLE mouse if present". A mouse on this board is almost always
+ * the BLE one - the USB host port belongs to the QMX, and a hub puts both
+ * behind a Transaction Translator ESP-IDF 5.4.4 does not implement - but
+ * nothing here cares which transport it came from: hid_cursor.c already merges
+ * the two into one position and one button bitmask.
+ *
+ * ⛔ THE RIGHT BUTTON NEVER REACHES LVGL, AND THAT IS WHY THIS LIVES HERE.
+ * mouse_read_cb() maps bit0 only - `data->state = (b & 0x01)` - so a right
+ * press is not a click as far as every widget on the screen is concerned, and
+ * it cannot press a button by accident. Bit1 has been carried in the bitmask
+ * all along with nothing reading it. So the gesture is implemented against the
+ * raw cursor state on this 33 Hz timer, and the left button keeps its meaning
+ * untouched: a left drag still tunes, exactly like a finger.
+ *
+ * The drag is LOCAL while the button is down - stroll_apply_offset() slides the
+ * canvas under the pointer - and the pan is applied once on release. Same
+ * division as the touch pan and as the browser, and for the browser's reason:
+ * the real pan costs a dsp_set_zoom() and a redraw, which is not something to
+ * do 33 times a second while a hand is moving.
+ *
+ * Direction matches the web: the content follows the hand, so dragging right
+ * pulls the spectrum right and brings LOWER frequencies into view. */
+static bool    s_mouse_pan_active   = false;
+static int     s_mouse_pan_start_x  = 0;
+static int64_t s_mouse_pan_start_hz = 0;
+
+/* Defined below with the touch pan it belongs to - this gesture is the same
+ * local slide, driven from a different input. */
+static void stroll_apply_offset(int off);
+
+static bool mouse_over_spectrum(lv_coord_t x, lv_coord_t y)
+{
+    return point_in_obj(s_spec_canvas, x, y) ||
+           point_in_obj(s_wf_canvas,   x, y) ||
+           point_in_obj(s_waterfall_obj, x, y);
+}
+
+/* Returns true when the right button owns this tick, so the caller leaves the
+ * hover/hot-corner work alone - the pointer is dragging, not pointing. */
+static bool mouse_pan_tick(void)
+{
+    int lx, ly;
+    uint8_t b;
+    hid_cursor_get(&lx, &ly, &b);
+    const bool right_down = (b & 0x02) != 0;
+
+    if (!s_mouse_pan_active) {
+        if (!right_down) return false;
+        /* Start only on the spectrum, only on the panadapter, and only when
+         * there is a window to move - with the still view off the spectrum
+         * follows the dial and a pan has no meaning. Same three conditions the
+         * API's set_pan refuses on. */
+        if (ui_mode_get() != UI_MODE_PANADAPTER) return false;
+        if (!mouse_over_spectrum(lx, ly))        return false;
+        if (!ui_pan_is_available())              return false;
+        s_mouse_pan_active   = true;
+        s_mouse_pan_start_x  = lx;
+        s_mouse_pan_start_hz = ui_get_pan_offset_hz();
+        s_target_x = -1;                      /* no cyan tune cursor mid-pan */
+        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
+
+    const int dx = lx - s_mouse_pan_start_x;
+    if (right_down) {
+        stroll_apply_offset(dx);              /* local only - no DSP, no CAT */
+        return true;
+    }
+
+    /* Released: put the canvas back and apply the real pan once. */
+    stroll_apply_offset(0);
+    s_mouse_pan_active = false;
+    const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ
+                          / (s_zoom_factor * (float)DISPLAY_H_RES);
+    pan_q_apply(s_mouse_pan_start_hz - (int64_t)lroundf((float)dx * hz_per_px));
+    return true;
+}
+
 static void mouse_timer_cb(lv_timer_t *t)
 {
     (void)t;
+
+    /* ⛔ BEFORE the pan check, not after. The pan owns every tick while the
+     * button is down, so an early return past this would strand a wheel click
+     * that was already waiting on the rate limit for as long as the drag
+     * lasted. Its own comment below says this must reach the radio even on a
+     * tick that carries no clicks of its own; a pan is such a tick. */
+    wheel_tune_flush();
+
+    if (mouse_pan_tick()) return;
 
     // Only re-test when the pointer has actually moved. It is stationary most of
     // the time, and this runs at 33 Hz.
@@ -7947,10 +8037,10 @@ static void mouse_timer_cb(lv_timer_t *t)
         cursor_set_hot(on_grip || hit != NULL);
     }
 
-    // Before anything else: a spin's last clicks must reach the radio even on a
-    // tick that carries none of its own.
-    wheel_tune_flush();
-
+    /* The flush that used to be here has MOVED to the top of this function -
+     * see the note there. It had to run before the pan check, and leaving a
+     * copy behind would be a second call per tick that only ever differs in a
+     * case nobody would find again. */
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
 

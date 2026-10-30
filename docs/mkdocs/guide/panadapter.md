@@ -143,6 +143,15 @@ Use two fingers to pinch in (zoom out) or pinch out (zoom in). The display cente
 
 Drag horizontally with one finger to scroll the spectrum left/right. Release to tune to the new center frequency.
 
+**With a Bluetooth mouse**, hold the **right** button and drag to pan instead.
+It moves the window without touching the dial, so the frequency stays where it
+is — the same gesture, direction and behaviour as the browser. The picture
+slides under the pointer while the button is down and the pan is applied when
+you release. The left button is unchanged, so a left drag still tunes exactly
+as a finger does, and the wheel still tunes in steps. The gesture needs the
+**still display** on, which is the default; with it off the spectrum follows
+the dial and there is no separate window to move.
+
 The **passband marker dims to about a third while you drag** rather than
 disappearing, so there is still something to aim at when you are pulling a
 station into the receive window. It returns to full brightness the moment you

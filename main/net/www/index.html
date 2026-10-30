@@ -8743,10 +8743,21 @@ let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
 let specPanActive      = false;
 let specPanStartX      = 0;
 let specPanStartPanHz  = 0;
-let specPanLastSent    = 0;
-const SPEC_PAN_SEND_MS = 120;   /* the trace comes FROM the device, so the pan
-                                   has to go out during the drag or nothing
-                                   moves. Throttled; the final goes on release. */
+/* ⛔⛔ THE PAN GOES OUT ONCE, ON RELEASE. It used to stream during the drag,
+   throttled to 120 ms, so the trace would follow the hand. The operator tried
+   it, 2026-10-30: "this latency is visually disturbing on the web. So I want
+   you to ONLY communicate the drag to the Tab5 when user finishes dragging."
+   He is right, and the reason is structural rather than a matter of tuning the
+   interval: each send is a round trip through the HTTP command, the LVGL queue,
+   dsp_set_zoom() and then the next WebSocket frame, so the picture arrives a
+   good fraction of a second behind the pointer. At that distance a live update
+   does not read as the spectrum following your hand, it reads as the spectrum
+   lagging it, which is worse than no movement at all.
+   So the drag is now PURELY LOCAL while the button is down - the canvases are
+   translated under the pointer, which costs nothing and is exactly in step with
+   it - and one set_pan goes out when the button comes up. Same shape as the
+   Tab5's own pan: stroll_apply_offset() slides the canvas live, and the real
+   pan is applied on release. */
 /* ⛔ NEGATIVE: THE CONTENT FOLLOWS THE HAND. Drag right and you pull the
    spectrum right with you, so what comes into view is LOWER in frequency -
    the way every map and document drags. The first cut had this positive,
@@ -8777,11 +8788,19 @@ function specPanHzPerPx(rect) {
    screen position instead of sliding across, and the whole-kHz rounding was the
    jitter. set_pan moves the window inside what the radio already hears and
    never touches the dial. */
-function specPanTo(panHz, force) {
-  const now = Date.now();
-  if (!force && now - specPanLastSent < SPEC_PAN_SEND_MS) return;
-  specPanLastSent = now;
+function specPanTo(panHz) {
   sendCmd({ action: "set_pan", hz: Math.round(panHz) });
+}
+/* The local half: slide both canvases by the pointer delta so the gesture has
+   feedback without a round trip. Cleared on release, at which point the device
+   has been told and its next frame draws the real thing. A canvas keeps its CSS
+   transform across redraws, so the 10 Hz trace updates do not fight this. */
+function specPanPreview(px) {
+  const t = px ? ("translateX(" + Math.round(px) + "px)") : "";
+  for (const id of ["spec", "waterfall"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.transform = t;
+  }
 }
 /* The pan offset the device is currently on: the view centre relative to the
    dial, which is exactly what ui_get_pan_offset_hz() holds on the Tab5. */
@@ -9672,7 +9691,6 @@ function addTuneListeners(overlayId, getRect, onSpec) {
       specPanActive     = true;
       specPanStartX     = e.clientX;
       specPanStartPanHz = pan0;
-      specPanLastSent   = 0;
       tuneActive  = false;                      // a pan is not a half-made tune
       tuneCursorX = -1;
       el.style.cursor = "grabbing";
@@ -9682,15 +9700,15 @@ function addTuneListeners(overlayId, getRect, onSpec) {
          view following the mouse around the page afterwards. */
       const onMove = (ev) => {
         if (!specPanActive) return;
-        const dx = ev.clientX - specPanStartX;
-        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()), false);
+        specPanPreview(ev.clientX - specPanStartX);   /* local only */
       };
       const onUp = (ev) => {
         if (!specPanActive) return;
         specPanActive = false;
         el.style.cursor = "";
+        specPanPreview(0);
         const dx = ev.clientX - specPanStartX;
-        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()), true);
+        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
