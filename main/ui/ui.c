@@ -7964,6 +7964,20 @@ static bool mouse_pan_tick(void)
     hid_cursor_get(&lx, &ly, &b);
     const bool right_down = (b & 0x02) != 0;
 
+    /* ⛔ THE BUTTON BYTE IS LOGGED BECAUSE I COULD NOT ANSWER A REPORT WITHOUT
+     * IT. The operator described the gesture misbehaving and asked me to read
+     * the capture; this path logged NOTHING, so the capture could only show the
+     * touch pan and I was left guessing which of the two had run. A gesture
+     * built on a bit nobody had read before has to say what it saw. Rate-
+     * limited to changes, so a resting mouse is silent. */
+    static uint8_t s_last_b = 0xff;
+    if (b != s_last_b) {
+        s_last_b = b;
+        ESP_LOGI("mousepan", "buttons=0x%02x (right=%d) at %d,%d mode=%d pan_avail=%d",
+                 b, right_down ? 1 : 0, lx, ly,
+                 (int)ui_mode_get(), ui_pan_is_available() ? 1 : 0);
+    }
+
     if (!s_mouse_pan_active) {
         if (!right_down) return false;
         /* Start only on the spectrum, only on the panadapter, and only when
@@ -7976,6 +7990,8 @@ static bool mouse_pan_tick(void)
         s_mouse_pan_active   = true;
         s_mouse_pan_start_x  = lx;
         s_mouse_pan_start_hz = ui_get_pan_offset_hz();
+        ESP_LOGI("mousepan", "START at x=%d pan=%lld Hz",
+                 lx, (long long)s_mouse_pan_start_hz);
         s_target_x = -1;                      /* no cyan tune cursor mid-pan */
         if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
         return true;
@@ -7992,7 +8008,10 @@ static bool mouse_pan_tick(void)
     s_mouse_pan_active = false;
     const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ
                           / (s_zoom_factor * (float)DISPLAY_H_RES);
-    pan_q_apply(s_mouse_pan_start_hz - (int64_t)lroundf((float)dx * hz_per_px));
+    const int64_t want = s_mouse_pan_start_hz - (int64_t)lroundf((float)dx * hz_per_px);
+    ESP_LOGI("mousepan", "RELEASE dx=%d -> pan %lld -> %lld Hz",
+             dx, (long long)s_mouse_pan_start_hz, (long long)want);
+    pan_q_apply(want);
     return true;
 }
 

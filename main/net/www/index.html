@@ -8817,25 +8817,47 @@ function specPanPreview(px) {
    deliberate: the device quantises the pan to whole FFT bins (46.875 Hz), so a
    predicted lo would need a tolerance, and a tolerance that is slightly wrong
    reintroduces the jump in the cases nobody tests. */
-let specPanHeldLo    = null;   /* lastView.lo at release; null = not holding */
+/* ⛔⛔ A SEPARATE FLAG, NOT "lo === null MEANS NOT HOLDING". That overloading
+   was a real defect and it is exactly what the operator hit: the release passes
+   lastView.lo, and when there is no viewport yet that is null - which the
+   settle check read as "nothing is held", so it returned early and THE
+   TRANSFORM WAS NEVER CLEARED. The canvases stayed translated for good, which
+   reads as "dragging Tab5 does not update the web anymore" (operator,
+   2026-10-30): the page was still drawing, just permanently shifted.
+   A sentinel that is also a legal value is a bug waiting for the one input
+   nobody tries. The flag says whether we are holding; the lo is only what we
+   compare against, and a null lo simply means every frame counts as a change. */
+let specPanHolding   = false;
+let specPanHeldLo    = null;
 let specPanHeldUntil = 0;
 function specPanHoldUntilFrame(loAtRelease) {
+  specPanHolding   = true;
   specPanHeldLo    = loAtRelease;
   specPanHeldUntil = Date.now() + 2000;
 }
+function specPanReleaseHold() {
+  specPanHolding = false;
+  specPanHeldLo  = null;
+  specPanPreview(0);
+}
 /* Called from the WS frame handler, after lastView is updated. */
 function specPanSettleCheck() {
-  if (specPanHeldLo === null) return;
+  if (!specPanHolding) return;
   const moved  = !lastView || lastView.lo !== specPanHeldLo;
   /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
      changed nothing the device would report - a drag of a few pixels that
      quantises to the same bin, or a pan already against its clamp - because
      then no frame ever differs and the preview would otherwise stick. */
-  if (moved || Date.now() > specPanHeldUntil) {
-    specPanHeldLo = null;
-    specPanPreview(0);
-  }
+  if (moved || Date.now() > specPanHeldUntil) specPanReleaseHold();
 }
+/* ⛔ AND A TIMER AS WELL AS THE FRAME CHECK. The frame check only runs when a
+   frame ARRIVES: if the WebSocket drops at the wrong moment, or the page is in
+   a background tab, nothing clears the hold and the canvases stay shifted.
+   The one thing this must never do is leave the display lying about where it
+   is pointing. */
+setInterval(() => {
+  if (specPanHolding && Date.now() > specPanHeldUntil) specPanReleaseHold();
+}, 500);
 /* The pan offset the device is currently on: the view centre relative to the
    dial, which is exactly what ui_get_pan_offset_hz() holds on the Tab5. */
 function specPanCurrentHz() {
@@ -9727,7 +9749,7 @@ function addTuneListeners(overlayId, getRect, onSpec) {
          specPanPreview(0), wiping the translate out from under the hand that
          is still moving. Found by reading the new state back, not on the
          glass - it needs two drags inside ~200 ms. */
-      specPanHeldLo     = null;
+      if (specPanHolding) specPanReleaseHold();   /* a new drag cancels the old hold */
       specPanActive     = true;
       specPanStartX     = e.clientX;
       specPanStartPanHz = pan0;
