@@ -34,7 +34,7 @@ lose the top and bottom bar controls entirely with no way to reach them.
 
 The web UI provides full remote control:
 
-- **Frequency** — tap the VFO to open the numeric keypad (drag it by its title bar to reposition; toggle between a 10-key and a phone-style digit layout), or click the spectrum to tune
+- **Frequency** — tap the VFO to open the numeric keypad (drag it by its title bar to reposition; toggle between a 10-key and a phone-style digit layout), or click the spectrum to tune (right-drag it to pan instead — see below)
 - **Mode** — buttons for USB, LSB, CW, DiGi
 - **Bandwidth** — selectors for SSB filter width or CW passband
 - **Band** — jump between configured bands
@@ -52,7 +52,13 @@ The waterfall is **live-streamed** from the Tab5 every ~100 ms. You see the same
 
 Click anywhere on the spectrum to tune to that frequency. The waterfall updates continuously — no refresh needed.
 
-**Right-drag to pan.** Hold the **right** mouse button on the spectrum or waterfall and drag sideways to move the window along the band. Left-drag still tunes — it puts the dial where you release — so the two gestures do not collide: **left moves the radio, right moves the view.** A pan never moves the dial — it moves the window inside what the radio already hears, which is why the passband marker stays visible throughout rather than fading as it does on the Tab5. The browser context menu is suppressed over those two panels so the drag can happen.
+**Right-drag to pan.** Hold the **right** mouse button on the spectrum or waterfall and drag sideways to move the window along the band. Left-drag still tunes — it puts the dial where you release — so the two gestures do not collide: **left moves the radio, right moves the view.**
+
+A pan never moves the dial. It moves the window inside what the radio is already receiving, so the frequency stays exactly where it was and the passband marker slides across the screen instead of sitting still. Drag right and you pull the spectrum right with you, bringing lower frequencies into view — the way a map drags. The passband stays visible throughout, in every mode.
+
+It needs the **still display** to be on, which is the default. With it off the spectrum follows the dial, so there is no separate window to move and the gesture is declined with that reason. The browser's own context menu is suppressed over those two panels so the drag can happen; it still works everywhere else on the page.
+
+The band-plan strip below drags the *opposite* way, on purpose: there your hand is on the window **marker** rather than on the picture, so the marker travels with your hand and the frequency rises as you drag right. That one does retune.
 
 **Whole-band plan strip.** Along the bottom of the view (above the status bar) is a colour-coded CW/Digi/Phone strip spanning the entire current band, mirroring the one on the Tab5. A draggable "visible window" marks the slice currently on screen — drag it, or tap anywhere on the strip, to retune — and a marker shows the VFO position.
 
