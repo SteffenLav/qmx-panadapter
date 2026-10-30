@@ -70,11 +70,11 @@ New in v1.20.5, after Samuel W7STF counted four gestures to change the volume.
   back from the radio when the panel opens, so it shows what the radio is
   actually set to, including a change you made on its own knob. A `--` means
   the radio has not answered yet.
-- **Radio RF gain** *(new in v1.21.0)* - 0-99 dB, the same control as
+- **Radio RF gain** - 0-99 dB, the same control as
   Drawer -> Radio. The QMX stores it **per band**, so it is written when you
   let go of the slider rather than on every tick of a drag. ⚠ It has **no
   effect on the spectrum or on the audio** - see the warning below.
-- **AGC Fast / Slow / Off** *(new in v1.21.0)* - the three settings worth
+- **AGC Fast / Slow / Off** - the three settings worth
   having in one tap. **Fast** is a 1 ms attack and a 30 ms release, for CW;
   **Slow** is 5 ms and 400 ms; **Off** pins the gain at the
   [AGC Ceiling](#the-agc-controls) rather than running a very slow AGC. The

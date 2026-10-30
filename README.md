@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.22.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.23.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.22.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.23.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -751,13 +751,13 @@ Full chapter: [tab5.lav.dk/guide/ft8-tx](https://tab5.lav.dk/guide/ft8-tx/)
 
 **JS8 Normal runs on the Tab5 itself** - decoder, error correction and transmitter, no PC. JS8 is a keyboard mode on FT8's modulation: it carries free text instead of FT8's fixed exchange, so stations hold short conversations.
 
-Pick **JS8** from the **Preset** dropdown in the FT8 view - the dropdown is three wide now. Only **JS8 Normal** (15-second slots) is supported; Fast, Turbo and Slow are not, and Turbo is unreachable over CAT anyway.
+Pick **JS8** from the **Preset** dropdown in the FT8 view - the dropdown is three wide now. All four speeds - Slow, Normal, Fast and Turbo - are selectable from v1.19.0, and **only Normal is proven on air**.
 
-With JS8 selected the right pane carries two tappable tabs: **Stations** (who is on the band, with grid and age) and **Conversation** (what has been said - AGE, Hz, CALL, MESSAGE). Both appear in the browser too.
+With JS8 selected the right pane shows **three panes at once** from v1.23.0 *(Ryan KK6DZB)*: **Stations** (who is on the band, with grid and age), **Conversation** (what has been said - AGE, Hz, CALL, MESSAGE) and a **type box** you compose in. The Stations and Conversation tabs are gone; there is nothing left to switch between. The browser shows the same three.
 
 ⚠ **JS8 is a beta.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been watched from both ends** - though the automatic exchange itself *is* implemented and has been since v1.17.0, which the v1.18.0 notes corrected publicly. **All four speeds - Slow, Normal, Fast and Turbo - are selectable from v1.19.0, and only Normal is proven on air.** Compound callsigns — `G0ABC/P`, `W1ABC/4`, special-event calls — are **read** from v1.18.0, where before they were discarded without trace. Proven on air: `SV2BBO/A` decoded twice on 20 m and entered the station list under its full callsign.
 
-**Sending free text.** Tap **Free text** under Call CQ on the Tab5 (JS8 only), or use the composer under the conversation pane on the web page. Both report how many frames the message takes and how many seconds it holds the frequency before anything is keyed, and show the normalised text the encoder will actually send - upper-cased, whitespace collapsed, unsendable characters dropped. One frame per 15-second slot, so a twelve-frame message is three minutes of transmitting. **Stop TX** aborts a run in flight and stays reachable while transmitting. Scriptable as `POST /api/cmd {"action":"js8_text","text":"..."}`, with `js8_text_plan` for the frame/second count without transmitting and `js8_text_cancel` to stop.
+**Sending free text.** Type into the box under the conversation pane - on the Tab5 or on the web page. The old **Free text** button under Call CQ is gone as of v1.23.0; with no physical keyboard, tapping the box opens the modal composer so the on-screen keyboard does not cover it. Both report how many frames the message takes and how many seconds it holds the frequency before anything is keyed, and show the normalised text the encoder will actually send - upper-cased, whitespace collapsed, unsendable characters dropped. One frame per 15-second slot, so a twelve-frame message is three minutes of transmitting. **Stop TX** aborts a run in flight and stays reachable while transmitting. Scriptable as `POST /api/cmd {"action":"js8_text","text":"..."}`, with `js8_text_plan` for the frame/second count without transmitting and `js8_text_cancel` to stop.
 
 A free-text frame carries **no callsign** - that is JS8's design. The Tab5 names a message after a station that identified itself on the same audio frequency, and shows the **frequency instead of a name** when two stations are equally plausible. A wrong callsign on somebody else's words is worse than none.
 
@@ -1075,11 +1075,12 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.22.0 is here.** Next on the bench:
+**v1.23.0 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
+- **A real JS8 Fast station decoded.** v1.23.0 can decode one alternate JS8 speed alongside the one you are using, one slot in five, receive-only and default off. It has only ever decoded my own encoder. Until a station actually running Fast is read off the air it stays untested.
 
 ### Longer term
 

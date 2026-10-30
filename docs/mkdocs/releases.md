@@ -4,27 +4,33 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.22.0** - 2026-10-28
+**v1.23.0** - 2026-10-30
 
-**CW and SSB contacts can be logged by hand, on the Tab5 and in the browser. Activation covers seven ?OTA programmes and writes each one's own ADIF file. A Scheduled events pane puts the contest calendar and the ?OTA schedule on one timeline.**
+**Right-drag pans the spectrum, in the browser and with a BLE mouse on the Tab5. The JS8 panel shows stations, the conversation and a type box all at once. Spur suppression works for the first time since it was written, and the FT8/JS8 decoder is 2.2x faster.**
 
-- **Log a contact (CW/SSB)** *(Gyula HA3HZ, Brian KB9WFS)*. The digital modes log themselves; CW and phone could not be logged at all. Settings drawer, or keyboard shortcut 26, or the browser menu. You type the callsign and the two reports — everything else comes from the radio and the device. Reports arrive filled in from the mode, 599 for CW and 59 for phone. The window stays open after Log with the callsign cleared, because a run of contacts is not one dialog at a time. Refused with no radio connected: a record with no frequency is not a QSO.
-- **Tapping a spot pre-fills the callsign** *(the operator)*.
-- **Activation covers seven programmes** *(the operator)*. POTA, SOTA, WWFF, IOTA, GMA, WCA and WWBOTA, each with its own reference style and qualifying count — 10, 4 and 44 for the first three. POTA, SOTA, WWFF and IOTA also get the dedicated ADIF field their uploader actually reads; without it an upload can be accepted and still not count.
-- **Stopping an activation writes that activation's own ADIF file** to the card *(Brian KB9WFS)*, named for the reference and the date. That is the file you submit. Stopping from the browser used to skip it silently.
-- **The contact count shows on the Activation button**, as `OZ-0001  3/10` *(Brian KB9WFS)*.
-- **Scheduled events** *(the operator)*. Contest calendar and announced POTA/SOTA activations on one timeline, soonest first, filterable. On demand, at most every 15 minutes — never a standing poll. A dead source is not an error: the last list stays up and the age line says how old it is.
-- **Each sub-mode keeps its own frequency.** FT8, FT4 and JS8 shared one memory, so leaving JS8 on 14.078 and returning to FT8 landed you on 14.078.
-- **For browser users** *(Randy N4OPI)*: the Radio menu can select FT8 (it used to leave you in FT4 or JS8 and grey out the FT8 entry), the band preset in use is shown as the Tab5 always did, the "no decodes for 20 minutes" warning reaches the browser, and a reply refused because the Tab5 is not in FT8 now says so instead of answering with silence.
-- **The waterfall no longer shows stale history.** Nothing writes a waterfall row while you are on the WSPR or FT8 page, so returning to the panadapter put the picture from before the visit back up as though it were live. Both surfaces blank it on arrival now.
-- **Fixed:** every dial write quantised to 10 Hz (with tune snap Off the grid was 1 Hz), a consecutive `.` in the frequency keypad refused, the log viewer's Today/All choice remembered across a restart, five of the seven activation programmes could not be selected from the picker that offered them, and the audio rate loop can recover from a starvation instead of staying pinned at its limit.
-- **RF gain says what it does** *(Samuel W7STF, mechanism confirmed by Stan KC7XE)*. It acts on the radio's own headphone and speaker audio, not on what the panadapter shows: in I/Q mode the Tab5 gets the raw stream from before the QMX's own DSP, so the command cannot reach it. Kept and relabelled.
+- **Right-drag pans the spectrum.** Hold the right mouse button on the spectrum or waterfall and drag sideways to move the window along the band; the dial does not move. Left-drag still tunes, so the two do not collide - left moves the radio, right moves the view. The browser had no pan at all before this, and the same gesture works on a BLE mouse connected to the Tab5.
+- **The JS8 panel shows all three panes at once** *(Ryan KK6DZB)*: stations, the conversation, and a type box you compose in. The Stations and Conversation tabs are gone, and so is the old **Free text** button - there is nothing left to switch between. With a physical keyboard you type in place; without one, tapping the box opens the modal composer so the on-screen keyboard does not cover it. The browser shows the same three.
+- **Spur suppression had never worked, and it was walking the dial up the band** *(Steve KX7R)*. The 25 Hz offset it nudges the dial by is not on the QMX's 10 Hz grid, so every nudge was rounded and four callers waiting for the frequency to read back were left waiting.
+- **The S digit of the report you received is measured** *(Gyula HA3HZ)*. In the Log a contact window, Tab5 and browser, it comes from the S-meter's own 10-second peak hold instead of being a `9` every time. R and T stay at the mode default, and the report you *send* is untouched - that is your judgement of a signal this device cannot hear.
+- **A WWFF, IOTA, GMA or WCA activation called `CQ POTA`.** Five programmes were added in v1.22.0 and this one site was not swept, so each went out under the wrong programme's name. Each now carries its own token; WWBOTA does not fit FT8's four-character modifier, so a bunker activation goes out as a plain `CQ` rather than as something untrue.
+- **A finished QSO stopped reporting "Busy: working ..." forever** *(Bruce N9JCV)*.
+- **The off-view marker arrow works.** It exists in the browser now as well as on the Tab5, appears on both edges, is gated on the marker and the bandwidth, and is actually tappable - the tap used to be swallowed by the spots lane's edge counter.
+- **The spectrum no longer jumps when you pan.** The waterfall is re-anchored and the spectrum average re-seeded when the view moves, so the content crossfades instead of snapping. The settle check meant to do this never ran above zoom x1.
+- **The passband dims while you drag it, in every mode.** It used to vanish, and only in CW.
+- **A crash class is closed.** One unlocked table in the WiFi co-processor's RPC layer was behind two different field asserts. It has run 20 hours clean here; the previous failures came within 7 minutes of boot.
+- **The FT8 and JS8 decoder is 2.2x faster.** One of its two monitors had its hottest buffer in a 32 KB region the system calls internal RAM but which is far slower to reach than cached PSRAM, and that buffer is copied twice per block, 93 blocks a slot. Both monitors now sit at 881 and 877 ms where one was 1968 ms - about seven points of one processor core returned on every FT8 and JS8 slot.
+- **Hamlib rigctld is documented at last** *(Brian KB9WFS)*. The Tab5 has been a Hamlib **NET rigctl** server on port 4532 since v0.9.6 with nothing in the manual about it. There is now a chapter, including Brian's own QLog recipe, and the limit nobody had written down: it cannot key the radio. There is no `set_ptt`, so set PTT to none or VOX and key the QMX the way you normally do.
+- **The "no decodes for 20 minutes" message no longer blames the radio.** On a quiet band, telling you to power-cycle the QMX is simply wrong - and a wedged radio and an empty band look identical to this firmware. It now says the band is most likely quiet and that leaving it receiving is the right thing to do, keeping the power-cycle hint conditional on a flash you have not cycled for.
 
-⚠ **Known limit: SSB auto-tune can land on the wrong side of a station on a .250 boundary.** It finds the station and converges from 1.5 kHz away, but SSB has no carrier — the only stable thing to measure is the edge of the occupied band, and that edge sits where the far operator's own low cut is, anywhere from 100 to 400 Hz. Measured against a known carrier it is accurate to 10 Hz for a station cutting at 300 Hz. A low-cut trim is provided and the raw estimate is logged so the right number can be read off a real contact.
+⚠ **One alternate JS8 speed can now be decoded alongside the one you are using**, one slot in five, off the audio the normal slot already captured. **Default off, and not proven.** It is receive-only by explicit refusal: a decode reaches the conversation pane tagged with the speed that heard it and nothing else - never the stations list, the QSO machine, the robot, transmit arming, PSK Reporter or the clock sync. No real station on another speed has ever been decoded with it, only my own encoder. Decoding all four speeds at once measures 118% of one processor core and does not fit.
 
 Audio and binaural CW remain a **declared beta**.
 
 ## Previous Releases
+
+### v1.22.0 - 2026-10-28
+
+CW and SSB contacts can be logged by hand on the Tab5 and in the browser; activation covers seven ?OTA programmes and writes each one's own ADIF file on stop, with the contact count on its own button; a Scheduled events pane puts the contest calendar and the ?OTA schedule on one timeline. FT8, FT4 and JS8 each keep their own frequency. Fixed: dial writes quantised to 10 Hz, the waterfall no longer shows history from before a WSPR or FT8 visit, five of the seven activation programmes could not be selected, and several browser faults reported by Randy N4OPI. RF gain relabelled to say what it actually acts on.
 
 ### v1.21.0 - 2026-10-25
 
@@ -1199,7 +1205,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.22.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.23.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

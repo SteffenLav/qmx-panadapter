@@ -2,7 +2,7 @@
 
 **JS8 Normal runs on the Tab5 itself** — the decoder, the error correction and the transmitter, with no PC in the loop. JS8 is a keyboard mode built on FT8's modulation: it carries free text rather than the fixed exchange FT8 uses, so stations hold short conversations with each other.
 
-JS8 arrived in v1.17.0 and is **declared a beta**. What is proven and what is not is spelled out in [section 6](#6-what-is-proven-and-what-is-not). Read that before relying on it.
+JS8 arrived in v1.17.0 and is **declared a beta**. What is proven and what is not is spelled out in [section 7](#7-what-is-proven-and-what-is-not). Read that before relying on it.
 
 ### 1. Selecting JS8
 
@@ -18,14 +18,32 @@ On the Tab5 you can also **tap the big MODE label** in the left pane while JS8 i
 
 ⚠ **JS8 and FT4 share two of their calling frequencies.** If you were expecting FT4 activity on a frequency and see JS8 instead, that is why — the modes overlap on the band plan, not a fault.
 
-### 2. The Stations and Conversation tabs
+### 2. The three-pane JS8 panel
 
-With JS8 selected, the right pane carries two tappable tabs:
+**From v1.23.0 you no longer switch between views.** With JS8 selected the
+right pane shows all three at once, top to bottom *(Ryan KK6DZB)*:
 
-- **Stations** — who is on the band. Each station that has identified itself, with its grid and how long ago it was heard.
-- **Conversation** — what has been said, newest first, with four columns: **AGE**, **Hz**, **CALL** and **MESSAGE**.
+- **Stations** — who is on the band. Each station that has identified itself,
+  with its grid and how long ago it was heard. Five rows.
+- **Conversation** — what has been said, newest first, with four columns:
+  **AGE**, **Hz**, **CALL** and **MESSAGE**. Ten rows.
+- **The type box** — write your message here and send it. This replaces the
+  free-text modal as the place you compose; the modal is still there as the
+  fallback when you have no physical keyboard.
 
-Rows are tappable in both. The same two views appear in the browser, so you can watch a conversation from a laptop while the Tab5 sits with the radio.
+Rows are tappable in both lists. The browser shows the same three panes, so you
+can watch a conversation from a laptop while the Tab5 sits with the radio.
+
+The **Stations** and **Conversation** tabs are gone — there is nothing left to
+switch between. **Flush** stays, because it is an action rather than a view: it
+empties the conversation list and does not touch your log.
+
+!!! note "The layout does not move"
+    With a physical keyboard — the snap-on or a BLE one — you type into the box
+    in place. Without one, tapping it opens the modal composer, which brings up
+    the on-screen keyboard and clears it again when you are done. The three
+    panes are sized for the keyboard being **down** and never resize, because a
+    panel that reflows under you is worse than one that does not.
 
 ### 3. What the decoder reads
 
@@ -62,7 +80,16 @@ at all, and almost everybody runs Normal — see section 1.
 
 ### 5. Sending free text
 
-**On the Tab5:** tap **Free text**, the button under Call CQ. It is shown in JS8 only. Type the message, and the window tells you how many frames it takes and how many seconds it holds the frequency *before* anything is keyed, along with the text exactly as it will go out. **Send** starts it; **Stop TX** aborts a run that is already going out, and stays reachable while transmitting.
+**On the Tab5:** type into the **type box** at the bottom of the right pane and
+tap **Send**. From v1.23.0 that box replaces the old **Free text** button under
+Call CQ, which is gone. With no physical keyboard, tapping the box opens the
+modal composer instead, so the on-screen keyboard does not cover the field you
+are typing into.
+
+Either way, you are told how many frames the message takes and how many seconds
+it holds the frequency *before* anything is keyed, along with the text exactly
+as it will go out. **Stop TX** aborts a run that is already going out, and
+stays reachable while transmitting.
 
 **In the browser:** the same composer sits under the conversation pane on the FT8/JS8 page, with the same plan line and the same Send and Stop.
 
