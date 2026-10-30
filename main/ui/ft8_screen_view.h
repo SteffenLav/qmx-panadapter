@@ -152,6 +152,8 @@ void ft8_screen_view_refresh_mode_label(void);
  * so both surfaces run the one code path. */
 void ft8_screen_view_request_js8_flush(void);
 
-/* Which JS8 pane is showing. Reported in /api/status so the capture and the
- * API can say what is on the screen without asking the operator. */
-bool ft8_screen_view_js8_tab_is_conversation(void);
+/* ⛔ ft8_screen_view_js8_tab_is_conversation() WAS HERE and is gone - T14.
+ * It answered "which JS8 pane is showing" for /api/status. All three panes
+ * are up at once now, so the question has no answer and the API reports
+ * "all" literally rather than this returning a constant that reads like a
+ * live reading. */

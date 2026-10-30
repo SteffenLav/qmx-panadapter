@@ -1267,9 +1267,9 @@
              ordering, so clicking any header does not leave the operator
              wondering how to get the CQ-callers-on-top view back. -->
         <a href="#" id="dec-order-reset" style="color:var(--dim); display:none">↺ CQ callers on top</a>
-        <!-- JS8 only. The Tab5's JS8 screen carries exactly these two tabs, and
-             ⭐ Conversation is the DEFAULT there: it is the only view that can
-             show what a station actually SAID, and Stations is one tap away.
+        <!-- JS8 only. ⭐ T14: the Tab5's JS8 screen now shows stations, the
+             conversation and a type box TOGETHER, and this row matches it - what
+             is left here is the target chip, the two macro sends and Flush.
              Hidden in FT8/FT4, which have no conversation to show. -->
         <span id="js8-tabs" style="display:none; margin-left:auto;">
           <!-- Who is selected, and the two macro sends. JS8 only, and they are
@@ -1290,8 +1290,10 @@
                surfaces end up disagreeing about what is set; the heading is
                already the thing that TELLS you the speed, so it is the thing
                that should change it. See js8SubmodePopup(). -->
-          <button type="button" id="js8-tab-conv" class="bot-btn">Conversation</button>
-          <button type="button" id="js8-tab-stn"  class="bot-btn">Stations</button>
+          <!-- ⛔ THE Conversation AND Stations BUTTONS WERE HERE - T14.
+               Both panes and the composer are shown at once now, matching the
+               Tab5's three-pane panel, so there is nothing to switch between.
+               Flush stays: it is an action, and it always was. -->
           <!-- The Tab5's JS8 tab bar has had a Flush since the page shipped and
                this one did not - Ryan KK6DZB, 2026-10-14: "No flush button in
                the webUI?". Same action and the same code path on the device, and
@@ -6690,7 +6692,6 @@ document.getElementById("dec-body").addEventListener("dblclick", async (e) => {
    ⛔ Rows are tappable and the row -> message map comes FROM THE DEVICE. A
    message can wrap onto several rows, so a tap cannot be turned into a message
    by arithmetic - the glass asks for the map for exactly this reason. */
-let js8Tab = "conv";      // the Tab5's default in JS8
 /* The selected station, mirrored from /api/status (ft8.js8_target) so the Tab5
    and this page cannot disagree about who is being worked - one piece of state,
    two surfaces, the rule cq_parity had to learn the hard way. */
@@ -6711,23 +6712,29 @@ function js8TabsSync(proto) {
   document.getElementById("js8-tabs").style.display = isJs8 ? "" : "none";
   const conv = document.getElementById("js8-conv");
   const tbl  = document.getElementById("dec-table").parentElement;
-  const showConv = isJs8 && js8Tab === "conv";
+  /* ⭐ T14: IN JS8 EVERYTHING IS UP AT ONCE - the decode table, the
+     conversation and the composer inside it. The old code showed exactly one
+     of the first two, which meant the composer VANISHED whenever you looked
+     at Stations: the Tab5's own fault repeated here, and worse, because the
+     browser has no modal composer to fall back on. */
+  const showConv = isJs8;
   conv.style.display = showConv ? "" : "none";
-  tbl.style.display  = showConv ? "none" : "";
-  /* ⭐ The glass HIDES the Stations column header in conversation view
-     (s_col_hdr, ft8_screen_view.c) and lets the tab bar name the pane. Do the
-     same: "Decode list - nothing heard yet" over a conversation is a heading
-     describing the pane that is not on screen. */
+  tbl.style.display  = "";
+  /* ⛔ THE DECODE-LIST HEADINGS COME BACK - T14. They were hidden in
+     conversation view because the table they named was not on screen; it now
+     always is, and a table with no heading above a conversation grid is the
+     harder thing to read. The glass made the same change: s_col_hdr is no
+     longer hidden in js8_tabs_apply(). The dataset flag is still cleared so a
+     page left open across an update does not keep a stale hidden heading. */
   for (const id of ["dec-title", "dec-count", "dec-rx", "dec-order-reset"]) {
     const el = document.getElementById(id);
     if (!el) continue;
-    if (showConv) { el.dataset.js8Hid = "1"; el.style.visibility = "hidden"; }
-    else if (el.dataset.js8Hid) { delete el.dataset.js8Hid; el.style.visibility = ""; }
+    if (el.dataset.js8Hid) delete el.dataset.js8Hid;
+    el.style.visibility = "";
   }
-  for (const [id, want] of [["js8-tab-conv", "conv"], ["js8-tab-stn", "stn"]]) {
-    const b = document.getElementById(id);
-    b.style.opacity = (js8Tab === want) ? "1" : "0.55";
-  }
+  /* The two tab buttons were dimmed here by which was selected. Gone with
+     them - T14. Flush is painted by its own stylesheet rule and never was
+     part of this. */
   /* The composer belongs to the conversation pane: it is where you are reading
      what was said, which is where you answer. */
   document.getElementById("js8-tx").style.display = showConv ? "" : "none";
@@ -7178,12 +7185,9 @@ document.getElementById("js8-flush").addEventListener("click", async () => {
   js8Poll();
 });
 
-document.getElementById("js8-tab-conv").addEventListener("click", () => {
-  js8Tab = "conv"; js8TabsSync("JS8");
-});
-document.getElementById("js8-tab-stn").addEventListener("click", () => {
-  js8Tab = "stn"; js8TabsSync("JS8");
-});
+/* ⛔ THE TWO TAB CLICK HANDLERS WERE HERE - T14.
+   Nothing switches panes any more. The selected-tab variable went with them,
+   and js8TabsSync() keys on the protocol alone. */
 
 /* Same gesture, and the same command, as clicking a row in the decode list -
    the glass resolves a conversation tap to the Stations row with that callsign

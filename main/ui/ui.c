@@ -20165,6 +20165,9 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  * A BLE MOUSE does not count: bt_hid_keyboard_active() requires the device's own
  * report map to declare a keyboard. And it goes false on disconnect, so a
  * keyboard that runs flat or walks out of range brings this straight back.
+ * The snap-on keyboard answers the same question through
+ * tab5_keyboard_present(), and goes false on a physical detach - see
+ * ui_phys_kbd_active() below, which is the predicate every caller uses.
  *
  * ⛔ EVERY CALLER MUST BE WIRED TO LV_EVENT_CLICKED AS WELL AS LV_EVENT_FOCUSED,
  * AND THAT IS NOT BELT-AND-BRACES - IT IS THE ONLY ONE THAT ALWAYS FIRES.
@@ -20186,11 +20189,28 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  * does not depend on knowing. */
 static lv_obj_t *s_osk_cur = NULL;   /* the on-screen keyboard currently shown */
 
+/* ⛔ BOTH PHYSICAL KEYBOARDS, NOT JUST BLE. T131, 2026-10-30.
+ *
+ * This gate tested bt_hid_keyboard_active() alone for its whole life, so the
+ * SNAP-ON keyboard raised a redundant 280 px on-screen keyboard over the
+ * bottom 45% of the screen in every modal - activation, CQ, filter, ADIF
+ * search, JS8 text. tab5_keyboard_present() existed the entire time and had
+ * ZERO callers anywhere in the tree; the two halves were written apart and
+ * nothing ever joined them.
+ *
+ * ⚠ Both predicates can go false again on a detach, which is the point: a
+ * keyboard unplugged mid-field must bring the on-screen one back. Neither is
+ * cached. */
+bool ui_phys_kbd_active(void)
+{
+    return bt_hid_keyboard_active() || tab5_keyboard_present();
+}
+
 void ui_osk_show(lv_obj_t *kb)
 {
     if (!kb) return;
     s_osk_cur = kb;
-    if (bt_hid_keyboard_active()) {
+    if (ui_phys_kbd_active()) {
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         return;
     }
@@ -20198,12 +20218,15 @@ void ui_osk_show(lv_obj_t *kb)
     lv_obj_move_foreground(kb);
 }
 
-/* A Bluetooth keyboard that wakes AFTER the field was tapped left the on-screen
+/* A physical keyboard that wakes AFTER the field was tapped left the on-screen
  * keyboard sitting there: the tap happened while nothing was connected, so
  * showing it was right at the time, and nothing revisited that decision when the
  * keyboard turned up two seconds later. Reported from the bench - the first two
  * or three keystrokes land in the field with the on-screen keyboard still
  * covering half the screen.
+ *
+ * ⛔ T131: this watched the BLE flag only, so clicking the snap-on keyboard on
+ * mid-field did not retire the on-screen one either. Both are checked now.
  *
  * Runs on the LVGL task, which is why the BLE side only sets a flag and never
  * touches a widget itself. */
@@ -20211,7 +20234,7 @@ static void osk_bt_retire_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_osk_cur || !lv_obj_is_valid(s_osk_cur)) { s_osk_cur = NULL; return; }
-    if (bt_hid_keyboard_active() && !lv_obj_has_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN))
+    if (ui_phys_kbd_active() && !lv_obj_has_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN))
         lv_obj_add_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN);
 }
 

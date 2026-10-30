@@ -377,10 +377,14 @@ static void add_ft8_tx_status(cJSON *root)
 
         /* Which JS8 pane the screen is showing. Here so a question about the
          * screen can be answered from the API instead of by interrupting the
-         * operator - 2026-10-09, chasing an internal-heap regression. */
-        cJSON_AddStringToObject(f, "tab",
-                                ft8_screen_view_js8_tab_is_conversation()
-                                    ? "conversation" : "stations");
+         * operator - 2026-10-09, chasing an internal-heap regression.
+         *
+         * ⛔ ALWAYS "all" SINCE T14. The screen stopped having a chosen tab:
+         * stations, the conversation and the type box are all up together.
+         * The field is kept because it is in the published API and a reader
+         * that expects it should see an honest value, not a missing key or a
+         * stale "conversation" that was never a reading. */
+        cJSON_AddStringToObject(f, "tab", "all");
 
         /* The newest few conversation entries - what the JS8 screen's
          * Conversation pane is showing.

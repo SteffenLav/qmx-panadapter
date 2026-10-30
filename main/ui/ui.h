@@ -597,6 +597,12 @@ void ui_restart_edge_grip_anims(void);
 void ui_kbd_note_focus(lv_obj_t *ta);
 void ui_kbd_note_unfocus(lv_obj_t *ta);
 
+// True while EITHER physical keyboard can type - BLE or the snap-on. This is
+// the predicate ui_osk_show() gates on, and the one a layout should ask when
+// it needs to know whether the 280 px on-screen keyboard will appear. Never
+// cached: both halves go false on a detach. See T131 in TODO.md.
+bool ui_phys_kbd_active(void);
+
 // Register the open modal's Save and Cancel buttons so the physical keyboard's
 // Enter key clicks Save (commit + close) and Esc clicks Cancel. Either may be
 // NULL. Auto-cleared when the buttons are deleted (modal closed). Call once
