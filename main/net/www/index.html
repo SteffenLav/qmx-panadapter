@@ -8742,7 +8742,15 @@ let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
    would only remove the reference you are panning against. */
 let specPanActive      = false;
 let specPanStartX      = 0;
-let specPanStartPanHz  = 0;
+/* ⭐ WHAT THE LAST FRAME SAID, not what the 1 Hz poll said. These are the
+   trailer fields webserver_ws.c samples beside the bins, valid on both FFT
+   paths, and they are the only source the gesture uses. frameViewSpan is 0
+   until a frame carrying them arrives, which is also the test for firmware
+   that does not send them - on that firmware the right-drag simply declines
+   rather than computing a pan from a stale derived number. */
+let frameViewLo        = null;
+let frameViewSpan      = 0;
+let framePanHz         = null;
 /* ⛔⛔ THE PAN GOES OUT ONCE, ON RELEASE. It used to stream during the drag,
    throttled to 120 ms, so the trace would follow the hand. The operator tried
    it, 2026-10-30: "this latency is visually disturbing on the web. So I want
@@ -8773,11 +8781,16 @@ let specPanStartPanHz  = 0;
    The two sites derive their offsets differently and the code comparison was
    not a reliable way to answer it. The feel of the gesture is settled by
    looking at it, not by matching two expressions. */
-function specPanHzPerPx(rect) {
-  const span = (lastView && typeof lastView.span === "number")
-                 ? lastView.span : (48000 / (lastZoom || 1));
-  return -span / rect.width;
-}
+/* ⛔ specPanHzPerPx() AND specPanCurrentHz() ARE GONE, deliberately.
+   They derived the span from lastView (stale by up to a second above zoom x1,
+   because the header carries no viewport there) and the pan from
+   lastView.lo + span/2 - lastFreqHz (snapped to a whole Tab5 pixel by
+   view_lo_snapped, and racing a second poll for the dial). Every drag sent a
+   pan built from those two errors, so the view landed slightly away from where
+   the hand left it and the preview had to absorb the difference as a visible
+   step. The frame now carries span, lo and the pan itself - frameViewSpan,
+   frameViewLo, framePanHz - so there is one source and nothing to derive.
+   Do not reintroduce a helper that computes either of them from lastView. */
 /* ⛔ set_pan, NOT view_center. view_center is the band-plan KNOB and is allowed
    to retune - it rounds the dial to whole kHz and drags the radio along. Built
    on it first, and the operator caught both symptoms at once, 2026-10-30:
@@ -8817,8 +8830,10 @@ function specPanTo(panHz) {
    (operator). But that build established the one fact that was missing: with no
    translate there is NO jump, so the device's arrival is a single clean step
    and the only thing ever wrong was WHEN we dropped the preview.
-   That moment is now read from a view-sequence byte in the frame trailer. See
-   specPanSettleCheck(). */
+   That moment turned out not to exist: the drawn trace does not move on one
+   frame, so no choice of instant could cancel it. The translate is now a
+   RESIDUAL recomputed from every frame's own viewport - see
+   specPanTrackFrame(). */
 /* ⛔⛔ THE PAGE WRITES INTO THE DEVICE'S SERIAL CAPTURE.
    Operator, 2026-10-30: "I am NOT your instrument! Then hurry up implementing
    web screen logs to the capture so that you can see exactly what happens."
@@ -8839,24 +8854,66 @@ const PAN_DEBUG = location.hash.indexOf("pandebug") >= 0;
 /* Where the drawn trace has moved to, in BINS, against a snapshot. Correlates
    specSmooth - the smoothed trace actually drawn - and NOT the raw frame: raw
    bins on a quiet band are a fresh noise realisation every frame and correlate
-   with nothing, which is exactly why my first attempt at this measurement
-   returned incoherent lags. */
+   with nothing.
+
+   ⛔⛔ THIS WAS A BROKEN INSTRUMENT AND IT PRODUCED CONFIDENT WRONG NUMBERS
+   FOR A WHOLE SESSION. It maximised an UN-NORMALISED dot product, sum(ref*cur),
+   over a trace whose values are all positive with a large mean (measured on
+   bench1: range 0.1 to 104.5, mean 79.2). For such a signal the dot product is
+   dominated by the mean level and its argmax has nothing to do with the shift.
+   MEASURED by shifting a live trace by a known K and asking it what it saw:
+
+       K =    0  -40  -80  -152  +60
+       old  -93 -133 -173  -245   -33      <- K minus 93, every time
+       new    0  -40  -80  -152  +60   (r = 1.000)
+
+   A constant -93 bin offset, about -92 px. So every content/net figure this
+   ever printed was wrong by that much, including the "the content RAMPS over
+   three frames - 189, 168, 134" reading that the EMA re-seed was built on.
+   The re-seed is still right - applyDeviceEma() plainly does blend the new
+   window into the old, which is readable in the code - but the ramp was never
+   measured. Nothing from the old instrument should be quoted.
+
+   Now: zero-mean, variance-normalised (Pearson) over the overlap, which is
+   scale and offset invariant and recovers a known shift exactly. It returns r
+   as well as the lag, because r is what says whether the lag means anything -
+   on a quiet band it falls to ~0.4 and the argmax can latch onto a false peak.
+   ⚠ The search is +/-300 bins. A gesture wider than that is UNMEASURABLE by
+   correlation, and reads as a false peak rather than as a refusal. That is why
+   the content figure logged below is no longer taken from here. */
 function panCorrShift(ref, cur) {
   let best = 0, bs = -Infinity;
-  for (let sft = -250; sft <= 250; sft += 1) {
-    let sum = 0, n = 0;
-    for (let i = 200; i < 824; i += 2) {
+  for (let sft = -300; sft <= 300; sft += 1) {
+    let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    for (let i = 150; i < 874; i += 1) {
       const j = i + sft;
       if (j < 0 || j >= SPEC_W) continue;
-      sum += ref[i] * cur[j]; n++;
+      const a = ref[i], b = cur[j];
+      n++; sx += a; sy += b; sxx += a * a; syy += b * b; sxy += a * b;
     }
-    if (n < 100) continue;
-    const v = sum / n;
-    if (v > bs) { bs = v; best = sft; }
+    if (n < 200) continue;
+    const num = sxy - sx * sy / n;
+    const den = Math.sqrt((sxx - sx * sx / n) * (syy - sy * sy / n));
+    if (!(den > 0)) continue;
+    const r = num / den;
+    if (r > bs) { bs = r; best = sft; }
   }
-  return best;
+  return { bins: best, r: bs };
 }
 let panRef = null, panRefAt = 0, panRefTx = 0;
+/* The viewport the reference trace was drawn under. This is what makes the
+   content figure exact instead of correlated - see panDebugFrame(). */
+let panRefLo = null, panRefSpan = 0;
+/* The view-sequence trailer byte, last seen. Its only job now is to re-seed
+   the spectrum EMA when the view moves - the preview no longer depends on it.
+   null until a frame carrying it arrives.
+   DECLARED HERE DELIBERATELY: it lived inside the hold-and-clear block that
+   the residual tracker replaced, and removing that block took the declaration
+   with it. The frame handler then threw a ReferenceError on EVERY frame, which
+   looked exactly like the trailer not being sent - the device was sending a
+   correct 1063-byte frame the whole time. Caught by evaluating the page state
+   in a browser, not by reading the diff. */
+let lastViewSeq = null;
 
 const SPEC_PAN_PREVIEW_ENABLED = true;
 function specPanPreview(px) {
@@ -8864,7 +8921,12 @@ function specPanPreview(px) {
   const t = px ? ("translateX(" + Math.round(px) + "px)") : "";
   for (const id of ["spec", "waterfall"]) {
     const el = document.getElementById(id);
-    if (el) el.style.transform = t;
+    if (!el) continue;
+    /* ⛔ KILL ANY EASE IN PROGRESS. specPanEaseOut() leaves a CSS transition on
+       these elements for 220 ms; a drag that starts inside that window would
+       otherwise animate every frame of the preview 180 ms behind the pointer. */
+    if (el.style.transition) el.style.transition = "";
+    el.style.transform = t;
   }
 }
 
@@ -8892,156 +8954,191 @@ function specPanPreview(px) {
    A sentinel that is also a legal value is a bug waiting for the one input
    nobody tries. The flag says whether we are holding; the lo is only what we
    compare against, and a null lo simply means every frame counts as a change. */
-let specPanHolding   = false;
-let specPanHeldLo    = null;
-let specPanHeldUntil = 0;
-/* ⛔⛔ WAIT FOR THE EXPECTED MOVE, NOT FOR ANY MOVE. "Any change clears the
-   hold" was the first version and it put the flicker straight back: MEASURED in
-   the browser against bench1, the viewport lo is not static between frames, so
-   the first frame after release can differ for a reason that is not our pan.
-   The hold then clears while the pixels are still in the old place - snap back -
-   and the real frame arrives a moment later - jump forward. Exactly what the
-   operator saw twice: "now we are back to the jumping back and forth".
+/* -- THE PREVIEW IS NO LONGER CLEARED AT A MOMENT. IT IS DERIVED.
+   Eight attempts tried to pick the instant to drop the translate. Keep the
+   list, because every one of them is a thing that cannot work:
 
-   I rejected predicting the value earlier, on the grounds that the device
-   quantises the pan to whole 46.875 Hz bins and a wrong tolerance would
-   reintroduce the jump. The measurement says the prediction is good: a 150 px
-   drag asked for -3550 Hz and the device delivered -3543, so one bin of
-   tolerance is ample and the argument against it was wrong.
+     - at mouseup: the device has not panned yet, so the canvas snaps back and
+       jumps forward when the frame lands. "please do not show this jump back
+       and forth" (operator, 2026-10-30).
+     - on the first frame whose viewport lo DIFFERS: lo is not static between
+       frames, so it fired on a move that was not ours.
+     - on the first frame matching a PREDICTED lo: needs a tolerance, and the
+       pan that lands on its clamp never arrives at all.
+     - on three quiet frames: the device is not finished when the first new
+       frame arrives - a 74 ms waterfall reframe follows it - so this held the
+       offset applied TWICE for ~300 ms and then snapped.
+     - on the view-sequence trailer byte: correct about WHEN the view moved,
+       and still visibly wrong, because the drawn trace does not move on one
+       frame. applyDeviceEma() blends the new window into the old sample by
+       sample, so the content RAMPS over about three frames - measured 189,
+       168, 134 px. A RAMP CANNOT BE CANCELLED BY A BINARY TRANSFORM. No
+       choice of instant could ever have worked, which is what eight attempts
+       were up against. (The ramp itself is now gone - specEmaReseed re-seeds
+       the EMA on any view move - but the lesson stands.)
 
-   A pan that lands on its CLAMP never reaches the expected value, so the
-   timeout is what ends those - 700 ms, short enough not to read as a stuck
-   display and long enough to cover a slow frame. */
-/* ⛔⛔ WAIT FOR IT TO GO QUIET. Not for a change, and not for a predicted
-   value - both were tried and both still flickered.
+   THE FIX: THE TRANSLATE IS A RESIDUAL, RECOMPUTED EVERY FRAME.
+   The frame now carries the live viewport on both FFT paths (see
+   WS_TRAILER_LEN in webserver_ws.c). So we know where the view was asked to
+   go, and every frame says where it actually is:
 
-   The operator, after the third attempt: "Why is it not possible to just let
-   the screen stay put where i leave it after the drag? Then when all the inter
-   communication between the web and tab5 has ended?" That is the right design
-   and it is what this does.
+       tx = (frameLo - wantLo) * width / span
 
-   Why the earlier conditions were not enough: the device is NOT finished when
-   the first new-window frame arrives. Its own capture shows a second stage -
+   At release frameLo is still the old lo and that evaluates to exactly the
+   drag distance - the picture holds where the hand left it. When the device
+   arrives frameLo IS wantLo and it evaluates to exactly zero. Anything in
+   between - a multi-stage move, a reframe, a pan that is still travelling -
+   gives the right partial offset instead of a guess. There is no instant to
+   choose and no tolerance to get wrong, because the sum of content and
+   translate is held constant by arithmetic.
 
-     pinch: still pan: -8607 -> -2326 Hz
-     ui: wf reframe: dx=335 moved=945 blanked=847 cols in 73663 us
+   Two cases never reach zero and both are ended by going quiet rather than by
+   a timeout at the wrong layer: a pan that lands on its CLAMP, and a drag of a
+   few pixels that quantises to the same FFT bin (46.875 Hz). Those ease out
+   over 180 ms - a movement the preview promised and the device cannot deliver
+   has to go somewhere, and a slide is not a jump. */
+let specPanTrack   = false;   /* a release is being tracked */
+let specPanWantLo  = 0;       /* where we asked the view to go, absolute Hz */
+let specPanTrackW  = 0;       /* canvas CSS width at release - tx is in CSS px */
+let specPanTrackSp = 0;       /* span at release; a zoom change abandons the track */
+let specPanQuiet   = 0;       /* consecutive unchanged frames AFTER the first move */
+let specPanPrevLo  = null;
+/* ⛔⛔ QUIET MEANS FINISHED, NOT NOT-STARTED. Without this flag the quiet
+   counter began at the release, when the device has not panned yet - so three
+   frames of "the device has not moved" read as "the device has stopped" and
+   the preview eased out BEFORE the pan arrived. MEASURED on bench1, five
+   synthetic gestures: 150, -150 and 8 px landed inside 150 ms and were fine,
+   but -320 px and -1200 px took over 300 ms, eased at +231 and +263 ms, and
+   the device's own move then landed as a bare step of -319 and -265 px. Two
+   out of five, and both of them the big drags - the ones a human makes.
+   So nothing is counted until lo has changed at least once. A pan that never
+   moves the view at all is ended by the 2 s backstop instead. */
+let specPanMoved   = false;
+let specPanUntil   = 0;       /* backstop only - never the mechanism */
 
-   a 74 ms waterfall reframe AFTER the pan. Clearing the preview on the first
-   frame that satisfies some test drops it with more movement still to come, so
-   whatever follows reads as a jump. There is no single frame to aim at.
-
-   So: hold until the viewport has reported the SAME lo on three consecutive
-   frames. Quiet means the device has stopped moving, whatever it was doing and
-   however many stages it took, and the preview can be dropped into a picture
-   that is no longer changing. */
-let specPanHeldSeq = null;
-function specPanHoldUntilFrame(loAtRelease) {
-  specPanHolding     = true;
-  specPanHeldSeq     = lastViewSeq;
-  specPanHeldLo      = loAtRelease;
-  /* Generous: this is the backstop for a device that never goes quiet, not the
-     mechanism. Three quiet frames at ~10 fps is ~300 ms, so 2 s leaves room for
-     a slow reframe without ever reading as a stuck display. */
-  specPanHeldUntil = Date.now() + 2000;
-}
-function specPanReleaseHold() {
-  if (specPanHolding) {
-    weblog("PAN clear  +" + (Date.now() - panRefAt) + "ms seq=" + lastViewSeq +
-           " heldSeq=" + specPanHeldSeq +
-           " lo=" + (lastView ? lastView.lo : "-"));
+function specPanEaseOut() {
+  for (const id of ["spec", "waterfall"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.style.transition = "transform 180ms linear";
+    el.style.transform  = "";
   }
-  specPanHolding = false;
-  specPanHeldSeq = null;
-  specPanHeldLo  = null;
-  specPanPreview(0);
-}
-/* Called from the WS frame handler, after lastView is updated. */
-/* ⛔⛔ CALLED ON EVERY SPECTRUM FRAME, AND hadViewport SAYS WHETHER THE FRAME
-   COULD ANSWER THE QUESTION.
-
-   This used to be called only from inside `if (spanF > 0)`, the branch that
-   handles a frame carrying its own viewport - and ABOVE ZOOM x1 THE DEVICE
-   SENDS NONE. Measured against bench1 at zoom x2: spanF = 0, decim = 2, and
-   specPanSettleCheck() was called zero times in two seconds at 9.6 fps.
-
-   So on every zoom the operator actually uses, the settle condition was never
-   evaluated and the preview was ended only by its timeout - the picture sat at
-   the dragged offset for up to two seconds after the device had already panned
-   underneath it, then snapped. That is the jump, and it is why five successive
-   rewrites of the CONDITION changed nothing: none of them ran. I argued about
-   the test for four attempts without once checking that it was reached.
-
-   With a viewport we clear on the first frame whose lo differs. Without one
-   the frame cannot say where it is, but it IS new content drawn after the pan
-   went out, so two of them is the signal. */
-/* ⭐⭐ THE DEVICE SAYS WHEN, so nothing here has to guess.
-   lastViewSeq is the trailer byte webserver_ws.c samples beside the bins; it
-   steps whenever the view actually moves. The frame whose sequence differs from
-   the one held at release IS the first frame drawn on the new window, at every
-   zoom, with no viewport needed and no tolerance.
-   The viewport comparison below is kept as the fallback for firmware older than
-   this byte - that page still works, it just drops the preview on the first
-   frame whose lo differs, which is what it did before. */
-let lastViewSeq = null;
-function specPanSettleCheck(hadViewport) {
-  /* ⭐ WHAT THE SCREEN IS ACTUALLY DOING, into the capture.
-     contentPx is where the drawn trace has moved to since the release frame;
-     txPx is the translate still applied. Their SUM is where a given signal
-     sits on the glass relative to the release. If that sum steps between
-     frames, THAT is the jump - with its size and its direction, and no need to
-     ask anyone to watch for it. */
-  if (PAN_DEBUG && panRef && specSmooth && (Date.now() - panRefAt) < 2500) {
-    const binsShift = panCorrShift(panRef, specSmooth);
-    const contentPx = -binsShift * (specPxW / SPEC_W);
-    const m = /translateX\((-?\d+)px\)/.exec(
-                (document.getElementById("spec").style.transform) || "");
-    const txPx = m ? +m[1] : 0;
-    weblog("PAN frame +" + (Date.now() - panRefAt) + "ms seq=" + lastViewSeq +
-           " content=" + contentPx.toFixed(0) + "px tx=" + txPx +
-           "px net=" + (contentPx + txPx).toFixed(0) + "px hold=" +
-           (specPanHolding ? 1 : 0));
-  }
-  if (!specPanHolding) return;
-  if (specPanHeldSeq !== null && lastViewSeq !== null) {
-    if (lastViewSeq !== specPanHeldSeq) {
-      /* The draw for THIS frame has not happened yet - specPanSettleCheck runs
-         before it in the same handler - so re-seeding here makes the content
-         step and the preview vanish in one paint. */
-      specEmaReseed = true;
-      specPanReleaseHold();
+  setTimeout(() => {
+    for (const id of ["spec", "waterfall"]) {
+      const el = document.getElementById(id);
+      if (el) el.style.transition = "";
     }
+  }, 220);
+}
+function specPanTrackEnd(ease) {
+  if (specPanTrack && PAN_DEBUG) {
+    weblog("PAN end    +" + (Date.now() - panRefAt) + "ms ease=" + (ease ? 1 : 0) +
+           " quiet=" + specPanQuiet + " moved=" + (specPanMoved ? 1 : 0));
+  }
+  specPanTrack  = false;
+  specPanPrevLo = null;
+  specPanQuiet  = 0;
+  specPanMoved  = false;
+  if (ease) specPanEaseOut(); else specPanPreview(0);
+}
+/* Begin tracking. loAtRelease and span come from the FRAME, not from the 1 Hz
+   status poll: above zoom x1 the poll was the page's only viewport source and
+   it is up to a second stale, so the drag was measured against a view that had
+   already moved. */
+function specPanTrackBegin(loAtRelease, span, width, dxPx) {
+  if (loAtRelease === null || !(span > 0) || !(width > 0)) {
+    specPanPreview(0);
     return;
   }
-  if (!hadViewport) return;   /* no seq, no viewport: the timeout ends it */
-  /* ⛔ THE FIRST FRAME THAT MOVES, not three quiet ones. Waiting for quiet was
-     the previous cut and it is wrong now, and was WORSE than wrong: the content
-     moves on the first new-viewport frame, so holding the translate for three
-     more frames shows the offset applied TWICE for ~300 ms and then snaps back.
-     With the waterfall re-anchored above, the whole picture moves on exactly
-     one frame, and that frame is the one to clear on. */
-  const lo    = lastView ? lastView.lo : null;
-  const moved = (lo !== specPanHeldLo);
-  /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
-     changed nothing the device would report - a drag of a few pixels that
-     quantises to the same bin, or a pan already against its clamp - because
-     then no frame ever differs and the preview would otherwise stick. */
-  if (moved || Date.now() > specPanHeldUntil) specPanReleaseHold();
+  specPanTrack   = true;
+  specPanTrackW  = width;
+  specPanTrackSp = span;
+  specPanPrevLo  = loAtRelease;
+  specPanQuiet   = 0;
+  specPanMoved   = false;
+  /* hzPerPx is -span/width (the content follows the hand), so the view's left
+     edge moves the other way from the pointer. */
+  specPanWantLo  = loAtRelease - dxPx * span / width;
+  /* Generous, and a backstop for a device that stops sending frames - not the
+     thing that ends a normal gesture. */
+  specPanUntil   = Date.now() + 2000;
 }
-/* ⛔ AND A TIMER AS WELL AS THE FRAME CHECK. The frame check only runs when a
+
+/* Called from the WS frame handler once the frame's own viewport is known, and
+   BEFORE the draw, so the content step and the translate change land in one
+   paint. */
+/* ⭐ THE INSTRUMENT, AND IT IS CALLED AFTER THE DRAW ON PURPOSE.
+   It used to run at the top of specPanTrackFrame(), which is before the trace
+   is drawn and before the translate is updated - so every line paired THIS
+   frame's lo with the PREVIOUS frame's content and the pre-update translate,
+   and the one-frame skew looked exactly like a step. Two artefacts in one line.
+
+   contentPx is now ARITHMETIC, not correlation: a signal at a fixed frequency
+   sits at x = (f - lo)/span*W, so its offset since the reference frame is
+   (refLo - lo)/span*W. Exact, valid at any distance, and valid on the zoom path
+   where correlation has nothing to lock to. The correlator is kept beside it as
+   an independent check that the DRAWN trace really follows lo - measured on
+   bench1 over 20 consecutive frames, a 3544 Hz move predicted 149.8 px and the
+   correlation found 148.6 px - and r says whether to believe it.
+
+   net = content + tx is the offset of a signal on the glass relative to the
+   release. It is the ONE number that matters: it must stay constant until the
+   gesture ends, and a step in it IS the jump. */
+function panDebugFrame(lo, span) {
+  if (!PAN_DEBUG || panRefLo === null || !(span > 0)) return;
+  if ((Date.now() - panRefAt) > 2500) return;
+  const el   = document.getElementById("spec");
+  if (!el) return;
+  const cssW = el.getBoundingClientRect().width;
+  const contentPx = (panRefLo - lo) / span * cssW;
+  const m   = /translateX\((-?[\d.]+)px\)/.exec(el.style.transform || "");
+  const txPx = m ? +m[1] : 0;
+  let corr = "";
+  if (panRef && specSmooth && span === panRefSpan) {
+    const c = panCorrShift(panRef, specSmooth);
+    corr = " corr=" + (c.bins * (cssW / SPEC_W)).toFixed(0) + "px r=" + c.r.toFixed(2);
+  }
+  weblog("PAN frame  +" + (Date.now() - panRefAt) + "ms seq=" + lastViewSeq +
+         " lo=" + lo + " want=" + Math.round(specPanWantLo) +
+         " content=" + contentPx.toFixed(0) + "px tx=" + txPx.toFixed(0) +
+         "px net=" + (contentPx + txPx).toFixed(0) + "px trk=" +
+         (specPanTrack ? 1 : 0) + corr);
+}
+function specPanTrackFrame(lo, span) {
+  if (!specPanTrack) return;
+  if (!(span > 0)) return;                       /* nothing to measure against */
+  if (span !== specPanTrackSp) { specPanTrackEnd(false); return; }  /* zoom changed */
+
+  const tx = (lo - specPanWantLo) * specPanTrackW / span;
+  specPanPreview(tx);
+
+  /* ⚠ ARRIVAL IS NOT EXACT AND MUST NOT BE TESTED AS IF IT WERE.
+     view_lo_snapped() rounds lo to a whole Tab5 pixel - span/1280 Hz - so the
+     reachable lo values are a grid and wantLo generally sits between two of
+     them. The tolerance is that grid expressed in this canvas's CSS pixels,
+     plus one: anything tighter never reaches "arrived" and the gesture ends on
+     the quiet test instead, with a needless 180 ms slide. */
+  if (Math.abs(tx) < 1 + specPanTrackW / 1280) { specPanTrackEnd(false); return; }
+
+  /* Quiet means the device has stopped moving, whatever it was doing and
+     however many stages it took. Only then is the residual real - a clamp, or
+     a drag that quantised away - and only then does it ease out.
+     ⛔ AFTER THE FIRST MOVE ONLY - see specPanMoved. */
+  if (lo !== specPanPrevLo) { specPanMoved = true; specPanQuiet = 0; }
+  else if (specPanMoved)    { specPanQuiet++; }
+  specPanPrevLo = lo;
+  if ((specPanMoved && specPanQuiet >= 3) || Date.now() > specPanUntil) {
+    specPanTrackEnd(true);
+  }
+}
+/* AND A TIMER AS WELL AS THE FRAME CHECK. The frame check only runs when a
    frame ARRIVES: if the WebSocket drops at the wrong moment, or the page is in
-   a background tab, nothing clears the hold and the canvases stay shifted.
+   a background tab, nothing ends the track and the canvases stay shifted.
    The one thing this must never do is leave the display lying about where it
    is pointing. */
 setInterval(() => {
-  if (specPanHolding && Date.now() > specPanHeldUntil) specPanReleaseHold();
+  if (specPanTrack && Date.now() > specPanUntil) specPanTrackEnd(true);
 }, 500);
-/* The pan offset the device is currently on: the view centre relative to the
-   dial, which is exactly what ui_get_pan_offset_hz() holds on the Tab5. */
-function specPanCurrentHz() {
-  if (!lastView || typeof lastView.span !== "number") return null;
-  if (!lastFreqHz) return null;
-  return lastView.lo + lastView.span / 2 - lastFreqHz;
-}
 let tuneOnSpec   = true; // which canvas is being dragged
 
 /* The tuning grid, mode by mode. ONE copy: the cursor preview and the commit both
@@ -9919,17 +10016,22 @@ function addTuneListeners(overlayId, getRect, onSpec) {
 
   el.addEventListener("mousedown", (e) => {
     if (e.button === 2) {                       // RIGHT: pan the window
-      const pan0 = specPanCurrentHz();
-      if (pan0 === null) return;
+      /* ⛔ THE DEVICE'S OWN NUMBERS OR NOTHING. The pan used to be derived -
+         lastView.lo + span/2 - lastFreqHz - from a viewport the status poll
+         refreshed once a second and a lo that view_lo_snapped() rounds to a
+         whole Tab5 pixel. Both errors went straight into the set_pan that was
+         sent, so the view landed a little away from where the hand left it and
+         the preview had to absorb the difference as a step. The frame now
+         carries the live pan and viewport, so nothing is derived. */
+      if (!(frameViewSpan > 0) || framePanHz === null) return;
       /* ⛔ A SECOND DRAG MUST CANCEL THE FIRST ONE'S HOLD. Without this, the
          frame that settles the PREVIOUS pan arrives mid-gesture and calls
          specPanPreview(0), wiping the translate out from under the hand that
          is still moving. Found by reading the new state back, not on the
          glass - it needs two drags inside ~200 ms. */
-      if (specPanHolding) specPanReleaseHold();   /* a new drag cancels the old hold */
+      if (specPanTrack) specPanTrackEnd(false);   /* a new drag cancels the old track */
       specPanActive     = true;
       specPanStartX     = e.clientX;
-      specPanStartPanHz = pan0;
       tuneActive  = false;                      // a pan is not a half-made tune
       tuneCursorX = -1;
       el.style.cursor = "grabbing";
@@ -9945,19 +10047,28 @@ function addTuneListeners(overlayId, getRect, onSpec) {
         if (!specPanActive) return;
         specPanActive = false;
         el.style.cursor = "";
-        const dx = ev.clientX - specPanStartX;
-        /* Leave the translate exactly where the hand put it and hand it to
-           specPanSettleCheck() - see the note there. Clearing it here is the
-           jump the operator reported. */
-        specPanHoldUntilFrame(lastView ? lastView.lo : null);
+        const dx    = ev.clientX - specPanStartX;
+        const rect  = getRect();
+        const lo0   = frameViewLo;
+        const span  = frameViewSpan;
+        const pan0  = framePanHz;
         /* Snapshot the drawn trace so every frame after this can be measured
            against it - this is the reference the shift is relative to. */
-        panRef   = specSmooth ? Float32Array.from(specSmooth) : null;
-        panRefAt = Date.now();
-        panRefTx = dx;
+        panRef     = specSmooth ? Float32Array.from(specSmooth) : null;
+        panRefAt   = Date.now();
+        panRefTx   = dx;
+        panRefLo   = lo0;
+        panRefSpan = span;
         weblog("PAN release dx=" + dx + "px seq=" + lastViewSeq +
-               " lo=" + (lastView ? lastView.lo : "-") + " zoom=" + lastZoom);
-        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
+               " lo=" + lo0 + " span=" + span + " pan=" + pan0 +
+               " w=" + Math.round(rect.width) + " zoom=" + lastZoom);
+        /* ⛔ ONE ARITHMETIC FOR THE PREVIEW AND THE REQUEST. The residual the
+           preview converges on is (frameLo - wantLo); the pan we ask for moves
+           the view by exactly the same delta. Derive them from two expressions
+           and they disagree by the difference, which is the step. */
+        const dHz = -dx * span / rect.width;          /* hzPerPx = -span/width */
+        specPanTrackBegin(lo0, span, rect.width, dx);
+        if (span > 0 && rect.width > 0 && pan0 !== null) specPanTo(pan0 + dHz);
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
@@ -12780,10 +12891,10 @@ function connectWs() {
        span === 0 means the device had no viewport for this frame (the zoom-FFT
        path); the browser then keeps its own centred mapping. */
     const u32 = (o) => (buf[o] | (buf[o+1] << 8) | (buf[o+2] << 16) | (buf[o+3] << 24)) >>> 0;
-    /* ⛔ READ BEFORE THE BRANCH BELOW, because specPanSettleCheck() is called
-       from inside it. Read after, and the settle test sees the PREVIOUS frame's
-       sequence and drops the preview one frame early - an off-by-one of exactly
-       the kind this byte exists to remove.
+    /* ⛔ READ BEFORE THE DRAW, because the EMA re-seed it sets has to take
+       effect on THIS frame's trace. The preview no longer depends on it at all
+       - that is specPanTrackFrame()'s residual - so this byte's only remaining
+       job is the re-seed, which is also the one it does well.
        One byte after the S-meter's two. Appended rather than put in the header
        for the reason stated in webserver_ws.c: the header is full, and growing
        it would shift the payload under any cached page. Length-checked, so
@@ -12800,28 +12911,42 @@ function connectWs() {
       if (lastViewSeq !== null && sq !== lastViewSeq) specEmaReseed = true;
       lastViewSeq = sq;
     }
+    /* ⭐⭐ THE LIVE VIEWPORT, ON EVERY FRAME AND EVERY ZOOM - trailer bytes
+       +3..+14, see WS_TRAILER_LEN in webserver_ws.c.
+       The header's own view_lo/span at [6..13] are ZERO above zoom x1, because
+       they come from ui_pan_view_current() and the bins mean something else
+       there. The page's only other source was the 1 Hz /api/status poll, so at
+       zoom x2 - which is where the operator works - the axis, the waterfall
+       anchor and the drag were all measured against a viewport up to a second
+       old. That is not a tuning problem, it is the reason the pan could not be
+       made to land cleanly: the browser could not see where the view WAS.
+       Length-checked: firmware without these bytes falls back to the header. */
+    const i32 = (o) => (buf[o] | (buf[o+1] << 8) | (buf[o+2] << 16) | (buf[o+3] << 24)) | 0;
+    let tLo = null, tSpan = 0;
+    if (buf.length >= HEADER_LEN + SPEC_W + 15) {
+      const sp = u32(HEADER_LEN + SPEC_W + 7);
+      if (sp > 0) {
+        tSpan         = sp;
+        tLo           = i32(HEADER_LEN + SPEC_W + 3);
+        frameViewSpan = tSpan;
+        frameViewLo   = tLo;
+        framePanHz    = i32(HEADER_LEN + SPEC_W + 11);
+      }
+    }
     const spanF = u32(10);
-    if (spanF > 0) {
-      let ifo = buf[22] | (buf[23] << 8);
-      if (ifo & 0x8000) ifo -= 0x10000;              /* signed */
-      frameDialHz = u32(2);
-      /* ⛔⛔ RE-ANCHOR THE WATERFALL HISTORY BEFORE lastView MOVES.
-         The waterfall scrolls its OWN bitmap - drawImage(wf, ...) copies the
-         canvas down one row and a fresh row goes on top - so the pixels already
-         on it are tied to the viewport they were drawn under. Nothing re-mapped
-         them when the viewport moved, so every pan left the history at the old
-         frequencies with new rows arriving at the new ones.
-         The Tab5 has done this since phase 3 and the browser never did; its
-         capture names the step - "wf reframe: dx=335 moved=945 blanked=847".
-         This is why no choice of moment could make the right-drag preview
-         seamless: the waterfall was inconsistent with EVERY choice, because
-         translating the canvas moved the history too. It is also a defect in
-         its own right, older than the drag - a pan from the Tab5 has always
-         skewed the browser's waterfall. */
-      if (lastView && typeof lastView.span === "number" && spanF === lastView.span) {
-        const dHz = u32(6) - lastView.lo;
+    /* ⛔⛔ RE-ANCHOR THE WATERFALL HISTORY BEFORE lastView MOVES, ON BOTH
+       PATHS. This used to sit inside the spanF branch, so above zoom x1 it
+       never ran at all and every pan left the waterfall's history at the old
+       frequencies with new rows arriving at the new ones. The trailer viewport
+       is what makes it possible here. */
+    {
+      const rSpan = (tSpan > 0) ? tSpan : spanF;
+      const rLo   = (tSpan > 0) ? tLo   : u32(6);
+      if (rSpan > 0 && lastView && typeof lastView.span === "number" &&
+          rSpan === lastView.span) {
+        const dHz = rLo - lastView.lo;
         if (dHz) {
-          const dpx = Math.round(-dHz / spanF * wfPxW);
+          const dpx = Math.round(-dHz / rSpan * wfPxW);
           if (dpx && Math.abs(dpx) < wfPxW) {
             wfctx.drawImage(wf, 0, 0, wfPxW, wfPxH, dpx, 0, wfPxW, wfPxH);
             /* The column that slid in has no history - leave it black rather
@@ -12835,13 +12960,13 @@ function connectWs() {
           }
         }
       }
+    }
+    if (spanF > 0) {
+      let ifo = buf[22] | (buf[23] << 8);
+      if (ifo & 0x8000) ifo -= 0x10000;              /* signed */
+      frameDialHz = u32(2);
       lastView = { lo: u32(6), hi: u32(6) + spanF, span: spanF,
                    capLo: u32(14), capHi: u32(18), ifOff: ifo, nBins: SPEC_W };
-      /* A held right-drag preview is released here and nowhere else: this is
-         the moment the pixels underneath it actually move - and now that the
-         waterfall is re-anchored above, they ALL move, so clearing the preview
-         on this frame is consistent for the whole display. */
-      specPanSettleCheck(true);
       /* ⛔ AND STAMP IT FRESH. Every frame carries its OWN axis - dial, lo,
          span, cap edges and the IF offset are all in this header - so while
          frames are arriving the scale cannot be out of date, whatever the
@@ -12851,15 +12976,21 @@ function connectWs() {
          drawing correctly at 10 fps, which is how Dave KX3DX and the operator
          both saw it while decoding carried on perfectly. */
       lastViewAt = performance.now();
-    } else {
-      /* ⛔ THE ZOOM-FFT PATH STILL HAS TO END A HELD PREVIEW. This frame has no
-         viewport to compare against, but it is new content drawn after the pan
-         command went out, which is all the signal there is above zoom x1 - and
-         that is every zoom the operator uses. Omitting this is the whole of the
-         "it still jumps" report: the branch above never ran, so nothing but the
-         timeout ever released the hold. */
-      specPanSettleCheck(false);
+    } else if (tSpan > 0) {
+      /* ⭐ THE ZOOM-FFT PATH NOW HAS AN AXIS TOO. No bin mapping here - which
+         BIN a frequency lands in is unknowable once dsp_set_zoom() has mixed
+         the target to DC - so capLo/capHi/ifOff/nBins are carried forward from
+         whatever the base path or the status poll last gave us, and only the
+         viewport is replaced. Stamping lastViewAt is part of it: the staleness
+         watchdog used to be fed only by the 1 Hz poll at this zoom. */
+      lastView = Object.assign({}, lastView || {},
+                               { lo: tLo, hi: tLo + tSpan, span: tSpan });
+      lastViewAt = performance.now();
     }
+    /* The right-drag residual, computed from THIS frame's viewport and applied
+       before the draw below, so the content step and the translate change land
+       in one paint. */
+    specPanTrackFrame((tSpan > 0) ? tLo : u32(6), (tSpan > 0) ? tSpan : spanF);
     /* S-meter trailer: 2 bytes AFTER the bins, int16 LE, dBm x10, 0x8000 = no
        reading. Absent on older firmware, which is why this is length-checked
        rather than assumed - the frame is still perfectly valid without it.
@@ -12887,6 +13018,9 @@ function connectWs() {
     /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
        built from the RAW frame, exactly as render.c does it. */
     (specFlatten?drawSpectrumFlat:drawSpectrumRaw)(applyDeviceEma(payload));
+    /* ⛔ AFTER THE DRAW. See panDebugFrame() - logging it before the draw was
+       half of what made the old numbers unreadable. */
+    panDebugFrame((tSpan > 0) ? tLo : u32(6), (tSpan > 0) ? tSpan : spanF);
     /* T74: honour the rate here too, with render.c's own accumulator. 0 is
        off - nothing ticks, so nothing is drawn. */
     if (wfRowsPerS !== 0) {
