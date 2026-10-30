@@ -8870,8 +8870,9 @@ let specPanHeldUntil = 0;
    however many stages it took, and the preview can be dropped into a picture
    that is no longer changing. */
 function specPanHoldUntilFrame(loAtRelease) {
-  specPanHolding   = true;
-  specPanHeldLo    = loAtRelease;
+  specPanHolding     = true;
+  specPanFramesSince = 0;
+  specPanHeldLo      = loAtRelease;
   /* Generous: this is the backstop for a device that never goes quiet, not the
      mechanism. Three quiet frames at ~10 fps is ~300 ms, so 2 s leaves room for
      a slow reframe without ever reading as a stuck display. */
@@ -8883,8 +8884,32 @@ function specPanReleaseHold() {
   specPanPreview(0);
 }
 /* Called from the WS frame handler, after lastView is updated. */
-function specPanSettleCheck() {
+/* ⛔⛔ CALLED ON EVERY SPECTRUM FRAME, AND hadViewport SAYS WHETHER THE FRAME
+   COULD ANSWER THE QUESTION.
+
+   This used to be called only from inside `if (spanF > 0)`, the branch that
+   handles a frame carrying its own viewport - and ABOVE ZOOM x1 THE DEVICE
+   SENDS NONE. Measured against bench1 at zoom x2: spanF = 0, decim = 2, and
+   specPanSettleCheck() was called zero times in two seconds at 9.6 fps.
+
+   So on every zoom the operator actually uses, the settle condition was never
+   evaluated and the preview was ended only by its timeout - the picture sat at
+   the dragged offset for up to two seconds after the device had already panned
+   underneath it, then snapped. That is the jump, and it is why five successive
+   rewrites of the CONDITION changed nothing: none of them ran. I argued about
+   the test for four attempts without once checking that it was reached.
+
+   With a viewport we clear on the first frame whose lo differs. Without one
+   the frame cannot say where it is, but it IS new content drawn after the pan
+   went out, so two of them is the signal. */
+const SPEC_PAN_BLIND_FRAMES = 2;
+let specPanFramesSince = 0;
+function specPanSettleCheck(hadViewport) {
   if (!specPanHolding) return;
+  if (!hadViewport) {
+    if (++specPanFramesSince >= SPEC_PAN_BLIND_FRAMES) specPanReleaseHold();
+    return;
+  }
   /* ⛔ THE FIRST FRAME THAT MOVES, not three quiet ones. Waiting for quiet was
      the previous cut and it is wrong now, and was WORSE than wrong: the content
      moves on the first new-viewport frame, so holding the translate for three
@@ -12657,7 +12682,7 @@ function connectWs() {
          the moment the pixels underneath it actually move - and now that the
          waterfall is re-anchored above, they ALL move, so clearing the preview
          on this frame is consistent for the whole display. */
-      specPanSettleCheck();
+      specPanSettleCheck(true);
       /* ⛔ AND STAMP IT FRESH. Every frame carries its OWN axis - dial, lo,
          span, cap edges and the IF offset are all in this header - so while
          frames are arriving the scale cannot be out of date, whatever the
@@ -12667,6 +12692,14 @@ function connectWs() {
          drawing correctly at 10 fps, which is how Dave KX3DX and the operator
          both saw it while decoding carried on perfectly. */
       lastViewAt = performance.now();
+    } else {
+      /* ⛔ THE ZOOM-FFT PATH STILL HAS TO END A HELD PREVIEW. This frame has no
+         viewport to compare against, but it is new content drawn after the pan
+         command went out, which is all the signal there is above zoom x1 - and
+         that is every zoom the operator uses. Omitting this is the whole of the
+         "it still jumps" report: the branch above never ran, so nothing but the
+         timeout ever released the hold. */
+      specPanSettleCheck(false);
     }
     /* S-meter trailer: 2 bytes AFTER the bins, int16 LE, dBm x10, 0x8000 = no
        reading. Absent on older firmware, which is why this is length-checked
