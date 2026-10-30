@@ -3176,6 +3176,15 @@ static void link_task(void *arg)
 
 
 
+/* The frequency the radio will actually hold for any value you ask for. The
+ * QMX's encoder steps 10 Hz, so every dial write is rounded to that grid - see
+ * the long note in cat_set_frequency(). Call this before comparing a readback
+ * against a target you computed, and before withdrawing a deferred write. */
+uint32_t cat_quantise_dial_hz(uint32_t freq_hz)
+{
+    return ((freq_hz + 5) / 10) * 10;
+}
+
 esp_err_t cat_set_frequency(uint32_t freq_hz)
 {
     if (s_cdc_dev == NULL) {
@@ -3203,8 +3212,24 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
      * which no ear resolves on a CW note.
      *
      * ⚠ RIT is NOT affected: it is its own command with its own resolution, and
-     * tap-to-RIT depends on that - see the note at the tap handler in ui.c. */
-    freq_hz = ((freq_hz + 5) / 10) * 10;
+     * tap-to-RIT depends on that - see the note at the tap handler in ui.c.
+     *
+     * ⛔⛔ THE ROUNDING IS A SHARED FUNCTION, NOT AN EXPRESSION HERE, BECAUSE A
+     * CALLER THAT CANNOT NAME THE VALUE THE RADIO WILL HOLD IS BROKEN BY IT.
+     * It was one line here, and that silently broke every caller that writes a
+     * computed target and then waits for the readback to match: the write is
+     * rounded, the comparison is not, and the two can never agree.
+     *
+     * Steve KX7R on v1.22.0, 2026-10-29: "the frequency changes automatically
+     * by +0.03 Hz every ~3 seconds ... I reflashed V1.20.5 and there is no
+     * drift." Reproduced on the bench the same day with spur suppression on:
+     * spur_map's 25 Hz dither went out as +30, tune_and_confirm() waited the
+     * full 3 s for a frequency the radio could never report, and the restore
+     * then refused the dial as "someone else's tune" - so the radio WALKED UP
+     * THE BAND 30 Hz every ~7 s and never came back. Three sites in that one
+     * file compared against the un-rounded value; cat_cancel_pending_freq_if()
+     * was a fourth, because s_pending_freq_hz is stored rounded below. */
+    freq_hz = cat_quantise_dial_hz(freq_hz);
 
     /* ⛔ SOMETHING ELSE MAY OWN THE PIPE, AND THIS USED TO WRITE ANYWAY.
      *
