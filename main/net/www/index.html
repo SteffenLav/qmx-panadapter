@@ -8869,14 +8869,9 @@ let specPanHeldUntil = 0;
    frames. Quiet means the device has stopped moving, whatever it was doing and
    however many stages it took, and the preview can be dropped into a picture
    that is no longer changing. */
-const SPEC_PAN_QUIET_FRAMES = 3;
-let specPanSeenLo    = null;
-let specPanStableN   = 0;
 function specPanHoldUntilFrame(loAtRelease) {
   specPanHolding   = true;
   specPanHeldLo    = loAtRelease;
-  specPanSeenLo    = loAtRelease;
-  specPanStableN   = 0;
   /* Generous: this is the backstop for a device that never goes quiet, not the
      mechanism. Three quiet frames at ~10 fps is ~300 ms, so 2 s leaves room for
      a slow reframe without ever reading as a stuck display. */
@@ -8885,25 +8880,19 @@ function specPanHoldUntilFrame(loAtRelease) {
 function specPanReleaseHold() {
   specPanHolding = false;
   specPanHeldLo  = null;
-  specPanSeenLo  = null;
-  specPanStableN = 0;
   specPanPreview(0);
 }
 /* Called from the WS frame handler, after lastView is updated. */
 function specPanSettleCheck() {
   if (!specPanHolding) return;
-  const lo = lastView ? lastView.lo : null;
-  if (lo === specPanSeenLo) {
-    specPanStableN++;
-  } else {
-    specPanSeenLo  = lo;
-    specPanStableN = 0;
-  }
-  /* ⚠ AND IT MUST HAVE MOVED AT ALL. Without that, the frames arriving before
-     the device has even started are three quiet frames of the OLD view, and
-     the preview is dropped before anything happens - which is the very first
-     version of this bug. */
-  const moved = (lo !== specPanHeldLo) && (specPanStableN >= SPEC_PAN_QUIET_FRAMES);
+  /* ⛔ THE FIRST FRAME THAT MOVES, not three quiet ones. Waiting for quiet was
+     the previous cut and it is wrong now, and was WORSE than wrong: the content
+     moves on the first new-viewport frame, so holding the translate for three
+     more frames shows the offset applied TWICE for ~300 ms and then snaps back.
+     With the waterfall re-anchored above, the whole picture moves on exactly
+     one frame, and that frame is the one to clear on. */
+  const lo    = lastView ? lastView.lo : null;
+  const moved = (lo !== specPanHeldLo);
   /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
      changed nothing the device would report - a drag of a few pixels that
      quantises to the same bin, or a pan already against its clamp - because
@@ -12632,10 +12621,42 @@ function connectWs() {
       let ifo = buf[22] | (buf[23] << 8);
       if (ifo & 0x8000) ifo -= 0x10000;              /* signed */
       frameDialHz = u32(2);
+      /* ⛔⛔ RE-ANCHOR THE WATERFALL HISTORY BEFORE lastView MOVES.
+         The waterfall scrolls its OWN bitmap - drawImage(wf, ...) copies the
+         canvas down one row and a fresh row goes on top - so the pixels already
+         on it are tied to the viewport they were drawn under. Nothing re-mapped
+         them when the viewport moved, so every pan left the history at the old
+         frequencies with new rows arriving at the new ones.
+         The Tab5 has done this since phase 3 and the browser never did; its
+         capture names the step - "wf reframe: dx=335 moved=945 blanked=847".
+         This is why no choice of moment could make the right-drag preview
+         seamless: the waterfall was inconsistent with EVERY choice, because
+         translating the canvas moved the history too. It is also a defect in
+         its own right, older than the drag - a pan from the Tab5 has always
+         skewed the browser's waterfall. */
+      if (lastView && typeof lastView.span === "number" && spanF === lastView.span) {
+        const dHz = u32(6) - lastView.lo;
+        if (dHz) {
+          const dpx = Math.round(-dHz / spanF * wfPxW);
+          if (dpx && Math.abs(dpx) < wfPxW) {
+            wfctx.drawImage(wf, 0, 0, wfPxW, wfPxH, dpx, 0, wfPxW, wfPxH);
+            /* The column that slid in has no history - leave it black rather
+               than smeared with a copy of the edge. */
+            wfctx.fillStyle = "#000";
+            if (dpx > 0) wfctx.fillRect(0, 0, dpx, wfPxH);
+            else         wfctx.fillRect(wfPxW + dpx, 0, -dpx, wfPxH);
+          } else if (dpx) {
+            wfctx.fillStyle = "#000";
+            wfctx.fillRect(0, 0, wfPxW, wfPxH);   /* moved further than a screen */
+          }
+        }
+      }
       lastView = { lo: u32(6), hi: u32(6) + spanF, span: spanF,
                    capLo: u32(14), capHi: u32(18), ifOff: ifo, nBins: SPEC_W };
       /* A held right-drag preview is released here and nowhere else: this is
-         the moment the pixels underneath it actually move. */
+         the moment the pixels underneath it actually move - and now that the
+         waterfall is re-anchored above, they ALL move, so clearing the preview
+         on this frame is consistent for the whole display. */
       specPanSettleCheck();
       /* ⛔ AND STAMP IT FRESH. Every frame carries its OWN axis - dial, lo,
          span, cap edges and the IF offset are all in this header - so while
