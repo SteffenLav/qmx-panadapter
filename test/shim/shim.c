@@ -116,6 +116,18 @@ esp_err_t esp_spiffs_gc(const char *label, size_t size)
 
 void sd_archive_mark_adif_dirty(void) { }
 
+/* No card and no competing task on the host, so the lock always succeeds.
+ * It must still EXIST: adif_log.c refuses the rewrite on a failed lock, and
+ * a stub that returned false would make the harness test the refusal path
+ * instead of the cache. */
+bool sd_archive_lock(uint32_t timeout_ms) { (void)timeout_ms; return true; }
+void sd_archive_unlock(void) { }
+
+/* No card on the host. adif_log_export_activation() returns -1 on this, so
+ * the harness never exercises the SD export path - which is correct: it
+ * tests the worked-call cache, not the card. */
+bool sd_archive_is_mounted(void) { return false; }
+
 char *sd_archive_read_adif_file(bool previous, size_t *out_len)
 {
     (void)previous;
@@ -139,6 +151,7 @@ void settings_set_eqsl_uploaded_n(uint32_t n) { s_set.eqsl_uploaded_n = n; }
 void settings_set_lotw_uploaded_n(uint32_t n) { s_set.lotw_uploaded_n = n; }
 
 const char *settings_activation_sig_name(void) { return NULL; }
+const char *settings_activation_adif_field(void) { return NULL; }
 bool settings_get_activation_ref(char *out, size_t out_sz)
 {
     (void)out; (void)out_sz;

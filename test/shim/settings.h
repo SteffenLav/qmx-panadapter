@@ -17,5 +17,9 @@ void settings_set_qrz_uploaded_n(uint32_t n);
 void settings_set_eqsl_uploaded_n(uint32_t n);
 void settings_set_lotw_uploaded_n(uint32_t n);
 const char *settings_activation_sig_name(void);
+/* ⛔ MUST be declared, not left implicit. Without it C assumed int and the
+ * harness failed on the pointer conversion at adif_log.c's MY_SIG field -
+ * which is the one that decides whether an activation credits at all. */
+const char *settings_activation_adif_field(void);
 bool settings_get_activation_ref(char *out, size_t out_sz);
 #endif
