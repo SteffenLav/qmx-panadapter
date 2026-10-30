@@ -5963,10 +5963,27 @@ static void build_spectrum(lv_obj_t *parent)
      *
      * ⛔ ON s_spectrum_obj, NOT the canvas: the canvas is a child with its own
      * geometry and these must sit above it in the z-order to get the press
-     * before touch_event_cb's tap-to-tune does. */
+     * before touch_event_cb's tap-to-tune does.
+     *
+     * ⛔⛔ AND THEY MUST NOT REACH THE SPOTS COUNTERS, which is what made the
+     * arrow feel dead. spots_lane_build(scr, TOP_BAR_H, SPECTRUM_H) puts a
+     * transparent, non-clickable lane over the WHOLE spectrum, created AFTER
+     * build_spectrum() - so it is above these - and its two edge counters ARE
+     * clickable 140x80 rects at the lane's bottom corners, i.e. absolute
+     * y 180..260. Centred on the spectrum these targets were y 120..200, so the
+     * bottom 20 px was dead and a fingertip aimed at the arrow at y 160 landed
+     * on the counter instead: the operator's capture shows ONE
+     * "off-view arrow tapped" against a "spot tap (off-screen right)" that
+     * retuned his dial to 7074000.
+     *
+     * So the two controls get DISJOINT bands: this one y 60..180 (the spectrum's
+     * top 120 px) and the counters keep y 180..260. The arrow itself is drawn at
+     * SPECTRUM_H/2, absolute y 160, which sits inside this band with the
+     * generous part above it where nothing else lives.
+     * ⚠ Do not re-centre these on the spectrum - that is what collided. */
     s_vfo_arrow_hit_l = lv_obj_create(s_spectrum_obj);
-    lv_obj_set_size(s_vfo_arrow_hit_l, 140, 80);
-    lv_obj_align(s_vfo_arrow_hit_l, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_size(s_vfo_arrow_hit_l, 140, 120);
+    lv_obj_align(s_vfo_arrow_hit_l, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_opa(s_vfo_arrow_hit_l, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_vfo_arrow_hit_l, 0, 0);
     lv_obj_set_style_pad_all(s_vfo_arrow_hit_l, 0, 0);
@@ -5976,8 +5993,8 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_add_event_cb(s_vfo_arrow_hit_l, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
 
     s_vfo_arrow_hit_r = lv_obj_create(s_spectrum_obj);
-    lv_obj_set_size(s_vfo_arrow_hit_r, 140, 80);
-    lv_obj_align(s_vfo_arrow_hit_r, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_size(s_vfo_arrow_hit_r, 140, 120);
+    lv_obj_align(s_vfo_arrow_hit_r, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_set_style_bg_opa(s_vfo_arrow_hit_r, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_vfo_arrow_hit_r, 0, 0);
     lv_obj_set_style_pad_all(s_vfo_arrow_hit_r, 0, 0);
