@@ -8802,6 +8802,40 @@ function specPanPreview(px) {
     if (el) el.style.transform = t;
   }
 }
+
+/* ⛔⛔ THE PREVIEW IS HELD UNTIL THE DEVICE'S FIRST FRAME ON THE NEW WINDOW.
+   Dropping it at mouseup is the obvious thing and it is WRONG: the device has
+   not panned yet, so for the ~100-200 ms until its next frame the canvas snaps
+   back to where the drag started and then jumps forward again when the frame
+   lands. Operator, 2026-10-30: "when i then release the right mouse button the
+   screen immediately goes back to the original position - and then jumps back
+   to the new again ... please do not show this jump back and forth."
+   So the translate stays exactly as the hand left it, and is cleared on the
+   first frame whose viewport actually differs from the one at release - at
+   which point the pixels underneath have already moved and clearing it is
+   invisible. Waiting for a CHANGE rather than for a predicted value is
+   deliberate: the device quantises the pan to whole FFT bins (46.875 Hz), so a
+   predicted lo would need a tolerance, and a tolerance that is slightly wrong
+   reintroduces the jump in the cases nobody tests. */
+let specPanHeldLo    = null;   /* lastView.lo at release; null = not holding */
+let specPanHeldUntil = 0;
+function specPanHoldUntilFrame(loAtRelease) {
+  specPanHeldLo    = loAtRelease;
+  specPanHeldUntil = Date.now() + 2000;
+}
+/* Called from the WS frame handler, after lastView is updated. */
+function specPanSettleCheck() {
+  if (specPanHeldLo === null) return;
+  const moved  = !lastView || lastView.lo !== specPanHeldLo;
+  /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
+     changed nothing the device would report - a drag of a few pixels that
+     quantises to the same bin, or a pan already against its clamp - because
+     then no frame ever differs and the preview would otherwise stick. */
+  if (moved || Date.now() > specPanHeldUntil) {
+    specPanHeldLo = null;
+    specPanPreview(0);
+  }
+}
 /* The pan offset the device is currently on: the view centre relative to the
    dial, which is exactly what ui_get_pan_offset_hz() holds on the Tab5. */
 function specPanCurrentHz() {
@@ -9688,6 +9722,12 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     if (e.button === 2) {                       // RIGHT: pan the window
       const pan0 = specPanCurrentHz();
       if (pan0 === null) return;
+      /* ⛔ A SECOND DRAG MUST CANCEL THE FIRST ONE'S HOLD. Without this, the
+         frame that settles the PREVIOUS pan arrives mid-gesture and calls
+         specPanPreview(0), wiping the translate out from under the hand that
+         is still moving. Found by reading the new state back, not on the
+         glass - it needs two drags inside ~200 ms. */
+      specPanHeldLo     = null;
       specPanActive     = true;
       specPanStartX     = e.clientX;
       specPanStartPanHz = pan0;
@@ -9706,8 +9746,11 @@ function addTuneListeners(overlayId, getRect, onSpec) {
         if (!specPanActive) return;
         specPanActive = false;
         el.style.cursor = "";
-        specPanPreview(0);
         const dx = ev.clientX - specPanStartX;
+        /* Leave the translate exactly where the hand put it and hand it to
+           specPanSettleCheck() - see the note there. Clearing it here is the
+           jump the operator reported. */
+        specPanHoldUntilFrame(lastView ? lastView.lo : null);
         specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
@@ -12509,6 +12552,9 @@ function connectWs() {
       frameDialHz = u32(2);
       lastView = { lo: u32(6), hi: u32(6) + spanF, span: spanF,
                    capLo: u32(14), capHi: u32(18), ifOff: ifo, nBins: SPEC_W };
+      /* A held right-drag preview is released here and nowhere else: this is
+         the moment the pixels underneath it actually move. */
+      specPanSettleCheck();
       /* ⛔ AND STAMP IT FRESH. Every frame carries its OWN axis - dial, lo,
          span, cap edges and the IF offset are all in this header - so while
          frames are arriving the scale cannot be out of date, whatever the
