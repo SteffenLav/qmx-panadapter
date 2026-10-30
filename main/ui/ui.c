@@ -5948,30 +5948,40 @@ static void build_spectrum(lv_obj_t *parent)
 
     /* ⭐ TAP THE OFF-VIEW ARROW TO COME BACK TO THE DIAL.
      *
-     * Generous targets - 44 px wide, 80 tall, centred on the arrow's own
-     * mid-height - because the arrow itself is 14 px of taper and nobody hits
-     * that with a finger. Created hidden; the draw pass un-hides whichever side
-     * it drew, so the two can never disagree about which edge is live.
+     * ⛔ 140 x 80 AND NOT SCROLLABLE - both copied from spots_lane.c's edge
+     * counters, which have worked under a fingertip for months. My first cut
+     * was 44 wide and left LV_OBJ_FLAG_SCROLLABLE set, and the operator went
+     * straight to it on the glass: "the arrow on the Tab5 is super hard to hit
+     * when you tap it". Two causes, and the flag is the worse one: a scrollable
+     * object treats a few pixels of finger travel as the start of a scroll and
+     * CANCELS the click, so a tap that is not perfectly still does nothing at
+     * all. 44 px is also only about 7 mm, under a fingertip.
+     * The parent already clears the flag; that does not clear it on a child.
+     *
+     * Created hidden; the draw pass un-hides whichever side it drew, so the two
+     * can never disagree about which edge is live.
      *
      * ⛔ ON s_spectrum_obj, NOT the canvas: the canvas is a child with its own
      * geometry and these must sit above it in the z-order to get the press
      * before touch_event_cb's tap-to-tune does. */
     s_vfo_arrow_hit_l = lv_obj_create(s_spectrum_obj);
-    lv_obj_set_size(s_vfo_arrow_hit_l, 44, 80);
+    lv_obj_set_size(s_vfo_arrow_hit_l, 140, 80);
     lv_obj_align(s_vfo_arrow_hit_l, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_style_bg_opa(s_vfo_arrow_hit_l, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_vfo_arrow_hit_l, 0, 0);
     lv_obj_set_style_pad_all(s_vfo_arrow_hit_l, 0, 0);
+    lv_obj_clear_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_vfo_arrow_hit_l, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
 
     s_vfo_arrow_hit_r = lv_obj_create(s_spectrum_obj);
-    lv_obj_set_size(s_vfo_arrow_hit_r, 44, 80);
+    lv_obj_set_size(s_vfo_arrow_hit_r, 140, 80);
     lv_obj_align(s_vfo_arrow_hit_r, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_opa(s_vfo_arrow_hit_r, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_vfo_arrow_hit_r, 0, 0);
     lv_obj_set_style_pad_all(s_vfo_arrow_hit_r, 0, 0);
+    lv_obj_clear_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_vfo_arrow_hit_r, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);

@@ -11419,7 +11419,9 @@ function drawVfoMarker(sctx, W, H) {
   /* Generous tap/click target around it, same reasoning as ui.c's 44x80: the
      taper is too thin to hit. Stored for the hit test, which runs BEFORE
      tap-to-tune so a click here recentres instead of retuning. */
-  const hw = Math.round(44 * dpr), hh = Math.round(80 * dpr);
+  /* 140 x 80, the size spots_lane.c has proven under a fingertip - not 44,
+     which is about 7 mm and which the operator could not hit on the Tab5. */
+  const hw = Math.round(140 * dpr), hh = Math.round(80 * dpr);
   vfoArrowBox = { x: left ? 0 : (W - hw), y: Math.max(0, mid - hh / 2), w: hw, h: hh,
                   left: left };
 }
