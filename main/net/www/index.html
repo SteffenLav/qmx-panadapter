@@ -8747,10 +8747,25 @@ let specPanLastSent    = 0;
 const SPEC_PAN_SEND_MS = 120;   /* the trace comes FROM the device, so the pan
                                    has to go out during the drag or nothing
                                    moves. Throttled; the final goes on release. */
+/* ⛔ NEGATIVE: THE CONTENT FOLLOWS THE HAND. Drag right and you pull the
+   spectrum right with you, so what comes into view is LOWER in frequency -
+   the way every map and document drags. The first cut had this positive,
+   copied from the band-plan strip, where positive is correct for the opposite
+   reason: there you are dragging the window MARKER along the band, not the
+   picture, so it travels with the hand and the frequency goes up.
+   Operator, 2026-10-30: "now you just need to drag in the right direction"
+   and, when asked: "Tab5 do it in the right direction - its only the web that
+   moves opposite". So the TAB5 IS THE REFERENCE for this gesture and is
+   correct as it stands - do not change ui.c to match this file.
+   ⚠ I nearly did. Reading stroll_apply_offset() I concluded the Tab5 had the
+   same sign as the broken web version and said so; the glass says otherwise.
+   The two sites derive their offsets differently and the code comparison was
+   not a reliable way to answer it. The feel of the gesture is settled by
+   looking at it, not by matching two expressions. */
 function specPanHzPerPx(rect) {
   const span = (lastView && typeof lastView.span === "number")
                  ? lastView.span : (48000 / (lastZoom || 1));
-  return span / rect.width;
+  return -span / rect.width;
 }
 /* ⛔ set_pan, NOT view_center. view_center is the band-plan KNOB and is allowed
    to retune - it rounds the dial to whole kHz and drags the radio along. Built
