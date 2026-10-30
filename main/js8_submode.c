@@ -62,6 +62,58 @@ const char *js8_submode_options_lvgl(void)
     return buf;
 }
 
+/* ---- the alternate picker, built from the SAME table -------------------
+ *
+ * Index 0 is "Off"; indices 1.. are S[] with Normal skipped. Nothing here
+ * decides whether a choice can actually be decoded - a sub-mode whose slot is
+ * longer than the primary's never fits and js8_alt_select() refuses it by
+ * arithmetic. Offering it anyway is deliberate: the primary can change, and a
+ * picker that silently dropped Slow when you were on Normal and grew it back
+ * on Slow would read as a bug. */
+#define ALT_OFF_LABEL  "Off - primary only"
+
+int js8_alt_count(void)
+{
+    int n = 1;                                  /* Off */
+    for (int i = 0; i < N_SUBMODES; i++) if (S[i].value != 0) n++;
+    return n;
+}
+
+uint8_t js8_alt_value(int index)
+{
+    if (index <= 0) return 255;
+    int n = 0;
+    for (int i = 0; i < N_SUBMODES; i++) {
+        if (S[i].value == 0) continue;
+        if (++n == index) return S[i].value;
+    }
+    return 255;
+}
+
+int js8_alt_index_of(uint8_t value)
+{
+    int n = 0;
+    for (int i = 0; i < N_SUBMODES; i++) {
+        if (S[i].value == 0) continue;
+        n++;
+        if (S[i].value == value) return n;
+    }
+    return 0;                                   /* unknown reads as Off */
+}
+
+const char *js8_alt_options_lvgl(void)
+{
+    static char buf[128];
+    if (buf[0] == 0) {
+        size_t n = (size_t)snprintf(buf, sizeof(buf), "%s", ALT_OFF_LABEL);
+        for (int i = 0; i < N_SUBMODES && n < sizeof(buf) - 1; i++) {
+            if (S[i].value == 0) continue;
+            n += (size_t)snprintf(buf + n, sizeof(buf) - n, "\n%s", S[i].label);
+        }
+    }
+    return buf;
+}
+
 bool js8_submode_set(uint8_t value, const char **why)
 {
     static const char *BUSY =

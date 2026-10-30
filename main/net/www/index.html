@@ -104,6 +104,16 @@
   }
   #submode-pop button:hover  { background: #262b31; }
   #submode-pop button.active { background: var(--accent); color: #000; }
+  /* T132: the divider between "transmit and receive on" and "also receive". */
+  .submode-pop-hdr {
+    margin-top: 6px;
+    padding: 6px 12px 2px;
+    border-top: 1px solid #3a3f46;
+    color: #8f98a3;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
   #spec-wrap    { grid-row: 3; }
   #freqaxis     { grid-row: 4; }
   #split-handle { grid-row: 5; }
@@ -6118,6 +6128,8 @@ let lastFtProto = "FT8";     /* what the device says it is running */
    this and the picker reads it back, so the Tab5 drawer, the glass and
    this page cannot disagree about what is set. */
 let lastJs8Submode = 0;
+/* T132: the ALTERNATE submode decoded as well as the primary. 255 = off. */
+let lastJs8AltSubmode = 255;
 let wsprEnabled = false;
 let wsprPollInFlight = false;
 /* The band list is fetched ONCE - it never changes - exactly like the FT8
@@ -6850,6 +6862,40 @@ function js8SubmodePopup(anchor) {
         alert("JS8 submode not changed: " + (r.err || "refused by the device"));
       }
       js8Poll();          /* re-read it either way */
+    });
+    pop.appendChild(b);
+  });
+
+  /* ⭐ THE SECOND HALF OF THE SAME POPUP: which OTHER submode to decode
+     (T132). It lives here rather than in its own control for the reason the
+     comment above gives - the heading is where the speed is chosen, and a
+     second control elsewhere on the page would be a second place to look.
+
+     ⚠ RECEIVE ONLY. It shows who is calling on the other speed; it cannot
+     work them, because TX stays on the submode chosen above. The device never
+     refuses this one - it touches nothing we transmit with - but it will
+     report fits:false for a submode whose slot is longer than the one we
+     capture, which can never be decoded alongside it. */
+  const hdr = document.createElement("div");
+  hdr.className = "submode-pop-hdr";
+  hdr.textContent = "Also decode (RX only)";
+  pop.appendChild(hdr);
+  const ALT_OPTS = [{ v: 255, label: "Off - primary only" }].concat(
+    JS8_SUBMODES.filter(e => e.v !== 0));
+  ALT_OPTS.forEach(e => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = e.label;
+    if (e.v === lastJs8AltSubmode) b.classList.add("active");
+    b.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      js8SubmodeClose();
+      const r = await sendCmd({ action: "js8_alt_submode", submode: e.v });
+      if (r && r.ok && r.fits === false && e.v !== 255) {
+        alert("That submode's slot is longer than the one we capture, so it "
+              + "cannot be decoded alongside the current one.");
+      }
+      js8Poll();
     });
     pop.appendChild(b);
   });
@@ -7914,6 +7960,8 @@ async function tick() {
     if (s.ft8 && s.ft8.proto) lastFtProto = s.ft8.proto;
     if (s.ft8 && typeof s.ft8.js8_submode === "number") {
       lastJs8Submode = s.ft8.js8_submode;
+      if (s.ft8.js8_alt_submode !== undefined)
+        lastJs8AltSubmode = s.ft8.js8_alt_submode;
     }
 
     /* The JS8 tabs follow the DEVICE's mode, not a click on this page: the

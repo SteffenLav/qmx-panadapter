@@ -110,6 +110,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_LISTEN    "cq_listen"
 #define KEY_SWR_LIMIT    "swr_lim"
 #define KEY_JS8_SUBMODE  "js8_sub"
+#define KEY_JS8_ALT_SUB  "js8_altsub"
 #define KEY_RXA_GAIN     "rxa_gain"
 #define KEY_RXA_PWIDTH   "rxa_pw"
 #define KEY_RXA_PBLEND   "rxa_pb"
@@ -257,7 +258,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 141, 18 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 151, 8 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -475,6 +476,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SB_LOWCUT       148  /* T90 SSB auto-tune low-cut trim */
 #define DIRTY_FT4_FREQ        149  /* T89 per-sub-mode preset frequency */
 #define DIRTY_JS8_FREQ        150  /* T89 per-sub-mode preset frequency */
+#define DIRTY_JS8_ALT_SUB     151  /* T132 duty-cycled alternate-submode decode */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -701,6 +703,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
         if (dirty_test(&dirty_local, DIRTY_JS8_SUBMODE)) nvs_set_u8(s_nvs, KEY_JS8_SUBMODE, snap.js8_submode);
+        if (dirty_test(&dirty_local, DIRTY_JS8_ALT_SUB)) nvs_set_u8(s_nvs, KEY_JS8_ALT_SUB, snap.js8_alt_submode);
         if (dirty_test(&dirty_local, DIRTY_RXA_GAIN))     nvs_set_u8(s_nvs, KEY_RXA_GAIN,   snap.rxaud_gain_d10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PWIDTH))   nvs_set_u8(s_nvs, KEY_RXA_PWIDTH, snap.rxaud_pan_width_x10);
         if (dirty_test(&dirty_local, DIRTY_RXA_PBLEND))   nvs_set_u8(s_nvs, KEY_RXA_PBLEND, snap.rxaud_pan_blend_x100);
@@ -1031,6 +1034,12 @@ static void load_from_nvs(qmx_settings_t *out)
     // on a merely mediocre match; the drawer can raise it or turn it off.
     out->swr_limit_x10 = 30;
     out->js8_submode   = 0;    /* Normal - what every station runs */
+    /* T132: the alternate submode to ALSO decode, on a duty cycle.
+     * 255 (JS8_ALT_OFF) = off, and it is off by default because Fast,
+     * Turbo and Slow have never been exchanged with a real JS8Call
+     * station - only our own encoder and decoder agree. It costs CPU on
+     * core 1 and it must earn that on air first. */
+    out->js8_alt_submode = 255;
     /* Defaults mirror rx_audio.h's documented ones (200 / 1.8 / 0.15 / 0.30),
      * which are the values tuned on the air 2026-09-20. */
     out->rxaud_gain_d10       = 20;
@@ -1156,6 +1165,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
     nvs_get_u8(s_nvs, KEY_JS8_SUBMODE, &out->js8_submode);
+    nvs_get_u8(s_nvs, KEY_JS8_ALT_SUB, &out->js8_alt_submode);
     nvs_get_u8(s_nvs, KEY_RXA_GAIN,   &out->rxaud_gain_d10);
     nvs_get_u8(s_nvs, KEY_RXA_PWIDTH, &out->rxaud_pan_width_x10);
     nvs_get_u8(s_nvs, KEY_RXA_PBLEND, &out->rxaud_pan_blend_x100);
@@ -2810,6 +2820,36 @@ void settings_set_js8_submode(uint8_t v)
     s_pending.js8_submode = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_JS8_SUBMODE);
+}
+
+/* T132: the ALTERNATE submode to decode as well as the primary, on a duty
+ * cycle. Same NSUBMODE numbering as settings_set_js8_submode() above, plus
+ * 255 for off, and clamped here for exactly the same reason - NVS and an
+ * imported config file are writers this module cannot see.
+ *
+ * ⛔ AN UNKNOWN VALUE FALLS BACK TO OFF, not to Normal. "Normal" is a legal
+ * submode but a useless ALTERNATE (it is what we are already decoding), and
+ * silently turning a corrupted byte into extra CPU load on core 1 is worse
+ * than silently doing nothing. js8_alt_select() refuses it too; this is the
+ * outer of the two. */
+void settings_set_js8_alt_submode(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v != 1 && v != 2 && v != 4) v = 255;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.js8_alt_submode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.js8_alt_submode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_JS8_ALT_SUB);
+}
+
+uint8_t settings_get_js8_alt_submode(void)
+{
+    if (!s_ready) return 255;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.js8_alt_submode;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 uint8_t settings_get_js8_submode(void)

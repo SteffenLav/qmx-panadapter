@@ -27,6 +27,7 @@
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "js8_submode.h"   // the submode table and the one refusal rule
+#include "js8_alt.h"       // T132 alternate-submode decode (RX only)
 #include "ui/js8_page.h"   // the conversation grid, composed for /api/js8
 #include "ft8_tx.h"
 #include "js8_ftx.h"
@@ -295,6 +296,17 @@ static void add_ft8_tx_status(cJSON *root)
         cJSON_AddNumberToObject(f, "js8_submode", settings_get_js8_submode());
         cJSON_AddStringToObject(f, "js8_submode_name",
                                 ftx_protocol_label(ft8_op_mode_protocol()));
+        /* T132: the ALTERNATE submode decoded on a duty cycle as well as the
+         * primary, 255 = off. Readable for the same reason the primary is -
+         * the drawer and this page both write it, and a control that cannot
+         * read its own state is a second source of truth. */
+        {
+            uint8_t alt = settings_get_js8_alt_submode();
+            cJSON_AddNumberToObject(f, "js8_alt_submode", alt);
+            cJSON_AddStringToObject(f, "js8_alt_submode_name",
+                                    alt == 255 ? "off"
+                                    : ftx_protocol_label(js8_alt_proto_for_submode(alt)));
+        }
         /* A station that sent the directed command SNR? and has had no answer
          * (Gyula HA3HZ). Served, not inferred from the conversation text: the
          * command is a frame field, and a browser matching on the words would
@@ -426,6 +438,14 @@ static void add_ft8_tx_status(cJSON *root)
                     cJSON_AddNumberToObject(o, "frames", cm.frames);
                     cJSON_AddBoolToObject(o,   "active", cm.active);
                     cJSON_AddBoolToObject(o,   "truncated", cm.truncated);
+                    /* ⛔ WHICH SPEED HEARD IT (T132). With the duty-cycled
+                     * alternate decode on, a row no longer implies the
+                     * primary submode, and a station heard on an alternate
+                     * CANNOT be worked from here - our TX is on the primary.
+                     * Emitted always, so a client can tell "not known" from
+                     * "field missing in an old build". */
+                    cJSON_AddStringToObject(o, "submode",
+                                            ftx_protocol_label((ftx_protocol_t)cm.proto));
                     cJSON_AddItemToArray(carr, o);
                 }
             }
@@ -2347,6 +2367,49 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                      (unsigned)settings_get_js8_submode(),
                      ftx_protocol_label(ft8_op_mode_protocol()),
                      ftx_protocol_slot_ms(ft8_op_mode_protocol()));
+            httpd_resp_sendstr(req, out);
+        }
+        return ESP_OK;
+    } else if (action && strcmp(action, "js8_alt_submode") == 0) {
+        /* {"action":"js8_alt_submode","submode":255|1|2|4} - T132. The
+         * ALTERNATE JS8 submode decoded as well as the primary, on a duty
+         * cycle, out of the audio the primary slot already captured. 255 is
+         * off and is the default.
+         *
+         * ⛔ IT IS RECEIVE ONLY, and that is the whole safety property. An
+         * alternate decode never reaches ft8_qso_advance(), the robot or TX
+         * arming: the station is operating on the PRIMARY submode, and a Fast
+         * decode advancing a Normal exchange could key the radio against the
+         * wrong state. So unlike "js8_submode" above there is nothing to
+         * refuse here - changing it does not touch the physical layer we
+         * transmit on, and it is safe mid-QSO.
+         *
+         * ⚠ Fast, Turbo and Slow have never been exchanged with a real
+         * JS8Call station; only our own encoder and decoder agree. This makes
+         * them visible, it does not make them proven.
+         *
+         * Clamped in settings.c, not here, for the same reason the primary is:
+         * NVS and an imported config file are writers this handler never
+         * sees. A submode that cannot fit in the primary slot - Slow under a
+         * 15 s primary - is accepted and then simply never selected, by
+         * arithmetic in js8_alt_select(); the reply says so. */
+        cJSON *sm = cJSON_GetObjectItem(root, "submode");
+        int want = cJSON_IsNumber(sm) ? sm->valueint : 255;
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        settings_set_js8_alt_submode((uint8_t)want);
+        {
+            uint8_t got = settings_get_js8_alt_submode();
+            ftx_protocol_t prim = ft8_op_mode_protocol();
+            bool fits = (got != 255) &&
+                        js8_alt_fits(prim, js8_alt_proto_for_submode(got));
+            char out[192];
+            snprintf(out, sizeof(out),
+                     "{\"ok\":true,\"submode\":%u,\"name\":\"%s\",\"fits\":%s}",
+                     (unsigned)got,
+                     got == 255 ? "off"
+                                : ftx_protocol_label(js8_alt_proto_for_submode(got)),
+                     fits ? "true" : "false");
             httpd_resp_sendstr(req, out);
         }
         return ESP_OK;
@@ -5769,7 +5832,11 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
         /* AGE is measured against the CALLER's clock - js8_page.c has none,
          * and the glass passes the same system time. */
         int64_t now_utc = (int64_t)time(NULL);
-        int used = js8_page_render(sc->msgs, have, now_utc, sc->lines, sc->row_msg);
+        /* The same grid the glass draws, including the submode mark in
+         * column 1 - one renderer, both surfaces. See js8_page.h. */
+        int used = js8_page_render(sc->msgs, have, now_utc,
+                                   (uint8_t)ft8_op_mode_protocol(),
+                                   sc->lines, sc->row_msg);
 
         cJSON_AddNumberToObject(root, "used", used);
         cJSON_AddNumberToObject(root, "count", have);
@@ -5813,6 +5880,15 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
         cJSON *bands = cJSON_AddArrayToObject(root, "bands");
         for (int i = 0; bands && i < have; i++)
             cJSON_AddItemToArray(bands, cJSON_CreateString(sc->msgs[i].band));
+
+        /* The submode each message was heard on, indexed the same way. The
+         * rendered `lines` carry the one-character mark in column 1, which is
+         * what the operator reads; this is the full name, for a client that
+         * wants to filter rather than parse a text grid. T132. */
+        cJSON *subs = cJSON_AddArrayToObject(root, "submodes");
+        for (int i = 0; subs && i < have; i++)
+            cJSON_AddItemToArray(subs, cJSON_CreateString(
+                ftx_protocol_label((ftx_protocol_t)sc->msgs[i].proto)));
 
         heap_caps_free(sc);
     }

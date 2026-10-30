@@ -80,6 +80,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "js8_submode.h"   /* the submode table and the one refusal rule */
+#include "js8_alt.h"       /* T132 alternate-submode decode (RX only) */
 #include "ft8_screen_view.h"
 #include "wspr_screen_view.h"
 #include "wspr_rx.h"
@@ -4121,6 +4122,45 @@ static void drawer_js8_submode_cb(lv_event_t *e)
     }
     /* The MODE label, the monitor-pool rebuild and the log line are all
      * js8_submode_set()'s job now. */
+}
+
+/* ---- T132: the ALTERNATE sub-mode, decoded as well as the primary -------
+ *
+ * ⛔ UNLIKE THE CONTROL ABOVE, THIS ONE IS NEVER REFUSED. The alternate
+ * decode is RECEIVE ONLY - it never reaches the QSO machine, the robot or TX
+ * arming (see decode_ctx_t in ft8_test.c) - so it does not touch the physical
+ * layer we transmit on and it is safe to change mid-QSO. There is no busy
+ * rule to share, which is why it does not go through js8_submode_set().
+ *
+ * ⚠ It is off by default and it stays off until it has heard a real station.
+ * Fast, Turbo and Slow have only ever round-tripped through our own encoder
+ * and decoder. */
+static lv_obj_t *s_js8alt_dd = NULL;
+
+static void drawer_refresh_js8_alt(void)
+{
+    if (!s_js8alt_dd) return;
+    lv_dropdown_set_selected(
+        s_js8alt_dd,
+        (uint32_t)js8_alt_index_of(settings_get_js8_alt_submode()));
+}
+
+static void drawer_js8_alt_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t  i  = lv_dropdown_get_selected(dd);
+    uint8_t   v  = js8_alt_value((int)i);
+    settings_set_js8_alt_submode(v);
+    /* ⭐ SAY WHEN IT CANNOT FIT, rather than letting it read as broken. Slow
+     * is 30 s and never fits inside a 15 s capture - that is arithmetic, not
+     * a failure - so the setting is accepted and simply never selects. A
+     * dropdown that sat on "Slow" while nothing ever decoded would be the
+     * silent kind of wrong. */
+    if (v != 255 &&
+        !js8_alt_fits(ft8_op_mode_protocol(), js8_alt_proto_for_submode(v))) {
+        ui_toast("That submode's slot is longer than the one we capture - "
+                 "it cannot be decoded alongside this one");
+    }
 }
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_port_a_mode_cb(lv_event_t *e);
@@ -17251,7 +17291,7 @@ static void drawer_build(void)
      * docs/js8-feasibility.md - so this control is offered without a promise
      * that the far end will hear it. */
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_JS8SUB, y, 100);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_JS8SUB, y, 190);
         lv_obj_t *js_hdr = lv_label_create(sec);
         lv_label_set_text(js_hdr, "JS8 submode");
         lv_obj_set_style_text_color(js_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -17270,7 +17310,31 @@ static void drawer_build(void)
         /* Unfold the whole list rather than scrolling four items - same
          * reasoning as the frequency-format dropdown above. */
         lv_obj_add_event_cb(s_js8sub_dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 100;
+
+        /* T132: also decode ONE other sub-mode, on a duty cycle, out of the
+         * audio this slot already captured. A station calling on Fast is
+         * otherwise invisible on Normal - Ryan KK6DZB lost JS8 entirely to
+         * that, and JS8Call's own multi-decoder defaults to on.
+         *
+         * ⚠ RECEIVE ONLY, and unproven on air. It shows you who is there on
+         * the other speed; it does not let you work them, because our TX is
+         * on the sub-mode above. */
+        lv_obj_t *ja_hdr = lv_label_create(sec);
+        lv_label_set_text(ja_hdr, "Also decode (RX only)");
+        lv_obj_set_style_text_color(ja_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ja_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(ja_hdr, LV_ALIGN_TOP_LEFT, 0, 96);
+
+        s_js8alt_dd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_js8alt_dd, js8_alt_options_lvgl());
+        lv_obj_set_size(s_js8alt_dd, DRAWER_W - 32, 50);
+        lv_obj_align(s_js8alt_dd, LV_ALIGN_TOP_LEFT, 0, 136);
+        lv_obj_set_style_text_font(s_js8alt_dd, &lv_font_montserrat_28, 0);
+        drawer_refresh_js8_alt();
+        lv_obj_add_event_cb(s_js8alt_dd, drawer_js8_alt_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_js8alt_dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
+
+        y += 190;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
@@ -17846,6 +17910,7 @@ static void drawer_open(void)
     drawer_refresh_cw_profiles();
     /* The submode is settable over the API too - see drawer_refresh_js8_submode. */
     drawer_refresh_js8_submode();
+    drawer_refresh_js8_alt();
     /* ...and so is every other checkbox in here - see drawer_refresh_checkboxes. */
     drawer_refresh_checkboxes();
     s_drawer_open = true;

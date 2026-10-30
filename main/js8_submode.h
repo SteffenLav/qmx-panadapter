@@ -42,6 +42,24 @@ const char *js8_submode_label(int index);
 /* The LVGL dropdown option string: every label, '\n' separated, built once. */
 const char *js8_submode_options_lvgl(void);
 
+/* ---- T132: the ALTERNATE sub-mode picker --------------------------------
+ *
+ * The same table, offered as "what ELSE to decode" - so "Off" first and
+ * Normal left out, because Normal as an alternate under a Normal primary is
+ * the thing we already decode. The value is still JS8Call's NSUBMODE, plus
+ * 255 for off (JS8_ALT_OFF in js8_alt.h).
+ *
+ * ⛔ STILL ONE TABLE. Adding a sub-mode means adding a row in js8_submode.c
+ * and nothing else; these four functions are built from it.
+ *
+ * ⚠ The alternate decode is RECEIVE ONLY and it is never refused - it does
+ * not touch the physical layer we transmit on, so there is no busy rule here
+ * to share with js8_submode_set(). See js8_alt.h. */
+int         js8_alt_count(void);
+uint8_t     js8_alt_value(int index);        /* 255 (off) for index 0 or out of range */
+int         js8_alt_index_of(uint8_t value); /* 0 (off) when unknown                  */
+const char *js8_alt_options_lvgl(void);
+
 /* Set it, with the one refusal rule.
  *
  * Refused while a QSO or a burst is live - ARMED counts, not just keyed,

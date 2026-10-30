@@ -4475,6 +4475,7 @@ static void conv_repaint(void)
     int have = js8_chat_copy(sel, s_conv->msgs, JS8_CHAT_MAX_MSGS);
 
     js8_page_render(s_conv->msgs, have, (int64_t)time(NULL),
+                    (uint8_t)ft8_op_mode_protocol(),
                     s_conv->lines, s_conv->row_msg);
 
     /* ⛔ ONLY THE ROWS THAT FIT - T14. js8_page_render fills all

@@ -509,6 +509,12 @@ typedef struct {
      * spacing and sync arrays all change - so this is not a quality knob and
      * two stations must agree on it before they can hear each other at all. */
     uint8_t  js8_submode;
+    /* T132: an ALTERNATE JS8 submode decoded as well as the primary, on a
+     * duty cycle, out of the audio the primary slot already captured.
+     * Same NSUBMODE numbering, plus 255 = off, which is the default.
+     * ⛔ It is RECEIVE ONLY - see js8_alt.h. Appended, so an old NVS blob
+     * reads back 0; settings_set_js8_alt_submode() clamps 0 to off. */
+    uint8_t  js8_alt_submode;
     /* RX audio, persisted so a level set by ear is not lost at the next boot -
      * these were live RAM-only values tuned over /api/cmd during development,
      * which is not something a user can reach. Scaled integers, same idiom as
@@ -1118,6 +1124,8 @@ uint8_t settings_get_swr_limit_x10(void);
  * something nobody can decode. */
 void    settings_set_js8_submode(uint8_t v);
 uint8_t settings_get_js8_submode(void);
+void    settings_set_js8_alt_submode(uint8_t v);
+uint8_t settings_get_js8_alt_submode(void);
 
 /* RX audio level and panoramic-split shape. Stored scaled; the Resource
  * Management sliders are the only writers. Ranges are clamped to what
