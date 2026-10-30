@@ -8729,6 +8729,34 @@ document.addEventListener("visibilitychange", () => {
    ===================================================================== */
 let tuneActive   = false;
 let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
+/* ⭐ RIGHT-DRAG PANS THE SPECTRUM. The browser had no pan at all: left-drag is
+   drag-to-TUNE (it moves the dial to where you release), and the only way to
+   move the WINDOW was the band-plan strip. The operator asked for the gesture
+   the Tab5 has, on the button that was free.
+   Left is unchanged, so nothing anybody already does changes meaning.
+   ⛔ The passband STAYS DRAWN throughout, in every mode - unlike the Tab5's own
+   pan, which hides it. The reason the Tab5 hides it is to show that the dial
+   came along with the window; this gesture goes out as view_center and
+   deliberately leaves the dial alone, so there is nothing to show and hiding it
+   would only remove the reference you are panning against. */
+let specPanActive      = false;
+let specPanStartX      = 0;
+let specPanStartCenter = 0;
+let specPanLastSent    = 0;
+const SPEC_PAN_SEND_MS = 120;   /* the trace comes FROM the device, so the pan
+                                   has to go out during the drag or nothing
+                                   moves. Throttled; the final goes on release. */
+function specPanHzPerPx(rect) {
+  const span = (lastView && typeof lastView.span === "number")
+                 ? lastView.span : (48000 / (lastZoom || 1));
+  return span / rect.width;
+}
+function specPanTo(centerHz, force) {
+  const now = Date.now();
+  if (!force && now - specPanLastSent < SPEC_PAN_SEND_MS) return;
+  specPanLastSent = now;
+  sendCmd({ action: "view_center", hz: Math.round(centerHz) });
+}
 let tuneOnSpec   = true; // which canvas is being dragged
 
 /* The tuning grid, mode by mode. ONE copy: the cursor preview and the commit both
@@ -9586,6 +9614,7 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     handleTuneMove(e.clientX, getRect());
   });
   el.addEventListener("mousemove", (e) => {
+    if (specPanActive) return;   /* panning, not aiming - no tune cursor */
     // A spot label under the pointer says so, and swallows the tune cursor: the
     // two mean different things and showing both invites a mis-click.
     const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
@@ -9599,7 +9628,44 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     spotHover = null;
     el.style.cursor = "";
   });
+  /* Without this the browser's own menu opens on press and the drag never
+     happens. Suppressed on the two overlays only. */
+  el.addEventListener("contextmenu", (e) => e.preventDefault());
+
   el.addEventListener("mousedown", (e) => {
+    if (e.button === 2) {                       // RIGHT: pan the window
+      if (!lastView || typeof lastView.span !== "number") return;
+      specPanActive      = true;
+      specPanStartX      = e.clientX;
+      specPanStartCenter = lastView.lo + lastView.span / 2;
+      specPanLastSent    = 0;
+      tuneActive  = false;                      // a pan is not a half-made tune
+      tuneCursorX = -1;
+      el.style.cursor = "grabbing";
+      /* ⛔ ON THE WINDOW, NOT THE OVERLAY. A pan that starts here very often
+         ends with the pointer off the canvas - that is what panning to the edge
+         IS - and an overlay-only mouseup would leave specPanActive true and the
+         view following the mouse around the page afterwards. */
+      const onMove = (ev) => {
+        if (!specPanActive) return;
+        const dx = ev.clientX - specPanStartX;
+        specPanTo(specPanStartCenter + dx * specPanHzPerPx(getRect()), false);
+      };
+      const onUp = (ev) => {
+        if (!specPanActive) return;
+        specPanActive = false;
+        el.style.cursor = "";
+        const dx = ev.clientX - specPanStartX;
+        specPanTo(specPanStartCenter + dx * specPanHzPerPx(getRect()), true);
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      e.preventDefault();
+      return;
+    }
+    if (e.button !== 0) return;                 // middle does nothing
     // Clicking a spot tunes to THAT station (frequency and mode) instead of to
     // wherever the pixel happened to be - the whole point of drawing them.
     const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
@@ -9609,6 +9675,7 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     e.preventDefault();
   });
   el.addEventListener("mouseup", (e) => {
+    if (e.button !== 0) return;   /* the right-button pan ends on the window */
     if (tuneActive) handleTuneCommit(e.clientX, getRect());
   });
 
