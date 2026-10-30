@@ -1756,6 +1756,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
              * the CAT write. The web path simply never did. */
             ui_update_frequency(hz);
         }
+    } else if (action && strcmp(action, "set_pan") == 0) {
+        /* ⛔ NOT view_center. That one is the band-plan knob and is ALLOWED to
+         * retune; this moves the window inside what the radio already hears and
+         * must leave the dial alone. The browser's right-drag used view_center
+         * first and the operator caught it immediately: "the Freq changes! This
+         * should of course stay put during dragging." */
+        double argv;
+        if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
+        if (!ui_pan_is_available()) {
+            cJSON_Delete(root);
+            /* Name the condition rather than answering a bare "no" - with the
+             * still view off the spectrum follows the dial and there is no
+             * independent window to move. Same rule as T82's refusals. */
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "409 Conflict");
+            return httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"still view is off - the spectrum follows the dial, so there is no view to pan\"}");
+        }
+        /* QUEUED, never applied here - see ui_request_pan_hz(). */
+        ui_request_pan_hz((int64_t)argv);
     } else if (action && strcmp(action, "view_center") == 0) {
         /* The band-plan knob, from the browser. Deliberately NOT set_freq: the
          * gesture moves the WINDOW and must be allowed to leave the dial alone,

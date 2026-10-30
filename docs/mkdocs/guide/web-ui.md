@@ -52,7 +52,7 @@ The waterfall is **live-streamed** from the Tab5 every ~100 ms. You see the same
 
 Click anywhere on the spectrum to tune to that frequency. The waterfall updates continuously — no refresh needed.
 
-**Right-drag to pan.** Hold the **right** mouse button on the spectrum or waterfall and drag sideways to move the window along the band. Left-drag still tunes — it puts the dial where you release — so the two gestures do not collide: **left moves the radio, right moves the view.** A pan leaves the dial alone wherever the radio can still reach the window, which is why the passband marker stays visible throughout rather than fading as it does on the Tab5. The browser context menu is suppressed over those two panels so the drag can happen.
+**Right-drag to pan.** Hold the **right** mouse button on the spectrum or waterfall and drag sideways to move the window along the band. Left-drag still tunes — it puts the dial where you release — so the two gestures do not collide: **left moves the radio, right moves the view.** A pan never moves the dial — it moves the window inside what the radio already hears, which is why the passband marker stays visible throughout rather than fading as it does on the Tab5. The browser context menu is suppressed over those two panels so the drag can happen.
 
 **Whole-band plan strip.** Along the bottom of the view (above the status bar) is a colour-coded CW/Digi/Phone strip spanning the entire current band, mirroring the one on the Tab5. A draggable "visible window" marks the slice currently on screen — drag it, or tap anywhere on the strip, to retune — and a marker shows the VFO position.
 

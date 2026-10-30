@@ -120,6 +120,13 @@ void ui_note_view_reframe(void);
  * See the comment above that function in ui.c. */
 uint32_t ui_bandplan_move_view(int64_t view_center_hz);
 void ui_request_bandplan_view(int64_t view_center_hz);
+/* T126: move the VIEW inside what the radio already hears and leave the dial
+ * alone - the opposite promise from ui_request_bandplan_view(), which is the
+ * band-plan knob and may retune. Queued for the LVGL thread the same way.
+ * ui_pan_is_available() is false when the still view is off, because then the
+ * spectrum follows the dial and there is no independent window to move. */
+void ui_request_pan_hz(int64_t pan_hz);
+bool ui_pan_is_available(void);
 
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);

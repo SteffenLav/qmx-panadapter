@@ -6458,6 +6458,9 @@ static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *p
  * two ever raced, the newer one is the one the operator asked for. */
 static volatile int64_t s_bp_view_req_hz = 0;
 static volatile bool    s_bp_view_req    = false;
+/* Same slot discipline, for the browser's right-drag pan (T126). */
+static volatile int64_t s_pan_req_hz     = 0;
+static volatile bool    s_pan_req        = false;
 
 void ui_request_bandplan_view(int64_t view_center_hz)
 {
@@ -6465,9 +6468,62 @@ void ui_request_bandplan_view(int64_t view_center_hz)
     s_bp_view_req    = true;
 }
 
+/* ⛔⛔ A PAN IS NOT A view_center, AND USING ONE FOR THE OTHER MOVES THE RADIO.
+ *
+ * ui_bandplan_move_view() is the band-plan KNOB: it is allowed to retune,
+ * because dragging a window across a whole band has to. A spectrum pan is the
+ * opposite promise - look somewhere else inside what the radio ALREADY hears,
+ * and do not touch the dial.
+ *
+ * The browser's right-drag was built on view_center first and the operator
+ * caught it at once, 2026-10-30: "dragging on the web does not move the BW on
+ * the screen ... however the Freq changes! This should of course stay put
+ * during dragging." Both halves are one cause - the dial came along, so the
+ * passband kept its screen position instead of sliding across, and the
+ * frequency moved. bp_solve_view() also rounds the dial to whole kHz, which is
+ * the jitter he saw.
+ *
+ * Bounds and side effects are deliberately identical to the Tab5's own pan
+ * release in touch_event_cb: same clamp, same dsp_set_zoom(), and the
+ * waterfall is NOT cleared, so its history shifts with the view. */
+void ui_request_pan_hz(int64_t pan_hz)
+{
+    s_pan_req_hz = pan_hz;
+    s_pan_req    = true;
+}
+
+bool ui_pan_is_available(void)
+{
+    return sv_effective();
+}
+
+static void pan_q_apply(int64_t want)
+{
+    if (!sv_effective()) return;   /* the view follows the dial - nothing to pan */
+
+    const int32_t if_hz  = ui_get_if_offset_hz();
+    const int64_t pan_hi = if_hz;
+    const int64_t pan_lo = (int64_t)if_hz - DSP_SAMPLE_RATE_HZ;
+    if (want > pan_hi) want = pan_hi;
+    if (want < pan_lo) want = pan_lo;
+
+    if (want == ui_get_pan_offset_hz()) return;
+    sv_apply_pan_hz(want);
+    dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+    /* A pan the operator placed by hand is a new starting point for the
+     * push/land policy, not a push in progress - the same reset
+     * ui_bandplan_move_view() makes, for the same reason. */
+    s_sv_push = 0;
+    s_sv_side = 0;
+}
+
 static void bp_view_q_drain_cb(lv_timer_t *t)
 {
     (void)t;
+    if (s_pan_req) {
+        s_pan_req = false;
+        pan_q_apply(s_pan_req_hz);
+    }
     if (!s_bp_view_req) return;
     s_bp_view_req = false;
     ui_bandplan_move_view(s_bp_view_req_hz);

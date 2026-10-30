@@ -8742,7 +8742,7 @@ let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
    would only remove the reference you are panning against. */
 let specPanActive      = false;
 let specPanStartX      = 0;
-let specPanStartCenter = 0;
+let specPanStartPanHz  = 0;
 let specPanLastSent    = 0;
 const SPEC_PAN_SEND_MS = 120;   /* the trace comes FROM the device, so the pan
                                    has to go out during the drag or nothing
@@ -8752,11 +8752,28 @@ function specPanHzPerPx(rect) {
                  ? lastView.span : (48000 / (lastZoom || 1));
   return span / rect.width;
 }
-function specPanTo(centerHz, force) {
+/* ⛔ set_pan, NOT view_center. view_center is the band-plan KNOB and is allowed
+   to retune - it rounds the dial to whole kHz and drags the radio along. Built
+   on it first, and the operator caught both symptoms at once, 2026-10-30:
+   "dragging on the web does not move the BW on the screen - but it kind of
+   jitters but stay - however the Freq changes! This should of course stay put
+   during dragging."
+   One cause for both: the dial moved with the view, so the passband held its
+   screen position instead of sliding across, and the whole-kHz rounding was the
+   jitter. set_pan moves the window inside what the radio already hears and
+   never touches the dial. */
+function specPanTo(panHz, force) {
   const now = Date.now();
   if (!force && now - specPanLastSent < SPEC_PAN_SEND_MS) return;
   specPanLastSent = now;
-  sendCmd({ action: "view_center", hz: Math.round(centerHz) });
+  sendCmd({ action: "set_pan", hz: Math.round(panHz) });
+}
+/* The pan offset the device is currently on: the view centre relative to the
+   dial, which is exactly what ui_get_pan_offset_hz() holds on the Tab5. */
+function specPanCurrentHz() {
+  if (!lastView || typeof lastView.span !== "number") return null;
+  if (!lastFreqHz) return null;
+  return lastView.lo + lastView.span / 2 - lastFreqHz;
 }
 let tuneOnSpec   = true; // which canvas is being dragged
 
@@ -9635,11 +9652,12 @@ function addTuneListeners(overlayId, getRect, onSpec) {
 
   el.addEventListener("mousedown", (e) => {
     if (e.button === 2) {                       // RIGHT: pan the window
-      if (!lastView || typeof lastView.span !== "number") return;
-      specPanActive      = true;
-      specPanStartX      = e.clientX;
-      specPanStartCenter = lastView.lo + lastView.span / 2;
-      specPanLastSent    = 0;
+      const pan0 = specPanCurrentHz();
+      if (pan0 === null) return;
+      specPanActive     = true;
+      specPanStartX     = e.clientX;
+      specPanStartPanHz = pan0;
+      specPanLastSent   = 0;
       tuneActive  = false;                      // a pan is not a half-made tune
       tuneCursorX = -1;
       el.style.cursor = "grabbing";
@@ -9650,14 +9668,14 @@ function addTuneListeners(overlayId, getRect, onSpec) {
       const onMove = (ev) => {
         if (!specPanActive) return;
         const dx = ev.clientX - specPanStartX;
-        specPanTo(specPanStartCenter + dx * specPanHzPerPx(getRect()), false);
+        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()), false);
       };
       const onUp = (ev) => {
         if (!specPanActive) return;
         specPanActive = false;
         el.style.cursor = "";
         const dx = ev.clientX - specPanStartX;
-        specPanTo(specPanStartCenter + dx * specPanHzPerPx(getRect()), true);
+        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()), true);
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
