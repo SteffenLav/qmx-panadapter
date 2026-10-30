@@ -2154,13 +2154,25 @@ let   bpFadeFrom       = 0;    // ms timestamp the fade may start at; 0 = fully 
 let   bpFadeRaf        = 0;
 /* 0 while dragging, ramps 0..1 after the delay, 1 once done. Clears bpFadeFrom
    on completion, which is also what stops the redraw loop below. */
+/* ⛔ CW never goes fully dark - it keeps CW_DRAG_PB_ALPHA. Gyula HA3HZ,
+   2026-10-29: "the bandwidth indicator disappears while I am dragging the
+   station into the previously visible reception range ... the final position
+   after releasing the mouse is not precise - it ends up being only
+   approximate." The block is ~6 px wide on a whole-band strip and it is the
+   thing being aimed at; in SSB it is ten times wider and the landing is
+   forgiving, which is why only CW reads as imprecise. The floor applies on the
+   way back up too, or the release would blink out what the drag kept. Matches
+   the CW_DRAG_PASSBAND_OPA rule in ui.c - keep the two in step. */
+const CW_DRAG_PB_ALPHA = 0.35;
 function bpFadeAlpha() {
-  if (bpDragging) return 0;
+  const cw = /CW/i.test(lastMode || "");
+  const floor = cw ? CW_DRAG_PB_ALPHA : 0;
+  if (bpDragging) return floor;
   if (!bpFadeFrom) return 1;
   const t = Date.now() - bpFadeFrom;
-  if (t <= 0)          return 0;
+  if (t <= 0)          return floor;
   if (t >= BP_FADE_MS) { bpFadeFrom = 0; return 1; }
-  return t / BP_FADE_MS;
+  return Math.max(floor, t / BP_FADE_MS);
 }
 /* The strip is otherwise only redrawn on a status poll, which is far too coarse
    to fade with - so drive it from rAF for the second or so it takes, and stop. */
