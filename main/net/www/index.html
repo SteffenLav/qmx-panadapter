@@ -8847,28 +8847,63 @@ let specPanHeldUntil = 0;
    A pan that lands on its CLAMP never reaches the expected value, so the
    timeout is what ends those - 700 ms, short enough not to read as a stuck
    display and long enough to cover a slow frame. */
-const SPEC_PAN_SETTLE_TOL_HZ = 70;    /* ~1.5 FFT bins at 46.875 Hz */
-let specPanExpectLo = null;
-function specPanHoldUntilFrame(loAtRelease, expectedDeltaHz) {
+/* ⛔⛔ WAIT FOR IT TO GO QUIET. Not for a change, and not for a predicted
+   value - both were tried and both still flickered.
+
+   The operator, after the third attempt: "Why is it not possible to just let
+   the screen stay put where i leave it after the drag? Then when all the inter
+   communication between the web and tab5 has ended?" That is the right design
+   and it is what this does.
+
+   Why the earlier conditions were not enough: the device is NOT finished when
+   the first new-window frame arrives. Its own capture shows a second stage -
+
+     pinch: still pan: -8607 -> -2326 Hz
+     ui: wf reframe: dx=335 moved=945 blanked=847 cols in 73663 us
+
+   a 74 ms waterfall reframe AFTER the pan. Clearing the preview on the first
+   frame that satisfies some test drops it with more movement still to come, so
+   whatever follows reads as a jump. There is no single frame to aim at.
+
+   So: hold until the viewport has reported the SAME lo on three consecutive
+   frames. Quiet means the device has stopped moving, whatever it was doing and
+   however many stages it took, and the preview can be dropped into a picture
+   that is no longer changing. */
+const SPEC_PAN_QUIET_FRAMES = 3;
+let specPanSeenLo    = null;
+let specPanStableN   = 0;
+function specPanHoldUntilFrame(loAtRelease) {
   specPanHolding   = true;
   specPanHeldLo    = loAtRelease;
-  specPanExpectLo  = (loAtRelease === null) ? null : loAtRelease + expectedDeltaHz;
-  specPanHeldUntil = Date.now() + 700;
+  specPanSeenLo    = loAtRelease;
+  specPanStableN   = 0;
+  /* Generous: this is the backstop for a device that never goes quiet, not the
+     mechanism. Three quiet frames at ~10 fps is ~300 ms, so 2 s leaves room for
+     a slow reframe without ever reading as a stuck display. */
+  specPanHeldUntil = Date.now() + 2000;
 }
 function specPanReleaseHold() {
-  specPanHolding  = false;
-  specPanHeldLo   = null;
-  specPanExpectLo = null;
+  specPanHolding = false;
+  specPanHeldLo  = null;
+  specPanSeenLo  = null;
+  specPanStableN = 0;
   specPanPreview(0);
 }
 /* Called from the WS frame handler, after lastView is updated. */
 function specPanSettleCheck() {
   if (!specPanHolding) return;
-  /* Landed = the viewport is where we asked it to go. With no expectation to
-     measure against (no viewport at release) the timeout is all there is. */
-  const landed = (specPanExpectLo !== null) && lastView &&
-                 Math.abs(lastView.lo - specPanExpectLo) <= SPEC_PAN_SETTLE_TOL_HZ;
-  const moved  = landed;
+  const lo = lastView ? lastView.lo : null;
+  if (lo === specPanSeenLo) {
+    specPanStableN++;
+  } else {
+    specPanSeenLo  = lo;
+    specPanStableN = 0;
+  }
+  /* ⚠ AND IT MUST HAVE MOVED AT ALL. Without that, the frames arriving before
+     the device has even started are three quiet frames of the OLD view, and
+     the preview is dropped before anything happens - which is the very first
+     version of this bug. */
+  const moved = (lo !== specPanHeldLo) && (specPanStableN >= SPEC_PAN_QUIET_FRAMES);
   /* ⚠ The timeout is a safety net, not the mechanism. It matters when the pan
      changed nothing the device would report - a drag of a few pixels that
      quantises to the same bin, or a pan already against its clamp - because
@@ -9797,11 +9832,8 @@ function addTuneListeners(overlayId, getRect, onSpec) {
         /* Leave the translate exactly where the hand put it and hand it to
            specPanSettleCheck() - see the note there. Clearing it here is the
            jump the operator reported. */
-        const wantPan = specPanStartPanHz + dx * specPanHzPerPx(getRect());
-        /* The viewport moves by the same amount the pan does. */
-        specPanHoldUntilFrame(lastView ? lastView.lo : null,
-                              wantPan - specPanStartPanHz);
-        specPanTo(wantPan);
+        specPanHoldUntilFrame(lastView ? lastView.lo : null);
+        specPanTo(specPanStartPanHz + dx * specPanHzPerPx(getRect()));
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
