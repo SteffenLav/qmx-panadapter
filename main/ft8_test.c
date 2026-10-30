@@ -394,7 +394,7 @@ int ft8_op_mode_slot_ms(void)
  * The toast below also lands here, and /api/status hands it to the page,
  * so the two surfaces say the same thing. Cleared on the next decode by
  * the same branch that clears s_stuck_told. */
-static char s_stuck_note[224];
+static char s_stuck_note[256];   /* same text as the stuck toast - widened with it */
 
 
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
@@ -3400,14 +3400,57 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
                      * resets s_stuck_slots but deliberately NOT s_stuck_fires,
                      * so the real gap can be longer than fires x 10 min. */
                     int mins = (s_stuck_fires * FT8_STUCK_RESET_MS) / 60000;
-                    /* 224, not 160: the fixed text alone is ~152 chars and gcc
-                     * sizes %d at 11, so -Werror=format-truncation refused the
-                     * smaller buffer. The mode name is on top of that. */
-                    char msg[224];
+                    /* ⛔ IT MUST NOT NAME A CAUSE IT CANNOT ESTABLISH.
+                     *
+                     * The old wording led with "The radio may not be
+                     * receiving". The operator hit it on 2026-10-30 on a band
+                     * that was simply dead, 21 min after a flash he had
+                     * already power-cycled for, and it told him to go and
+                     * power-cycle again.
+                     *
+                     * ⛔ THE GATE ABOVE DISCRIMINATES NOTHING, and two fixes
+                     * that looked obvious were eliminated before this one:
+                     *   - `n_cand > 20` was meant to mean "there is signal".
+                     *     MEASURED the same evening: cand was 140, the cap, in
+                     *     ALL 109 slots of a dead band. The term is always
+                     *     true, so the only live condition is zero decodes -
+                     *     which IS the definition of a quiet band.
+                     *   - "fire only if nothing has decoded since boot" fails
+                     *     on the identical case: a flash, then a dead band, is
+                     *     zero decodes since boot.
+                     *   - "fire only if the QMX has not re-enumerated since
+                     *     boot" fails too: that boot saw RX_CONNECTED at 21.0 s
+                     *     and 34.6 s and no later drop, so there was nothing to
+                     *     separate.
+                     *
+                     * ⚠ There IS a hint in the data - the wedged window of
+                     * 2026-10-21 ran 13 dB quieter (noise p50 -57.1 vs -43.8)
+                     * and repeated its `zero` sample count far more often
+                     * (160 distinct values in 1198 slots vs 85 in 123). That is
+                     * ONE wedged episode against ONE dead evening, different
+                     * bands and different nights: one paired reading, not a
+                     * calibration, and this file has already eliminated two
+                     * level-based designs by measurement. Do not build a
+                     * detector on it. The measurement that would settle it is
+                     * slotdiag through a DELIBERATE wedge - flash, wait 20 min,
+                     * then power-cycle - on tonight's band and antenna.
+                     *
+                     * So: state the fact, put the likely reading first, and
+                     * keep the power-cycle line conditional. A quiet band is
+                     * the common case and leaving it receiving is the right
+                     * thing to do, which the message now says outright.
+                     *
+                     * 256, not 224: the fixed text alone is ~196 chars and gcc
+                     * sizes %d at 11, so -Werror=format-truncation refuses the
+                     * smaller buffer. The mode name is on top of that.
+                     * s_stuck_note (/api/status) carries the same text and was
+                     * widened with it. */
+                    char msg[256];
                     snprintf(msg, sizeof(msg),
-                             "No %s decodes for over %d min and resetting the audio did not "
-                             "help. The radio may not be receiving - if the Tab5 was "
-                             "flashed or restarted, power-cycle the QMX.",
+                             "No %s decodes for over %d min. Most likely the band is "
+                             "quiet - that is normal, leave it receiving. If you "
+                             "flashed or restarted the Tab5 since the QMX was last "
+                             "powered on, power-cycle the QMX.",
                              proto, mins);
                     ESP_LOGW(TAG, "%s", msg);
                     ui_toast_ms(msg, 30000);
