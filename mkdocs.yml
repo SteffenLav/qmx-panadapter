@@ -39,6 +39,7 @@ nav:
     - Gestures & Controls: reference/gestures.md
     - Hardware: reference/hardware.md
     - Web API: reference/web-api.md
+    - Hamlib rigctld: reference/rigctld.md
     - Troubleshooting: reference/troubleshooting.md
     - Glossary: reference/glossary.md
   - For Builders:

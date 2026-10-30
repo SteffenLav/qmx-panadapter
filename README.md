@@ -360,9 +360,12 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Quick Guide](#quick-guide) — get on air in 10 minutes
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
+- [Audio](#audio) — binaural CW and panoramic split (beta)
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
 - [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
 - [Web UI](#web-ui) — browser panadapter and remote control
+- [Web API](#web-api) — drive the radio from a script: every endpoint the browser page uses
+- [Hamlib rigctld](#hamlib-rigctld) — point a logger at the Tab5 on port 4532, no cable, no driver
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
 - [JS8](#js8) — keyboard mode on the device: decode, free text, CQ (beta)
@@ -690,6 +693,24 @@ Read-only to start with: `GET /api/status` tells you everything the bottom bar
 knows.
 
 Full chapter: [tab5.lav.dk/reference/web-api](https://tab5.lav.dk/reference/web-api/)
+
+---
+
+## Hamlib rigctld
+
+The Tab5 is also a Hamlib **NET rigctl** server on TCP port **4532**, so a
+logger or digital-mode program on the LAN can read and set the QMX's frequency
+and mode with nothing installed on the PC and no serial cable. It starts on its
+own once the Tab5 joins WiFi - there is nothing to turn on.
+
+Point the program at the IP address on the Tab5's bottom bar, port 4532, rig
+model **NET rigctl**. Tested with QLog, WSJT-X and fldigi.
+
+It is receive-side control: there is no `set_ptt`, so it cannot key the radio
+and will never report that you are transmitting. Set PTT to none or VOX, or key
+the QMX the way you normally do.
+
+Full chapter: [tab5.lav.dk/reference/rigctld](https://tab5.lav.dk/reference/rigctld/)
 
 ---
 
