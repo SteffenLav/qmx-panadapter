@@ -4503,9 +4503,19 @@ static bool js8_send_directive(const char *cmd_text, char *out, size_t out_len)
     js8_target_get(call, sizeof(call));
     if (!call[0]) { snprintf(out, out_len, "Tap a station first"); return false; }
 
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    if (!cfg.my_callsign[0]) {
+    /* ⛔ THE SMALL ACCESSOR, NOT settings_load_all(). This function runs on
+     * taskLVGL, whose stack is small, and it already holds an
+     * ft8_tx_request_t below. The first cut loaded a whole qmx_settings_t -
+     * 3636 bytes, measured - and held both at once: that peak is unique to
+     * this function (js8_send_grid has the settings and no request,
+     * js8_send_snr has the request and no settings), and it took the board
+     * down with a stack protection fault in taskLVGL the first time a
+     * directive was sent from the sheet, 2026-10-31. The task-stack rule in
+     * CLAUDE.md says exactly this; I broke it in a new function on the same
+     * day I fixed the same mistake in js8_sim.c. */
+    char my_call[FT8_CALL_MAX_LEN];
+    settings_get_my_callsign(my_call, sizeof(my_call));
+    if (!my_call[0]) {
         snprintf(out, out_len, "Set your callsign first");
         return false;
     }
@@ -4517,7 +4527,7 @@ static bool js8_send_directive(const char *cmd_text, char *out, size_t out_len)
      * read "would go out as ..." instead of being told the names are too long
      * to carry the command. */
     char line[48];
-    int n = snprintf(line, sizeof(line), "%s %s %s", call, cfg.my_callsign, cmd_text);
+    int n = snprintf(line, sizeof(line), "%s %s %s", call, my_call, cmd_text);
     if (n < 0 || (size_t)n >= sizeof(((ft8_tx_request_t *)0)->display_text)) {
         snprintf(out, out_len, "'%s' is too long for %s", cmd_text, call);
         return false;

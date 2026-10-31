@@ -290,31 +290,54 @@ static bool build_answer(js8_phantom_t *p, const char *my_call, const char *rest
 {
     *kind_out = JS8_CHAT_DIRECTED;
 
-    /* The queries that come back as free text. */
+    /* The queries that come back as free text.
+     *
+     * ⛔ REFUSE ON TRUNCATION, do not let snprintf shorten it. JS8_TEXT_MAX
+     * is 48 and these lines carry two callsigns plus free text, so a compound
+     * call or a longer info string reaches the limit - and the HEARING? case
+     * below shows what silent truncation looks like when it lands on a
+     * callsign. A phantom that says nothing is a simulator with a gap; one
+     * that says half a word teaches the operator a message the decoder does
+     * not produce. */
     if (strcmp(rest, "INFO?") == 0) {
+        int n = snprintf(out, cap, "%s %s INFO %s", my_call, p->call, p->info);
+        if (n < 0 || (size_t)n >= cap) return false;
         *kind_out = JS8_CHAT_FREETEXT;
-        snprintf(out, cap, "%s %s INFO %s", my_call, p->call, p->info);
         return true;
     }
     if (strcmp(rest, "STATUS?") == 0) {
+        int n = snprintf(out, cap, "%s %s STATUS %s", my_call, p->call, p->status);
+        if (n < 0 || (size_t)n >= cap) return false;
         *kind_out = JS8_CHAT_FREETEXT;
-        snprintf(out, cap, "%s %s STATUS %s", my_call, p->call, p->status);
         return true;
     }
     if (strcmp(rest, "HEARING?") == 0) {
-        /* The four most recently heard, which is what the directive means.
-         * Any four that are not this phantom - a plausible list is all the
-         * screen needs. */
-        char list[64] = "";
+        /* The most recently heard, which is what the directive means. Any of
+         * the others - a plausible list is all the screen needs.
+         *
+         * ⛔ WHOLE CALLSIGNS ONLY, AND THE ROOM IS MEASURED FIRST. The first
+         * cut built four calls into a 64-byte list and then snprintf'd the
+         * whole line into JS8_TEXT_MAX (48). On air it came out as
+         * "...JA1GHI EA5JK" - EA5JKL with its last letter cut off, which is a
+         * DIFFERENT STATION, silently. Seen on bench1, 2026-10-31, the first
+         * time HEARING? was pressed. js8_message.c already states this rule
+         * for the callsign codec ("a truncated callsign is a DIFFERENT
+         * station, so it must refuse, not shorten"); it applies to a list of
+         * them too. So: append only while a whole call plus its space fits,
+         * and stop - a shorter list is honest, a cut one is not. */
+        int off = snprintf(out, cap, "%s %s HEARING", my_call, p->call);
+        if (off < 0 || (size_t)off >= cap) return false;
+
         int n = 0;
         for (int i = 0; i < N_PH && n < 4; i++) {
             if (&s_ph[i] == p) continue;
-            size_t used = strlen(list);
-            snprintf(list + used, sizeof(list) - used, "%s%s", n ? " " : "", s_ph[i].call);
+            size_t need = 1 + strlen(s_ph[i].call);        /* the space, too */
+            if ((size_t)off + need + 1 > cap) break;       /* +1 for the NUL */
+            off += snprintf(out + off, cap - (size_t)off, " %s", s_ph[i].call);
             n++;
         }
+        if (!n) return false;                              /* nothing fitted */
         *kind_out = JS8_CHAT_FREETEXT;
-        snprintf(out, cap, "%s %s HEARING %s", my_call, p->call, list);
         return true;
     }
     if (strcmp(rest, "GRID?") == 0) {
@@ -322,8 +345,9 @@ static bool build_answer(js8_phantom_t *p, const char *my_call, const char *rest
          * JO65"). JS8_CMD_GRID exists in the vocabulary but carries no
          * locator, so a bare "GRID" would answer the question with nothing.
          * See the comment at js8_send_grid() in ft8_screen_view.c. */
+        int n = snprintf(out, cap, "%s %s %.4s", my_call, p->call, p->grid);
+        if (n < 0 || (size_t)n >= cap) return false;
         *kind_out = JS8_CHAT_FREETEXT;
-        snprintf(out, cap, "%s %s %.4s", my_call, p->call, p->grid);
         return true;
     }
 
