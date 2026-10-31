@@ -195,6 +195,19 @@ left this branch with an unreachable page until `MODE: CW` was added under
 PANADAPTER (2026-10-28, verified on the glass). `ui_advance_page()` is
 DELETED here and still present on main - expect that in the next merge.
 
+⭐ **THE HOLD-BACK IS NOW A FIRMWARE GATE, NOT ONLY A BRANCH DISCIPLINE**
+(2026-10-31, proven on bench2 and seen on the glass). `cw_page_en` defaults
+OFF; the drawer hides `MODE: CW` and re-centres the stack, `set_screen "cw"`
+answers 403, boot restore falls through to the Panadapter, and
+`ui_set_base_mode()` refuses. Turn it on with
+`{"action":"cw_enable","on":true}` or `cw_page_enabled = yes` in a config
+file. ⛔ Unlike `wspr_en`, **asking for the page does NOT enable it** - WSPR
+is finished and its flag is vestigial, this one is a real gate, because `KY`
+still has no abort.
+
+**So the branch could now merge to main dark**, the way WSPR once shipped.
+That is the operator's call and has NOT been made - do not act on it.
+
 ⭐ **CW TRANSMIT WORKS — CAT `KY` KEYS THE RADIO, confirmed OFF AIR by the
 operator on 2026-09-30:** *"the cw is keyed clearly on the antenna - i have
 tried it and it works"*. It may be described as working.
