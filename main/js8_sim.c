@@ -168,6 +168,20 @@ static void inject(js8_phantom_t *p, js8_chat_kind_t kind, const char *text,
      * number to give - it is fixed rather than dressed up as measured. */
     ft8_screen_record_decode(text, 30, p->snr_db, p->tone_hz, slot_sec, 0);
 
+    /* ⛔ THE STORE HAS TO EXIST, AND ON A DEAD BAND NOTHING ELSE CREATES IT.
+     * js8_chat_add() is a silent no-op while s_store is NULL, and the only
+     * other caller of js8_chat_init() is inside ft8_test.c's slot loop, in the
+     * branch that handles JS8 events from a REAL decode. With the simulator on
+     * and no station on the air, that branch never runs - so every phantom
+     * reached the stations pane through ft8_screen_record_decode() above and
+     * the conversation pane stayed on "Nothing decoded yet". Reported from the
+     * glass, 2026-10-31, and the /api/js8 read agreed: used 0, count 0, while
+     * the log showed eleven injections.
+     *
+     * init is idempotent and remembers a failure, so calling it here costs a
+     * pointer test per message. */
+    js8_chat_init();
+
     uint32_t dial = cat_get_frequency();
     js8_chat_msg_t cm;
     memset(&cm, 0, sizeof(cm));
