@@ -123,10 +123,14 @@ bool js8_alt_select(ftx_protocol_t primary, uint8_t alt_submode,
                     ftx_protocol_t *alt, int *offs_samples, int max_offs,
                     int *n_windows);
 
-/* The one-character mark the JS8 page puts in front of a message that was
- * heard on something other than the submode we are operating. ' ' for the
- * primary, so the column is blank on an ordinary session. */
-char js8_alt_mark(ftx_protocol_t proto, ftx_protocol_t primary);
+/* The one-character mark the JS8 page puts in front of every message, saying
+ * which speed heard it: 'N' Normal, 'F' Fast, 'T' Turbo, 'S' Slow.
+ *
+ * ALWAYS a letter for a JS8 protocol, including the one being operated - a
+ * column that is blank for the common case and a letter for the rare one is
+ * two meanings in one place. ' ' only for a non-JS8 protocol, which has no
+ * speed to name. */
+char js8_alt_mark(ftx_protocol_t proto);
 
 /* Map an NSUBMODE value to a protocol. Shared with js8_submode.c's table by
  * value, not by index - see the note there about the numbering not being

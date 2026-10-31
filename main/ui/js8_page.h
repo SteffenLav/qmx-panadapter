@@ -59,9 +59,11 @@
  * second column would have taken more. Column 1 was already spare, and it is
  * where the eye scans for the flag anyway.
  *
- * BLANK for the primary submode, so an ordinary single-submode session shows
- * no new column at all. 'N' Normal, 'F' Fast, 'T' Turbo, 'S' Slow - see
- * js8_alt_mark(). */
+ * ALWAYS the speed that heard the message: 'N' Normal, 'F' Fast, 'T' Turbo,
+ * 'S' Slow - see js8_alt_mark(). It used to be blank for the submode being
+ * operated, which made one column mean two things and only taught the
+ * operator anything on the rare alternate row (operator, 2026-10-31). Blank
+ * now means only "not a JS8 protocol". */
 #define JS8_PAGE_COL_SUBMODE 1
 #define JS8_PAGE_W_SUBMODE   1
 
@@ -120,10 +122,12 @@
  * message by arithmetic. Operator, 2026-10-09: the TX target is whatever row
  * you tap, not the newest message. */
 /* `primary_proto` is the ftx_protocol_t the station is OPERATING on, cast to
- * uint8_t so this module keeps no dependency on the decoder. It decides only
- * which rows get a submode mark - a message heard on it is unmarked. */
+ * ⛔ THE PRIMARY PROTOCOL IS NO LONGER PASSED IN. It used to decide which
+ * rows got a mark - the one being operated was left blank - and the operator
+ * asked for the letter on every row instead (2026-10-31), so there is nothing
+ * left for it to decide. Removed rather than ignored, so no future caller
+ * believes it still matters. */
 int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
-                    uint8_t primary_proto,
                     char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1],
                     int row_msg[JS8_PAGE_ROWS]);
 

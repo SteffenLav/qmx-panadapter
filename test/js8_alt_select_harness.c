@@ -317,14 +317,21 @@ static void test_mutations(void)
                    20 / JS8_ALT_DUTY_EVERY);
     }
 
-    /* (f) the mark column must be BLANK for the primary, or an ordinary
-     * single-submode session grows a column of letters it cannot explain. */
-    expect_int("(f) the mark for the primary submode is a space",
-               js8_alt_mark(FTX_PROTOCOL_JS8, FTX_PROTOCOL_JS8), ' ');
-    expect_int("(f) the mark for Fast under Normal is 'F'",
-               js8_alt_mark(FTX_PROTOCOL_JS8_FAST, FTX_PROTOCOL_JS8), 'F');
-    expect_int("(f) the mark for Normal under a Fast primary is 'N'",
-               js8_alt_mark(FTX_PROTOCOL_JS8, FTX_PROTOCOL_JS8_FAST), 'N');
+    /* (f) the mark column names the speed on EVERY JS8 row, including the one
+     * being operated. It used to be blank for the primary; the operator asked
+     * for the letter always, because a column that is empty in the common case
+     * and lettered in the rare one means two things at once (2026-10-31). */
+    expect_int("(f) Normal is marked 'N' even when Normal is the primary",
+               js8_alt_mark(FTX_PROTOCOL_JS8), 'N');
+    expect_int("(f) Fast is marked 'F'",
+               js8_alt_mark(FTX_PROTOCOL_JS8_FAST), 'F');
+    expect_int("(f) Turbo is marked 'T'",
+               js8_alt_mark(FTX_PROTOCOL_JS8_TURBO), 'T');
+    expect_int("(f) Slow is marked 'S'",
+               js8_alt_mark(FTX_PROTOCOL_JS8_SLOW), 'S');
+    /* Non-JS8 keeps the blank: an FT8 row has no JS8 speed to name. */
+    expect_int("(f) a non-JS8 protocol stays blank",
+               js8_alt_mark(FTX_PROTOCOL_FT8), ' ');
     printf("\n");
 }
 

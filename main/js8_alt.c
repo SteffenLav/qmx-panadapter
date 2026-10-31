@@ -76,9 +76,23 @@ bool js8_alt_select(ftx_protocol_t primary, uint8_t alt_submode,
     return true;
 }
 
-char js8_alt_mark(ftx_protocol_t proto, ftx_protocol_t primary)
+/* @ST ALWAYS THE LETTER, NEVER A BLANK (operator, 2026-10-31: "I want it
+ * always to show the speed letter..... anything else is confusing UI").
+ *
+ * It used to return ' ' when the message came in on the submode we are
+ * operating, so the column was empty on an ordinary session and a letter
+ * appeared only for an alternate decode. That reads as two different things
+ * in one column: "no speed" and "this speed". The operator has to remember
+ * which submode is primary to know what a blank means, and the blank is the
+ * COMMON case, so the column teaches nothing until the rare row shows up.
+ *
+ * @NO The `primary` argument is therefore GONE rather than ignored. Leaving
+ * it would invite a future caller to believe it still decides something.
+ *
+ * A non-JS8 protocol still gives ' ': an FT8 or FT4 row has no JS8 speed,
+ * and inventing a letter for it would be worse than the blank this replaces. */
+char js8_alt_mark(ftx_protocol_t proto)
 {
-    if (proto == primary) return ' ';
     switch (proto) {
     case FTX_PROTOCOL_JS8:       return 'N';
     case FTX_PROTOCOL_JS8_FAST:  return 'F';

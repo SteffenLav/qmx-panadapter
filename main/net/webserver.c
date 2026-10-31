@@ -6006,7 +6006,6 @@ static esp_err_t js8_get_handler(httpd_req_t *req)
         /* The same grid the glass draws, including the submode mark in
          * column 1 - one renderer, both surfaces. See js8_page.h. */
         int used = js8_page_render(sc->msgs, have, now_utc,
-                                   (uint8_t)ft8_op_mode_protocol(),
                                    sc->lines, sc->row_msg);
 
         cJSON_AddNumberToObject(root, "used", used);

@@ -79,7 +79,6 @@ int js8_page_rows_for(const js8_chat_msg_t *m)
 }
 
 int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
-                    uint8_t primary_proto,
                     char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1],
                     int row_msg[JS8_PAGE_ROWS])
 {
@@ -112,7 +111,7 @@ int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
          * run wraps, and a letter repeated down the continuation rows would
          * read as several separate alternate-submode messages. */
         lines[row][JS8_PAGE_COL_SUBMODE] =
-            js8_alt_mark((ftx_protocol_t)m->proto, (ftx_protocol_t)primary_proto);
+            js8_alt_mark((ftx_protocol_t)m->proto);
 
         char ag[6];
         age_str(now_utc, m->last_utc, ag);
