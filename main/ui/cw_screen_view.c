@@ -352,9 +352,32 @@ static void edit_kb_event_cb(lv_event_t *e)
         lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* The field the macro buttons paste into. The keyboard already tracks it, but
+ * lv_keyboard_get_textarea() reads back NULL once the keyboard is hidden, and
+ * the buttons have to work with it down. */
+static lv_obj_t *s_edit_focus = NULL;
+
+/* ⭐ MACROS GO IN WITH ONE TAP. They could always be typed, and that was the
+ * whole problem: { and } live on LVGL's symbol layer, so "{CALL}" cost eight
+ * taps and two layer switches - 1#, {, abc, C, A, L, L, 1#, }, abc - for six
+ * characters, in a window the operator opens once and then avoids. The hint
+ * line that used to sit here named the three macros and gave no way to use
+ * them. Operator, 2026-11-01: "then what is the idea to make it easy to write
+ * the call etc.??"
+ *
+ * Pasted at the cursor of the focused field, not appended: the call usually
+ * belongs at the FRONT ("{CALL} UR 599 599 BK"), which append cannot do. */
+static void edit_macro_cb(lv_event_t *e)
+{
+    const char *macro = (const char *)lv_event_get_user_data(e);
+    if (!s_edit_focus || !macro) return;
+    lv_textarea_add_text(s_edit_focus, macro);
+}
+
 static void edit_ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
+    s_edit_focus = ta;
     // One blinking cursor at a time, keyboard follows the focused field.
     for (int i = 0; i < N_CW_MEM; i++)
         if (s_edit_ta6[i] && s_edit_ta6[i] != ta)
@@ -396,11 +419,34 @@ static void edit_build(void)
     lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_28, 0);
     lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 4);
 
-    lv_obj_t *hint = lv_label_create(panel);
-    lv_label_set_text(hint, "{MYCALL} {PARK} {CALL} fill in when sent");
-    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_18, 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 320, 12);
+    /* The hint line that used to be here is GONE, replaced by the buttons it
+     * described - a label naming three macros the operator then had to spell
+     * out by hand was the gap, not the information. Tapping one says what it
+     * does better than the sentence did. */
+    {
+        static const char *MACROS[] = { "{MYCALL}", "{PARK}", "{CALL}" };
+        static const int   MW[]     = { 150, 124, 124 };
+        int mx = 212;
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *b = lv_btn_create(panel);
+            lv_obj_set_size(b, MW[i], 48);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 0);
+            lv_obj_set_style_bg_color(b, lv_color_hex(0x2a2f37), 0);
+            lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+            lv_obj_set_style_border_width(b, 1, 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            lv_obj_add_event_cb(b, edit_macro_cb, LV_EVENT_CLICKED,
+                                (void *)MACROS[i]);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, MACROS[i]);
+            /* CW blue, the page's own colour - these insert, they do not
+             * commit, so they must not read as Save. */
+            lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            lv_obj_center(l);
+            mx += MW[i] + 8;
+        }
+    }
 
     lv_obj_t *btn_cancel = lv_btn_create(panel);
     lv_obj_set_size(btn_cancel, 150, 48);
@@ -464,6 +510,10 @@ static void edit_open(int slot)
         lv_textarea_set_text(s_edit_ta6[i], s.cw_msg[i]);
         lv_obj_remove_state(s_edit_ta6[i], LV_STATE_FOCUSED);
     }
+    /* No field is focused on open, so nothing is a paste target yet - a
+     * macro button tapped first would otherwise land in whichever line was
+     * focused the last time this window was used. */
+    s_edit_focus = NULL;
     lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_modal);

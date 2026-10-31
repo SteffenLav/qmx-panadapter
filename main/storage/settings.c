@@ -1003,10 +1003,30 @@ static void load_from_nvs(qmx_settings_t *out)
     // work for every operator without baking a callsign in.
     strcpy(out->cw_msg[0], "CQ CQ DE {MYCALL} {MYCALL} K");
     strcpy(out->cw_msg[1], "CQ POTA DE {MYCALL} {MYCALL} K");
-    strcpy(out->cw_msg[2], "UR 599 599 BK");
-    strcpy(out->cw_msg[3], "TU 73 EE");
+    /* ⛔ M3 AND M4 NAME THE STATION, because a direct tap and the NEXT
+     * button used to send different things from the same memory. NEXT
+     * prefixed the captured call (cw_qso.c compose()); tapping M3 on the
+     * pane keyed a bare "UR 599 599 BK" addressed to nobody, which on a busy
+     * band is a report anyone might take as theirs. With {CALL} in the text
+     * both paths send the same words, and compose() skips its prefix when
+     * it sees the macro so the call is not sent twice.
+     *
+     * ⚠ The cost, stated rather than discovered: these two now REFUSE when
+     * no station has been captured, with "station (tap the card)". That is
+     * already how the NEXT ladder behaved - it returned false without a
+     * target - so this makes the direct tap agree with it rather than
+     * inventing a new rule. */
+    strcpy(out->cw_msg[2], "{CALL} UR 599 599 BK");
+    strcpy(out->cw_msg[3], "{CALL} TU 73 EE");
     strcpy(out->cw_msg[4], "AGN AGN BK");
     strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
+    /* ⚠ NO DEFAULT USES {PARK}, and that is on purpose after looking at what
+     * it would cost. expand_macros() REFUSES a message whose macro has no
+     * value, so putting {PARK} in M2 would stop "CQ POTA" working for
+     * everyone who is not activating - a worse failure than the park not
+     * being offered. M2 also still says POTA literally; a {PROG} macro taking
+     * the word from the running activation has the same refusal problem when
+     * nothing is running. Both want an operator decision, not a default. */
     out->cw_park[0] = '\0';
     out->cw_sim_en = false;
     /* OFF until the CW page is finished - see the note on the field. The

@@ -22,6 +22,7 @@
 #include "ui/cw_screen_view.h"
 
 #include <string.h>
+#include <strings.h>   // strncasecmp, for the {CALL} test in compose()
 #include <ctype.h>
 #include <stdio.h>
 #include <time.h>
@@ -598,8 +599,29 @@ void cw_qso_clear_capture(void)
     portEXIT_CRITICAL(&s_mux);
 }
 
-// Compose "<target> <memory text>" (memory raw, macros expanded later by the
-// view's shared expander, which also handles {MYCALL}/{PARK}).
+/* strcasestr is not in newlib's default profile here, and this is the only
+ * caller - a six-line scan beats a _GNU_SOURCE for one lookup. */
+static bool strcasestr_portable(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (const char *p = hay; *p; p++)
+        if (strncasecmp(p, needle, n) == 0) return true;
+    return false;
+}
+
+/* Compose "<target> <memory text>" (memory raw, macros expanded later by the
+ * view's shared expander, which also handles {MYCALL}/{PARK}/{CALL}).
+ *
+ * ⛔ THE PREFIX IS SKIPPED WHEN THE MEMORY ALREADY NAMES THE CALL, or the
+ * station is sent twice. The prefix exists because a memory had no way to say
+ * "their call"; {CALL} is that way, and the shipped M3/M4 now use it, so
+ * prefixing on top would key "W1AW W1AW UR 599 599 BK".
+ *
+ * Both paths stay, and that is deliberate rather than a duplicate left
+ * standing: a memory EDITED BEFORE {CALL} existed has no macro in it and
+ * still needs the prefix to address anyone. The test is explicit, so the two
+ * cannot both fire. New text should use {CALL} - it is the only form that
+ * makes a direct tap on the memory send the same thing NEXT does. */
 static bool compose(char *out, size_t out_sz, int mem_idx, bool prefix_target)
 {
     qmx_settings_t s;
@@ -608,10 +630,14 @@ static bool compose(char *out, size_t out_sz, int mem_idx, bool prefix_target)
     if (!m[0]) return false;
     char tgt[CALL_MAX];
     cw_qso_get_target(tgt, sizeof(tgt));
-    if (prefix_target) {
+    if (prefix_target && !strcasestr_portable(m, "{CALL}")) {
         if (!tgt[0]) return false;
         snprintf(out, out_sz, "%s %s", tgt, m);
     } else {
+        /* The ladder step still requires a station even when the macro
+         * carries it - expand_macros() would refuse later anyway, and
+         * refusing here keeps "NEXT sends" honest about it. */
+        if (prefix_target && !tgt[0]) return false;
         snprintf(out, out_sz, "%s", m);
     }
     return true;
