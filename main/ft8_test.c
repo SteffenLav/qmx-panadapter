@@ -69,7 +69,7 @@
 #include "common/monitor.h"
 
 #include "esp_memory_utils.h"   /* T133 placement dump */
-#include "soc/soc.h"            /* SOC_RTC_DRAM_LOW - LP SRAM is not L2 */
+#include "util/mem_where.h"    /* mem_where() - LP SRAM is not L2. T133/T134 */
 #include "dsp.h"
 #include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
@@ -858,23 +858,6 @@ static void free_shared_fft(void)
  * taskLVGL back on that core at ~74 % - the log showed `idle0 0.0%` at the
  * moment of the fault. A longer bound changes the odds, not the race; this
  * file already records two fixes falsified for exactly that reasoning. */
-/* ⛔ "INTERNAL" IS TWO DIFFERENT MEMORIES ON THIS PART, AND ONE OF THEM IS
- * SLOW. esp_ptr_internal() is true for both the main L2 DRAM at 0x4ff00000
- * and the 32 KB LP/RTC SRAM at 0x50108000, and with
- * CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=y the generic heap hands the
- * LP block out to any allocation that fits. Reached from the HP core it is
- * far slower than cached PSRAM - MEASURED at 2.5x on the decoder's hottest
- * memmove (T133, the note at the last_frame relocation below).
- *
- * So a diagnostic that prints "INTERNAL" hides exactly the thing worth
- * seeing. Three words, not two. */
-static const char *mem_where(const void *p)
-{
-    uintptr_t a = (uintptr_t)p;
-    if (a >= SOC_RTC_DRAM_LOW && a < SOC_RTC_DATA_HIGH) return "LPSRAM";
-    if (a >= SOC_DRAM_LOW     && a < SOC_DRAM_HIGH)     return "L2";
-    return "PSRAM";
-}
 
 static void forget_capture_pool(void)
 {
