@@ -27,6 +27,7 @@ idf_component_register(
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
         "ui/js8_text_modal.c"
+        "ui/js8_macro_modal.c"
         "ui/manual_log_modal.c"
         "ui/sched_modal.c"
         "ui/ft8_time_modal.c"

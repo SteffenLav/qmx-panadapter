@@ -39,6 +39,11 @@ int         js8_submode_index_of(uint8_t value); /* 0 (Normal) when unknown     
  * newline-separated option string (js8_submode_options_lvgl). */
 const char *js8_submode_label(int index);
 
+/* The slot period in seconds for a NSUBMODE value - 15 for Normal, 6 for
+ * Turbo. The same table row the label comes from, so the two cannot drift.
+ * An unknown value reads as Normal, exactly as js8_submode_index_of() does. */
+int         js8_submode_secs(uint8_t value);
+
 /* The LVGL dropdown option string: every label, '\n' separated, built once. */
 const char *js8_submode_options_lvgl(void);
 

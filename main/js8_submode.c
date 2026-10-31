@@ -19,15 +19,30 @@ static const char *TAG = "js8sub";
 static const struct {
     uint8_t     value;          /* JS8Call NSUBMODE */
     const char *label;
+    int         secs;           /* the slot period, as a NUMBER - see below */
 } S[] = {
-    { 0, "Normal - 15 s" },
-    { 1, "Fast - 10 s"   },
-    { 2, "Turbo - 6 s"   },
-    { 4, "Slow - 30 s"   },
+    { 0, "Normal - 15 s", 15 },
+    { 1, "Fast - 10 s",   10 },
+    { 2, "Turbo - 6 s",    6 },
+    { 4, "Slow - 30 s",   30 },
 };
+
+/* The seconds appear twice on each row, once inside the label and once as an
+ * integer. That is deliberate and it is still ONE row: a caller that needs to
+ * compute with the period (the macro sheet prints the airtime a press will
+ * cost) cannot parse it out of a display string without a second copy of the
+ * formatting rules. Keeping both in the same row means a new submode cannot
+ * get one and not the other. */
 #define N_SUBMODES ((int)(sizeof(S) / sizeof(S[0])))
 
 int js8_submode_count(void) { return N_SUBMODES; }
+
+int js8_submode_secs(uint8_t value)
+{
+    for (int i = 0; i < N_SUBMODES; i++)
+        if (S[i].value == value) return S[i].secs;
+    return S[0].secs;   /* unknown reads as Normal, as index_of() already does */
+}
 
 uint8_t js8_submode_value(int index)
 {

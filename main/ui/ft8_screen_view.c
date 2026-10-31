@@ -34,6 +34,7 @@
 #include "ft8_tx.h"
 #include "js8_ftx.h"
 #include "js8_submode.h"   /* the submode table and the one refusal rule */
+#include "js8_macro_modal.h"
 #include "js8_target.h"
 #include "ft8_qso.h"
 #include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
@@ -648,6 +649,9 @@ static void js8_tx_bar_sync(void);
  * presses them too and needs the refusal text - see their definitions. */
 static bool js8_send_snr(char *out, size_t out_len);
 static bool js8_send_grid(char *out, size_t out_len);
+/* The macro SHEET's sends - every directive that is not the report or the
+ * grid. One worker for both surfaces, same as the two above. */
+static bool js8_send_directive(const char *cmd_text, char *out, size_t out_len);
 
 static void row_activate(int idx) { row_activate_ex(idx, false); }
 
@@ -678,6 +682,28 @@ static void row_activate_ex(int idx, bool direct)
      * happening without a press per message. The SNR and GRID buttons are the
      * explicit sends, and the free-text box is addressed to this selection. */
     if (js8_mode_now()) {
+        /* ⭐ RE-TAP ON THE STATION ALREADY SELECTED OPENS THE MACRO SHEET.
+         *
+         * There is no room on this page for twelve more permanent buttons -
+         * it already carries three panes, and v1.23.0 removed the Free text
+         * button to make space. A sheet costs ZERO screen estate and keeps
+         * the font where it is.
+         *
+         * ⛔ IT MUST BE THE SECOND TAP ON THE SAME ROW, never the first. A
+         * sheet that opened on any tap would put twelve transmit buttons over
+         * a station the operator had only just pointed at; requiring them to
+         * tap the row they ALREADY chose means the target cannot be a
+         * surprise. The first tap keeps its old behaviour exactly: select,
+         * filter the pane, transmit nothing. */
+        {
+            char cur[FT8_CALL_MAX_LEN];
+            js8_target_get(cur, sizeof(cur));
+            if (cur[0] && strcmp(cur, call) == 0) {
+                ESP_LOGI(TAG, "JS8 row re-tapped (%s) -> macro sheet", call);
+                js8_macro_modal_show();
+                return;
+            }
+        }
         js8_target_set(call);
         s_confirmed_row_idx = idx;
         char tb[48];
@@ -1381,6 +1407,12 @@ static char          s_web_ftx_result[64];
 /* The JS8 SNR/GRID macros from the browser. -1 = nothing pending, 0 = SNR,
  * 1 = GRID. Same deferral and the same reason as the free text above. */
 static volatile int  s_web_js8_macro = -1;
+/* The macro SHEET's directive, from the browser. A STRING rather than an
+ * index, for the same reason js8_send_directive() takes one: there is no
+ * command table here to fall out of step with the library's. Empty = nothing
+ * pending; only the HTTP task writes it and only the LVGL timer clears it,
+ * which is the same single-writer rule as the flags around it. */
+static char          s_web_js8_cmd[16] = "";
 // Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
 // browser operator could start a CQ but not say which window it went out in.
 // -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
@@ -1981,6 +2013,22 @@ static void t_clock_cb(lv_timer_t *t)
             char msg[80];
             bool ok = (which == 0) ? js8_send_snr(msg, sizeof(msg))
                                    : js8_send_grid(msg, sizeof(msg));
+            web_result_set("%s%s", ok ? "" : "Refused: ", msg);
+        }
+    }
+
+    /* The macro sheet's directives, drained here for the same reason: they
+     * arm. The refusal is reported verbatim, because the browser operator is
+     * the one person who cannot see the radio. */
+    if (s_web_js8_cmd[0]) {
+        char cmd[sizeof(s_web_js8_cmd)];
+        snprintf(cmd, sizeof(cmd), "%s", s_web_js8_cmd);
+        s_web_js8_cmd[0] = '\0';
+        if (!js8_mode_now()) {
+            web_result_set("Not in JS8 mode");
+        } else {
+            char msg[96];
+            bool ok = js8_send_directive(cmd, msg, sizeof(msg));
             web_result_set("%s%s", ok ? "" : "Refused: ", msg);
         }
     }
@@ -3072,6 +3120,18 @@ void ft8_screen_view_request_js8_macro(int which)
 {
     if (which != 0 && which != 1) return;
     s_web_js8_macro = which;
+}
+
+/* ⛔ ONLY RECORDS IT. js8_send_directive() arms, and arming must not happen
+ * on the HTTP task - the same deferral every other TX path in this file uses.
+ * The command is NOT validated here: js8_cmd_from_text() is the authority on
+ * what is sendable, and a second opinion on this task would be a copy of its
+ * table. An unknown word comes back as a refusal from the encoder, which is
+ * the message the browser should show anyway. */
+void ft8_screen_view_request_js8_directive(const char *cmd_text)
+{
+    if (!cmd_text || !cmd_text[0]) return;
+    snprintf(s_web_js8_cmd, sizeof(s_web_js8_cmd), "%s", cmd_text);
 }
 
 /* What became of it, for /api/status. "" until the timer has acted. */
@@ -4414,6 +4474,77 @@ static bool js8_send_grid(char *out, size_t out_len)
     snprintf(out, out_len, "Sending: %s", msg);
     ESP_LOGI(TAG, "JS8 GRID macro: '%s'", msg);
     return true;
+}
+
+/* ⭐ EVERY OTHER DIRECTIVE - GRID? INFO? STATUS? HEARING? HW CPY? QSL AGN?
+ * YES NO 73 RR73. One worker, called by the macro sheet on the Tab5 and by
+ * /api/cmd from the browser, so a refusal reads the same on both.
+ *
+ * ⛔ THE DIRECTIVE IS A STRING, NOT AN INDEX. js8_text_to_frame() parses the
+ * line, and js8_cmd_from_text() accepts ONLY the spelling js8_cmd_text()
+ * hands out. Passing the word through means this function needs no copy of
+ * the command table and cannot disagree with it - and "RR73", which is cmd 21
+ * reached through its own branch rather than through the lookup, needs no
+ * special case here either.
+ *
+ * ⛔ A SELECTION IS REQUIRED, with no fallback to whoever asked. js8_send_snr()
+ * has that fallback because an incoming "SNR?" names the exact question being
+ * answered; "INFO?" or "73" to a station the operator never picked would be a
+ * transmission they did not aim. The sheet only opens on a selected row, so
+ * this refusal should be unreachable from the Tab5 - it is here for the API.
+ *
+ * The round-trip guard inside ft8_tx_build_request_text() is what finally
+ * decides: if the line would go out as something else, nothing is keyed. */
+static bool js8_send_directive(const char *cmd_text, char *out, size_t out_len)
+{
+    if (!cmd_text || !cmd_text[0]) { snprintf(out, out_len, "No directive"); return false; }
+
+    char call[FT8_CALL_MAX_LEN];
+    js8_target_get(call, sizeof(call));
+    if (!call[0]) { snprintf(out, out_len, "Tap a station first"); return false; }
+
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    if (!cfg.my_callsign[0]) {
+        snprintf(out, out_len, "Set your callsign first");
+        return false;
+    }
+
+    /* ⛔ LENGTH IS CHECKED HERE, NOT LEFT TO snprintf. display_text is 32
+     * bytes and two 11-character compound calls plus "QUERY MSGS" is 34, so a
+     * silent truncation is reachable. A truncated directive would still be
+     * refused one layer down by the round-trip guard, but the operator would
+     * read "would go out as ..." instead of being told the names are too long
+     * to carry the command. */
+    char line[48];
+    int n = snprintf(line, sizeof(line), "%s %s %s", call, cfg.my_callsign, cmd_text);
+    if (n < 0 || (size_t)n >= sizeof(((ft8_tx_request_t *)0)->display_text)) {
+        snprintf(out, out_len, "'%s' is too long for %s", cmd_text, call);
+        return false;
+    }
+
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request_text(line, ft8_tx_pick_tone_hz(), &req, err, sizeof(err))) {
+        snprintf(out, out_len, "%s", err[0] ? err : "Could not build that directive");
+        ESP_LOGW(TAG, "JS8 directive refused: '%s' (%s)", line, err);
+        return false;
+    }
+    if (!js8_arm_one(&req, err, sizeof(err))) {
+        snprintf(out, out_len, "%s", err);
+        ESP_LOGW(TAG, "JS8 directive '%s' not armed: %s", line, err);
+        return false;
+    }
+    snprintf(out, out_len, "Armed: %s", line);
+    ESP_LOGI(TAG, "JS8 directive armed: '%s'", line);
+    return true;
+}
+
+/* The macro sheet's buttons land here. Public so js8_macro_modal.c can press
+ * them without a second copy of the compose-and-arm rules. */
+bool ft8_screen_view_js8_directive(const char *cmd_text, char *out, size_t out_len)
+{
+    return js8_send_directive(cmd_text, out, out_len);
 }
 
 static void js8_grid_btn_cb(lv_event_t *e)

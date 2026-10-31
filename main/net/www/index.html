@@ -79,7 +79,7 @@
   /* The list itself. Absolutely positioned against the document rather than
      the heading, because the heading is RELOCATED between the FT8 status line
      and its own grid row, and a child would have moved with it. */
-  #submode-pop {
+  #submode-pop, #macro-pop {
     position: absolute;
     z-index: 50;
     display: flex;
@@ -92,7 +92,7 @@
     border-radius: 6px;
     box-shadow: 0 6px 18px rgba(0,0,0,.6);
   }
-  #submode-pop button {
+  #submode-pop button, #macro-pop button {
     background: transparent;
     border: 0;
     border-radius: 4px;
@@ -102,8 +102,22 @@
     padding: 8px 12px;
     cursor: pointer;
   }
-  #submode-pop button:hover  { background: #262b31; }
+  #submode-pop button:hover, #macro-pop button:hover { background: #262b31; }
   #submode-pop button.active { background: var(--accent); color: #000; }
+  /* The macro sheet: the same panel, laid out as a grid because twelve
+     commands in one column would run off the bottom of the viewport. Three
+     across matches the two behaviour groups without splitting either. */
+  #macro-pop { width: 372px; }
+  #macro-pop .macro-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+  }
+  #macro-pop button { text-align: center; padding: 10px 6px; }
+  /* The queries the far end answers by itself get the accent border; QSO
+     courtesy does not. The split is the same one the Tab5 sheet draws with
+     two button colours. */
+  #macro-pop button.auto { border: 1px solid var(--accent); }
   /* T132: the divider between "transmit and receive on" and "also receive". */
   .submode-pop-hdr {
     margin-top: 6px;
@@ -1336,6 +1350,12 @@
                   title="Send this station a signal report">SNR</button>
           <button type="button" id="js8-grid" class="bot-btn" disabled
                   title="Send this station your grid">GRID</button>
+          <!-- ⭐ The other twelve directed commands. SNR and GRID keep their
+               own buttons because they are not bare directives - SNR carries a
+               number and GRID goes out as free text - and both were proven on
+               air long before this sheet. -->
+          <button type="button" id="js8-cmd" class="bot-btn" disabled
+                  title="Send this station a JS8 command">CMD</button>
           <!-- ⛔ THE SUBMODE PICKER IS NOT HERE. It is the MODE heading
                (#mode-banner), exactly as on the Tab5, where tapping "JS8 NORM"
                opens the list. Operator, 2026-10-15: "Make it like the Tab5 -
@@ -6854,6 +6874,12 @@ function js8BarSync() {
   if (snr) snr.disabled = !(js8Target || js8SnrReq);
   const grid = document.getElementById("js8-grid");
   if (grid) grid.disabled = !js8Target;
+  /* The command sheet needs a SELECTION, like GRID and unlike SNR: "73" or
+     "INFO?" aimed at whoever last asked us something would be a transmission
+     the operator did not aim. */
+  const cmd = document.getElementById("js8-cmd");
+  if (cmd) cmd.disabled = !js8Target;
+  if (!js8Target) js8MacroClose();
 }
 
 /* ⭐ THE SUBMODE, PICKED FROM THE MODE HEADING - the Tab5's arrangement.
@@ -6870,11 +6896,16 @@ function js8BarSync() {
    the old submode, so the refusal is reported rather than second-guessed here
    and the heading repaints from the next poll either way. */
 const JS8_SUBMODES = [
-  { v: 0, label: "Normal - 15 s", short: "JS8 NORM"  },
-  { v: 1, label: "Fast - 10 s",   short: "JS8 FAST"  },
-  { v: 2, label: "Turbo - 6 s",   short: "JS8 TURBO" },
-  { v: 4, label: "Slow - 30 s",   short: "JS8 SLOW"  },
+  { v: 0, label: "Normal - 15 s", short: "JS8 NORM",  secs: 15 },
+  { v: 1, label: "Fast - 10 s",   short: "JS8 FAST",  secs: 10 },
+  { v: 2, label: "Turbo - 6 s",   short: "JS8 TURBO", secs:  6 },
+  { v: 4, label: "Slow - 30 s",   short: "JS8 SLOW",  secs: 30 },
 ];
+/* The seconds appear in the label AND as a number, the same arrangement
+   main/js8_submode.c uses and for the same reason: the macro sheet prints the
+   airtime a press will cost, and parsing it out of a display string would be
+   a second copy of the formatting. One row carries both, so a new submode
+   cannot get one and not the other. */
 
 /* The heading's own text, mirroring the Tab5's mode_label() word for word.
    NORM rather than NORMAL because "JS8 NORMAL" does not fit the glass, and the
@@ -6993,6 +7024,108 @@ for (const [id, act, what] of [["js8-snr", "js8_snr", "signal report"],
     const wr = document.getElementById("ft8-webr");
     if (wr) wr.textContent = "Sending your " + what + " to " + js8Target + "...";
     await sendCmd({ action: act });
+  });
+}
+
+/* ---- the macro sheet -------------------------------------------------
+   ⭐ THE SAME TWELVE THE TAB5 SHOWS, in the same two groups and the same
+   order, because the two surfaces must not word the same command differently.
+   The table is main/ui/js8_macro_modal.c's MACROS[].
+
+   ⛔ THE WORD IS THE MESSAGE. Each button posts its own label, and
+   js8_cmd_from_text() on the device is what decides whether it has a directed
+   form. There is no command list in this file to drift from the library's -
+   an unknown word comes back as the encoder's own refusal.
+
+   ⛔ ONE PRESS, ONE TRANSMISSION. The sheet closes on a press, exactly as
+   the Tab5's does: a press arms one frame for the next slot and a second
+   press would REPLACE it, so a sheet left open invites queueing three
+   commands and transmitting only the last. */
+const JS8_MACROS = [
+  { cmd: "SNR?",     auto: true  },
+  { cmd: "GRID?",    auto: true  },
+  { cmd: "INFO?",    auto: true  },
+  { cmd: "STATUS?",  auto: true  },
+  { cmd: "HEARING?", auto: true  },
+  { cmd: "HW CPY?",  auto: true  },
+  { cmd: "RR73",     auto: false },
+  { cmd: "QSL",      auto: false },
+  { cmd: "73",       auto: false },
+  { cmd: "AGN?",     auto: false },
+  { cmd: "YES",      auto: false },
+  { cmd: "NO",       auto: false },
+];
+
+function js8MacroClose() {
+  const pop = document.getElementById("macro-pop");
+  if (pop) pop.remove();
+}
+
+function js8MacroPopup(anchor) {
+  if (document.getElementById("macro-pop")) { js8MacroClose(); return; }
+  if (!js8Target) return;
+
+  const pop = document.createElement("div");
+  pop.id = "macro-pop";
+
+  /* The airtime, before the radio is keyed - the same thing the Tab5 sheet
+     puts in its header. Every command here is one frame; the slot length is
+     the submode's, which the page already knows from the poll. */
+  const secs = (JS8_SUBMODES.find(x => x.v === lastJs8Submode) || {}).secs || 15;
+  const hdr = document.createElement("div");
+  hdr.className = "submode-pop-hdr";
+  hdr.style.marginTop = "0";
+  hdr.style.borderTop = "0";
+  hdr.textContent = js8Target + " - 1 frame, " + secs + " s";
+  pop.appendChild(hdr);
+
+  for (const grp of [true, false]) {
+    const h = document.createElement("div");
+    h.className = "submode-pop-hdr";
+    h.textContent = grp ? "They answer these automatically" : "QSO courtesy";
+    pop.appendChild(h);
+
+    const grid = document.createElement("div");
+    grid.className = "macro-grid";
+    JS8_MACROS.filter(m => m.auto === grp).forEach(m => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = m.cmd;
+      if (m.auto) b.classList.add("auto");
+      b.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        js8MacroClose();
+        const wr = document.getElementById("ft8-webr");
+        if (wr) wr.textContent = "Sending " + m.cmd + " to " + js8Target + "...";
+        await sendCmd({ action: "js8_cmd", cmd: m.cmd });
+      });
+      grid.appendChild(b);
+    });
+    pop.appendChild(grid);
+  }
+
+  const r = anchor.getBoundingClientRect();
+  /* Right-aligned to the button: the TX bar sits at the right edge of the
+     page, and a popup anchored by its LEFT corner would hang off it. */
+  pop.style.visibility = "hidden";
+  document.body.appendChild(pop);
+  const w = pop.getBoundingClientRect().width;
+  pop.style.left = Math.round(Math.max(4, r.right + window.scrollX - w)) + "px";
+  pop.style.top  = Math.round(r.bottom + window.scrollY + 4) + "px";
+  pop.style.visibility = "";
+}
+
+document.addEventListener("click", (e) => {
+  const pop = document.getElementById("macro-pop");
+  if (pop && !pop.contains(e.target) &&
+      e.target !== document.getElementById("js8-cmd")) js8MacroClose();
+});
+
+{
+  const cb = document.getElementById("js8-cmd");
+  if (cb) cb.addEventListener("click", (e) => {
+    e.stopPropagation();
+    js8MacroPopup(cb);
   });
 }
 

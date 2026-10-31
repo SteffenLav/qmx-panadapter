@@ -2487,6 +2487,21 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         ft8_screen_view_request_js8_macro(0);
     } else if (action && strcmp(action, "js8_grid") == 0) {
         ft8_screen_view_request_js8_macro(1);
+    } else if (action && strcmp(action, "js8_cmd") == 0) {
+        /* {"action":"js8_cmd","cmd":"GRID?"} - the macro sheet's directives,
+         * the same twelve the Tab5 shows and by the same worker.
+         *
+         * ⛔ NOT VALIDATED HERE. js8_cmd_from_text() is the authority on
+         * what has a directed form; a list in this file would be a second
+         * copy of it and the two would drift. An unknown word comes back as
+         * the encoder's own refusal, which is what the page should show. */
+        const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cmd"));
+        if (!cmd || !cmd[0]) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"cmd required\"}");
+            return ESP_OK;
+        }
+        ft8_screen_view_request_js8_directive(cmd);
     } else if (action && strcmp(action, "js8_flush") == 0) {
         /* The browser's Flush. Ryan KK6DZB, 2026-10-14: "No flush button in
          * the webUI?" - the Tab5's JS8 tab bar has had one all along. It
