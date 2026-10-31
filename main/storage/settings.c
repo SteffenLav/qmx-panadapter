@@ -1953,6 +1953,16 @@ void settings_set_cw_sim_en(bool v)
     mark_dirty(DIRTY_CW_SIM);
 }
 
+void settings_get_cw_park(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, out_sz, "%s", s_pending.cw_park);
+    xSemaphoreGive(s_mutex);
+}
+
 void settings_set_cw_page_en(bool v)
 {
     if (!s_ready) return;

@@ -1056,6 +1056,12 @@ uint8_t settings_get_cq_listen_every(void); // narrow, same reason (#409)
 void settings_set_cw_msg(uint8_t idx, const char *text);
 void settings_set_cw_park(const char *park);
 
+// The park reference alone, narrow - the CW page resolves {PARK} from its
+// 500 ms tick and cannot afford a qmx_settings_t local there. Writes "" when
+// none is set. NOT the whole answer to "which reference do we key": a running
+// activation outranks this one - see park_resolve() in cw_screen_view.c.
+void settings_get_cw_park(char *out, size_t out_sz);
+
 // Master switch for the CW page - default OFF. The getter is a NARROW read
 // (mutex + one bool), never settings_load_all(): it is called from the drawer
 // build, from boot restore and from the web API, and a 3.9 kB struct on any of

@@ -181,6 +181,44 @@ void cw_screen_feed_decoded(const char *s, int n)
     }
 }
 
+/* ---- where {PARK} comes from ------------------------------------------------
+ *
+ * TWO FIELDS USED TO MEAN THE SAME FACT and never spoke to each other:
+ * cw_park, typed on this page and kept for ever, and the activation
+ * (act_type + act_ref) that the Activation window sets and that the ADIF
+ * writer already stamps on every QSO as MY_SIG / MY_<PROG>_REF. Start a POTA
+ * activation at OZ-0001 and this page still read "Park: --", with {PARK}
+ * refusing to expand. Operator, 2026-10-31: "Parks: -- will it change
+ * according to what was activated?"
+ *
+ * ⭐ THE RUNNING ACTIVATION WINS, and that is the arguable half of this.
+ * cw_park has no lifecycle - it is whatever was typed last, weeks ago - while
+ * an activation is a deliberate statement of where the operator is RIGHT NOW,
+ * and the log is already being written with it. Keying a stale reference is
+ * the worse failure of the two. cw_park is what answers when nothing is being
+ * activated, which is the case it was written for.
+ *
+ * Narrow accessors only. This is called from the 500 ms tick and from every
+ * memory-label refresh; settings_load_all() here would be a 3.9 kB local on
+ * the LVGL stack several times a second.
+ *
+ * out gets the reference; prog gets the programme word ("POTA", "SOTA", ...)
+ * when it came from an activation, or NULL when it came from cw_park.
+ * Returns false when there is no reference at all. */
+static bool park_resolve(char *out, size_t out_sz, const char **prog)
+{
+    if (prog) *prog = NULL;
+    if (!out || out_sz == 0) return false;
+    out[0] = '\0';
+
+    if (settings_get_activation_ref(out, out_sz)) {
+        if (prog) *prog = settings_activation_sig_name();
+        return true;
+    }
+    settings_get_cw_park(out, out_sz);
+    return out[0] != '\0';
+}
+
 // ---- macro expansion --------------------------------------------------------
 // {MYCALL} and {PARK} expand from settings; everything upper-cased (CW is
 // caseless and the QMX keyer expects plain text). Returns false when a macro
@@ -193,6 +231,7 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
     size_t o = 0;
     *missing = NULL;
     char tgt[16];
+    char park[16];
     cw_qso_get_target(tgt, sizeof(tgt));
     for (const char *p = in; *p && o + 1 < out_sz; ) {
         const char *val = NULL;
@@ -200,8 +239,15 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
             if (!s.my_callsign[0]) { *missing = "callsign (Identity)"; return false; }
             val = s.my_callsign; p += 8;
         } else if (strncasecmp(p, "{PARK}", 6) == 0) {
-            if (!s.cw_park[0]) { *missing = "park (tap Park)"; return false; }
-            val = s.cw_park; p += 6;
+            /* The activation's reference if one is running, else cw_park -
+             * see park_resolve(). The hint names BOTH ways to set it, because
+             * either one fixes a refusal and the operator may well be about
+             * to start an activation anyway. */
+            if (!park_resolve(park, sizeof(park), NULL)) {
+                *missing = "park (tap Park, or start an activation)";
+                return false;
+            }
+            val = park; p += 6;
         } else if (strncasecmp(p, "{CALL}", 6) == 0) {
             if (!tgt[0]) { *missing = "station (tap the card)"; return false; }
             val = tgt; p += 6;
@@ -231,11 +277,23 @@ static void refresh_mem_labels(void)
             txt = exp;
         lv_label_set_text(s_lbl_mem[i], txt);
     }
-    // ASCII fallback only - an em-dash is outside the compiled montserrat
-    // glyph range and renders as a tofu box (hardware-observed 2026-08-01).
-    if (s_lbl_park)
-        lv_label_set_text_fmt(s_lbl_park, "Park: %s",
-                              s.cw_park[0] ? s.cw_park : "--");
+    /* ASCII fallback only - an em-dash is outside the compiled montserrat
+     * glyph range and renders as a tofu box (hardware-observed 2026-08-01).
+     *
+     * ⛔ NO "Park: " PREFIX ON THE INHERITED FORM, and the reason is pixels,
+     * not taste. The button is PANE_W-20 = 300 px and the label is
+     * montserrat_22; act_ref holds up to 15 characters and the longest
+     * programme word is WWBOTA, so "Park: DL/BE-001 (WWBOTA)" is about 30
+     * characters - past the button at this font. "WWBOTA DL/BE-001" is 16 and
+     * fits with room, and it is how these references are written anyway. The
+     * pane cannot widen and the font does not shrink. */
+    if (s_lbl_park) {
+        char ref[16];
+        const char *prog = NULL;
+        if (!park_resolve(ref, sizeof(ref), &prog)) lv_label_set_text(s_lbl_park, "Park: --");
+        else if (prog)  lv_label_set_text_fmt(s_lbl_park, "%s %s", prog, ref);
+        else            lv_label_set_text_fmt(s_lbl_park, "Park: %s", ref);
+    }
 }
 
 // ---- editor modal ------------------------------------------------------------
@@ -416,6 +474,7 @@ static void edit_open(int slot)
 // the six-line editor with five dead rows (operator, 2026-08-02).
 static lv_obj_t *s_park_modal = NULL;
 static lv_obj_t *s_park_ta    = NULL;
+static lv_obj_t *s_park_note  = NULL;
 static lv_obj_t *s_park_kb    = NULL;
 
 static void park_close(void)
@@ -486,6 +545,17 @@ static void park_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    /* ⛔ SAY WHEN THIS FIELD IS NOT THE ONE BEING SENT. A running activation
+     * outranks it (see park_resolve), so without this line the operator
+     * types a reference, saves, and watches the Park row keep showing the
+     * other one - which reads as the save having failed. Shown only while an
+     * activation is running; it is the normal case that needs no words. */
+    s_park_note = lv_label_create(panel);
+    lv_obj_set_style_text_color(s_park_note, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_park_note, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_park_note, LV_ALIGN_TOP_RIGHT, 0, 6);
+    lv_obj_add_flag(s_park_note, LV_OBJ_FLAG_HIDDEN);
+
     s_park_ta = lv_textarea_create(panel);
     lv_obj_set_size(s_park_ta, 320, 56);
     lv_obj_align(s_park_ta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
@@ -530,9 +600,19 @@ static void park_build(void)
 static void park_edit_open(void)
 {
     park_build();
-    qmx_settings_t s;
-    settings_load_all(&s);
-    lv_textarea_set_text(s_park_ta, s.cw_park);
+    char cur[16];
+    settings_get_cw_park(cur, sizeof(cur));
+    lv_textarea_set_text(s_park_ta, cur);
+    if (s_park_note) {
+        char ref[16];
+        if (settings_get_activation_ref(ref, sizeof(ref))) {
+            lv_label_set_text_fmt(s_park_note, "%s %s is active - it wins",
+                                  settings_activation_sig_name(), ref);
+            lv_obj_clear_flag(s_park_note, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_park_note, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     lv_obj_remove_state(s_park_ta, LV_STATE_FOCUSED);
     lv_obj_add_flag(s_park_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_park_modal, LV_OBJ_FLAG_HIDDEN);
@@ -890,6 +970,31 @@ static void tick_cb(lv_timer_t *t)
 
     int wpm = cat_get_keyer_wpm();
     if (wpm > 0 && s_lbl_wpm) lv_label_set_text_fmt(s_lbl_wpm, "%d WPM", wpm);
+
+    /* ⛔ THE ACTIVATION CAN CHANGE WHILE THIS PAGE IS UP. It is started and
+     * stopped from the Activation window and over /api/cmd, neither of which
+     * knows this page exists, and refresh_mem_labels() only ran on page entry
+     * and after an edit here - so the Park row and every memory preview
+     * carrying {PARK} would have shown the pre-activation answer until the
+     * page was left and re-entered.
+     *
+     * Guarded on a CHANGE, not called every tick: refresh_mem_labels() does a
+     * settings_load_all() and six macro expansions, and running that twice a
+     * second for ever is not what this costs. park_resolve() is narrow, so
+     * the check itself is a mutex and a string compare. */
+    {
+        static char s_park_seen[24];
+        char ref[16];
+        const char *prog = NULL;
+        char now[24];
+        if (!park_resolve(ref, sizeof(ref), &prog)) snprintf(now, sizeof(now), "-");
+        else snprintf(now, sizeof(now), "%s/%s", prog ? prog : "", ref);
+        if (strcmp(now, s_park_seen) != 0) {
+            snprintf(s_park_seen, sizeof(s_park_seen), "%s", now);
+            refresh_mem_labels();
+            refresh_next_label();
+        }
+    }
 
     // ESM/card refresh + the phantom practice pump (CW sim only).
     {
