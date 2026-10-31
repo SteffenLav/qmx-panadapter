@@ -3450,7 +3450,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
             if (n_decoded > 0 || n_js8ev > 0) {
                 s_stuck_fires = 0;
                 s_stuck_told  = false;
-                s_stuck_note[0] = ' ';
+                s_stuck_note[0] = '\0';
             }
         }
     }

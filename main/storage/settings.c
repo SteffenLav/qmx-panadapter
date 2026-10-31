@@ -3326,7 +3326,7 @@ void settings_get_wifi_static(char ip[16], char mask[16], char gw[16], char dns[
 void settings_get_my_grid(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0) return;
-    out[0] = ' ';
+    out[0] = '\0';
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     snprintf(out, out_sz, "%s", s_pending.my_grid);
