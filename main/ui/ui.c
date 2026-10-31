@@ -5635,20 +5635,50 @@ static void rit_pill_cb(lv_event_t *e)
 // so you run an offset for them and want it gone - and then back, unchanged -
 // as the turn passes round. Clearing and re-dialling it every time is the thing
 // he was asking to avoid.
-static void rit_pill_long_cb(lv_event_t *e)
+/* ⭐ THE PARK/RESTORE ITSELF, WITH NO LVGL IN IT, so the browser can reach
+ * it too (Ralph DL1HR's class of gap: a feature that exists on one surface
+ * only). The long press was the ONLY way to park an offset, and a long press
+ * is not a thing a web page has.
+ *
+ * ⛔ NOTHING HERE MAY TOUCH A WIDGET. /api/cmd runs on the httpd task, and
+ * an LVGL call from there is the display-lock inversion this project has
+ * already paid for once. The pill redraws itself on rit_pill_tick_cb(), so
+ * the web path needs no repaint at all; the Tab5 caller below syncs straight
+ * away only because a button press should not wait for the next tick. */
+/* What is parked right now, 0 for nothing. /api/status sends it so the web
+ * RIT control can offer "Restore +120" instead of a button whose effect the
+ * operator has to remember. Read-only and lock-free: one int, written only
+ * from ui_rit_park_toggle(). */
+int ui_rit_parked_hz(void)
 {
-    (void)e;
+    return s_rit_stash_hz;
+}
+
+ui_rit_park_t ui_rit_park_toggle(int *hz)
+{
     int rit_now = cat_get_rit_hz();
+    if (hz) *hz = 0;
 
     if (rit_now != 0) {
         s_rit_stash_hz = rit_now;      // park it and stand down
         cat_request_rit_hz(0);
-        ESP_LOGI(TAG, "RIT: parked %+d Hz (long press) - long press again to restore",
-                 s_rit_stash_hz);
-    } else if (s_rit_stash_hz != 0) {
+        ESP_LOGI(TAG, "RIT: parked %+d Hz - park again to restore", s_rit_stash_hz);
+        if (hz) *hz = s_rit_stash_hz;
+        return UI_RIT_PARKED;
+    }
+    if (s_rit_stash_hz != 0) {
         cat_request_rit_hz(s_rit_stash_hz);
-        ESP_LOGI(TAG, "RIT: restored %+d Hz (long press)", s_rit_stash_hz);
-    } else {
+        ESP_LOGI(TAG, "RIT: restored %+d Hz", s_rit_stash_hz);
+        if (hz) *hz = s_rit_stash_hz;
+        return UI_RIT_RESTORED;
+    }
+    return UI_RIT_NOTHING;
+}
+
+static void rit_pill_long_cb(lv_event_t *e)
+{
+    (void)e;
+    if (ui_rit_park_toggle(NULL) == UI_RIT_NOTHING) {
         // Nothing engaged and nothing parked: say so rather than doing nothing
         // silently, since a long press that appears inert reads as a dead button.
         ui_toast("No RIT offset to restore");

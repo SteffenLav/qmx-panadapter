@@ -1208,12 +1208,56 @@
         <span class="lab">Zoom</span><span id="zoom">x1.0</span><span class="arr">▾</span>
         <div class="dropdown" id="dd-zoom"></div>
       </div>
+      <!-- Zero-beat / auto-tune. The Tab5 does this with a LONG PRESS on the BW
+           label, which is not a gesture a browser has - so on this surface it
+           is its own pill, next to BW where the Tab5 keeps it.
+           ⛔ ONE BUTTON FOR BOTH ESTIMATORS, because the device dispatches:
+           CW zero-beats a carrier, USB/LSB snaps to the far station's filter
+           edge (T90). The page must NOT read the mode and choose - that would
+           be a third model that can disagree with the two that already decide.
+           Asked for by Ralph DL1HR, who had it on the Tab5 and not here. -->
+      <div class="pill clickable" id="pill-zerobeat" onclick="zeroBeatClick()"
+           title="Put the dial on the signal: zero-beat in CW, snap to the station's filter edge in SSB. One shot - it never runs by itself, and it cannot transmit.">
+        <span class="lab">Tune</span><span id="zerobeat">&#9678;</span>
+      </div>
       <!-- RIT: arms click-to-RIT, and shows the live offset. Not a dropdown - it is
            a mode toggle, and the mode has to be readable at a glance because it
            changes what clicking the spectrum does. -->
       <div class="pill clickable" id="pill-rit" onclick="ritPillClick()"
            title="Receive off the dial without moving transmit. Click to arm, then click a signal on the spectrum to listen there. Click again to clear.">
         <span class="lab">RIT</span><span id="rit">off</span>
+      </div>
+      <!-- Park / restore, shown only when there is something to park or to put
+           back. The Tab5 has it on a long press of the RIT pill; Roy KI0ER's
+           round robin is the case - one station off frequency, the offset
+           wanted and unwanted as the turn passes round, and CLEARING it is a
+           different intention that throws the value away. Separate from the
+           pill above on purpose: that one clears, this one remembers, and a
+           control that did both depending on how long you held it is the
+           gesture a browser cannot express anyway. -->
+      <div class="pill clickable" id="pill-ritpark" style="display:none" onclick="ritParkClick()"
+           title="Switch the RIT offset off without losing it - click again to put it straight back.">
+        <span class="lab" id="ritpark-lab">Park</span><span id="ritpark">--</span>
+      </div>
+      <!-- CW keyer speed, shown only in CW. Ralph DL1HR: it was reachable only
+           through the Settings panel, "too complicate to quickly act when
+           someone calls me" - which is the whole use case, a slower station
+           answering your CQ. One click from the band it is being used on.
+           ⚠ NOT the "CW ~NNwpm" figure in the decode header: that is the speed
+           of the station being HEARD. Two quantities, one unit, and they must
+           never share a label. -->
+      <div class="pill clickable" id="pill-keyer" style="display:none" onclick="openKeyer()"
+           title="Your keyer speed, sent to the radio and read back. 0 is Straight Key mode."
+           ><span class="lab">Keyer</span><span id="keyer">--</span><span class="arr">▾</span>
+        <div class="dropdown" id="dd-keyer"></div>
+      </div>
+      <!-- Output power, per band. Shown only where the band has been through
+           Calibrate Power, because the levels ARE that sweep's results - see
+           the out_power action for why a free-text wattage is refused. -->
+      <div class="pill clickable" id="pill-outpwr" style="display:none" onclick="openOutPwr()"
+           title="Transmit power on this band, from its power calibration."
+           ><span class="lab">PWR</span><span id="outpwr">--</span><span class="arr">▾</span>
+        <div class="dropdown" id="dd-outpwr"></div>
       </div>
       <!-- Activation, shown ONLY while one is running. The hazard is forgetting, so
            it says so without being asked - the same job the Tab5's bottom bar does. -->
@@ -7923,6 +7967,19 @@ async function tick() {
     if (Array.isArray(s.zoom_steps) && s.zoom_steps.length) lastZoomSteps = s.zoom_steps;
     lastRitHz      = s.rit_hz     || 0;
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
+    /* All three are device state that the TAB5 can also move, so they are read
+       every poll rather than remembered from this page's last click. A browser
+       that trusted its own memory here would show a keyer speed the operator
+       had since changed on the glass. */
+    lastRitParkedHz = (typeof s.rit_parked_hz === "number") ? s.rit_parked_hz : 0;
+    lastKeyerWpm    = (typeof s.keyer_wpm === "number") ? s.keyer_wpm : -1;
+    updateRitParkPill();
+    /* ⚠ The keyer pill is NOT updated here. It is shown only in CW, and
+       lastMode is not assigned until further down this same function - so a
+       call at this point would decide visibility from the PREVIOUS poll's
+       mode and leave the control one second behind every mode change. It runs
+       beside that assignment instead. Same for the power pill, which keys off
+       the band string set in the same block. */
     lastAct        = s.activation || {type:0, ref:'', qsos:0};
     updateActPill();
     /* Show or hide the WSPR card from the device's own flag. */
@@ -7999,6 +8056,14 @@ async function tick() {
         pb.style.borderColor= on ? "#ffc02a" : "";
       } }
     lastMode       = s.mode        || "USB";
+    updateKeyerPill();   // CW-only, so it has to follow the mode it reads
+    /* ⚠ THIS REPAINTS, IT DOES NOT RE-READ. The ladder and the current target
+       are fetched by refreshOutPwr(), which runs on a band change and after
+       our own write - not every poll, because it reads the band's whole
+       calibration table. So a target changed on the TAB5 shows here on the
+       next band change or page load, not within the second. Worth knowing
+       before anyone reads a stale wattage as a device fault. */
+    updateOutPwrPill();
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
     lastIfCalHz    = s.if_cal_hz   || 0;
@@ -8449,9 +8514,19 @@ async function tick() {
           /* Only Re-send and Cancel mean anything once the exchange is
              closed: RR73 and 73 build from the current exchange, which no
              longer exists, and would answer "No active QSO exchange". */
+          /* ⛔ THIS LABEL MUST NOT NAME A CAUSE IT CANNOT ESTABLISH. It read
+             "<call> has not acknowledged:", which is a claim about the other
+             station, taken from a flag that only says "a final went out and
+             the re-send window is open". Randy N4OPI, 2026-10-31, had it
+             sitting under a green "WA2HMM QSO complete" for five minutes:
+             "I still see this conflicting information after a successful
+             exchange." Two boxes asserting opposite things about the same
+             contact, and only one of them was entitled to.
+             What IS known is on our side of the contact: we are still
+             listening, and we will re-send if they ask. Say that. */
           const lbl = ov.querySelector(".ovr-label");
           if (lbl) lbl.textContent = (!live && fw)
-            ? (fw.call + " has not acknowledged:") : "Mid-QSO:";
+            ? ("Still listening for " + fw.call + ":") : "Mid-QSO:";
           /* Skip needs a live exchange for the same reason RR73 and 73 do:
              there is no station to give up on once it has closed, and the
              final-watch case is a station we are still TRYING to finish
@@ -8530,6 +8605,13 @@ async function tick() {
     document.getElementById("vfo").textContent  = fmtHz(lastFreqHz);
     document.getElementById("mode").textContent = s.mode || "--";
     document.getElementById("band").textContent = s.band || "--";
+    /* The band the OUTPUT POWER ladder belongs to. Its levels are that band's
+       own calibration sweep, so a band change invalidates them - re-fetch
+       rather than leave the previous band's watts on the pill. */
+    if ((s.band || "") !== lastBandStr) {
+      lastBandStr = s.band || "";
+      refreshOutPwr();
+    }
     document.getElementById("bw").textContent   = lastPassbandHz ? (lastPassbandHz + " Hz") : "--";
     document.getElementById("zoom").textContent = "x" + lastZoom.toFixed(1);
 
@@ -9697,6 +9779,174 @@ function updateRitPill() {
     val.textContent = "off";
     pill.style.color = "";
   }
+}
+
+/* =====================================================================
+   The four controls the Tab5 had and this page did not (Ralph DL1HR,
+   2026-10-31: "The zero beat function works great - is it possible to add
+   this to the web UI as well?" and, on the keyer, "getting there via the
+   settings menu is - at least for me - too complicate to quickly act when
+   someone calls me").
+
+   ⛔ THE DEVICE DECIDES, THE PAGE DRAWS. Every one of these reads its state
+   out of /api/status each poll and sends a command for the change. None of
+   them keeps a local idea of the radio: all four exist on the Tab5 too, and
+   a second opinion here is how two surfaces start disagreeing. */
+let lastRitParkedHz = 0;
+let lastKeyerWpm    = -1;
+let lastBandStr     = "";     /* the band the ladder below belongs to */
+let outPwrInfo      = null;   /* the calibrated ladder, fetched on demand */
+
+/* Say it in the control that was pressed, for a few seconds. This page has no
+   toast of its own, and the pattern it already uses for a refusal is to put
+   the device's own words where the button was (see the screen-to links). */
+function pillSay(id, msg, ms) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const was = el.textContent;
+  el.textContent = msg;
+  setTimeout(() => { if (el.textContent === msg) el.textContent = was; }, ms || 3000);
+}
+
+/* The speeds offered. 0 is FIRST and is a REAL value, not a placeholder: the
+   QMX operating manual (4.5) makes speed 0 Straight Key mode whatever the
+   keyer mode says, which is the quick way to key down for a tune-up. The
+   radio clamps nothing and neither do we - the span below is only what the
+   list offers, and a radio set outside it still reports its true speed. */
+const KEYER_WPM_LIST = [0, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40];
+
+async function zeroBeatClick() {
+  const val = document.getElementById("zerobeat");
+  if (!val) return;
+  const was = val.textContent;
+  val.textContent = "...";
+  const r = await sendCmd({ action: "cw_tune" });
+  /* The device answers with what it DID, including which estimator ran and
+     whether it is still listening - say that rather than a bare tick, because
+     a tuning aid that silently does nothing reads as a dead button (the same
+     reasoning as the Tab5's toast). */
+  let msg = "?";
+  if (!r) msg = "no reply";
+  else if (r.ok && r.listening) msg = "listening";
+  else if (r.ok && typeof r.moved_hz === "number")
+    msg = r.moved_hz ? ((r.moved_hz > 0 ? "+" : "") + r.moved_hz + " Hz") : "on peak";
+  else if (r.ok) msg = "done";
+  else msg = r.error || "refused";
+  val.textContent = msg;
+  setTimeout(() => { val.textContent = was; }, 3000);
+}
+
+function updateRitParkPill() {
+  const pill = document.getElementById("pill-ritpark");
+  if (!pill) return;
+  /* Visible only when there is something to do: an engaged offset to park, or
+     a parked one to put back. A control that says "nothing" all day trains
+     you to stop reading it - the same rule the activation pill follows. */
+  const canPark    = !!lastRitHz;
+  const canRestore = !canPark && !!lastRitParkedHz;
+  pill.style.display = (canPark || canRestore) ? "" : "none";
+  if (!canPark && !canRestore) return;
+  const hz = canPark ? lastRitHz : lastRitParkedHz;
+  document.getElementById("ritpark-lab").textContent = canPark ? "Park" : "Restore";
+  document.getElementById("ritpark").textContent = (hz > 0 ? "+" : "") + hz;
+  pill.style.color = canRestore ? "#ffa040" : "";
+}
+
+async function ritParkClick() {
+  await sendCmd({ action: "rit_park" });
+  /* No optimistic paint: the park moves RIT over CAT, and the next status
+     poll is the only thing that knows whether the radio took it. */
+}
+
+function updateKeyerPill() {
+  const pill = document.getElementById("pill-keyer");
+  if (!pill) return;
+  const m = (lastMode || "").toUpperCase();
+  pill.style.display = (m.indexOf("CW") >= 0) ? "" : "none";
+  if (m.indexOf("CW") < 0) return;
+  /* -1 means the radio has never answered a KS query - usually no CAT link.
+     "--" says that; rendering -1 as a speed would be a number that is not one. */
+  document.getElementById("keyer").textContent =
+    (lastKeyerWpm < 0) ? "--" : (lastKeyerWpm === 0 ? "straight key" : lastKeyerWpm + " wpm");
+}
+
+function buildKeyerDropdown() {
+  const dd = document.getElementById("dd-keyer");
+  if (!dd) return;
+  dd.innerHTML = "";
+  KEYER_WPM_LIST.forEach(w => {
+    const btn = document.createElement("button");
+    btn.textContent = (w === 0) ? "0 - straight key" : (w + " wpm");
+    if (w === lastKeyerWpm) btn.classList.add("active");
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      closeAllDropdowns();
+      /* Through /api/settings, which is where the keyer write already lives:
+         it sends KS over CAT and reads the speed back, so what the pill shows
+         next poll is what the RADIO accepted, not what was asked for. */
+      await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyer_wpm: w })
+      });
+    };
+    dd.appendChild(btn);
+  });
+}
+
+/* Built on open, not once at load: the "active" mark has to land on whatever
+   the radio reports NOW, and the Tab5's own slider can have moved it since. */
+function openKeyer() {
+  buildKeyerDropdown();
+  toggleDropdown("keyer");
+}
+
+function updateOutPwrPill() {
+  const pill = document.getElementById("pill-outpwr");
+  if (!pill) return;
+  /* Hidden until the ladder has been fetched once AND this band turned out to
+     be calibrated. An uncalibrated band has no levels to offer, and offering
+     a watts box there would invite exactly the free-text wattage the device
+     refuses. */
+  const ok = outPwrInfo && outPwrInfo.calibrated && outPwrInfo.band === lastBandStr;
+  pill.style.display = ok ? "" : "none";
+  if (!ok) return;
+  const t = outPwrInfo.target_x100;
+  document.getElementById("outpwr").textContent =
+    (typeof t === "number") ? ((t / 100).toFixed(2).replace(/0$/, "") + " W") : "--";
+}
+
+async function refreshOutPwr() {
+  /* On demand only - it reads this band's whole calibration table, which is
+     not something to do at 1 Hz. Called when the pill is opened and when the
+     band changes. */
+  outPwrInfo = await sendCmd({ action: "out_power" });
+  updateOutPwrPill();
+}
+
+async function openOutPwr() {
+  await refreshOutPwr();
+  const dd = document.getElementById("dd-outpwr");
+  if (!dd || !outPwrInfo || !outPwrInfo.calibrated) return;
+  dd.innerHTML = "";
+  (outPwrInfo.watts_x100 || []).forEach(w => {
+    const btn = document.createElement("button");
+    btn.textContent = (w / 100).toFixed(2).replace(/0$/, "") + " W";
+    if (w === outPwrInfo.target_x100) btn.classList.add("active");
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      closeAllDropdowns();
+      const r = await sendCmd({ action: "out_power", watts_x100: w });
+      /* A deferred write is a success that did only half the job, and the
+         device says which - pass it on rather than letting the pill imply the
+         PA moved while WSPR or a burst still owns it. */
+      if (r && r.ok && r.deferred) pillSay("outpwr", r.note || "stored, not applied", 4000);
+      else if (r && !r.ok) pillSay("outpwr", r.error || "refused", 4000);
+      await refreshOutPwr();
+    };
+    dd.appendChild(btn);
+  });
+  toggleDropdown("outpwr");
 }
 
 /* =====================================================================

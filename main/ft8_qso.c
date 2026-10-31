@@ -2537,11 +2537,29 @@ static bool try_start_pileup_pounce(void)
     return true;
 }
 
-// Is the station we just finished with STILL asking us for the final? True only
-// for a message addressed to us whose third field is a report or R-report -
-// RR73/73/RRR all mean they heard us and are done, and anything else (a grid, a
-// CQ) isn't them chasing this QSO.
-static bool partner_still_awaiting_final(int64_t slot_sec, const char *call)
+/* ⛔ SILENCE AND ACKNOWLEDGEMENT ARE NOT THE SAME ANSWER, and a bool could
+ * not tell them apart. Randy N4OPI, 2026-10-31: "WA2HMM QSO Complete and
+ * WA2HMM has not acknowledged ... It stayed on screen for about 5 minutes."
+ * 5 minutes is FINAL_RESEND_WINDOW_SEC exactly - the watch was running its
+ * full term on a contact that had closed, because the ONLY things that ever
+ * cleared a slot were the window expiring, a failed build, and the operator.
+ * Nothing cleared it on the evidence that they HEARD us.
+ *
+ * A false return used to mean both "they said nothing this slot" (the common
+ * case, and no reason to stop watching) and "they sent RR73/73/RRR" (decisive:
+ * the contact is acknowledged and there is nothing left to re-send). Only the
+ * second may close the watch, so the two have to be distinguishable. */
+typedef enum {
+    PARTNER_SILENT = 0,   /* nothing from them this slot - keep watching */
+    PARTNER_ASKING,       /* a report or R-report: they never got our final */
+    PARTNER_ACKED,        /* RR73 / 73 / RRR: they heard us, the watch is over */
+} partner_answer_t;
+
+// What did the station we just finished with say to us THIS slot? Only a
+// message addressed to us counts, and only its third field decides: a report
+// or R-report means they are still chasing this QSO, RR73/73/RRR means they
+// heard us, and anything else (a grid, a CQ) is not about this QSO at all.
+static partner_answer_t partner_answer_this_slot(int64_t slot_sec, const char *call)
 {
     ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -2549,8 +2567,12 @@ static bool partner_still_awaiting_final(int64_t slot_sec, const char *call)
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
-    bool asking = false;
-    for (int i = 0; i < n && !asking; i++) {
+    /* ACKED wins over ASKING if both somehow appear: the acknowledgement is
+     * the later fact in the exchange, and acting on it only ever stops us
+     * transmitting. So the loop runs to the end rather than breaking on the
+     * first hit. */
+    partner_answer_t ans = PARTNER_SILENT;
+    for (int i = 0; i < n; i++) {
         if (strcmp(snap[i].call, call) != 0) continue;
         if (snap[i].last_utc != slot_sec) continue;
         char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
@@ -2558,18 +2580,21 @@ static bool partner_still_awaiting_final(int64_t slot_sec, const char *call)
                         rest, sizeof(rest))) continue;
         if (strcmp(tok1, s_my_call) != 0) continue;          // not addressed to us
         if (!strcmp(rest, "RR73") || !strcmp(rest, "73") ||
-            !strcmp(rest, "RRR")) continue;                  // they DID hear us
+            !strcmp(rest, "RRR")) { ans = PARTNER_ACKED; continue; }  // they DID hear us
         // A report ("-10") or a roger'd report ("R-10") - they're still waiting.
         const char *p = (rest[0] == 'R') ? rest + 1 : rest;
-        if (*p == '+' || *p == '-') asking = true;
+        if ((*p == '+' || *p == '-') && ans != PARTNER_ACKED) ans = PARTNER_ASKING;
     }
     free(snap);
-    return asking;
+    return ans;
 }
 
 // Is tracked slot idx still within its window and still being asked-for this
-// slot? Clears the slot itself if the window has closed - same "stop watching
-// for them" behaviour the old single-slot code had, just per-entry now.
+// slot? Clears the slot itself when the window has closed - and now also when
+// the partner acknowledges, which is the only other thing that can END a watch
+// on evidence rather than on a clock. Silence does NOT clear it: a partner who
+// goes quiet for two slots and then repeats the report is exactly who the
+// watch exists for (Don WB0LQW).
 static bool final_track_still_asking(int64_t slot_sec, int idx)
 {
     final_track_t *f = &s_final[idx];
@@ -2579,13 +2604,19 @@ static bool final_track_still_asking(int64_t slot_sec, int idx)
         f->call[0] = '\0';            // window closed - stop watching for them
         return false;
     }
-    return partner_still_awaiting_final(slot_sec, f->call);
+    partner_answer_t ans = partner_answer_this_slot(slot_sec, f->call);
+    if (ans == PARTNER_ACKED) {
+        ESP_LOGI(TAG, "final watch on %s closed - they acknowledged", f->call);
+        f->call[0] = '\0';
+        return false;
+    }
+    return ans == PARTNER_ASKING;
 }
 
 // Re-send the final for tracked slot idx. Caller has already confirmed this
 // slot is still being asked-for THIS RX slot (final_track_still_asking()) -
 // this only re-checks the resend budget and TX availability, so the decode
-// scan in partner_still_awaiting_final() runs once per tracked partner per
+// scan in partner_answer_this_slot() runs once per tracked partner per
 // slot, not twice. Does NOT touch s_state or s_cur_req: it builds and arms one
 // message directly, so whatever we were doing (idle, or an armed CQ) resumes
 // by itself on the next on_tx_complete() re-arm. Nothing is logged - the QSO
@@ -2999,8 +3030,35 @@ static void finish_wait_done(const char *target)
                     s_final_sent_kind = FT8_TX_KIND_73;
                     snprintf(s_final_sent_extra, sizeof(s_final_sent_extra), "73");
                 }
-                final_track_add(target, s_freq_hz,
-                                 s_final_sent_kind, s_final_sent_extra);
+                /* ⭐ ONLY A FINAL THAT IS STILL OWED AN ANSWER IS WORTH
+                 * WATCHING. The watch exists for Don WB0LQW's case: we sent
+                 * RR73, they never decoded it, and they keep repeating the
+                 * report. That is the RR73 final, and its closing 73 is
+                 * genuinely outstanding.
+                 *
+                 * A plain "73" final is the other side of the same exchange,
+                 * and reaching it PROVES they heard us: every path into
+                 * WAIT_DONE that arms a 73 is entered by decoding their
+                 * RR73/73/RRR (see the WAIT_ROGER and WAIT_RR73 branches in
+                 * scan_for_response - both send_next(..., "73", WAIT_DONE)
+                 * calls sit behind got_rr73/got_73/got_rrr). So the
+                 * acknowledgement is already in hand at this line, and arming
+                 * a watch here put every ordinary QSO under "has not
+                 * acknowledged" for the full 300 s (Randy N4OPI).
+                 *
+                 * ⚠ The test is the EXTRA, not the kind: both finals are
+                 * FT8_TX_KIND_73 and only extra_field tells them apart, and
+                 * the hand-armed close at ft8_qso_notify_manual_final() sets the kind
+                 * to 73 while passing the operator's own RR73 through. */
+                bool still_owed = (strcmp(s_final_sent_extra, "RR73") == 0 ||
+                                   strcmp(s_final_sent_extra, "RRR")  == 0);
+                if (still_owed) {
+                    final_track_add(target, s_freq_hz,
+                                     s_final_sent_kind, s_final_sent_extra);
+                } else {
+                    ESP_LOGI(TAG, "%s acknowledged before our %s - no final watch",
+                             target, s_final_sent_extra);
+                }
             }
             // Consumed on BOTH branches. The hound branch tracks nothing, but
             // leaving the flag set would hand the next contact this one's

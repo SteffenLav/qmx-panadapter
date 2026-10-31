@@ -49,6 +49,8 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "ui/activation_modal.h" // activation_stop - ONE stop for Tab5 and web
+#include "ui/power_cal_modal.h"  // power_cal_list_watts - the SAME calibrated
+                                 // ladder the Tab5 slider walks (out_power)
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
 #include "adif/adif_check.h"  // #263 "check my log" - completeness pass
 #include "util/dma_owners.h"
@@ -789,6 +791,23 @@ static esp_err_t status_handler(httpd_req_t *req)
         }
     }
 
+    /* @ST THE TWO FIELDS THE NEW TOP-BAR CONTROLS RUN ON (Ralph DL1HR).
+     *
+     * keyer_wpm is the CACHED read-back, and the cache is the whole point:
+     * @NO DO NOT CALL cat_query_keyer_wpm() HERE. This handler runs on every
+     * status poll, and hanging the query off a per-poll path is exactly the
+     * mistake made when the keyer control was first built - a KS query every
+     * 200 ms, for ever. The value is refreshed on the CAT link-up edge and
+     * again after every write, which is all a 1 Hz pill needs.
+     *
+     * -1 until the radio has ever answered; the page shows "--" for that and
+     * must not render it as a speed.
+     *
+     * rit_parked_hz is 0 unless an offset is standing by, and it is what lets
+     * the web say "Restore +120" rather than offering a button whose effect
+     * the operator has to remember. */
+    cJSON_AddNumberToObject(root, "keyer_wpm",    cat_get_keyer_wpm());
+    cJSON_AddNumberToObject(root, "rit_parked_hz", ui_rit_parked_hz());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     /* Three pages now. Asked of ui_mode rather than of the FT8 view, so a new
      * page cannot be reported as "panadapter" just because FT8 is not up. */
@@ -1874,16 +1893,168 @@ static esp_err_t cmd_handler(httpd_req_t *req)
     } else if (action && strcmp(action, "cw_tune") == 0) {
         /* CW-Tune (A4 step 2): put the dial on the CW signal nearest to it.
          * One shot per call - see the note in ui.h for why nothing here runs
-         * on its own. RX only; it cannot key the radio. */
+         * on its own. RX only; it cannot key the radio.
+         *
+         * ⭐ ONE ACTION, TWO ESTIMATORS, EXACTLY AS THE TAB5 GESTURE DOES IT.
+         * The Tab5's long press on the BW label (bw_label_long_cb) means "put
+         * the dial on the signal": a zero-beat in CW, T90's filter-edge snap
+         * in USB/LSB. This endpoint only ever ran the CW half, so a web
+         * operator in SSB got "not in CW/CW-R" and the SSB estimator had no
+         * remote caller at all. Ralph DL1HR asked for the gesture on the web;
+         * half of it would have been the wrong thing to give him.
+         *
+         * ⛔ THE DISPATCH IS THE CW ESTIMATOR'S OWN REFUSAL, not a mode read
+         * here - the same rule bw_label_long_cb records. Reading the mode in
+         * this file would be a third model that can disagree with both.
+         *
+         * ⚠ The SSB half is ASYNCHRONOUS: ui_sb_tune_start() opens a 4 s vote
+         * window and sb_tune_tick() moves the dial (or not) when it closes.
+         * LISTENING is therefore a success, not an error - the page says so
+         * and the dial speaks for itself. CW's own LISTENING (up to 8 s) is
+         * the same thing for the same reason. */
         int32_t moved = 0;
         ui_cw_tune_t r = ui_cw_tune_to_peak(&moved);
         cJSON_Delete(root);
-        char body[96];
+        char body[160];
         if (r == UI_CW_TUNE_OK)
-            snprintf(body, sizeof(body), "{\"ok\":true,\"moved_hz\":%d}", (int)moved);
-        else
             snprintf(body, sizeof(body),
-                     "{\"ok\":false,\"error\":\"%s\"}", ui_cw_tune_reason(r));
+                     "{\"ok\":true,\"mode\":\"cw\",\"moved_hz\":%d}", (int)moved);
+        else if (r == UI_CW_TUNE_LISTENING)
+            snprintf(body, sizeof(body),
+                     "{\"ok\":true,\"mode\":\"cw\",\"listening\":true,"
+                     "\"note\":\"listening for up to 8 s\"}");
+        else if (r != UI_CW_TUNE_NOT_CW)
+            snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"mode\":\"cw\",\"error\":\"%s\"}",
+                     ui_cw_tune_reason(r));
+        else {
+            ui_sb_tune_t sb = ui_sb_tune_start();
+            if (sb == UI_SB_TUNE_LISTENING)
+                snprintf(body, sizeof(body),
+                         "{\"ok\":true,\"mode\":\"ssb\",\"listening\":true,"
+                         "\"note\":\"listening for 4 s\"}");
+            else if (sb == UI_SB_TUNE_OK)
+                snprintf(body, sizeof(body), "{\"ok\":true,\"mode\":\"ssb\"}");
+            else
+                snprintf(body, sizeof(body),
+                         "{\"ok\":false,\"mode\":\"ssb\",\"error\":\"%s\"}",
+                         ui_sb_tune_reason(sb));
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "rit_park") == 0) {
+        /* Park an engaged RIT offset, or put the parked one back - the Tab5's
+         * long press on the RIT pill, which a browser has no way to perform.
+         * Roy KI0ER's round robin: one station off frequency, the offset
+         * wanted and unwanted as the turn passes round, and clearing it is a
+         * different intention that loses the value.
+         *
+         * ⛔ ONE implementation, in ui.c. This used to live only inside the
+         * LVGL callback; it was moved out rather than copied, so the parked
+         * value is one static int that both surfaces move. A second copy here
+         * would park on the web and restore nothing on the glass. */
+        int hz = 0;
+        ui_rit_park_t r = ui_rit_park_toggle(&hz);
+        cJSON_Delete(root);
+        char body[96];
+        if (r == UI_RIT_NOTHING)
+            snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"error\":\"No RIT offset to restore\"}");
+        else
+            snprintf(body, sizeof(body), "{\"ok\":true,\"%s\":true,\"hz\":%d}",
+                     (r == UI_RIT_PARKED) ? "parked" : "restored", hz);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "out_power") == 0) {
+        /* ⭐ OUTPUT POWER ON THE WEB (Ralph DL1HR's gap class). The Tab5 has
+         * had a per-band Output power slider since 2026-09-15; the browser had
+         * nothing at any layer - not an action, not a setting, not a status
+         * field.
+         *
+         * ⛔ IT IS A LADDER, NOT A NUMBER, and that is why it is an action
+         * rather than a settings key. The achievable levels come from THIS
+         * band’s power calibration sweep (power_cal_list_watts), and each watt
+         * figure is paired with the lowest PA voltage that produced it. A
+         * browser allowed to post a bare wattage would be asking for a power
+         * the PA may never have made - the "nearby-voltage guess"
+         * power_cal_modal.c already refuses to give. So: no argument lists the
+         * ladder, and a watts_x100 that is not ON the ladder is refused by
+         * name rather than rounded to a neighbour.
+         *
+         * ⛔ AND IT MUST NOT WRITE THE PA MID-BURST OR UNDER WSPR. Both guards
+         * are the Tab5’s, for the reasons written at its slider:
+         * wspr_rx_owns_pa() (NOT wspr_rx_running() - John W5JSS, 2026-10-18,
+         * whose receiver failed to start while the page still owned the
+         * register), and a TX in progress. The per-band TARGET is still stored
+         * when the radio is busy; only the voltage write waits. */
+        const char *band = adif_log_band_for_freq(cat_get_frequency());
+        uint16_t w_x100[PWRCAL_STEPS], v_x10[PWRCAL_STEPS];
+        int n = (band && band[0])
+                ? power_cal_list_watts(band, w_x100, v_x10, PWRCAL_STEPS) : 0;
+
+        cJSON *jw = cJSON_GetObjectItem(root, "watts_x100");
+        if (!cJSON_IsNumber(jw)) {
+            /* No argument: report the ladder and where we are on it. */
+            cJSON_Delete(root);
+            cJSON *out = cJSON_CreateObject();
+            cJSON_AddBoolToObject(out, "ok", true);
+            cJSON_AddStringToObject(out, "band", (band && band[0]) ? band : "");
+            cJSON_AddBoolToObject(out, "calibrated", n > 0);
+            cJSON *arr = cJSON_AddArrayToObject(out, "watts_x100");
+            for (int i = 0; i < n; i++)
+                cJSON_AddItemToArray(arr, cJSON_CreateNumber(w_x100[i]));
+            uint16_t cur = 0;
+            if (band && band[0] && settings_get_pwr_target_watts(band, &cur))
+                cJSON_AddNumberToObject(out, "target_x100", cur);
+            cJSON_AddBoolToObject(out, "busy",
+                                  ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE ||
+                                  wspr_tx_get_status(NULL, 0, NULL) != WSPR_TX_IDLE);
+            cJSON_AddBoolToObject(out, "wspr_owns_pa", wspr_rx_owns_pa());
+            char *txt = cJSON_PrintUnformatted(out);
+            cJSON_Delete(out);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+            if (txt) free(txt);
+            return ESP_OK;
+        }
+
+        uint16_t want = (uint16_t)jw->valuedouble;
+        cJSON_Delete(root);
+        char body[176];
+        int idx = -1;
+        for (int i = 0; i < n; i++) if (w_x100[i] == want) { idx = i; break; }
+        if (n == 0)
+            snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"error\":\"%s is not power-calibrated\"}",
+                     (band && band[0]) ? band : "this band");
+        else if (idx < 0)
+            snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"error\":\"%u.%02u W is not a calibrated level on %s\"}",
+                     (unsigned)(want / 100), (unsigned)(want % 100), band);
+        else {
+            settings_set_pwr_target_watts(band, w_x100[idx]);
+            bool busy = ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE ||
+                        wspr_tx_get_status(NULL, 0, NULL) != WSPR_TX_IDLE;
+            bool wspr = wspr_rx_owns_pa();
+            if (!busy && !wspr) {
+                cat_request_pa_voltage_x10(v_x10[idx]);
+                snprintf(body, sizeof(body),
+                         "{\"ok\":true,\"watts_x100\":%u,\"pa_v_x10\":%u}",
+                         (unsigned)w_x100[idx], (unsigned)v_x10[idx]);
+            } else {
+                /* Stored, not applied - and said so, because a control that
+                 * silently does half of what it says is the worse failure. */
+                snprintf(body, sizeof(body),
+                         "{\"ok\":true,\"watts_x100\":%u,\"deferred\":true,"
+                         "\"note\":\"stored; the PA is %s\"}",
+                         (unsigned)w_x100[idx], wspr ? "held by WSPR" : "transmitting");
+            }
+            ESP_LOGI(TAG, "web: output power on %s -> %u.%02u W%s", band,
+                     (unsigned)(w_x100[idx] / 100), (unsigned)(w_x100[idx] % 100),
+                     (!busy && !wspr) ? "" : " (stored, not applied)");
+        }
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
         return ESP_OK;

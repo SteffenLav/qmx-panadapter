@@ -533,6 +533,28 @@ typedef enum {
     UI_SB_TUNE_NO_EDGE,       /* the window closed without two votes   */
 } ui_sb_tune_t;
 
+/* RIT park/restore - switch an offset off and back on WITHOUT losing it,
+ * which is what a rig with a dedicated RIT button does and what clearing it
+ * cannot express (Roy KI0ER's round robin: one station off frequency, the
+ * offset wanted and unwanted as the turn passes round).
+ *
+ * On the Tab5 this is a long press on the RIT pill. It is also /api/cmd
+ * {"action":"rit_park"}, because a long press is not available to a browser
+ * and the parked value is firmware state either surface may move.
+ *
+ * Safe from any task: it drives CAT and a static int, and touches no widget. */
+typedef enum {
+    UI_RIT_PARKED = 0,   /* an engaged offset was stood down and remembered */
+    UI_RIT_RESTORED,     /* the remembered offset was put back              */
+    UI_RIT_NOTHING,      /* nothing engaged and nothing parked              */
+} ui_rit_park_t;
+
+/* *hz (may be NULL) is the offset parked or restored; 0 for UI_RIT_NOTHING. */
+ui_rit_park_t ui_rit_park_toggle(int *hz);
+
+/* The parked offset in Hz, 0 if nothing is parked. */
+int ui_rit_parked_hz(void);
+
 ui_sb_tune_t ui_sb_tune_start(void);
 const char  *ui_sb_tune_reason(ui_sb_tune_t r);
 
