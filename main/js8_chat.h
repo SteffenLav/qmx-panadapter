@@ -65,6 +65,17 @@ typedef struct {
      *
      * `band` is the adif_log_band_for_freq() string ("40m") - the ONE band
      * table. Both are 0 / "" when the dial was not known. */
+    /* ⛔ THE SUBMODE THIS WAS HEARD ON, as an ftx_protocol_t cast to uint8_t.
+     * T132 decodes ONE alternate submode on a duty cycle as well as the one
+     * we are operating, so a row no longer implies the primary submode - and
+     * an operator who cannot tell which speed heard a station cannot act on
+     * it. Part of the run's IDENTITY, not decoration: a Fast and a Normal
+     * transmission can share an audio offset and a slot and still be two
+     * different stations, so same_run() compares it (see js8_chat.c).
+     *
+     * ⚠ A station heard on an alternate submode CANNOT be worked from here -
+     * our TX is on the primary. The page marks it; it is not a pounce target. */
+    uint8_t proto;          /* ftx_protocol_t of the slot that decoded it    */
     uint32_t dial_hz;       /* dial at the first frame, 0 = unknown          */
     char    band[8];        /* adif_log_band_for_freq(dial_hz), "" = unknown */
     char    sender[JS8_CHAT_CALL_LEN];   /* "" when never identified        */

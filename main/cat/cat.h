@@ -24,6 +24,11 @@ esp_err_t cat_init(void);
  *         ESP_ERR_TIMEOUT if rate-limited
  */
 esp_err_t cat_set_frequency(uint32_t freq_hz);
+/* The frequency the radio will actually hold for any value you ask for -
+ * every dial write is rounded to the QMX's 10 Hz encoder grid. Use it before
+ * comparing a readback against a target you computed, or the two can never
+ * agree (KX7R's v1.22.0 band walk; see the note in cat_set_frequency). */
+uint32_t  cat_quantise_dial_hz(uint32_t freq_hz);
 
 /**
  * @brief Same as cat_set_frequency() but bypasses the 200 ms rate-limiter.

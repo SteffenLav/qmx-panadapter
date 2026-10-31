@@ -1,8 +1,10 @@
 /* Host test for main/ui/js8_page.c - the JS8 conversation page layout.
  *
  * Build (from the repo root):
- *   gcc -O2 -Wall -I main -I main/ui \
+ *   gcc -O2 -Wall -I main -I main/ui -I components/ft8_lib -I components/ft8_lib/ft8 \
  *       -o js8_page_harness test/js8_page_harness.c main/ui/js8_page.c \
+ *       main/js8_alt.c components/ft8_lib/ft8/constants.c \
+ *       components/ft8_lib/ft8/js8_tables.c -lm \
  *       && ./js8_page_harness
  *
  * The page is a pure function, so every way it can be wrong is reachable here:
@@ -15,6 +17,10 @@
 #include <string.h>
 
 #include "js8_page.h"
+#include "js8_alt.h"
+
+/* The sub-mode the station is operating in these tests. T132 marks a row
+ * only when it was heard on something ELSE. */
 
 static int fails;
 
@@ -34,6 +40,10 @@ static js8_chat_msg_t mk(int64_t first, int hz, const char *sender,
     js8_chat_msg_t m;
     memset(&m, 0, sizeof(m));
     m.kind = JS8_CHAT_FREETEXT;
+    /* JS8 Normal: the other tests are about the OTHER columns, and column 1
+     * now always carries a letter, so they assert AGE's start position rather
+     * than a blank. */
+    m.proto = (uint8_t)FTX_PROTOCOL_JS8;
     m.first_utc = first;
     m.last_utc = first;
     m.freq_hz = hz;
@@ -290,6 +300,73 @@ static void t_rows_for_agrees_with_render(void)
     }
 }
 
+/* ---- T132: the sub-mode mark, column 1 --------------------------------
+ *
+ * ⭐ ALWAYS A LETTER, INCLUDING THE SUB-MODE BEING OPERATED. It was blank
+ * for the primary at first, on the reasoning that a single-sub-mode session
+ * should grow no new column. The operator read the result and disagreed
+ * (2026-10-31): "I want it always to show the speed letter..... anything else
+ * is confusing UI". A column that is empty in the common case and lettered in
+ * the rare one carries two meanings at once, and only teaches you anything on
+ * the row you were least expecting.
+ *
+ * ⛔ AND IT MUST NOT COST THE OTHER COLUMNS A CHARACTER. The grid was exactly
+ * full when BAND took five columns off the message and the operator noticed.
+ * Column 1 was already spare; this checks it still is, by requiring AGE to
+ * start where it always did. */
+static void t_submode_mark(void)
+{
+    printf("T132 sub-mode mark (column %d)\n", JS8_PAGE_COL_SUBMODE);
+
+    js8_chat_msg_t m = mk(NOW - 60, 1188, "OZ1LAV", "QSL", false, false);
+
+    /* Heard on the sub-mode we are operating: still a letter. */
+    js8_page_render(&m, 1, NOW, L, M);
+    CHECK(L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE] == 'N',
+          "the operated sub-mode is marked '%c', want 'N'",
+          L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE]);
+    CHECK(at(JS8_PAGE_ROW0, JS8_PAGE_COL_AGE, " 60s"),
+          "the mark column moved AGE: '%.4s'", &L[JS8_PAGE_ROW0][JS8_PAGE_COL_AGE]);
+
+    /* Heard on Fast while we operate Normal. */
+    m.proto = (uint8_t)FTX_PROTOCOL_JS8_FAST;
+    js8_page_render(&m, 1, NOW, L, M);
+    CHECK(L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE] == 'F',
+          "a Fast message is marked '%c', want 'F'",
+          L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE]);
+    CHECK(at(JS8_PAGE_ROW0, JS8_PAGE_COL_AGE, " 60s"),
+          "the mark column moved AGE: '%.4s'", &L[JS8_PAGE_ROW0][JS8_PAGE_COL_AGE]);
+    CHECK(at(JS8_PAGE_ROW0, JS8_PAGE_COL_SENDER, "OZ1LAV"),
+          "the mark column moved CALL: '%.9s'", &L[JS8_PAGE_ROW0][JS8_PAGE_COL_SENDER]);
+    CHECK(at(JS8_PAGE_ROW0, JS8_PAGE_COL_TEXT, "QSL"),
+          "the mark column moved MESSAGE: '%.3s'", &L[JS8_PAGE_ROW0][JS8_PAGE_COL_TEXT]);
+
+    /* The flag column is NOT the mark column: a live Fast run shows both. */
+    m.active = true;
+    js8_page_render(&m, 1, NOW, L, M);
+    CHECK(L[JS8_PAGE_ROW0][0] == JS8_PAGE_FLAG_LIVE,
+          "the mark overwrote the live flag: '%c'", L[JS8_PAGE_ROW0][0]);
+    CHECK(L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE] == 'F',
+          "the live flag overwrote the mark: '%c'",
+          L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE]);
+
+    /* ⛔ ONE MARK PER MESSAGE, not one per wrapped row. A long free-text run
+     * takes several rows and a letter repeated down them would read as
+     * several separate alternate-sub-mode messages. */
+    js8_chat_msg_t w = mk(NOW, 1000, "X",
+        "GOOD MORNING OM THANKS FOR THE CALL THE WEATHER HERE IS FINE TODAY",
+        false, false);
+    w.proto = (uint8_t)FTX_PROTOCOL_JS8_TURBO;
+    int used = js8_page_render(&w, 1, NOW, L, M);
+    CHECK(used > 1, "the wrap case did not wrap (used %d)", used);
+    CHECK(L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE] == 'T',
+          "first row mark '%c', want 'T'", L[JS8_PAGE_ROW0][JS8_PAGE_COL_SUBMODE]);
+    for (int r = JS8_PAGE_ROW0 + 1; r < JS8_PAGE_ROW0 + used; r++)
+        CHECK(L[r][JS8_PAGE_COL_SUBMODE] == ' ',
+              "continuation row %d is marked '%c'", r,
+              L[r][JS8_PAGE_COL_SUBMODE]);
+}
+
 int main(void)
 {
     t_no_title_row();
@@ -304,6 +381,7 @@ int main(void)
     t_row_map_names_the_message_each_row_belongs_to();
     t_band_column();
     t_rows_for_agrees_with_render();
+    t_submode_mark();
 
     printf(fails ? "\nFAIL (%d)\n" : "\nPASS\n", fails);
     return fails ? 1 : 0;

@@ -427,13 +427,20 @@ Presets persist across power cycles. Common modifiers:
 - **SOTA** — Summits on the Air activation
 - *(blank)* — standard CQ
 
-!!! tip "From v1.20.5 you do not have to set POTA by hand"
-    While an **activation is running**, your CQ goes out as `CQ POTA` — or
-    `CQ SOTA` for a summit — whatever the preset says, and goes back to normal
-    when you stop the session. Before this, starting an activation left the CQ
-    unchanged, so nobody hunting parks knew you were in one *(Bruce N9JCV)*.
-    Field Day mode has always worked this way and still outranks it: FT8 has
-    room for exactly one modifier.
+!!! tip "From v1.20.5 you do not have to set the modifier by hand"
+    While an **activation is running**, your CQ carries that programme's own
+    token — `CQ POTA`, `CQ SOTA`, `CQ WWFF`, `CQ IOTA`, `CQ GMA`, `CQ WCA` —
+    whatever the preset says, and goes back to normal when you stop the
+    session. Before this, starting an activation left the CQ unchanged, so
+    nobody hunting parks knew you were in one *(Bruce N9JCV)*. Field Day mode
+    has always worked this way and still outranks it: FT8 has room for exactly
+    one modifier.
+
+    ⚠ **WWBOTA goes out as a plain `CQ`.** FT8's modifier is at most four
+    characters and WWBOTA is six, so it cannot be encoded. A plain CQ tells
+    hunters nothing; `CQ POTA` during a bunker activation would tell them
+    something untrue, so it does not do that. Fixed in **v1.23.0** — before it,
+    every programme past SOTA called `CQ POTA`.
 
 The preset editor's top-right **CQ stop** button sets the CQ auto-stop limit (see [Call CQ](#2-call-cq) above) — it cycles never / 1–5 / 10 and applies on tap, independent of Save/Cancel.
 

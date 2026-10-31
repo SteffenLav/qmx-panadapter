@@ -50,6 +50,57 @@ const char* js8_cmd_text(uint8_t cmd)
     return (t && t[0]) ? t : "?";
 }
 
+/* The reverse of js8_cmd_text(): a spelling back to its directed_cmds index,
+ * or JS8_CMD_NONE.
+ *
+ * ⛔ IT LIVES HERE, BESIDE THE TABLE, AND NOT IN js8_text.c. kCmdText is
+ * static, so this is the only way the text seam can see it - and that is the
+ * point: the spelling this returns is BY CONSTRUCTION the same one
+ * js8_frame_to_text() emits, so ft8_tx.c's round-trip guard cannot be made to
+ * disagree with itself by a typo in a second copy of the table. A duplicated
+ * list would have been the kind of drift that only shows up on air.
+ *
+ * ⛔ FOUR GROUPS ARE REFUSED, and each refusal is a frame we must never key:
+ *
+ *  - index 31, free text. Its entry is "" and every unmatched line would
+ *    otherwise compare equal to it. That alone would turn every unparseable
+ *    message into a directed frame carrying nothing.
+ *  - index 5, ">". The relay/free-text directive: the payload it introduces
+ *    has no field in a Directed frame, so a bare one says nothing.
+ *  - indices 9, 10, 11, 13 - MSG, "MSG TO:", QUERY, "QUERY CALL". Each needs
+ *    an argument (a message, a callsign) that the Directed frame has no room
+ *    for. The mailbox family belongs on the free-text path, which already
+ *    carries 160 characters. "QUERY MSGS" (12) is complete on its own and is
+ *    NOT refused.
+ *  - index 29, "HEARTBEAT SNR". Deprecated - it was ACK in JS8Call 2.1.
+ *  - index 21, "RR". ⚠ NOT for a protocol reason: js8_frame_to_text() renders
+ *    a numberless RR as "RR73", so accepting the bare word here would build a
+ *    frame that renders back as a DIFFERENT string and ft8_tx.c's round-trip
+ *    guard would refuse it one layer later. "RR73" already reaches cmd 21
+ *    through its own branch, so nothing is lost.
+ *
+ * Matching is exact: no trimming, no case folding. A caller that built the
+ * line itself gets a refusal rather than a frame that is nearly what it meant.
+ */
+uint8_t js8_cmd_from_text(const char* text)
+{
+    if (!text || !text[0]) return JS8_CMD_NONE;
+
+    for (int i = 0; i < 32; i++)
+    {
+        switch (i)
+        {
+        case 5: case 9: case 10: case 11: case 13: case 21: case 29: case 31:
+            continue;
+        default:
+            break;
+        }
+        const char* t = kCmdText[i];
+        if (t && t[0] && strcmp(t, text) == 0) return (uint8_t)i;
+    }
+    return JS8_CMD_NONE;
+}
+
 const char* js8_cq_text(bool is_cq, uint8_t bits3)
 {
     /* All eight HB variants spell "HB"; the distinctions (AUTO, RELAY, SPOT)

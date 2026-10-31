@@ -830,3 +830,97 @@ something already shipped rather than adding something new.
 6. **Varicode has no test vectors.** Unchanged from J2, and the mitigation is
    unchanged: extract by script, never transcribe, and validate the unpack
    direction against real traffic before trusting pack.
+
+# T132 - decoding a second JS8 submode (built 2026-10-30, UNPROVEN ON AIR)
+
+## The problem
+
+The firmware decodes exactly one JS8 submode at a time. A station calling on
+Fast is invisible to a station on Normal, and the submode is stored in NVS, so
+a wrong one survives every power cycle. Ryan KK6DZB lost JS8 entirely to that.
+JS8Call has no such problem: `actionModeMultiDecoder` defaults to true.
+
+## Why all four every slot does not fit
+
+Measured 2026-10-30 from bench1's own slot log, whole series, 26140 slots:
+JS8 Normal costs stft 1872 ms + dec 1858 ms per 15 s slot, which is 24.9% of
+one core. Two scaling laws out of `constants.h`:
+
+- STFT work per minute is IDENTICAL for every submode - the symbol period
+  cancels in the waterfall-size arithmetic - so four submodes is a flat x4
+  with no knob.
+- LDPC scales with slots per minute at the saturated 140-candidate cap, x5.5.
+
+All four every slot is 118% of one core at the median and 193% on a busy band.
+Core 0 is already the wall.
+
+## What is built
+
+ONE alternate submode, decoded on a duty cycle, out of the audio the primary
+slot already captured. There is no second capture - the firmware holds exactly
+one slot in `s_cap_scratch` and the next slot overwrites it.
+
+- `main/js8_alt.c` holds the arithmetic and nothing else, so
+  `test/js8_alt_select_harness.c` links the real functions.
+- `test/js8_alt_window_harness.c` proved the alignment against the real
+  decoder first. Feeding a monitor from the wrong offset produces SILENCE, not
+  an error, which is why it is a harness and not a comment.
+- One window every **5** primary slots, not 4. A minute holds exactly four
+  15 s slots, so `slot_number % 4` is the phase of the minute and never moves -
+  a duty of 4 would look at the same alternate window for ever. 5 is coprime
+  with 4, so the phase walks and every reachable window is covered in 5
+  minutes.
+- Predicted cost: a Fast window is stft 10/15 x 1872 = 1248 ms plus a
+  saturated decode of 1858 ms = 3106 ms, which at one slot in five is 4.1%
+  added, about 29% of one core in total. **That is arithmetic. It has not
+  been measured on hardware yet.**
+
+### Coverage is capped by the slot grids, not by the duty cycle
+
+A Fast slot that straddles a Normal boundary is in neither capture. The Fast
+slots at **:10 and :40 can never be decoded** this way - Fast coverage is 4 of
+6 per minute, whatever the duty cycle is. Turbo reaches 8 of 10. Slow (30 s)
+never fits inside a 15 s capture at all and is excluded by arithmetic, not
+deferred. `js8_alt_select_harness.c` asserts all of this.
+
+## It is RECEIVE ONLY, and that is the safety property
+
+`decode_slot()` calls `ft8_qso_advance()`, runs the robot and can arm a
+transmission. An alternate decode reaches none of it. `decode_ctx_t.rx_only`
+in `ft8_test.c` is an explicit refusal rather than an absence, and it blocks:
+
+- the QSO machine, the late look, the robot and Fox/Hound;
+- `ft8_screen_record_decode()` - those rows are TAPPABLE and a tap is a
+  pounce, at a station we cannot work because our TX is on the primary;
+- PSK Reporter spots - an unproven decoder must not publish into somebody
+  else's database;
+- the system-clock auto-sync - an unverified RX path must not become a
+  TX-affecting one;
+- the free-text reassembler - a run is keyed on an audio offset and joining
+  two submodes' frames would splice two transmissions into one sentence;
+- the stuck-RX watchdog and the hold-for-decode TX gate counters.
+
+It DOES record, show and log: the frame reaches the JS8 conversation pane and
+`/api/js8`, marked with the submode that heard it.
+
+## Where it shows
+
+- Tab5 and web JS8 page: a one-character mark in column 1 - blank for the
+  primary, `N`/`F`/`T`/`S` otherwise. One renderer (`js8_page.c`) draws both
+  surfaces, and the mark costs the message column nothing.
+- `/api/js8` carries a `submodes` array beside `senders` and `bands`.
+- `/api/status` carries `submode` on each chat row, plus `js8_alt_submode`.
+- Settings: the drawer's JS8 section and the web mode heading both offer
+  "Also decode (RX only)". **Default off.**
+- The slot log gets a separate `altslot ... stft=.. dec=..` line. Deliberately
+  not the ordinary slot line: that is the instrument the budget above was
+  measured with, and a second line in the same format would halve its apparent
+  median.
+
+## ⚠ What is NOT proven
+
+Nothing in this firmware has ever exchanged Fast, Turbo or Slow with a real
+JS8Call station. Our own encoder feeds our own decoder, so a shared
+misunderstanding of the physical layer passes every harness here. The feature
+is off by default for that reason, and the predicted 29% has not been
+confirmed against a capture.

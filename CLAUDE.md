@@ -42,6 +42,10 @@ Standing rule:
 
 ## ⛔ FOUR boards share this machine — resolve by BENCH NAME
 
+⛔ **On `main` the bench is `bench1`, always.** bench2 is dedicated to
+`feat/cw-page` and carries that branch's firmware. Read `tools/bench.json` for
+the assignment - never a sentence in the prompt (got this wrong 2026-10-28).
+
 Use `bench flash <name>`, `bench capture <name>`, `bench antenna <name>`. See [bench setup](../../../memory/project_bench_setup.md) for the registry and MAC addresses. All four boards enumerate as `VID_303A&PID_1001` with no serial number—the COM port follows the socket, not the board.
 
 ## Standing patches (MUST be applied before build)

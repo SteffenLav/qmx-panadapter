@@ -2,6 +2,7 @@
 #include "sock_owners.h"
 
 #include "esp_timer.h"
+#include "wifi/wifi.h"   /* wifi_tcpip_stack_up - see the guard below */
 
 #include <errno.h>
 #include <unistd.h>
@@ -13,8 +14,24 @@ static const char *TAG = "sock";
 
 #define SOCK_PROBE_CAP_MAX 24   // LWIP_MAX_SOCKETS is 16; a little room above it
 
+/* ⛔ EVERY ENTRY POINT IN THIS FILE MUST ASK FIRST. socket() is not a
+ * function that returns an error when LWIP is absent - it ABORTS:
+ *     assert failed: tcpip_send_msg_wait_sem tcpip.c:454 (Invalid mbox)
+ *
+ * And LWIP really can be absent. wifi_task() returns before esp_netif_init()
+ * when esp_hosted_init() fails, so a boot where the C6 does not answer has no
+ * tcpip thread at all. CRASHED bench1 on 2026-10-31, v1.23.0-4-g85e8f5e7:
+ * "SDIO card init did not signal within 6000 ms" at 14.7 s, and this probe -
+ * which the heap watchdog runs every 10 s from heap_wd, with no network gate
+ * of its own - took the board down at 18.7 s. One reboot and it came back,
+ * because the fault is in the diagnostic, not in what it diagnoses.
+ *
+ * ⚠ A DIAGNOSTIC MUST NOT BE ABLE TO KILL THE DEVICE IT WATCHES. "No stack"
+ * is reported as "nothing is wrong with the socket table", which is true: a
+ * device with no LWIP has no socket table to exhaust. */
 bool sock_probe_exhausted(void)
 {
+    if (!wifi_tcpip_stack_up()) return false;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return true;
     close(fd);
@@ -24,6 +41,7 @@ bool sock_probe_exhausted(void)
 int sock_probe_free(int cap)
 {
     if (cap < 1) return 0;
+    if (!wifi_tcpip_stack_up()) return 0;   /* no stack, no sockets to count */
     if (cap > SOCK_PROBE_CAP_MAX) cap = SOCK_PROBE_CAP_MAX;
 
     int fds[SOCK_PROBE_CAP_MAX];
@@ -42,6 +60,12 @@ int sock_probe_free(int cap)
 void sock_probe_report(void)
 {
     static bool s_was_exhausted = false;
+
+    /* ⛔ BEFORE sock_owners too, not only before the probe: it walks LWIP's
+     * own socket table, which does not exist either when the stack never
+     * started. The guard belongs at the top of the function, so a new call
+     * added below it is covered by default rather than by remembering. */
+    if (!wifi_tcpip_stack_up()) return;
 
     /* The leak is visible long before the wedge - see sock_owners.h for the
      * fd-creep evidence - so look every tick and speak only on a new high. */

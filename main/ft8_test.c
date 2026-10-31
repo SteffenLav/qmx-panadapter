@@ -64,9 +64,12 @@
 #include "ft8/js8_reasm.h"
 #include "js8_chat.h"
 #include "js8_target.h"
+#include "js8_alt.h"        /* T132 - the duty-cycled alternate submode */
 #include "ft8/js8_message.h"
 #include "common/monitor.h"
 
+#include "esp_memory_utils.h"   /* T133 placement dump */
+#include "util/mem_where.h"    /* mem_where() - LP SRAM is not L2. T133/T134 */
 #include "dsp.h"
 #include "wspr_rx.h"         /* wspr_rx_running() - see FT8_ALLOC_MAX_WAIT_TRIES */
 #include "audio/audio.h"
@@ -96,6 +99,10 @@ static const char *TAG = "ft8_test";
  * because ft8_op_mode_set() and ft8_op_mode_name() both ask it, and they sit
  * above it. */
 static ftx_protocol_t proto_for_mode(void);
+/* Defined with the rest of the T132 alternate-sub-mode machinery, further
+ * down; declared here because free_capture_pool() sits above it and the two
+ * pools have the same lifetime. */
+static void free_alt_monitor(void);
 
 #define SR_HZ                 12000
 #define SLOT_SAMPLES          180000      // 15 s × 12 kHz - the FT8 slot, and ONLY
@@ -356,7 +363,16 @@ int ft8_op_mode_slot_ms(void)
 // in INTERNAL RAM, so keeping the count minimal matters: 3 monitors left only
 // ~9 KB internal free; 2 restores comfortable headroom.
 #define FT8_NUM_BUFFERS       2
-#define DECODE_QUEUE_DEPTH    FT8_NUM_BUFFERS
+/* T132's alternate sub-mode pool - ONE monitor, and the reasoning for that is
+ * at s_alt_pool. Up here only because DECODE_QUEUE_DEPTH below needs it. */
+#define FT8_NUM_ALT_BUFFERS   1
+/* ⛔ THE PRIMARY POOL PLUS THE ALTERNATE ONE. It was FT8_NUM_BUFFERS, with
+ * the comment at the full-queue branch saying "shouldn't happen (queue depth
+ * == pool size)" - which stopped being true when T132 added a second pool
+ * that posts its own job from the same slot. One short and a busy slot drops
+ * the alternate window, which is only a missed decode, but the invariant the
+ * comment relies on is cheaper to keep than to re-reason about. */
+#define DECODE_QUEUE_DEPTH    (FT8_NUM_BUFFERS + FT8_NUM_ALT_BUFFERS)
 
 // Stuck-pipeline watchdog: consecutive idle-RX slots with candidates-but-zero-
 // decodes before a soft audio+IQ reset. A genuinely wedged pipeline stays
@@ -378,7 +394,7 @@ int ft8_op_mode_slot_ms(void)
  * The toast below also lands here, and /api/status hands it to the page,
  * so the two surfaces say the same thing. Cleared on the next decode by
  * the same branch that clears s_stuck_told. */
-static char s_stuck_note[224];
+static char s_stuck_note[256];   /* same text as the stuck toast - widened with it */
 
 
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
@@ -427,6 +443,20 @@ static char s_stuck_note[224];
 
 typedef struct {
     int      mon_idx;   // monitor pool slot to decode and release; -1 = termination sentinel
+    /* ⛔ WHICH POOL mon_idx INDEXES. 0 = s_mon_pool (the primary capture),
+     * 1 = s_alt_pool (T132's duty-cycled alternate sub-mode). The decode task
+     * uses it to pick the monitor AND to clear the right busy flag; getting
+     * that wrong leaks a monitor out of one pool and frees a live one in the
+     * other. Zero is the primary, so the termination sentinel (mon_idx < 0,
+     * tested before anything else) is unaffected. */
+    uint8_t  pool;
+    uint8_t  expect_mon;    // ftx_protocol_t the monitor was built for
+    uint8_t  expect_mode;   // the OPERATING protocol when this was queued
+    /* Alternate jobs only: the windows inside s_alt_audio to feed the alt
+     * monitor, in samples, from js8_alt_slots_in_primary(). The STFT runs on
+     * the DECODE task for these - see the note at s_alt_audio. */
+    int      alt_n;
+    int      alt_offs[JS8_ALT_MAX_WINDOWS];
     int64_t  slot_sec;  // UTC slot start
     int      slot_idx;
     int      cap_ms;    // capture wall-clock duration (incl. streaming STFT), for log
@@ -532,6 +562,59 @@ static volatile bool s_pool_quiesce;
 // are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
 // so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
 static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
+
+/* ---- T132: the ALTERNATE sub-mode pool ---------------------------------
+ *
+ * A second, independent monitor for ONE other JS8 sub-mode, decoded out of
+ * the audio the primary slot already captured. See js8_alt.h for why this is
+ * a duty cycle and not simply "decode all four".
+ *
+ * ⛔ ONE MONITOR, NOT FT8_NUM_BUFFERS. The primary pool has two so a busy
+ * decoder never costs a capture; an alternate job is optional by
+ * construction, so when the one monitor is still in flight the right answer
+ * is to SKIP this visit and log it, not to spend another waterfall of PSRAM
+ * on a feature that runs one slot in five.
+ *
+ * ⛔ IT SHARES NOTHING WITH THE PRIMARY POOL. nfft is block_size * freq_osr
+ * and block_size is the SYMBOL PERIOD in samples, so a Fast monitor's FFT is
+ * a different size from a Normal one - the shared kiss-FFT config and the
+ * shared STFT scratch (s_shared_fft_work, s_shared_stft_time/freq) are sized
+ * for the primary and CANNOT be lent to it. build_alt_monitor() therefore
+ * keeps monitor_init()'s own private buffers and only relocates them to
+ * PSRAM. That independence is also what makes it safe for the DECODE task to
+ * run monitor_process() on this monitor while the capture task runs it on a
+ * primary one: the "capture-task-only, strictly sequential" rule at
+ * s_shared_fft_work is a rule about the SHARED scratch, and this monitor
+ * touches none of it. */
+static monitor_t    *s_alt_pool[FT8_NUM_ALT_BUFFERS];
+static volatile bool s_alt_busy[FT8_NUM_ALT_BUFFERS];
+static int           s_alt_proto = -1;   // ftx_protocol_t, or -1
+/* The primary slot's audio, copied for the alternate decode.
+ *
+ * ⛔ A COPY, AND THE STFT RUNS ON THE DECODE TASK. The obvious shape is to
+ * monitor_process() the alternate straight out of s_cap_scratch on the
+ * capture task, right after the primary's block loop. It is wrong for a
+ * timing reason, not a correctness one: the primary capture runs to the UTC
+ * boundary, so work added after it lands in the NEXT slot. A Fast window's
+ * STFT is 10/15 of Normal's measured 1872 ms, about 1.25 s, and the slot loop
+ * re-anchors with `ms_to_boundary = period_ms - start_off_ms` - so one slot in
+ * five would capture 13.75 s instead of 15 and lose the last ~8 symbols of
+ * every signal in it. It would also poison the `woke` instrument, which
+ * exists to catch exactly "the previous slot's work overrunning".
+ *
+ * So the capture task does a memcpy (~720 KB of PSRAM, a few ms) and the
+ * decode task does the STFT. The copy is the WHOLE primary slot, not just the
+ * window: the offsets js8_alt_slots_in_primary() returns are then usable
+ * unchanged, which removes a class of off-by-one that produces silence rather
+ * than an error. */
+static float        *s_alt_audio = NULL;
+static int           s_alt_audio_samples = 0;   /* capacity, in samples */
+
+/* Wall-clock cap for ONE alternate window's candidate loop. Shorter than the
+ * primary's 11 s on purpose: an alternate decode is optional and must never be
+ * the reason a primary slot's decode is late. A Fast window's measured decode
+ * is ~1.9 s, so 4 s is headroom, not a limit. */
+#define JS8_ALT_DECODE_BUDGET_MS  4000
 
 // Slot-start UTC of the last slot we actually RECEIVED, per transmit window.
 // Written only where a capture completed, read by the UI to tell "this window is
@@ -775,6 +858,7 @@ static void free_shared_fft(void)
  * taskLVGL back on that core at ~74 % - the log showed `idle0 0.0%` at the
  * moment of the fault. A longer bound changes the odds, not the race; this
  * file already records two fixes falsified for exactly that reasoning. */
+
 static void forget_capture_pool(void)
 {
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) s_mon_pool[i] = NULL;
@@ -785,6 +869,17 @@ static void forget_capture_pool(void)
     s_shared_stft_freq    = NULL;
     s_cap_scratch         = NULL;
     s_pool_proto          = -1;
+    /* The alternate monitor is abandoned on exactly the same terms and for
+     * exactly the same reason: this path is reached only when the decode task
+     * did not exit within the bounded wait, so it may still be reading the
+     * alternate waterfall. A leak in PSRAM beats a use-after-free. */
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) {
+        s_alt_pool[i] = NULL;
+        s_alt_busy[i] = false;
+    }
+    s_alt_audio         = NULL;
+    s_alt_audio_samples = 0;
+    s_alt_proto         = -1;
 }
 
 // Free the monitor pool + capture scratch (idempotent; safe on partial alloc).
@@ -812,6 +907,7 @@ static void free_capture_pool(void)
     if (s_slotcap) { heap_caps_free(s_slotcap); s_slotcap = NULL;
                      s_slotcap_n = 0; }
     s_pool_proto = -1;
+    free_alt_monitor();   /* T132 - same lifetime as the pool it rides on */
 }
 
 // Map the sub-mode flag to a decoder protocol. ONE copy: the QSO ladder and
@@ -908,14 +1004,57 @@ static bool build_monitor_pool(ftx_protocol_t proto)
                      (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
             return false;
         }
-        // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
-        // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
-        // threshold) - across the pool that starves internal heap (main runs at
-        // ~39 KB free in FT8; without this we drop to ~7 KB). The window is
-        // read-only in monitor_process, so PSRAM costs nothing on the hot path;
-        // last_frame stays internal since it's written every block.
+        /* Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
+         * and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
+         * threshold) - across the pool that starves internal heap (main runs at
+         * ~39 KB free in FT8; without this we drop to ~7 KB). The window is
+         * read-only in monitor_process, so PSRAM costs nothing on the hot path.
+         *
+         * ⛔⛔ last_frame MOVES TOO, AND THE LINE THAT USED TO BE HERE WAS
+         * WRONG. It said "last_frame stays internal since it's written every
+         * block" - the reasoning is sound and the outcome was the opposite,
+         * because "internal" on this part is not one kind of memory.
+         *
+         * MEASURED on bench1 2026-10-30 (T133), read off the board rather than
+         * inferred - the slot line carries the pool index and the pool prints
+         * where each buffer landed:
+         *
+         *     mon 0  last_frame 0x5010c0ac INTERNAL   stft p50 2154 ms
+         *     mon 1  last_frame 0x492a79dc PSRAM      stft p50  873 ms
+         *
+         * No overlap at all between the two populations over 11 slots, and
+         * nothing else differs: both windows and both waterfalls are in PSRAM
+         * and timedata/freqdata/fft_work are the same shared pointers on both.
+         *
+         * ⭐ THE ADDRESS IS THE ANSWER. 0x5010c0ac is inside SOC_RTC_DRAM_LOW
+         * 0x50108000 .. 0x50110000 (soc.h) - that is the 32 KB LP/RTC SRAM,
+         * NOT the main L2 DRAM at 0x4ff00000. esp_ptr_internal() calls it
+         * internal and the generic heap hands it out, but reached from the HP
+         * core it is far slower than cached PSRAM - and monitor_process()
+         * memmoves the whole of last_frame twice per block, 93 x 2 x 15360 B
+         * a slot, which is the most memory-bound loop in the decoder.
+         *
+         * So the monitor that WON the internal-RAM lottery was the loser. The
+         * s_shared_fft_work note above records the opposite case (a PSRAM
+         * spill costing 10x) and that is still true of the FFT work area; it
+         * does not generalise to every buffer, and this is the counter-example.
+         *
+         * ⚠ PSRAM, not "L2 DRAM explicitly". L2 might be faster still, but
+         * this board runs at ~30 KB internal free (#65, the .bss audit) and
+         * 873 ms of a 15 s slot needs no help. Same decision the FFT work
+         * area's own comment already argues. Measure before reconsidering.
+         *
+         * ⭐ It also GIVES BACK 15 KB of internal RAM per monitor. Faster and
+         * cheaper in the scarce pool, which is why there is no trade here. */
         {
             monitor_t *m = s_mon_pool[i];
+            float *lf = heap_caps_malloc((size_t)m->nfft * sizeof(float),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (lf) {
+                memcpy(lf, m->last_frame, (size_t)m->nfft * sizeof(float));
+                heap_caps_free(m->last_frame);
+                m->last_frame = lf;
+            }
             float *w = heap_caps_malloc((size_t)m->nfft * sizeof(float),
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (w) {
@@ -1068,7 +1207,210 @@ static bool build_monitor_pool(ftx_protocol_t proto)
                   " - all %d monitors share it",
              (unsigned)fft_work_size, s_shared_fft_internal ? "INTERNAL" : "PSRAM",
              s_mon_pool[0]->nfft, (unsigned)int_lblk, FT8_NUM_BUFFERS);
+
+    /* ⛔⛔ T133 DIAGNOSTIC - WHERE EACH MONITOR'S PRIVATE BUFFERS LANDED.
+     *
+     * MEASURED on bench1 2026-10-30: the per-slot stft_ms is BIMODAL, ~905 ms
+     * and ~1915 ms, alternating STRICTLY slot by slot (71 flips in 80 adjacent
+     * pairs over 81 slots). FT8_NUM_BUFFERS is 2 and find_free_buffer() hands
+     * them out alternately while a decode is still running, so the pattern IS
+     * this pool: one monitor costs twice the STFT of the other for identical
+     * work - same nfft, same config, same block count.
+     *
+     * That makes 6ace379c's "JS8 stft p50 1872 ms" the SLOW monitor's number,
+     * and the whole T132 budget was scaled off it.
+     *
+     * THE HYPOTHESIS THIS LINE EXISTS TO KILL OR CONFIRM. After the shared
+     * FFT work area and the shared STFT pair, `last_frame` is the ONLY hot
+     * per-monitor allocation left, and monitor_process() memmoves the whole
+     * thing twice per block - 93 blocks x 2 x 15360 B a slot. It is 15360 B
+     * at this nfft, just under the 16 KB PSRAM-spill threshold, so plain
+     * malloc() puts it in INTERNAL RAM while there is room and in PSRAM once
+     * there is not. The s_shared_fft_work comment above records exactly this
+     * failure for fft_work: "only the first won the scarce-internal-RAM
+     * lottery and the second spilled to PSRAM, making its STFT ~10x slower
+     * (measured)". That was fixed for fft_work and last_frame was left.
+     *
+     * ⚠ AND THERE IS A READING THAT POINTS THE OTHER WAY, which is why this
+     * is a diagnostic and not a fix. T132's alternate monitor has ALL of its
+     * buffers explicitly in PSRAM and measured stft 558 ms over 100 blocks at
+     * nfft 2400; scaled to 93 blocks at nfft 3840 that is ~880 ms, which is
+     * the FAST monitor, not the slow one. If all-PSRAM is fast, spilling to
+     * PSRAM cannot be the penalty. One of those two readings is wrong and
+     * this line says which.
+     *
+     * Addresses, not just a verdict: internal SRAM and PSRAM are different
+     * ranges on this part, so the raw pointer is the evidence and the
+     * INTERNAL/PSRAM word is the convenience. */
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
+        const monitor_t *m = s_mon_pool[i];
+        ESP_LOGI(TAG, "monplace %d: last_frame %p %-8s | window %p %-8s | "
+                      "wf.mag %p %-8s | timedata %p | freqdata %p | fft_work %p",
+                 i,
+                 (void *)m->last_frame, mem_where(m->last_frame),
+                 (void *)m->window,     mem_where(m->window),
+                 (void *)m->wf.mag,     mem_where(m->wf.mag),
+                 (void *)m->timedata, (void *)m->freqdata, (void *)m->fft_work);
+    }
     return true;
+}
+
+/* ---- T132: the alternate monitor ---------------------------------------
+ *
+ * Tear it down. Idempotent, and safe on a partial build. Nothing here is
+ * shared with the primary pool (see s_alt_pool), so every buffer is this
+ * monitor's own and monitor_free() may free all of them.
+ *
+ * ⛔ THE CALLER MUST HAVE DRAINED IT FIRST. Freeing a waterfall the decode
+ * task is still reading is the crash this file already records twice - the
+ * FT8->FT4 Load access fault at reinit_pool_if_mode_changed(), and the
+ * estimate_snr_db fault in forget_capture_pool(). s_alt_busy[] is the test. */
+static void free_alt_monitor(void)
+{
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) {
+        if (s_alt_pool[i]) {
+            monitor_free(s_alt_pool[i]);
+            heap_caps_free(s_alt_pool[i]);
+            s_alt_pool[i] = NULL;
+        }
+        s_alt_busy[i] = false;
+    }
+    if (s_alt_audio) { heap_caps_free(s_alt_audio); s_alt_audio = NULL; }
+    s_alt_audio_samples = 0;
+    s_alt_proto = -1;
+}
+
+/* Build the alternate monitor for `proto`, plus the audio copy buffer sized
+ * for `primary_samples`. Returns false on any failure, having freed whatever
+ * it got - the caller then simply runs without an alternate. */
+static bool build_alt_monitor(ftx_protocol_t proto, int primary_samples)
+{
+    const monitor_config_t cfg = {
+        .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
+        .time_osr = 2, .freq_osr = 2, .protocol = proto,
+    };
+
+    s_alt_pool[0] = heap_caps_malloc(sizeof(monitor_t),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_alt_pool[0]) {
+        ESP_LOGW(TAG, "alt monitor: alloc failed - alternate decode off this session");
+        return false;
+    }
+    s_alt_busy[0] = false;
+    monitor_init(s_alt_pool[0], &cfg);
+    /* ⛔ monitor_init() DOES NOT CHECK ITS OWN ALLOCATIONS, and a NULL
+     * waterfall is only found by the first capture writing through it - the
+     * Store access fault at MTVAL 0 the primary builder's comment records.
+     * The alternate is optional, so a failure here is a warning and a quiet
+     * stand-down, not a refusal to run JS8. */
+    if (!monitor_alloc_ok(s_alt_pool[0])) {
+        ESP_LOGW(TAG, "alt monitor for %s: buffers not allocated (%u KB PSRAM free)"
+                      " - alternate decode off",
+                 ftx_protocol_label(proto),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        free_alt_monitor();
+        return false;
+    }
+
+    /* ⛔ EVERYTHING monitor_init() MALLOC'D GOES TO PSRAM. Each of these is
+     * under the 16 KB PSRAM-spill threshold at Fast's nfft of 2400, so
+     * left alone they all land in scarce INTERNAL RAM - about 50 KB of it,
+     * on a board that runs at ~30 KB free (#65, and the .bss audit). The
+     * primary pool relocates its window for exactly this reason and shares
+     * the rest; the alternate can share nothing, so it moves all of them.
+     *
+     * ⚠ fft_work is REBUILT, not copied: kiss_fftr_alloc() constructs the
+     * cfg inside the buffer it is given, and a memcpy of that buffer to a new
+     * address is not something kiss_fft promises to survive. */
+    {
+        monitor_t *m = s_alt_pool[0];
+        struct { void **p; size_t sz; } mv[] = {
+            { (void **)&m->window,    (size_t)m->nfft * sizeof(float) },
+            { (void **)&m->last_frame,(size_t)m->nfft * sizeof(float) },
+            { (void **)&m->timedata,  (size_t)m->nfft * sizeof(kiss_fft_scalar) },
+            { (void **)&m->freqdata,  ((size_t)m->nfft / 2 + 1) * sizeof(kiss_fft_cpx) },
+        };
+        for (size_t i = 0; i < sizeof(mv) / sizeof(mv[0]); i++) {
+            void *n = heap_caps_malloc(mv[i].sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!n) continue;           /* leave it where it is - correct, just internal */
+            memcpy(n, *mv[i].p, mv[i].sz);
+            free(*mv[i].p);
+            *mv[i].p = n;
+        }
+        size_t ws = 0;
+        kiss_fftr_alloc(m->nfft, 0, NULL, &ws);
+        void *w = heap_caps_malloc(ws, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (w) {
+            size_t chk = ws;
+            kiss_fftr_cfg cfg2 = kiss_fftr_alloc(m->nfft, 0, w, &chk);
+            if (cfg2) {
+                free(m->fft_work);
+                m->fft_work = w;
+                m->fft_cfg  = cfg2;
+            } else {
+                heap_caps_free(w);      /* keep the internal one rather than none */
+            }
+        }
+    }
+
+    s_alt_audio = heap_caps_malloc((size_t)primary_samples * sizeof(float),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_alt_audio) {
+        ESP_LOGW(TAG, "alt audio buffer (%u KB) failed - alternate decode off",
+                 (unsigned)((size_t)primary_samples * sizeof(float) / 1024));
+        free_alt_monitor();
+        return false;
+    }
+    s_alt_audio_samples = primary_samples;
+    s_alt_proto = (int)proto;
+    ESP_LOGI(TAG, "alt monitor built for %s: block=%d samples, %d blocks/slot, "
+                  "%u KB waterfall + %u KB audio copy (1 window in %d primary slots)",
+             ftx_protocol_label(proto), s_alt_pool[0]->block_size,
+             s_alt_pool[0]->wf.max_blocks,
+             (unsigned)((size_t)s_alt_pool[0]->wf.max_blocks *
+                        s_alt_pool[0]->wf.block_stride *
+                        sizeof(s_alt_pool[0]->wf.mag[0]) / 1024),
+             (unsigned)((size_t)primary_samples * sizeof(float) / 1024),
+             JS8_ALT_DUTY_EVERY);
+    return true;
+}
+
+/* True when every alternate monitor is free. The rebuild paths must see this
+ * before they may free anything - see free_alt_monitor(). */
+static bool alt_pool_idle(void)
+{
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) if (s_alt_busy[i]) return false;
+    return true;
+}
+
+/* Top-of-slot: bring the alternate monitor in line with the setting and with
+ * the primary protocol. Called once per slot, so a change costs at most one
+ * slot; a rebuild that cannot run because a decode is in flight is simply
+ * retried next slot, the same policy reinit_pool_if_mode_changed() settled on
+ * after the FT8->FT4 crash.
+ *
+ * `primary_samples` is this protocol's slot length - the audio copy is sized
+ * from it, so a primary sub-mode change rebuilds the buffer too. */
+static void reinit_alt_if_changed(ftx_protocol_t primary, int primary_samples)
+{
+    uint8_t want_sub = settings_get_js8_alt_submode();
+    ftx_protocol_t want = js8_alt_proto_for_submode(want_sub);
+    bool want_any = (want_sub != JS8_ALT_OFF) && js8_alt_fits(primary, want);
+
+    if (!want_any) {
+        if (s_alt_proto >= 0 && alt_pool_idle()) {
+            ESP_LOGI(TAG, "alt monitor torn down (%s)",
+                     want_sub == JS8_ALT_OFF ? "turned off"
+                                             : "does not fit the primary slot");
+            free_alt_monitor();
+        }
+        return;
+    }
+    if ((int)want == s_alt_proto && s_alt_audio_samples == primary_samples) return;
+    if (!alt_pool_idle()) return;      /* a decode is reading it - try next slot */
+
+    free_alt_monitor();
+    if (!build_alt_monitor(want, primary_samples)) free_alt_monitor();
 }
 
 /* How long the slot task will wait for an in-flight decode before giving up on
@@ -1320,8 +1662,39 @@ typedef struct {
     int   js8ev_dropped;
 } decode_result_t;
 
+/* ⛔⛔ WHAT A DECODE IS ALLOWED TO TOUCH, and it is a PARAMETER rather than
+ * something each path hopes about.
+ *
+ * T132 decodes ONE alternate JS8 submode on a duty cycle as well as the one
+ * the station is operating (js8_alt.h). decode_slot() calls
+ * ft8_qso_advance(), runs the robot and can ARM A TRANSMISSION. An alternate
+ * decode must reach none of that: the station is operating on the PRIMARY
+ * submode, and a Fast decode advancing a Normal exchange would step the state
+ * machine from a message our partner never sent and could key the radio
+ * against the wrong state.
+ *
+ * `rx_only` is therefore an explicit refusal, not an absence. Under it a
+ * decode may RECORD the frame (js8ev, for the chat store), SHOW it and LOG
+ * it, and nothing else - no ft8_screen_record_decode (its rows are TAPPABLE,
+ * and a tap is a pounce at a station we cannot hear on our own timing - the
+ * same hazard the mid-slot protocol guard below already records), no early
+ * advance, no pile-up, no spot, no robot, no reassembly.
+ *
+ * The two protocols are both carried because the staleness test needs both:
+ * `expect_mon` is what the MONITOR was built for and `expect_mode` is what
+ * the station was OPERATING when the job was queued. For a primary job the
+ * two are equal and the guard behaves exactly as it did before this change. */
+typedef struct {
+    ftx_protocol_t expect_mon;    /* the monitor's own protocol              */
+    ftx_protocol_t expect_mode;   /* the operating submode at queue time     */
+    bool           rx_only;       /* alternate submode: record/show/log only */
+    int            budget_ms;     /* wall-clock cap for the candidate loop   */
+    int            max_iters;     /* LDPC iterations per candidate           */
+} decode_ctx_t;
+
 typedef struct {
     monitor_t              *mon;
+    const decode_ctx_t     *dc;
     const ftx_candidate_t  *cands;
     int                     n_cand;
     float                   noise_db;
@@ -1796,7 +2169,8 @@ static bool decode_msg_to_text(const ftx_message_t *msg, ftx_protocol_t proto,
 // concurrently against one shared monitor. The shared wall-clock budget
 // (t_start_us) bounds the busiest slots; candidates are strongest-first so only
 // the weakest tail is dropped.
-static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
+static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
+                                   const ftx_candidate_t *cands,
                                    int n_cand, int start, int step,
                                    float noise_db, int64_t slot_sec,
                                    int64_t t_start_us, int start_off_ms,
@@ -1822,7 +2196,16 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     (void)start_off_ms;   // no longer added to the timing (backfill anchors the
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
-    int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
+    /* ⛔ FROM THE CONTEXT, NOT FROM s_pool_proto. s_pool_proto names the
+     * PRIMARY pool, and an alternate-submode job decodes a monitor that pool
+     * never built - reading the iteration count off it would hand a JS8 Fast
+     * decode whatever the primary happened to be. decode_slot's caller sets
+     * it once, from the protocol this job actually carries. */
+    int max_iters = dc->max_iters;
+    /* Only the primary submode may advance the QSO machine - see decode_ctx_t.
+     * Folded into the local so every use below is covered by one test rather
+     * than by remembering to add `&& !rx_only` at each site. */
+    if (dc->rx_only) may_early_advance = false;
     // Real decodes are suppressed from the shared decode list while sim mode
     // is on - otherwise a real QMX still attached and receiving keeps
     // re-populating the list with genuine stations moments after ft8_sim.c
@@ -1932,16 +2315,31 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
          * The timing samples go with it, deliberately: they describe a slot
          * measured on the old protocol's block size, and the auto-sync leash
          * has no business integrating those. */
-        if (mon->wf.protocol != proto_for_mode()) {
+        /* ⛔ TWO TESTS NOW, AND THE SECOND IS THE ONE THAT WAS ALWAYS MEANT.
+         *
+         * This was `mon->wf.protocol != proto_for_mode()`, which read "the
+         * monitor is not the mode we are in" and was exactly right while every
+         * monitor WAS the mode we are in. An alternate-submode monitor never
+         * is - it is Fast while we operate Normal - so that spelling would
+         * drop every alternate decode on its first candidate.
+         *
+         * The protection it exists for is STALENESS: a pool built for a
+         * sub-mode the operator has since left. So keep it and say it
+         * properly - the monitor must still be the one this job was queued
+         * for, AND the operating sub-mode must not have moved under it. For a
+         * primary job the two expectations are equal and this is the same test
+         * as before. */
+        if (mon->wf.protocol != dc->expect_mon ||
+            proto_for_mode() != dc->expect_mode) {
             ESP_LOGW(TAG, "sub-mode changed mid-slot - dropping this %s slot's decodes "
                           "(%d attempted, %d decoded so far)",
-                     ftx_protocol_name(mon->wf.protocol), out->n_attempted, out->n_decoded);
+                     ftx_protocol_label(mon->wf.protocol), out->n_attempted, out->n_decoded);
             out->n_decoded = 0;
             out->n_timing  = 0;
             break;
         }
 
-        if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
+        if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= dc->budget_ms) {
             break;
         }
         out->n_attempted++;
@@ -2057,7 +2455,14 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             }
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
-            if (!sim_suppresses_real) {
+            /* ⛔ NOT THE STATIONS LIST, under rx_only. Its rows are TAPPABLE
+             * and a tap is a pounce - at a station heard on a sub-mode we do
+             * not transmit on, which cannot answer and cannot be worked. That
+             * is the same hazard the mid-slot guard above names in its own
+             * comment; this is the other door into it. The frame is still
+             * recorded (js8ev_record, above) and still reaches the JS8
+             * conversation pane, marked with the sub-mode that heard it. */
+            if (!sim_suppresses_real && !dc->rx_only) {
                 ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
                                          (int)lroundf(cand_dt_ms));
 
@@ -2118,7 +2523,14 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             // PSK Reporter spot (REAL decodes only - this path never runs on
             // simulator injections, which bypass the audio pipeline entirely;
             // pskreporter.c additionally refuses spots while sim mode is on).
-            {
+            /* ⛔ NO SPOT FROM AN ALTERNATE SUB-MODE. PSK Reporter is an
+             * outward-facing publication and Fast, Turbo and Slow have never
+             * been exchanged with a real JS8Call station - only our own
+             * encoder and decoder agree. Publishing spots from a decoder
+             * nothing has confirmed puts our mistakes into somebody else's
+             * database, where they cannot be withdrawn. When the alternate
+             * path has been proven on air this is the line to revisit. */
+            if (!dc->rx_only) {
                 char sp_call[16], sp_grid[8];
                 if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
                     ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
@@ -2233,7 +2645,7 @@ static void ft8_decode_worker_task(void *arg)
            ft8_qso_advance() now serialises its callers on its own mutex and
            refuses a second advance for the same slot, so both halves may race
            for it and exactly one wins. See its comment. */
-        decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
+        decode_candidate_range(job->mon, job->dc, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
                                job->start_off_ms, true,
                                &job->next_cand, &job->cand_lock,
@@ -2254,11 +2666,15 @@ static void ft8_decode_worker_task(void *arg)
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
 // capture). Candidate search, then dual-core LDPC fan-out, merge, record,
 // advance the QSO state machine.
-static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
-                        int slot_idx, int cap_ms, int stft_ms, int start_off_ms,
-                        int arm_backlog, int drop_delta)
+static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
+                        const decode_ctx_t *dc, int64_t slot_sec,
+                        int slot_idx, int mon_idx, int cap_ms, int stft_ms,
+                        int start_off_ms, int arm_backlog, int drop_delta)
 {
     int64_t t_start = esp_timer_get_time();
+    /* Shorthand, used often enough below that spelling it out every time
+     * buries the thing being guarded. See decode_ctx_t. */
+    const bool rx_only = dc->rx_only;
 
     ftx_candidate_t cands[FT8_MAX_CANDIDATES];
     // Deeper search: min sync score 10 -> 5 surfaces weaker candidates to attempt.
@@ -2278,7 +2694,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // (FT8_REPLY_TX_WINDOW_MS) actually be hit on a crowded band instead of
     // racing the full candidate list first.
     int priority_freq_hz;
-    if (n_cand > 1 && ft8_qso_get_priority_freq(&priority_freq_hz)) {
+    /* Not under rx_only: the hint is our QSO partner's tone on the PRIMARY
+     * sub-mode, and nothing in an alternate slot can be them. Front-loading
+     * the alternate's candidate list by it would only reorder noise. */
+    if (!rx_only && n_cand > 1 && ft8_qso_get_priority_freq(&priority_freq_hz)) {
         ftx_candidate_t reordered[FT8_MAX_CANDIDATES];
         int np = 0, nr = 0;
         for (int i = 0; i < n_cand; i++) {
@@ -2340,9 +2759,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             if (sc >= 15) n15++;
             if (sc >= 20) n20++;
         }
-        ESP_LOGI(TAG, "slotdiag %d: noise=%.1f wf_mean=%.1f sat=%u zero=%u blocks=%d "
+        ESP_LOGI(TAG, "%sslotdiag %d: noise=%.1f wf_mean=%.1f sat=%u zero=%u blocks=%d "
                       "score max=%d mean=%.1f n10=%d n15=%d n20=%d",
-                 slot_idx, noise_db,
+                 rx_only ? "alt " : "", slot_idx, noise_db,
                  n_mag ? (float)msum / (float)n_mag : 0.0f,
                  (unsigned)n_sat, (unsigned)n_zero, wf->num_blocks,
                  smax, n_cand ? (float)ssum / (float)n_cand : 0.0f, n10, n15, n20);
@@ -2366,7 +2785,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     slot_dedup_t dedup = { .lock = portMUX_INITIALIZER_UNLOCKED, .n = 0 };
 
     worker_job_t job = {
-        .mon = mon, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
+        .mon = mon, .dc = dc, .cands = cands, .n_cand = n_cand, .noise_db = noise_db,
         .slot_sec = slot_sec, .t_start_us = t_start, .start_off_ms = start_off_ms,
         .start = 1, .step = 2, .result = &r_worker,
         /* Both halves walk this one cursor - see decode_candidate_range(). */
@@ -2429,7 +2848,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     int64_t t_search_done = esp_timer_get_time();
 
     // Our half (even indices).
-    decode_candidate_range(mon, cands, n_cand, 0, 2, noise_db, slot_sec,
+    decode_candidate_range(mon, dc, cands, n_cand, 0, 2, noise_db, slot_sec,
                            t_start, start_off_ms, true,
                            dispatched ? &job.next_cand : NULL,
                            dispatched ? &job.cand_lock : NULL, &dedup, &r_main);
@@ -2443,7 +2862,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
            on the same terms as the even half above. */
         /* Same dedup table as the even half above: a duplicate must be caught
            across the two ranges, not only within one. */
-        decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
+        decode_candidate_range(mon, dc, cands, n_cand, 1, 2, noise_db, slot_sec,
                                t_start, start_off_ms, true, NULL, NULL,
                                &dedup, &r_worker);
     }
@@ -2479,8 +2898,20 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
      * ranges' events are therefore swept twice - identifications first - and
      * not merged in arrival order. */
     if (ftx_protocol_is_js8(proto_for_mode())) {
+        /* ⛔ THE REASSEMBLER IS PRIMARY-ONLY. js8_reasm keys a run on an audio
+         * OFFSET and joins whatever arrives there over the next four slots.
+         * An alternate sub-mode's data frame at the same offset belongs to a
+         * different station on a different timing, and feeding it in would
+         * splice two transmissions into one sentence that nobody sent. There
+         * is no second reassembler and there should not be one until the
+         * alternate path has been proven on air - a free-text run reassembled
+         * from one window in five is mostly holes anyway.
+         *
+         * The STRUCTURED traffic below is different: each frame is complete in
+         * itself, so it reaches the conversation pane marked with the sub-mode
+         * that heard it, and that is the whole point of T132. */
         const decode_result_t *ranges[2] = { &r_main, &r_worker };
-        for (int pass = 0; pass < 2; pass++) {
+        for (int pass = 0; rx_only ? false : pass < 2; pass++) {
             for (int rr = 0; rr < 2; rr++) {
                 /* Clamped, as well as initialised at the source. The reset
                  * above is the fix; this is so the same slip can never again
@@ -2501,7 +2932,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                 }
             }
         }
-        js8_reasm_tick(&s_js8_reasm, slot_sec);
+        if (!rx_only) js8_reasm_tick(&s_js8_reasm, slot_sec);
 
         /* ---- feed the conversation store (the JS8 page) -------------------
          *
@@ -2552,6 +2983,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                     cm.freq_hz   = src[rr]->js8ev[k].freq_hz;
                     cm.frames    = 1;
                     cm.snr_db    = JS8_CHAT_NO_SNR;
+                    /* ⛔ WHICH SPEED HEARD IT. Part of the run's identity in
+                     * the store, not decoration - see js8_chat.c's same_run().
+                     * The monitor's own protocol, never proto_for_mode():
+                     * this is an alternate job's whole reason to exist. */
+                    cm.proto     = (uint8_t)mon->wf.protocol;
                     cm.dial_hz   = js8_dial_hz;
                     snprintf(cm.band, sizeof(cm.band), "%s", js8_band ? js8_band : "");
                     snprintf(cm.sender, sizeof(cm.sender), "%s",
@@ -2580,7 +3016,13 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                      * Only when it is addressed to US by name. @ALLCALL and
                      * the group tokens carry the same command and are not a
                      * question to this station. */
-                    if (js8_frame_type(src[rr]->js8ev[k].frame) == JS8_FRAME_DIRECTED) {
+                    /* ⛔ NOT FROM AN ALTERNATE SUB-MODE. The note tells the
+                     * operator to press SNR, and SNR transmits on the PRIMARY
+                     * sub-mode - which the station that asked is not
+                     * listening on. Prompting for a reply that cannot be
+                     * heard is worse than staying quiet about it. */
+                    if (!rx_only &&
+                        js8_frame_type(src[rr]->js8ev[k].frame) == JS8_FRAME_DIRECTED) {
                         js8_directed_t d;
                         if (js8_unpack_directed(src[rr]->js8ev[k].frame, &d) &&
                             d.cmd == JS8_CMD_SNR_QUERY && d.from[0] && d.to[0]) {
@@ -2593,7 +3035,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                     }
                 }
             }
-            for (int k = 0; k < js8_reasm_active(&s_js8_reasm); k++) {
+            /* ⛔ PRIMARY ONLY, like the reassembler that fills it. These runs
+             * were joined from the primary sub-mode's frames; re-publishing
+             * them from an alternate job would file somebody else's
+             * conversation under the alternate's mark, and the store keys on
+             * the sub-mode (js8_chat.c), so it would appear TWICE. */
+            for (int k = 0; !rx_only && k < js8_reasm_active(&s_js8_reasm); k++) {
                 const js8_reasm_run_t *run = js8_reasm_at(&s_js8_reasm, k);
                 if (!run) continue;
                 js8_chat_msg_t cm;
@@ -2618,10 +3065,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
             }
             /* The same quiet window js8_reasm uses, so a run stops being
              * marked live on the page in the slot it is forgotten there. */
-            js8_chat_tick(slot_sec, JS8_REASM_TIMEOUT_SLOTS * 15);
+            if (!rx_only) js8_chat_tick(slot_sec, JS8_REASM_TIMEOUT_SLOTS * 15);
         }
 
-        int n_runs = js8_reasm_active(&s_js8_reasm);
+        int n_runs = rx_only ? 0 : js8_reasm_active(&s_js8_reasm);
         int dropped = r_main.js8ev_dropped + r_worker.js8ev_dropped;
         if (n_runs || dropped) {
             /* One line, not one per run: this is per-slot log volume on a
@@ -2657,6 +3104,31 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                          " (+%d frames dropped, event cap)", dropped);
             if (n_new || dropped) ESP_LOGI(TAG, "%s", line);
         }
+    }
+
+    /* ⛔⛔ AN ALTERNATE SUB-MODE NEVER STEERS THE CLOCK.
+     *
+     * What follows is not a readout - it pushes a correction into the system
+     * clock every slot, and the system clock is what our own TX fires
+     * against. The alternate decoder has never been checked against a real
+     * JS8Call station on any speed; letting it move the clock would make an
+     * unproven RX path a TX-affecting one, which is exactly the boundary
+     * decode_ctx_t.rx_only exists to hold.
+     *
+     * ⚠ NOT because the measurement would be wrong in principle. Both slot
+     * grids are anchored to UTC and the alternate window is fed from its own
+     * boundary, so the DT it measures is meaningful. It is unverified, and
+     * unverified is the reason - say so rather than inventing a mechanism.
+     * This is the line to revisit once the alternate path has decoded a real
+     * station on air. */
+    if (rx_only) {
+        ESP_LOGI(TAG, "altslot %d UTC %lld %s: stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d",
+                 slot_idx, (long long)slot_sec,
+                 ftx_protocol_label(mon->wf.protocol),
+                 stft_ms, (int)((esp_timer_get_time() - t_start) / 1000),
+                 n_cand, n_decoded, n_js8ev, n_dup, n_skipped);
+        ft8_screen_view_request_refresh();
+        return;
     }
 
     // Merge both halves' timing samples, then robust (outlier-rejecting) average
@@ -2787,11 +3259,26 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
      * keeps those protocols reporting exactly what they did before and no
      * protocol guard is needed. */
     int n_shown = (n_js8ev > n_decoded) ? n_js8ev : n_decoded;
+
+    /* ⛔ AN ALTERNATE JOB GETS ITS OWN LINE AND LEAVES THE SLOT LINE ALONE.
+     *
+     * The slot line is the instrument: the T132 budget was measured by
+     * scraping stft_ms and dec_ms out of 26140 of them (6ace379c), and a
+     * second line per slot in the same format would silently double the
+     * sample count and halve the apparent median. Its own keyword keeps the
+     * two series separable, and makes the alternate's REAL cost - the thing
+     * this change has to be judged on - directly scrapeable:
+     *
+     *     altslot <idx> UTC <sec> <label>: stft=<ms> dec=<ms> cand=<n> dec=<n> js8f=<n>
+     *
+     * It also skips ft8_status_set(): the status line says what the RX slot
+     * did, and overwriting it with an alternate's count would make the glass
+     * read 0 on a perfectly good primary slot. */
     ft8_status_set("RX: %d decoded", n_shown);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
+        "slot %d UTC %lld: mon=%d off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
-        slot_idx, (long long)slot_sec, start_off_ms,
+        slot_idx, (long long)slot_sec, mon_idx, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_js8ev, n_dup, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
@@ -2896,14 +3383,57 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
                      * resets s_stuck_slots but deliberately NOT s_stuck_fires,
                      * so the real gap can be longer than fires x 10 min. */
                     int mins = (s_stuck_fires * FT8_STUCK_RESET_MS) / 60000;
-                    /* 224, not 160: the fixed text alone is ~152 chars and gcc
-                     * sizes %d at 11, so -Werror=format-truncation refused the
-                     * smaller buffer. The mode name is on top of that. */
-                    char msg[224];
+                    /* ⛔ IT MUST NOT NAME A CAUSE IT CANNOT ESTABLISH.
+                     *
+                     * The old wording led with "The radio may not be
+                     * receiving". The operator hit it on 2026-10-30 on a band
+                     * that was simply dead, 21 min after a flash he had
+                     * already power-cycled for, and it told him to go and
+                     * power-cycle again.
+                     *
+                     * ⛔ THE GATE ABOVE DISCRIMINATES NOTHING, and two fixes
+                     * that looked obvious were eliminated before this one:
+                     *   - `n_cand > 20` was meant to mean "there is signal".
+                     *     MEASURED the same evening: cand was 140, the cap, in
+                     *     ALL 109 slots of a dead band. The term is always
+                     *     true, so the only live condition is zero decodes -
+                     *     which IS the definition of a quiet band.
+                     *   - "fire only if nothing has decoded since boot" fails
+                     *     on the identical case: a flash, then a dead band, is
+                     *     zero decodes since boot.
+                     *   - "fire only if the QMX has not re-enumerated since
+                     *     boot" fails too: that boot saw RX_CONNECTED at 21.0 s
+                     *     and 34.6 s and no later drop, so there was nothing to
+                     *     separate.
+                     *
+                     * ⚠ There IS a hint in the data - the wedged window of
+                     * 2026-10-21 ran 13 dB quieter (noise p50 -57.1 vs -43.8)
+                     * and repeated its `zero` sample count far more often
+                     * (160 distinct values in 1198 slots vs 85 in 123). That is
+                     * ONE wedged episode against ONE dead evening, different
+                     * bands and different nights: one paired reading, not a
+                     * calibration, and this file has already eliminated two
+                     * level-based designs by measurement. Do not build a
+                     * detector on it. The measurement that would settle it is
+                     * slotdiag through a DELIBERATE wedge - flash, wait 20 min,
+                     * then power-cycle - on tonight's band and antenna.
+                     *
+                     * So: state the fact, put the likely reading first, and
+                     * keep the power-cycle line conditional. A quiet band is
+                     * the common case and leaving it receiving is the right
+                     * thing to do, which the message now says outright.
+                     *
+                     * 256, not 224: the fixed text alone is ~196 chars and gcc
+                     * sizes %d at 11, so -Werror=format-truncation refuses the
+                     * smaller buffer. The mode name is on top of that.
+                     * s_stuck_note (/api/status) carries the same text and was
+                     * widened with it. */
+                    char msg[256];
                     snprintf(msg, sizeof(msg),
-                             "No %s decodes for over %d min and resetting the audio did not "
-                             "help. The radio may not be receiving - if the Tab5 was "
-                             "flashed or restarted, power-cycle the QMX.",
+                             "No %s decodes for over %d min. Most likely the band is "
+                             "quiet - that is normal, leave it receiving. If you "
+                             "flashed or restarted the Tab5 since the QMX was last "
+                             "powered on, power-cycle the QMX.",
                              proto, mins);
                     ESP_LOGW(TAG, "%s", msg);
                     ui_toast_ms(msg, 30000);
@@ -2958,6 +3488,76 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     ft8_hound_tick(slot_sec);
     ft8_robot_tick(slot_sec);
     ft8_screen_view_request_refresh();
+}
+
+/* ---- T132: decode one alternate sub-mode out of the copied slot ---------
+ *
+ * Runs on the DECODE task, not the capture task - see the note at
+ * s_alt_audio for the timing measurement that put it here.
+ *
+ * ⛔ monitor_process() ON THIS TASK IS SAFE ONLY BECAUSE THIS MONITOR OWNS
+ * ITS BUFFERS. The "capture-task-only, strictly sequential" rule recorded at
+ * s_shared_fft_work is a rule about the SHARED kiss-FFT config and the shared
+ * STFT scratch; build_alt_monitor() deliberately gives the alternate its own,
+ * because its nfft is different and the shared ones could not be lent to it
+ * anyway. If anyone ever makes the alternate share them, this loop has to
+ * move back onto the capture task and pay the timing cost.
+ *
+ * One job can carry more than one window - Turbo fits twice inside a 15 s
+ * primary slot - and they are processed STRICTLY in sequence, reusing the one
+ * monitor, because that is the only way one waterfall can serve both.
+ */
+static void decode_alt_job(worker_ctx_t *wctx, const decode_job_t *job)
+{
+    monitor_t *mon = s_alt_pool[job->mon_idx];
+    if (!mon || !s_alt_audio) return;
+
+    const ftx_protocol_t alt = (ftx_protocol_t)job->expect_mon;
+    const decode_ctx_t dc = {
+        .expect_mon  = alt,
+        .expect_mode = (ftx_protocol_t)job->expect_mode,
+        .rx_only     = true,
+        .budget_ms   = JS8_ALT_DECODE_BUDGET_MS,
+        .max_iters   = FT8_LDPC_MAX_ITERS,
+    };
+
+    const int alt_samples = ftx_protocol_slot_ms(alt) * (SR_HZ / 1000);
+
+    for (int w = 0; w < job->alt_n && w < JS8_ALT_MAX_WINDOWS; w++) {
+        /* The operator changed sub-mode while this job sat in the queue. The
+         * candidate loop's own guard would catch it, but only after a full
+         * STFT - and the STFT is the expensive half. */
+        if (proto_for_mode() != dc.expect_mode) {
+            ESP_LOGI(TAG, "alt %s: sub-mode moved - dropping the rest of this slot",
+                     ftx_protocol_label(alt));
+            break;
+        }
+        const int off = job->alt_offs[w];
+        /* ⛔ BOUNDS, NOT TRUST. The offsets come from js8_alt_select() and are
+         * right, but this is a read of 10 s of float out of a PSRAM buffer
+         * and the cost of being wrong is a fault in another task entirely -
+         * the same shape as the SLOT_SAMPLES_MAX refusal in the slot loop.
+         * The mutation test in js8_alt_window_harness.c segfaulted exactly
+         * here, on the first run, for exactly this reason. */
+        if (off < 0 || off + alt_samples > s_alt_audio_samples) {
+            ESP_LOGE(TAG, "alt %s window %d at +%d runs past the %d-sample copy"
+                          " - REFUSING", ftx_protocol_label(alt), w, off,
+                     s_alt_audio_samples);
+            continue;
+        }
+
+        monitor_reset(mon);
+        int64_t t_stft = esp_timer_get_time();
+        for (int pos = 0; pos + mon->block_size <= alt_samples;
+             pos += mon->block_size) {
+            monitor_process(mon, &s_alt_audio[off + pos]);
+        }
+        int stft_ms = (int)((esp_timer_get_time() - t_stft) / 1000);
+
+        decode_slot(wctx, mon, &dc, job->slot_sec, job->slot_idx, job->mon_idx,
+                    0 /* cap_ms: there was no capture, this is a replay */,
+                    stft_ms, 0 /* start_off_ms */, 0, 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3034,9 +3634,35 @@ static void ft8_decode_task(void *arg)
             continue;
         }
         if (job.mon_idx < 0) break;     // termination sentinel from capture task
-        decode_slot(wctx, s_mon_pool[job.mon_idx], job.slot_sec, job.slot_idx,
-                    job.cap_ms, job.stft_ms, job.start_off_ms,
-                    job.arm_backlog, job.drop_delta);
+        if (job.pool) {
+            /* T132: an alternate sub-mode, RECEIVE ONLY. It deliberately does
+             * NOT touch s_decode_jobs_done - that counter is one half of the
+             * hold-for-decode TX gate (see FT8_TX_HOLD_DEADLINE_MS), paired
+             * with s_decode_jobs_queued, which the capture task does not bump
+             * for an alternate either. Counting it there would make our own
+             * transmission wait on a decode that can never change what we are
+             * about to send. */
+            decode_alt_job(wctx, &job);
+            s_alt_busy[job.mon_idx] = false;
+            continue;
+        }
+        {
+            const decode_ctx_t dc = {
+                .expect_mon  = (ftx_protocol_t)job.expect_mon,
+                .expect_mode = (ftx_protocol_t)job.expect_mode,
+                .rx_only     = false,
+                .budget_ms   = FT8_DECODE_BUDGET_MS,
+                /* ⛔ FT4's own iteration count, picked HERE from the job's own
+                 * protocol rather than read off s_pool_proto inside the
+                 * candidate loop. Same value as before; it just no longer
+                 * depends on a global that an alternate job would make lie. */
+                .max_iters   = (job.expect_mon == (uint8_t)FTX_PROTOCOL_FT4)
+                                   ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS,
+            };
+            decode_slot(wctx, s_mon_pool[job.mon_idx], &dc, job.slot_sec, job.slot_idx,
+                        job.mon_idx, job.cap_ms, job.stft_ms, job.start_off_ms,
+                        job.arm_backlog, job.drop_delta);
+        }
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool
         // Open the hold-for-decode gate ONLY here, after decode_slot() has
         // fully returned - by then ft8_qso_advance() has run and (on progress)
@@ -3277,6 +3903,12 @@ static void ft8_task(void *arg)
          * different task entirely, with no connection to this line visible
          * anywhere. Refuse loudly instead: a protocol that does not fit must
          * not capture at all. */
+        /* T132: the alternate sub-mode monitor. After the SLOT_SAMPLES_MAX
+         * refusal below would be too late - that branch `continue`s - so it
+         * goes here, where `slot_samples` is known and the pool for this
+         * protocol is already settled. Costs one settings read per slot. */
+        reinit_alt_if_changed(sproto, slot_samples);
+
         if (slot_samples > SLOT_SAMPLES_MAX) {
             ESP_LOGE(TAG, "%s needs %d samples/slot but the capture scratch holds "
                           "%d - REFUSING to capture. Raise SLOT_SAMPLES_MAX.",
@@ -3709,8 +4341,24 @@ static void ft8_task(void *arg)
                 int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
                 int stft_ms = (int)(stft_us / 1000);
                 int drop_delta = (int)(audio_get_dropped_total() - drop_before);
-                decode_job_t job = { bi, slot_sec, slot_idx, cap_ms, stft_ms,
-                                     start_off_ms, arm_backlog, drop_delta };
+                /* ⛔ DESIGNATED INITIALISERS, not the positional list this
+                 * used to be. decode_job_t grew a pool selector and two
+                 * protocol stamps for T132; a positional list would have put
+                 * slot_sec into `pool` and sent every decode to the wrong
+                 * pool, silently, with the compiler happy. */
+                decode_job_t job = {
+                    .mon_idx      = bi,
+                    .pool         = 0,
+                    .expect_mon   = (uint8_t)sproto,
+                    .expect_mode  = (uint8_t)proto_for_mode(),
+                    .slot_sec     = slot_sec,
+                    .slot_idx     = slot_idx,
+                    .cap_ms       = cap_ms,
+                    .stft_ms      = stft_ms,
+                    .start_off_ms = start_off_ms,
+                    .arm_backlog  = arm_backlog,
+                    .drop_delta   = drop_delta,
+                };
                 if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
                     // Shouldn't happen (queue depth == pool size), but if it
                     // does, release the monitor so it isn't lost from the pool.
@@ -3718,6 +4366,60 @@ static void ft8_task(void *arg)
                     ESP_LOGW(TAG, "slot %d: decode queue full - slot dropped", slot_idx);
                 } else {
                     s_decode_jobs_queued++;   // hold-for-decode gate bookkeeping
+                }
+
+                /* ---- T132: the alternate sub-mode, on a duty cycle --------
+                 *
+                 * AFTER the primary job, always. The primary decode carries
+                 * the QSO - an alternate ahead of it in the queue would delay
+                 * our own reply by its whole decode, which is the latency
+                 * problem the early-advance work already fought once.
+                 *
+                 * The work here is a memcpy and a queue send; the STFT and
+                 * the decode both run on the decode task (see s_alt_audio),
+                 * so this adds nothing to the capture task's path to the next
+                 * UTC boundary. */
+                if (s_alt_pool[0] && s_alt_audio) {
+                    ftx_protocol_t alt = FTX_PROTOCOL_FT8;
+                    int alt_offs[JS8_ALT_MAX_WINDOWS];
+                    int alt_n = 0;
+                    if (js8_alt_select(sproto, settings_get_js8_alt_submode(),
+                                       slot_sec, &alt, alt_offs,
+                                       JS8_ALT_MAX_WINDOWS, &alt_n) &&
+                        (int)alt == s_alt_proto &&
+                        slot_samples <= s_alt_audio_samples) {
+                        if (s_alt_busy[0]) {
+                            /* The last alternate decode has not finished. It
+                             * is optional work, so skip this visit rather
+                             * than wait or allocate a second waterfall - but
+                             * SAY SO, because a persistent backlog here means
+                             * the budget arithmetic in js8_alt.h is wrong and
+                             * nothing else would report it. */
+                            ESP_LOGW(TAG, "slot %d: alt %s monitor still busy "
+                                          "- skipping this alternate window",
+                                     slot_idx, ftx_protocol_label(alt));
+                        } else {
+                            memcpy(s_alt_audio, s_cap_scratch,
+                                   (size_t)slot_samples * sizeof(float));
+                            s_alt_busy[0] = true;
+                            decode_job_t ajob = {
+                                .mon_idx     = 0,
+                                .pool        = 1,
+                                .expect_mon  = (uint8_t)alt,
+                                .expect_mode = (uint8_t)proto_for_mode(),
+                                .alt_n       = alt_n,
+                                .slot_sec    = slot_sec,
+                                .slot_idx    = slot_idx,
+                            };
+                            for (int w = 0; w < alt_n && w < JS8_ALT_MAX_WINDOWS; w++)
+                                ajob.alt_offs[w] = alt_offs[w];
+                            if (xQueueSend(s_decode_queue, &ajob, 0) != pdTRUE) {
+                                s_alt_busy[0] = false;
+                                ESP_LOGW(TAG, "slot %d: decode queue full - "
+                                              "alternate window dropped", slot_idx);
+                            }
+                        }
+                    }
                 }
             } else {
                 s_buf_busy[bi] = false;   // capture failed: release the monitor

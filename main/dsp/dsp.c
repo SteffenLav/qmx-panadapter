@@ -62,6 +62,8 @@ static volatile bool s_avg_done   = false;
 // accumulating LINEAR power per bin over ~1 s before ranking - a single FFT frame
 // is +/-13 dB Rayleigh-noisy and cannot tell a spur from luck.
 
+#include "util/mem_where.h"
+
 static const char *TAG = "dsp";
 
 #define STATS_PERIOD_MS  1000
@@ -566,10 +568,18 @@ esp_err_t dsp_init(void)
         ESP_LOGE(TAG, "Failed to allocate DSP buffers");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Allocated buffers: window=%d B, workbuf=%d B, spectrum=%d B",
+    /* T134 - the SIZE was never the question; WHICH internal memory is.
+     * These three stay internal on purpose (the PSRAM spill cost 10x here,
+     * see the note at s_ft8_pre), but "internal" includes the slow LP/RTC
+     * block, so print where each one actually landed. */
+    ESP_LOGI(TAG, "Allocated buffers: window=%d B %p/%s, workbuf=%d B %p/%s, "
+                  "spectrum=%d B %p/%s",
              (int)(DSP_FFT_SIZE * sizeof(float)),
+             (void *)s_window,   mem_where(s_window),
              (int)(DSP_FFT_SIZE * 2 * sizeof(float)),
-             (int)(DSP_FFT_SIZE * sizeof(float)));
+             (void *)s_workbuf,  mem_where(s_workbuf),
+             (int)(DSP_FFT_SIZE * sizeof(float)),
+             (void *)s_spectrum, mem_where(s_spectrum));
 
     /* Latched once: the input source cannot change without a restart
      * (rx_source_t), so reading it here keeps settings off the hot path. */

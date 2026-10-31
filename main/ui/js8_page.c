@@ -1,5 +1,7 @@
 #include "js8_page.h"
 
+#include "js8_alt.h"   /* js8_alt_mark() - one definition of the mark column */
+
 #include <stdio.h>
 #include <string.h>
 
@@ -104,6 +106,12 @@ int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
         lines[row][0] = m->active     ? JS8_PAGE_FLAG_LIVE
                       : m->truncated  ? JS8_PAGE_FLAG_TRUNC
                                       : JS8_PAGE_FLAG_NONE;
+
+        /* ⛔ ON THE FIRST ROW ONLY, like the flag beside it. A long free-text
+         * run wraps, and a letter repeated down the continuation rows would
+         * read as several separate alternate-submode messages. */
+        lines[row][JS8_PAGE_COL_SUBMODE] =
+            js8_alt_mark((ftx_protocol_t)m->proto);
 
         char ag[6];
         age_str(now_utc, m->last_utc, ag);

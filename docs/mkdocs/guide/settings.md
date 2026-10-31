@@ -52,7 +52,7 @@ receives, and everything the Tab5 shows or plays comes from that stream. Stan KC
 PCM1804 samples, taken before the radio's own DSP. **The control still works on the
 QMX's own headphones and speaker**, which is why it is kept and labelled that way
 rather than removed. See
-[Audio Features](audio.md#know-which-volume-control-does-what). Because it is **per band**, the Tab5 reads it from the radio
+[Audio Features](audio.md#4-know-which-volume-control-does-what). Because it is **per band**, the Tab5 reads it from the radio
 rather than remembering a number that would belong to whichever band you were on last;
 it shows "reading…" until the radio answers, and **"radio not connected"** if the radio
 is not there at all. Until v1.8.3 it could stick on "reading…" for a whole session:
@@ -1060,9 +1060,15 @@ You type **the callsign and the two reports. Nothing else.** The frequency,
 mode, band, date, time, your own callsign and grid, and the running activation
 reference all come from the radio and the device.
 
-- The reports arrive **filled in from the mode** — `599` for CW, `59` for
-  phone. Clearing one logs the contact *without* a report rather than with a
-  wrong one.
+- The reports arrive **filled in**. The one you *send* comes from the mode —
+  `599` for CW, `59` for phone — because that is your judgement of a signal
+  this device cannot hear. From v1.23.0 the **S digit of the report you
+  received is measured**, off the S-meter's own 10-second peak hold, instead of
+  being a `9` every time *(Gyula HA3HZ)*. R and T stay at the mode default: no
+  measurement here answers readability, and every synthesised rig on the air is
+  T9. With no reading to hand it falls back to the mode default rather than
+  offering S0 — an absent measurement is not a weak signal.
+- Clearing a report logs the contact *without* it rather than with a wrong one.
 - The window **stays open** after Log, with the callsign cleared and the
   reports kept. A run of contacts is not one dialog at a time.
 - **Tapping a spot** in the spots lane opens this window with that callsign

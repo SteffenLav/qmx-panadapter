@@ -30,6 +30,12 @@ void ui_apply_saved_mode_start(void);
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
 void ui_update_smeter(int s_units);
+/* T120 - the strongest S-unit reading of the last few seconds, for the
+ * manual log window's received report. false when nothing was measured in
+ * that time, which is NOT the same as a weak signal: the caller falls back
+ * to its own default rather than offering S0. See ui.c for the hold policy
+ * and for the one thing about it that has not been measured. */
+bool ui_smeter_recent_peak(int *out_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"
 void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll
@@ -117,6 +123,17 @@ void ui_note_view_reframe(void);
  * See the comment above that function in ui.c. */
 uint32_t ui_bandplan_move_view(int64_t view_center_hz);
 void ui_request_bandplan_view(int64_t view_center_hz);
+/* T126: move the VIEW inside what the radio already hears and leave the dial
+ * alone - the opposite promise from ui_request_bandplan_view(), which is the
+ * band-plan knob and may retune. Queued for the LVGL thread the same way.
+ * ui_pan_is_available() is false when the still view is off, because then the
+ * spectrum follows the dial and there is no independent window to move. */
+void ui_request_pan_hz(int64_t pan_hz);
+/* Steps whenever the spectrum's view actually moves. Carried in the WS frame
+ * trailer so the browser can tell, exactly and at any zoom, which frame is the
+ * first one drawn on the new window - see the note at sv_apply_pan_hz(). */
+uint8_t ui_view_seq8(void);
+bool ui_pan_is_available(void);
 
 void ui_set_still_view(bool on);
 bool ui_get_still_view(void);
@@ -527,6 +544,28 @@ typedef enum {
     UI_SB_TUNE_NO_EDGE,       /* the window closed without two votes   */
 } ui_sb_tune_t;
 
+/* RIT park/restore - switch an offset off and back on WITHOUT losing it,
+ * which is what a rig with a dedicated RIT button does and what clearing it
+ * cannot express (Roy KI0ER's round robin: one station off frequency, the
+ * offset wanted and unwanted as the turn passes round).
+ *
+ * On the Tab5 this is a long press on the RIT pill. It is also /api/cmd
+ * {"action":"rit_park"}, because a long press is not available to a browser
+ * and the parked value is firmware state either surface may move.
+ *
+ * Safe from any task: it drives CAT and a static int, and touches no widget. */
+typedef enum {
+    UI_RIT_PARKED = 0,   /* an engaged offset was stood down and remembered */
+    UI_RIT_RESTORED,     /* the remembered offset was put back              */
+    UI_RIT_NOTHING,      /* nothing engaged and nothing parked              */
+} ui_rit_park_t;
+
+/* *hz (may be NULL) is the offset parked or restored; 0 for UI_RIT_NOTHING. */
+ui_rit_park_t ui_rit_park_toggle(int *hz);
+
+/* The parked offset in Hz, 0 if nothing is parked. */
+int ui_rit_parked_hz(void);
+
 ui_sb_tune_t ui_sb_tune_start(void);
 const char  *ui_sb_tune_reason(ui_sb_tune_t r);
 
@@ -590,6 +629,12 @@ void ui_restart_edge_grip_anims(void);
 // ui_theme_style_textarea(); not normally called directly.
 void ui_kbd_note_focus(lv_obj_t *ta);
 void ui_kbd_note_unfocus(lv_obj_t *ta);
+
+// True while EITHER physical keyboard can type - BLE or the snap-on. This is
+// the predicate ui_osk_show() gates on, and the one a layout should ask when
+// it needs to know whether the 280 px on-screen keyboard will appear. Never
+// cached: both halves go false on a detach. See T131 in TODO.md.
+bool ui_phys_kbd_active(void);
 
 // Register the open modal's Save and Cancel buttons so the physical keyboard's
 // Enter key clicks Save (commit + close) and Esc clicks Cancel. Either may be

@@ -42,6 +42,25 @@ void panadapter_wifi_set_enabled(bool enabled);
 void panadapter_wifi_apply_preferred(void);
 
 // Returns true once the station has an IP address.
+/* Is the LWIP TCP/IP stack INITIALISED? This is not "are we online" - it is
+ * the far weaker question of whether esp_netif_init() ever ran, which is what
+ * starts the tcpip thread and creates its mailbox.
+ *
+ * ⛔ IT IS FALSE MORE OFTEN THAN IT LOOKS. wifi_task() returns early when
+ * esp_hosted_init() fails - BEFORE esp_netif_init() - so a boot where the C6
+ * does not come up leaves the whole device with no tcpip thread at all. Every
+ * socket call then hits
+ *     assert failed: tcpip_send_msg_wait_sem tcpip.c:454 (Invalid mbox)
+ * which is an abort, not an error return. MEASURED on bench1 2026-10-31: SDIO
+ * did not signal within 6000 ms, and 4 s later the heap watchdog's 10 s socket
+ * probe took the board down.
+ *
+ * ⚠ ASK THIS BEFORE ANY socket() ON A PATH THAT CAN RUN WITHOUT WIFI. The
+ * feeds (dxcluster, rbn, pskreporter) are safe because they already refuse
+ * while offline, and rigctld only starts from the got-IP path. A periodic
+ * diagnostic has no such gate of its own and needs this one. */
+bool wifi_tcpip_stack_up(void);
+
 bool wifi_is_connected(void);
 
 // Is WiFi even meant to be running? False after the operator turned it off (the

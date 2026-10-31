@@ -35,6 +35,7 @@
 #include "esp_codec_dev.h"
 #include "dsps_fir.h"
 #include "line_in_hilbert.h"
+#include "util/mem_where.h"
 
 static const char *TAG = "line_in";
 
@@ -116,6 +117,21 @@ static bool alloc_scratch(void)
         free_scratch();
         return false;
     }
+    /* T134 - WHICH internal RAM did each of these land in? All seven are far
+     * under 16 KB, so every one can be handed the slow LP/RTC SRAM block the
+     * same way last_frame was (T133). This runs once per line-in start and
+     * costs one log line; it answers the question off the board instead of
+     * from a guess. ⛔ Read the addresses before moving anything - a PSRAM
+     * spill cost 10x the other way on the FFT work area. */
+    ESP_LOGI(TAG, "scratch raw=%p/%s in=%p/%s q=%p/%s coef=%p/%s "
+                  "delay=%p/%s idelay=%p/%s iq=%p/%s",
+             (void *)s_raw,    mem_where(s_raw),
+             (void *)s_in,     mem_where(s_in),
+             (void *)s_q,      mem_where(s_q),
+             (void *)s_coeffs, mem_where(s_coeffs),
+             (void *)s_delay,  mem_where(s_delay),
+             (void *)s_idelay, mem_where(s_idelay),
+             (void *)s_iq,     mem_where(s_iq));
     return true;
 }
 

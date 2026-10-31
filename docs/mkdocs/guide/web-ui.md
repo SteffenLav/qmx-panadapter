@@ -34,7 +34,7 @@ lose the top and bottom bar controls entirely with no way to reach them.
 
 The web UI provides full remote control:
 
-- **Frequency** — tap the VFO to open the numeric keypad (drag it by its title bar to reposition; toggle between a 10-key and a phone-style digit layout), or click the spectrum to tune
+- **Frequency** — tap the VFO to open the numeric keypad (drag it by its title bar to reposition; toggle between a 10-key and a phone-style digit layout), or click the spectrum to tune (right-drag it to pan instead — see below)
 - **Mode** — buttons for USB, LSB, CW, DiGi
 - **Bandwidth** — selectors for SSB filter width or CW passband
 - **Band** — jump between configured bands
@@ -43,6 +43,24 @@ The web UI provides full remote control:
 - **RIT** — click the **RIT** pill to arm it, then click a caller to receive off your
   transmit frequency without moving the dial. See
   [RIT](panadapter.md#rit-receiving-off-your-transmit-frequency)
+- **Park / Restore** — appears beside RIT only when there is an offset to stand down,
+  or a parked one to put back. Parking keeps the value; clearing RIT throws it away.
+  The Tab5 does the same thing with a long press on its RIT pill, and both screens
+  share the one parked value
+- **Tune** — put the dial on the signal. In CW it zero-beats the carrier; in USB or
+  LSB it snaps to the far station's own filter edge and onto the grid they are almost
+  certainly on. One press, one move — it never runs by itself, and it cannot transmit.
+  It says how far the dial went, or why it would not move
+- **Keyer** — your CW keyer speed, shown only when the radio is in CW. The speed is
+  sent to the radio and read back, so the figure is what the QMX accepted. **0** is a
+  real setting: it selects Straight Key mode, which is the quick way to key down for a
+  tune-up. This is what *you* send — the decoded-CW line shows the speed of the station
+  you are *hearing*, which is a different number
+- **PWR** — transmit power on this band, shown only where that band has been through
+  Calibrate Power. The levels offered are the ones your own sweep measured, so a figure
+  the PA never produced is refused rather than rounded to a neighbour. While a
+  transmission is in progress, or while WSPR owns the PA, the target is stored and the
+  page says so
 
 Everything mirrors the Tab5 display with sub-second latency.
 
@@ -51,6 +69,14 @@ Everything mirrors the Tab5 display with sub-second latency.
 The waterfall is **live-streamed** from the Tab5 every ~100 ms. You see the same real-time signal activity as on the device itself.
 
 Click anywhere on the spectrum to tune to that frequency. The waterfall updates continuously — no refresh needed.
+
+**Right-drag to pan.** Hold the **right** mouse button on the spectrum or waterfall and drag sideways to move the window along the band. Left-drag still tunes — it puts the dial where you release — so the two gestures do not collide: **left moves the radio, right moves the view.**
+
+A pan never moves the dial. It moves the window inside what the radio is already receiving, so the frequency stays exactly where it was and the passband marker slides across the screen instead of sitting still. Drag right and you pull the spectrum right with you, bringing lower frequencies into view — the way a map drags. The passband stays visible throughout, in every mode.
+
+It needs the **still display** to be on, which is the default. With it off the spectrum follows the dial, so there is no separate window to move and the gesture is declined with that reason. The browser's own context menu is suppressed over those two panels so the drag can happen; it still works everywhere else on the page.
+
+The band-plan strip below drags the *opposite* way, on purpose: there your hand is on the window **marker** rather than on the picture, so the marker travels with your hand and the frequency rises as you drag right. That one does retune.
 
 **Whole-band plan strip.** Along the bottom of the view (above the status bar) is a colour-coded CW/Digi/Phone strip spanning the entire current band, mirroring the one on the Tab5. A draggable "visible window" marks the slice currently on screen — drag it, or tap anywhere on the strip, to retune — and a marker shows the VFO position.
 
@@ -535,7 +561,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Let me use the QMX menus** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you hand it back. See [Settings](settings.md#radio)
 - **Antenna Tune** — QMX 1.04+ only; keys a steady carrier with live power and SWR, and stops itself after 60 seconds
 - **Activation** — start or stop a POTA/SOTA session from the browser. While one is running a badge appears in the top bar with the reference and the contact count, so it cannot be forgotten on the drive home
-- **Log a contact** — log a CW or SSB contact you worked by hand. You type the callsign and the two reports; the frequency, mode, band, date, time, your own callsign and grid and the running activation all come from the radio. The reports arrive filled in from the mode — 599 for CW, 59 for phone — and clearing one logs the contact without a report rather than with a wrong one. It **stays open** after Log, with the callsign cleared and the reports kept, because a run of contacts is not one dialog at a time. It is refused if the radio is not connected, since the record would have no frequency *(Gyula HA3HZ, Brian KB9WFS)*
+- **Log a contact** — log a CW or SSB contact you worked by hand. You type the callsign and the two reports; the frequency, mode, band, date, time, your own callsign and grid and the running activation all come from the radio. The report you send arrives filled in from the mode — 599 for CW, 59 for phone — and from v1.23.0 the S digit of the report you received is measured off the S-meter instead of being a 9 every time *(Gyula HA3HZ)*. Clearing one logs the contact without a report rather than with a wrong one. It **stays open** after Log, with the callsign cleared and the reports kept, because a run of contacts is not one dialog at a time. It is refused if the radio is not connected, since the record would have no frequency *(Gyula HA3HZ, Brian KB9WFS)*
 - **Scheduled events** — the contest calendar and announced POTA/SOTA activations on one timeline, soonest first, with what is on the air now below what is coming. Filter to Contests or ?OTA when you have already decided which kind of evening it is. The list is fetched at most every 15 minutes; Refresh asks for it now. The source being down is normal — the last list stays up and the age line says how old it is
 - **Radio menus** — the QMX's own 80×24 menu system, in the browser. Arrow keys, Enter and Back on screen, and your real keyboard works too. Needs the radio's second USB serial port switched on first. See [Radio Menus](radio-menus.md)
 

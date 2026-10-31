@@ -13,6 +13,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "js8_chat.h"
 
@@ -47,6 +48,25 @@
  * no clock, and 64 columns do not hold both: clock + age + offset + sender
  * would leave 33 for the message, and "F6HCM HB9BV HEARTBEAT SNR" is 26 on
  * its own. Operator, 2026-10-09: "age in sec needs to be there". */
+/* ⛔ THE SUBMODE MARK, column 1 - the one character between the flag column
+ * and AGE that the layout already left blank. T132 decodes ONE alternate JS8
+ * submode on a duty cycle as well as the one we are operating, so a row no
+ * longer implies the primary submode and the page has to say which speed
+ * heard the station.
+ *
+ * ⭐ IT COSTS THE MESSAGE COLUMN NOTHING. The grid was exactly full when BAND
+ * took five characters off the text (see above), and the operator noticed; a
+ * second column would have taken more. Column 1 was already spare, and it is
+ * where the eye scans for the flag anyway.
+ *
+ * ALWAYS the speed that heard the message: 'N' Normal, 'F' Fast, 'T' Turbo,
+ * 'S' Slow - see js8_alt_mark(). It used to be blank for the submode being
+ * operated, which made one column mean two things and only taught the
+ * operator anything on the rare alternate row (operator, 2026-10-31). Blank
+ * now means only "not a JS8 protocol". */
+#define JS8_PAGE_COL_SUBMODE 1
+#define JS8_PAGE_W_SUBMODE   1
+
 #define JS8_PAGE_COL_AGE     2
 #define JS8_PAGE_W_AGE       4
 #define JS8_PAGE_COL_HZ      7
@@ -101,6 +121,12 @@
  * can wrap onto several rows, so a tap at row r cannot be turned into a
  * message by arithmetic. Operator, 2026-10-09: the TX target is whatever row
  * you tap, not the newest message. */
+/* `primary_proto` is the ftx_protocol_t the station is OPERATING on, cast to
+ * ⛔ THE PRIMARY PROTOCOL IS NO LONGER PASSED IN. It used to decide which
+ * rows got a mark - the one being operated was left blank - and the operator
+ * asked for the letter on every row instead (2026-10-31), so there is nothing
+ * left for it to decide. Removed rather than ignored, so no future caller
+ * believes it still matters. */
 int js8_page_render(const js8_chat_msg_t *msgs, int n, int64_t now_utc,
                     char lines[JS8_PAGE_ROWS][JS8_PAGE_COLS + 1],
                     int row_msg[JS8_PAGE_ROWS]);

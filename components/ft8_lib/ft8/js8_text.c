@@ -374,6 +374,26 @@ bool js8_text_to_frame(const char* text, uint8_t frame[JS8_FRAME_BYTES], uint8_t
         d.cmd = JS8_CMD_SNR;
         d.num = rpt;
     }
+    else if (js8_cmd_from_text(rest) != JS8_CMD_NONE)
+    {
+        /* ⭐ THE OTHER DIRECTIVES: GRID? INFO? STATUS? HEARING? HW CPY? QSL
+         * AGN? YES NO 73 and the rest of the vocabulary. The packer was never
+         * the limit - js8_pack_directed() writes any of the 32 indices into
+         * five bits - and js8_frame_to_text() has always spelled every one of
+         * them back. Only this parser refused, so the macro buttons could send
+         * two commands out of thirty-two.
+         *
+         * ⚠ THIS MUST STAY BELOW THE NUMBER-BEARING BRANCHES. "SNR" and
+         * "RR" appear in kCmdText as bare words, and a report ("-07", "R-07")
+         * must still reach the branches above that attach the number. The
+         * bare forms fall through to here and carry JS8_NUM_NONE, which is
+         * what js8_frame_to_text() renders back as the bare word.
+         *
+         * The round trip is safe by construction: the only spelling this
+         * accepts is the one js8_cmd_text() hands out, which is the one the
+         * renderer uses. See js8_cmd_from_text() for what it refuses. */
+        d.cmd = js8_cmd_from_text(rest);
+    }
     else
     {
         /* No JS8 Directed form. The FT8 ladder's opening "<them> <me> <grid>"

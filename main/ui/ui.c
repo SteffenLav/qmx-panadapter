@@ -80,6 +80,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "js8_submode.h"   /* the submode table and the one refusal rule */
+#include "js8_alt.h"       /* T132 alternate-submode decode (RX only) */
 #include "ft8_screen_view.h"
 #include "cw_screen_view.h"
 #include "wspr_screen_view.h"
@@ -1896,8 +1897,29 @@ static int     s_sv_side    = 0;     /* +1 right, -1 left, 0 none */
 
 static int64_t s_sv_pan_hz = 0;
 
+/* ⛔⛔ THE ONE PLACE THAT CAN SAY "THE VIEW MOVED", AND THE BROWSER NEEDS IT.
+ *
+ * The web right-drag previews its pan locally and must drop that preview on
+ * the exact frame whose bins were captured after the pan landed. Six attempts
+ * to infer that moment in the browser failed in front of the operator: above
+ * zoom x1 the frame carries no viewport to compare (span = 0, the zoom-FFT
+ * path), and correlating the bins needs a carrier the band did not have.
+ *
+ * This counter is the answer, and it is free. It steps whenever the view
+ * actually moves; webserver_ws.c puts it in the frame trailer beside the bins
+ * it describes, and a frame whose sequence differs from the one held at release
+ * IS the first frame on the new window. No inference and no tolerance.
+ *
+ * ⚠ It must step HERE rather than at the callers. Every pan - touch, BLE mouse,
+ * band-plan strip, the API - funnels through this function, and a counter
+ * maintained at the call sites would miss the next one added. */
+static volatile uint8_t s_view_seq = 0;
+
+uint8_t ui_view_seq8(void) { return s_view_seq; }
+
 static void sv_apply_pan_hz(int64_t hz)
 {
+    if (hz != s_sv_pan_hz) s_view_seq++;
     s_sv_pan_hz       = hz;
     s_pan_offset_bins = (int)llround((double)hz * (double)DSP_FFT_SIZE
                                                 / (double)DSP_SAMPLE_RATE_HZ);
@@ -3426,7 +3448,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_DISTANCE   17  // distance unit (km/miles) - shown in FT8 AND WSPR,
                                   // since both decode lists honour it
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
-#define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
+#define DRAWER_SEC_SIMMODE    19  // FT8 PAGE, every sub-mode: phantom-station simulation (practice/testing, never keys the radio). FT8/FT4 are ft8_sim.c, JS8 is js8_sim.c - one toggle, the protocol picks
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
 #define DRAWER_SEC_CWSIM      22  // CW-page-only: CW phantom practice (own flag, NOT sim_mode_en)
 #define DRAWER_SEC_TUNE2      21  // Antenna Tune (1_04+ only) - own section right above
@@ -4277,6 +4299,45 @@ static void drawer_js8_submode_cb(lv_event_t *e)
     /* The MODE label, the monitor-pool rebuild and the log line are all
      * js8_submode_set()'s job now. */
 }
+
+/* ---- T132: the ALTERNATE sub-mode, decoded as well as the primary -------
+ *
+ * ⛔ UNLIKE THE CONTROL ABOVE, THIS ONE IS NEVER REFUSED. The alternate
+ * decode is RECEIVE ONLY - it never reaches the QSO machine, the robot or TX
+ * arming (see decode_ctx_t in ft8_test.c) - so it does not touch the physical
+ * layer we transmit on and it is safe to change mid-QSO. There is no busy
+ * rule to share, which is why it does not go through js8_submode_set().
+ *
+ * ⚠ It is off by default and it stays off until it has heard a real station.
+ * Fast, Turbo and Slow have only ever round-tripped through our own encoder
+ * and decoder. */
+static lv_obj_t *s_js8alt_dd = NULL;
+
+static void drawer_refresh_js8_alt(void)
+{
+    if (!s_js8alt_dd) return;
+    lv_dropdown_set_selected(
+        s_js8alt_dd,
+        (uint32_t)js8_alt_index_of(settings_get_js8_alt_submode()));
+}
+
+static void drawer_js8_alt_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t  i  = lv_dropdown_get_selected(dd);
+    uint8_t   v  = js8_alt_value((int)i);
+    settings_set_js8_alt_submode(v);
+    /* ⭐ SAY WHEN IT CANNOT FIT, rather than letting it read as broken. Slow
+     * is 30 s and never fits inside a 15 s capture - that is arithmetic, not
+     * a failure - so the setting is accepted and simply never selects. A
+     * dropdown that sat on "Slow" while nothing ever decoded would be the
+     * silent kind of wrong. */
+    if (v != 255 &&
+        !js8_alt_fits(ft8_op_mode_protocol(), js8_alt_proto_for_submode(v))) {
+        ui_toast("That submode's slot is longer than the one we capture - "
+                 "it cannot be decoded alongside this one");
+    }
+}
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_port_a_mode_cb(lv_event_t *e);
 static void porta_warn_refresh(uint8_t mode);
@@ -4520,6 +4581,30 @@ static void update_db_scale(void);   // positions/labels the gridline values
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
+/* Invisible tap targets over the off-view VFO arrow, one per edge. Only the
+ * side whose arrow is drawn is ever un-hidden - see the arrow in the draw
+ * pass. Same shape as spots_lane.c's edge counters, and for the same reason:
+ * a live target sitting over empty spectrum would steal tap-to-tune. */
+static lv_obj_t *s_vfo_arrow_hit_l = NULL;
+static lv_obj_t *s_vfo_arrow_hit_r = NULL;
+/* Tapping either arrow brings the dial back to the middle of the view.
+ *
+ * ui_request_pan_hz(residual) and not 0: the marker is drawn at
+ * cx = (residual - pan) * W / span + W/2, so cx lands on W/2 exactly when the
+ * pan equals the residual. Derived from the SAME expression that draws the
+ * marker, so the tap cannot put it somewhere the arrow did not promise - the
+ * spectrum is rotated by a whole number of bins and a pan of 0 would be up to
+ * ~23 Hz off, which is half the screen at x16.
+ *
+ * Queued, not applied here: this runs in the LVGL event context and
+ * pan_q_apply() calls dsp_set_zoom(). Same route the web API takes. */
+static void vfo_arrow_click_cb(lv_event_t *e)
+{
+    (void)e;
+    int res = ui_get_if_residual_hz();
+    ui_request_pan_hz((int64_t)res);
+    ESP_LOGI(TAG, "off-view arrow tapped: pan -> %d Hz, dial back to centre", res);
+}
 /* Partial-invalidate state for ui_push_spectrum - declared here, beside the
  * buffer it describes, because build_spectrum() allocates it. The reasoning
  * is at the invalidate itself. */
@@ -5740,20 +5825,50 @@ static void rit_pill_cb(lv_event_t *e)
 // so you run an offset for them and want it gone - and then back, unchanged -
 // as the turn passes round. Clearing and re-dialling it every time is the thing
 // he was asking to avoid.
-static void rit_pill_long_cb(lv_event_t *e)
+/* ⭐ THE PARK/RESTORE ITSELF, WITH NO LVGL IN IT, so the browser can reach
+ * it too (Ralph DL1HR's class of gap: a feature that exists on one surface
+ * only). The long press was the ONLY way to park an offset, and a long press
+ * is not a thing a web page has.
+ *
+ * ⛔ NOTHING HERE MAY TOUCH A WIDGET. /api/cmd runs on the httpd task, and
+ * an LVGL call from there is the display-lock inversion this project has
+ * already paid for once. The pill redraws itself on rit_pill_tick_cb(), so
+ * the web path needs no repaint at all; the Tab5 caller below syncs straight
+ * away only because a button press should not wait for the next tick. */
+/* What is parked right now, 0 for nothing. /api/status sends it so the web
+ * RIT control can offer "Restore +120" instead of a button whose effect the
+ * operator has to remember. Read-only and lock-free: one int, written only
+ * from ui_rit_park_toggle(). */
+int ui_rit_parked_hz(void)
 {
-    (void)e;
+    return s_rit_stash_hz;
+}
+
+ui_rit_park_t ui_rit_park_toggle(int *hz)
+{
     int rit_now = cat_get_rit_hz();
+    if (hz) *hz = 0;
 
     if (rit_now != 0) {
         s_rit_stash_hz = rit_now;      // park it and stand down
         cat_request_rit_hz(0);
-        ESP_LOGI(TAG, "RIT: parked %+d Hz (long press) - long press again to restore",
-                 s_rit_stash_hz);
-    } else if (s_rit_stash_hz != 0) {
+        ESP_LOGI(TAG, "RIT: parked %+d Hz - park again to restore", s_rit_stash_hz);
+        if (hz) *hz = s_rit_stash_hz;
+        return UI_RIT_PARKED;
+    }
+    if (s_rit_stash_hz != 0) {
         cat_request_rit_hz(s_rit_stash_hz);
-        ESP_LOGI(TAG, "RIT: restored %+d Hz (long press)", s_rit_stash_hz);
-    } else {
+        ESP_LOGI(TAG, "RIT: restored %+d Hz", s_rit_stash_hz);
+        if (hz) *hz = s_rit_stash_hz;
+        return UI_RIT_RESTORED;
+    }
+    return UI_RIT_NOTHING;
+}
+
+static void rit_pill_long_cb(lv_event_t *e)
+{
+    (void)e;
+    if (ui_rit_park_toggle(NULL) == UI_RIT_NOTHING) {
         // Nothing engaged and nothing parked: say so rather than doing nothing
         // silently, since a long press that appears inert reads as a dead button.
         ui_toast("No RIT offset to restore");
@@ -6090,6 +6205,63 @@ static void build_spectrum(lv_obj_t *parent)
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
                          DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    /* ⭐ TAP THE OFF-VIEW ARROW TO COME BACK TO THE DIAL.
+     *
+     * ⛔ 140 x 80 AND NOT SCROLLABLE - both copied from spots_lane.c's edge
+     * counters, which have worked under a fingertip for months. My first cut
+     * was 44 wide and left LV_OBJ_FLAG_SCROLLABLE set, and the operator went
+     * straight to it on the glass: "the arrow on the Tab5 is super hard to hit
+     * when you tap it". Two causes, and the flag is the worse one: a scrollable
+     * object treats a few pixels of finger travel as the start of a scroll and
+     * CANCELS the click, so a tap that is not perfectly still does nothing at
+     * all. 44 px is also only about 7 mm, under a fingertip.
+     * The parent already clears the flag; that does not clear it on a child.
+     *
+     * Created hidden; the draw pass un-hides whichever side it drew, so the two
+     * can never disagree about which edge is live.
+     *
+     * ⛔ ON s_spectrum_obj, NOT the canvas: the canvas is a child with its own
+     * geometry and these must sit above it in the z-order to get the press
+     * before touch_event_cb's tap-to-tune does.
+     *
+     * ⛔⛔ AND THEY MUST NOT REACH THE SPOTS COUNTERS, which is what made the
+     * arrow feel dead. spots_lane_build(scr, TOP_BAR_H, SPECTRUM_H) puts a
+     * transparent, non-clickable lane over the WHOLE spectrum, created AFTER
+     * build_spectrum() - so it is above these - and its two edge counters ARE
+     * clickable 140x80 rects at the lane's bottom corners, i.e. absolute
+     * y 180..260. Centred on the spectrum these targets were y 120..200, so the
+     * bottom 20 px was dead and a fingertip aimed at the arrow at y 160 landed
+     * on the counter instead: the operator's capture shows ONE
+     * "off-view arrow tapped" against a "spot tap (off-screen right)" that
+     * retuned his dial to 7074000.
+     *
+     * So the two controls get DISJOINT bands: this one y 60..180 (the spectrum's
+     * top 120 px) and the counters keep y 180..260. The arrow itself is drawn at
+     * SPECTRUM_H/2, absolute y 160, which sits inside this band with the
+     * generous part above it where nothing else lives.
+     * ⚠ Do not re-centre these on the spectrum - that is what collided. */
+    s_vfo_arrow_hit_l = lv_obj_create(s_spectrum_obj);
+    lv_obj_set_size(s_vfo_arrow_hit_l, 140, 120);
+    lv_obj_align(s_vfo_arrow_hit_l, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_opa(s_vfo_arrow_hit_l, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_vfo_arrow_hit_l, 0, 0);
+    lv_obj_set_style_pad_all(s_vfo_arrow_hit_l, 0, 0);
+    lv_obj_clear_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_vfo_arrow_hit_l, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
+
+    s_vfo_arrow_hit_r = lv_obj_create(s_spectrum_obj);
+    lv_obj_set_size(s_vfo_arrow_hit_r, 140, 120);
+    lv_obj_align(s_vfo_arrow_hit_r, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_opa(s_vfo_arrow_hit_r, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_vfo_arrow_hit_r, 0, 0);
+    lv_obj_set_style_pad_all(s_vfo_arrow_hit_r, 0, 0);
+    lv_obj_clear_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_vfo_arrow_hit_r, vfo_arrow_click_cb, LV_EVENT_CLICKED, NULL);
 
     // Phase 5.4: dB range labels (top-left and bottom-left of spectrum)
     s_db_max_label = lv_label_create(s_spectrum_obj);
@@ -6691,6 +6863,9 @@ static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *p
  * two ever raced, the newer one is the one the operator asked for. */
 static volatile int64_t s_bp_view_req_hz = 0;
 static volatile bool    s_bp_view_req    = false;
+/* Same slot discipline, for the browser's right-drag pan (T126). */
+static volatile int64_t s_pan_req_hz     = 0;
+static volatile bool    s_pan_req        = false;
 
 void ui_request_bandplan_view(int64_t view_center_hz)
 {
@@ -6698,9 +6873,62 @@ void ui_request_bandplan_view(int64_t view_center_hz)
     s_bp_view_req    = true;
 }
 
+/* ⛔⛔ A PAN IS NOT A view_center, AND USING ONE FOR THE OTHER MOVES THE RADIO.
+ *
+ * ui_bandplan_move_view() is the band-plan KNOB: it is allowed to retune,
+ * because dragging a window across a whole band has to. A spectrum pan is the
+ * opposite promise - look somewhere else inside what the radio ALREADY hears,
+ * and do not touch the dial.
+ *
+ * The browser's right-drag was built on view_center first and the operator
+ * caught it at once, 2026-10-30: "dragging on the web does not move the BW on
+ * the screen ... however the Freq changes! This should of course stay put
+ * during dragging." Both halves are one cause - the dial came along, so the
+ * passband kept its screen position instead of sliding across, and the
+ * frequency moved. bp_solve_view() also rounds the dial to whole kHz, which is
+ * the jitter he saw.
+ *
+ * Bounds and side effects are deliberately identical to the Tab5's own pan
+ * release in touch_event_cb: same clamp, same dsp_set_zoom(), and the
+ * waterfall is NOT cleared, so its history shifts with the view. */
+void ui_request_pan_hz(int64_t pan_hz)
+{
+    s_pan_req_hz = pan_hz;
+    s_pan_req    = true;
+}
+
+bool ui_pan_is_available(void)
+{
+    return sv_effective();
+}
+
+static void pan_q_apply(int64_t want)
+{
+    if (!sv_effective()) return;   /* the view follows the dial - nothing to pan */
+
+    const int32_t if_hz  = ui_get_if_offset_hz();
+    const int64_t pan_hi = if_hz;
+    const int64_t pan_lo = (int64_t)if_hz - DSP_SAMPLE_RATE_HZ;
+    if (want > pan_hi) want = pan_hi;
+    if (want < pan_lo) want = pan_lo;
+
+    if (want == ui_get_pan_offset_hz()) return;
+    sv_apply_pan_hz(want);
+    dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+    /* A pan the operator placed by hand is a new starting point for the
+     * push/land policy, not a push in progress - the same reset
+     * ui_bandplan_move_view() makes, for the same reason. */
+    s_sv_push = 0;
+    s_sv_side = 0;
+}
+
 static void bp_view_q_drain_cb(lv_timer_t *t)
 {
     (void)t;
+    if (s_pan_req) {
+        s_pan_req = false;
+        pan_q_apply(s_pan_req_hz);
+    }
     if (!s_bp_view_req) return;
     s_bp_view_req = false;
     ui_bandplan_move_view(s_bp_view_req_hz);
@@ -8101,9 +8329,118 @@ static bool wheel_tune_take(int clicks)
     return true;
 }
 
+/* ⭐⭐ RIGHT-DRAG PANS THE SPECTRUM, exactly as it does in the browser.
+ *
+ * Operator, 2026-10-30: "Then on Tab5 only: Please implement the same web mouse
+ * gesture on the BLE mouse if present". A mouse on this board is almost always
+ * the BLE one - the USB host port belongs to the QMX, and a hub puts both
+ * behind a Transaction Translator ESP-IDF 5.4.4 does not implement - but
+ * nothing here cares which transport it came from: hid_cursor.c already merges
+ * the two into one position and one button bitmask.
+ *
+ * ⛔ THE RIGHT BUTTON NEVER REACHES LVGL, AND THAT IS WHY THIS LIVES HERE.
+ * mouse_read_cb() maps bit0 only - `data->state = (b & 0x01)` - so a right
+ * press is not a click as far as every widget on the screen is concerned, and
+ * it cannot press a button by accident. Bit1 has been carried in the bitmask
+ * all along with nothing reading it. So the gesture is implemented against the
+ * raw cursor state on this 33 Hz timer, and the left button keeps its meaning
+ * untouched: a left drag still tunes, exactly like a finger.
+ *
+ * The drag is LOCAL while the button is down - stroll_apply_offset() slides the
+ * canvas under the pointer - and the pan is applied once on release. Same
+ * division as the touch pan and as the browser, and for the browser's reason:
+ * the real pan costs a dsp_set_zoom() and a redraw, which is not something to
+ * do 33 times a second while a hand is moving.
+ *
+ * Direction matches the web: the content follows the hand, so dragging right
+ * pulls the spectrum right and brings LOWER frequencies into view. */
+static bool    s_mouse_pan_active   = false;
+static int     s_mouse_pan_start_x  = 0;
+static int64_t s_mouse_pan_start_hz = 0;
+
+/* Defined below with the touch pan it belongs to - this gesture is the same
+ * local slide, driven from a different input. */
+static void stroll_apply_offset(int off);
+
+static bool mouse_over_spectrum(lv_coord_t x, lv_coord_t y)
+{
+    return point_in_obj(s_spec_canvas, x, y) ||
+           point_in_obj(s_wf_canvas,   x, y) ||
+           point_in_obj(s_waterfall_obj, x, y);
+}
+
+/* Returns true when the right button owns this tick, so the caller leaves the
+ * hover/hot-corner work alone - the pointer is dragging, not pointing. */
+static bool mouse_pan_tick(void)
+{
+    int lx, ly;
+    uint8_t b;
+    hid_cursor_get(&lx, &ly, &b);
+    const bool right_down = (b & 0x02) != 0;
+
+    /* ⛔ THE BUTTON BYTE IS LOGGED BECAUSE I COULD NOT ANSWER A REPORT WITHOUT
+     * IT. The operator described the gesture misbehaving and asked me to read
+     * the capture; this path logged NOTHING, so the capture could only show the
+     * touch pan and I was left guessing which of the two had run. A gesture
+     * built on a bit nobody had read before has to say what it saw. Rate-
+     * limited to changes, so a resting mouse is silent. */
+    static uint8_t s_last_b = 0xff;
+    if (b != s_last_b) {
+        s_last_b = b;
+        ESP_LOGI("mousepan", "buttons=0x%02x (right=%d) at %d,%d mode=%d pan_avail=%d",
+                 b, right_down ? 1 : 0, lx, ly,
+                 (int)ui_mode_get(), ui_pan_is_available() ? 1 : 0);
+    }
+
+    if (!s_mouse_pan_active) {
+        if (!right_down) return false;
+        /* Start only on the spectrum, only on the panadapter, and only when
+         * there is a window to move - with the still view off the spectrum
+         * follows the dial and a pan has no meaning. Same three conditions the
+         * API's set_pan refuses on. */
+        if (ui_mode_get() != UI_MODE_PANADAPTER) return false;
+        if (!mouse_over_spectrum(lx, ly))        return false;
+        if (!ui_pan_is_available())              return false;
+        s_mouse_pan_active   = true;
+        s_mouse_pan_start_x  = lx;
+        s_mouse_pan_start_hz = ui_get_pan_offset_hz();
+        ESP_LOGI("mousepan", "START at x=%d pan=%lld Hz",
+                 lx, (long long)s_mouse_pan_start_hz);
+        s_target_x = -1;                      /* no cyan tune cursor mid-pan */
+        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+        return true;
+    }
+
+    const int dx = lx - s_mouse_pan_start_x;
+    if (right_down) {
+        stroll_apply_offset(dx);              /* local only - no DSP, no CAT */
+        return true;
+    }
+
+    /* Released: put the canvas back and apply the real pan once. */
+    stroll_apply_offset(0);
+    s_mouse_pan_active = false;
+    const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ
+                          / (s_zoom_factor * (float)DISPLAY_H_RES);
+    const int64_t want = s_mouse_pan_start_hz - (int64_t)lroundf((float)dx * hz_per_px);
+    ESP_LOGI("mousepan", "RELEASE dx=%d -> pan %lld -> %lld Hz",
+             dx, (long long)s_mouse_pan_start_hz, (long long)want);
+    pan_q_apply(want);
+    return true;
+}
+
 static void mouse_timer_cb(lv_timer_t *t)
 {
     (void)t;
+
+    /* ⛔ BEFORE the pan check, not after. The pan owns every tick while the
+     * button is down, so an early return past this would strand a wheel click
+     * that was already waiting on the rate limit for as long as the drag
+     * lasted. Its own comment below says this must reach the radio even on a
+     * tick that carries no clicks of its own; a pan is such a tick. */
+    wheel_tune_flush();
+
+    if (mouse_pan_tick()) return;
 
     // Only re-test when the pointer has actually moved. It is stationary most of
     // the time, and this runs at 33 Hz.
@@ -8133,10 +8470,10 @@ static void mouse_timer_cb(lv_timer_t *t)
         cursor_set_hot(on_grip || hit != NULL);
     }
 
-    // Before anything else: a spin's last clicks must reach the radio even on a
-    // tick that carries none of its own.
-    wheel_tune_flush();
-
+    /* The flush that used to be here has MOVED to the top of this function -
+     * see the note there. It had to run before the pan check, and leaving a
+     * copy behind would be a second call per tick that only ever differs in a
+     * case nobody would find again. */
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
 
@@ -8957,6 +9294,74 @@ static void pinch_poll_cb(lv_timer_t *t)
 
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
+
+    /* ⭐ THREE FINGERS HELD -> SIMULATION MODE ON/OFF, on the FT8 page in any
+     * sub-mode (FT8, FT4 and JS8 share one sim_mode_en).
+     *
+     * Operator, 2026-10-31: "It takes a lot of resources and the scrolling
+     * down in the drawer is REALY slow". The toggle is near the bottom of a
+     * long drawer, and simulation is the one setting that gets turned on and
+     * off repeatedly in a testing session - so it is the one that should not
+     * cost a scroll.
+     *
+     * ⛔ THREE, NOT TWO. Two fingers are already spoken for twice over on this
+     * page: pinch-zooms the spectrum, and a two-finger double-tap sleeps the
+     * display. Three is the first count with nothing on it.
+     *
+     * ⛔ THE WHOLE TOUCH SESSION IS SWALLOWED, not just the moment it fires.
+     * Fingers never land or lift together, so a three-finger press passes
+     * through npts==2 on the way in AND on the way out. Without the latch the
+     * way in starts a spectrum pinch and the way out reads as a two-finger
+     * tap - two of those put the display to sleep, which is exactly the wrong
+     * answer to a gesture meant to toggle a setting. So: once three fingers
+     * are seen, every poll returns here until the panel reports zero, and the
+     * two-finger trackers are cleared rather than left mid-gesture.
+     *
+     * The setting is written and nothing else: the 1 Hz sim_border_keepalive
+     * already follows it and repaints both drawer checkboxes and the red
+     * bezel, so there is one path that reacts to a change whatever made it -
+     * the drawer, the web API, or this. */
+    {
+        static uint64_t s_3f_down_us = 0;
+        static bool     s_3f_fired   = false;
+        static bool     s_3f_lock    = false;   /* swallow until ALL fingers lift */
+        const uint64_t  HOLD_US      = 1200000; /* a deliberate press, not a rest */
+        uint64_t now_us = esp_timer_get_time();
+
+        if (npts >= 3 && ui_mode_get() == UI_MODE_FT8) {
+            if (!s_3f_lock) {
+                s_3f_lock    = true;
+                s_3f_down_us = now_us;
+                s_3f_fired   = false;
+                /* Whatever the first two fingers started, end it now. */
+                stroll_cancel();
+                s_2f_down_us     = 0;
+                s_2f_last_tap_us = 0;
+                s_2f_moved       = true;
+            }
+            if (!s_3f_fired && now_us - s_3f_down_us >= HOLD_US) {
+                s_3f_fired = true;
+                /* ⛔ THE NARROW ACCESSOR. settings_load_all() puts 3636 bytes on
+                 * taskLVGL's stack and this runs on it every 50 ms. */
+                bool want = !settings_get_sim_mode_en();
+                settings_set_sim_mode_en(want);
+                ui_toast(want ? "Simulation ON - the radio is not keyed"
+                              : "Simulation off");
+                ESP_LOGI(TAG, "three-finger hold: simulation %s",
+                         want ? "ON (radio not keyed)" : "off");
+            }
+        }
+
+        if (s_3f_lock) {
+            s_multi_lockout_us = now_us + MULTI_LOCKOUT_MS * 1000;
+            if (npts == 0) {
+                s_3f_lock    = false;
+                s_3f_down_us = 0;
+                s_3f_fired   = false;
+            }
+            return;
+        }
+    }
 
     // While the freq pad is open, raw touch handling belongs to it alone -
     // a two-finger pinch toggles its size; nothing else from this function
@@ -10173,11 +10578,96 @@ static int smeter_value_for_units(int s_units)
     return (v > 68) ? 68 : v;
 }
 
+/* T120 - THE RECENT PEAK, so the manual log window can offer a measured S
+ * instead of 599 every time. Gyula HA3HZ: "not every signal can be a 59 or
+ * 599; since the device measures digital signal levels, it should be able to
+ * measure other signals as well." He is right, and the measurement was
+ * already here - only the log window never asked for it.
+ *
+ * A DECAYING PEAK-HOLD, not a sliding window: the peak expires `window_ms`
+ * after the moment it OCCURRED, which is what "the strongest thing heard in
+ * the last few seconds" means to an operator reading a meter. Two words of
+ * state, written at 1.6 Hz by the render task and read once per modal open by
+ * the LVGL task - hence the spinlock, which is for the PAIR (units with its
+ * timestamp), not for either word alone.
+ *
+ * PEAK, not mean, for both modes and for the same reason: on CW the carrier
+ * is steady so peak = level, and on SSB an operator reads the meter on speech
+ * peaks, which is what a voice report has always meant.
+ *
+ * ⭐ MEASURED 2026-10-29, AND IT KILLED THE ONE HYPOTHESIS THAT WOULD HAVE
+ * SUNK THIS. The fear was our own transmission: there is no CAT TX getter
+ * (cat.h has mode, AF gain, RF gain - no PTT) and a hand-keyed contact never
+ * goes through our TX path, so this code cannot know when the radio is keyed.
+ * If the I/Q carried our own carrier at a high level, the hold would latch on
+ * it and offer S9 for ten seconds after we stop - exactly when the operator
+ * reaches for Log.
+ *
+ * It does not. A tune carrier into a dummy load on 40 m, confirmed on the air
+ * by the radio's own reports (mode -> MD8, PC10 = 1.0 W, SW107..113 = SWR 1.1):
+ *
+ *     before   -119.2, -121.7 dBm      S1
+ *     keyed    -116.6, -113.7, -116.2  S2
+ *     after    -120.7, -119.9          S1
+ *
+ * About 6 dB, no overlap between the groups, back to baseline on stop. Even
+ * 20 dB more leakage at full power would reach S5, not S9.
+ *
+ * ⚠ Measured at 1.0 W, which is what Tune keys. 5 W is an extrapolation, not
+ * a measurement - but the margin to a railed reading is far too large for it
+ * to matter. */
+/* ⛔ ONE constant, not a window the caller picks. A decay period in the writer
+ * and a different window in the reader disagree: a peak older than the
+ * reader's window but younger than the writer's decay still suppresses a newer
+ * lower value, and the reader then reports nothing at all while the meter is
+ * plainly reading something. One number, both sides.
+ *
+ * 10 s is about three CW "TU 73" overs or one sentence of speech - short
+ * enough that it is still the station just worked, long enough that the
+ * operator can finish the exchange before reaching for Log. The render task
+ * samples at 1.6 Hz, so a hold spans ~16 samples. */
+#define SMETER_HOLD_MS 10000
+
+static portMUX_TYPE s_smeter_hold_mux = portMUX_INITIALIZER_UNLOCKED;
+static int64_t      s_smeter_hold_us    = 0;   /* 0 = nothing held */
+static int          s_smeter_hold_units = 0;
+
+bool ui_smeter_recent_peak(int *out_units)
+{
+    if (!out_units) return false;
+    int64_t now = esp_timer_get_time();
+    bool ok = false;
+    portENTER_CRITICAL(&s_smeter_hold_mux);
+    if (s_smeter_hold_us != 0 &&
+        now - s_smeter_hold_us <= (int64_t)SMETER_HOLD_MS * 1000) {
+        *out_units = s_smeter_hold_units;
+        ok = true;
+    }
+    portEXIT_CRITICAL(&s_smeter_hold_mux);
+    return ok;
+}
+
 void ui_update_smeter(int s_units)
 {
-    if (!s_smeter_bar) return;
     if (s_units < 0) s_units = 0;
     if (s_units > 108) s_units = 108;  // clamp at S9+99
+
+    /* ⛔ RECORDED BEFORE THE WIDGET CHECK. The bar does not exist on every
+     * screen, and the early return below would otherwise stop the hold on
+     * exactly the screens where the operator is listening and about to log. */
+    {
+        int64_t now = esp_timer_get_time();
+        portENTER_CRITICAL(&s_smeter_hold_mux);
+        bool stale = (s_smeter_hold_us == 0) ||
+                     (now - s_smeter_hold_us > (int64_t)SMETER_HOLD_MS * 1000);
+        if (stale || s_units >= s_smeter_hold_units) {
+            s_smeter_hold_units = s_units;
+            s_smeter_hold_us    = now;
+        }
+        portEXIT_CRITICAL(&s_smeter_hold_mux);
+    }
+
+    if (!s_smeter_bar) return;
     int value = smeter_value_for_units(s_units);
     if (display_lock(100)) {
         lv_bar_set_value(s_smeter_bar, value, LV_ANIM_ON);
@@ -11176,10 +11666,37 @@ void ui_push_spectrum(const float *bins, int n_bins)
     uint64_t now_us = esp_timer_get_time();
     float fade_opacity = 1.0f;  // 0 = invisible, 1 = full opacity
 
-    // Hide passband during pan and after pan settles
+    /* ⛔ THE PASSBAND IS THE TARGET, SO IT IS DIMMED AND NOT HIDDEN.
+     *
+     * ⚠ THIS REVERSES A PREFERENCE OF THE OPERATOR'S OWN, deliberately and on
+     * his instruction. He asked for the hide on 2026-09-18 because a hidden
+     * passband is what SHOWS that the dial came along with the window. Having
+     * seen the dimmed version on the glass he overruled it, 2026-10-30:
+     * "this should affect BOTH SSB and CW - in fact ALL modes on the
+     * Panadapter". Dimming carries the same cue - the strip plainly changes on
+     * grab - without taking away the thing being aimed at. ⛔ Do not re-narrow
+     * this to CW; the narrow version was mine, not his.
+     *
+     * It began as a CW report. Gyula HA3HZ,
+     * 2026-10-29: "when adjusting the frequency using the drag-and-drop
+     * method, the bandwidth indicator disappears while I am dragging the
+     * station into the previously visible reception range. Consequently, the
+     * final position after releasing the mouse is not precise - it ends up
+     * being only approximate." He is aiming at a 300 Hz window on a 12 kHz
+     * span: roughly 25 px of the 1280, and the aim point is the thing that
+     * vanishes. In SSB the passband is ten times wider and the landing is
+     * forgiving, which is why nobody reported it there.
+     *
+     * Dimmed, not full: 0.35 keeps the "the dial moved too" cue - the strip
+     * still changes visibly on grab and comes back on release - while leaving
+     * something to aim at. The band-plan strip's own block is a separate LVGL
+     * object and is still hidden outright; this is the spectrum tint, which is
+     * the one drawn over the signal he is dragging. */
+    const float DRAG_PASSBAND_OPA = 0.35f;
+
+    // Dim, never hide, while panning and while the pan settles
     if (s_stroll_active) {
-        // While dragging: hide immediately so user doesn't see it move
-        fade_opacity = 0.0f;
+        fade_opacity = DRAG_PASSBAND_OPA;
     } else if (s_hide_passband_now) {
         // Just after pan settles: stay hidden
         fade_opacity = 0.0f;
@@ -11201,6 +11718,15 @@ void ui_push_spectrum(const float *bins, int n_bins)
             s_passband_fade_start_us = 0;
             fade_opacity = 1.0f;
         }
+    }
+
+    /* ⛔ AND THE SAME FLOOR ON THE WAY BACK UP, or the release flickers worse
+     * than the drag ever did: that path zeroes the opacity and holds it there
+     * for PASSBAND_FADE_DELAY_MS, so a passband that was dimly visible for the
+     * whole drag would blink out at the exact moment the finger lifts. It now
+     * never drops below what the drag showed. */
+    if (fade_opacity < DRAG_PASSBAND_OPA) {
+        fade_opacity = DRAG_PASSBAND_OPA;
     }
 
     // Apply fade_opacity to label bar (frequency scale labels). Skip the
@@ -11266,8 +11792,23 @@ void ui_push_spectrum(const float *bins, int n_bins)
         int edge_x_lo = X0 + (int)((int64_t)(pb_low_hz  + pb_res - pan_hz_pb) * VW / span_hz_pb) + VW / 2;
         int edge_x_hi = X0 + (int)((int64_t)(pb_high_hz + pb_res - pan_hz_pb) * VW / span_hz_pb) + VW / 2;
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
-        if (edge_x_lo < X0) edge_x_lo = X0;
-        if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        /* ⛔ OFF-VIEW MEANS GONE, NOT SQUASHED ONTO THE EDGE.
+         *
+         * This used to clamp both ends unconditionally, so a passband entirely
+         * off the view collapsed to a one-column tint stuck against x=0 or
+         * x=1279 and sat there - saying "the filter is here" about a frequency
+         * that is not on screen. pan_view.h names that exact failure, and the
+         * passband EDGE LINES twelve lines below already avoid it by skipping
+         * when they fall outside. The tint disagreed with the lines it bounds.
+         *
+         * An empty range makes the fill loop below a no-op, which is the whole
+         * fix: clamp only when there is something to clamp INTO. */
+        if (edge_x_hi < X0 || edge_x_lo >= DISPLAY_H_RES) {
+            edge_x_lo = 1; edge_x_hi = 0;          /* empty: nothing is drawn */
+        } else {
+            if (edge_x_lo < X0) edge_x_lo = X0;
+            if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        }
         SPEC_SIG(pb_low_hz); SPEC_SIG(pb_high_hz); SPEC_SIG(rit_pb_hz);
         SPEC_SIG(pan_hz_pb); SPEC_SIG(span_hz_pb); SPEC_SIG(pb_res);
         SPEC_SIG(edge_x_lo); SPEC_SIG(edge_x_hi);
@@ -11731,14 +12272,25 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // see the note there for why it is applied at the drawing and not in
         // compute_passband_edges_hz().
         int32_t rit_edge_hz = cat_get_rit_hz();
-        for (int side = 0; side < 2; side++) {
-            int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
-            /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
+        /* ⭐ BOTH EDGES COMPUTED UP FRONT AND LEFT UNCLAMPED, because the arrow
+         * below needs to know whether ANY PART of the passband is on screen -
+         * not just whether a given edge is. They were worked out inside the
+         * drawing loop and thrown away, so that question could not be asked. */
+        int pb_x[2];
+        {
             int32_t pan_hz = (int32_t)ui_get_pan_offset_hz();   /* exact - see the tint above */
             int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
-            /* Same residual as the tint above and the cursor below - all three
-             * must agree or the edges sit off the block they bound. */
-            int edge_x = X0 + (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz) * VW / span_hz_pb) + VW / 2;
+            for (int side = 0; side < 2; side++) {
+                int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
+                /* Same residual as the tint above and the cursor below - all three
+                 * must agree or the edges sit off the block they bound. */
+                pb_x[side] = X0 + (int)((int64_t)(edge_hz + ui_get_if_residual_hz() - pan_hz)
+                                        * VW / span_hz_pb) + VW / 2;
+            }
+            if (pb_x[0] > pb_x[1]) { int t = pb_x[0]; pb_x[0] = pb_x[1]; pb_x[1] = t; }
+        }
+        for (int side = 0; side < 2; side++) {
+            int edge_x = pb_x[side];
             if (edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
@@ -11772,16 +12324,30 @@ void ui_push_spectrum(const float *bins, int n_bins)
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
             }
-        } else {
-            /* ⭐ THE DIAL IS OFF THE VIEW (#298 phase 4). Reachable now that a
-             * swipe pans without retuning, and before this the amber line simply
-             * vanished - leaving no way to tell "panned away from the VFO" from
-             * "something is broken".
-             *
-             * A TRIANGLE, never a line parked on the edge: a line at x=0 reads
-             * as "tuned here", which is precisely the wrong thing to say about a
-             * frequency that is off screen. pan_view.h calls this out, which is
-             * why hz_to_x is deliberately unclamped. */
+        }
+        /* ⭐ THE DIAL IS OFF THE VIEW (#298 phase 4). Reachable now that a
+         * swipe pans without retuning, and before this the amber line simply
+         * vanished - leaving no way to tell "panned away from the VFO" from
+         * "something is broken".
+         *
+         * A TRIANGLE, never a line parked on the edge: a line at x=0 reads
+         * as "tuned here", which is precisely the wrong thing to say about a
+         * frequency that is off screen. pan_view.h calls this out, which is
+         * why hz_to_x is deliberately unclamped.
+         *
+         * ⛔⛔ THE MARKER BEING OFF SCREEN IS NOT ENOUGH. It used to draw
+         * whenever cx fell outside, which meant the arrow appeared while the
+         * passband was still half on screen and plainly visible - an arrow
+         * pointing off-view at something you are already looking at. The
+         * operator's rule, 2026-10-30: "there is no need for any indication if
+         * the bw is for example still half visible on the screen. Only if BOTH
+         * the freq marker and the bw is out of sight THEN i want this solid
+         * arrow". So the test is the marker AND the whole passband, and the
+         * passband test is an INTERSECTION - a filter wider than the span has
+         * both edges off screen while covering every column of it. */
+        const bool vfo_off = (cx < X0 || cx >= DISPLAY_H_RES);
+        const bool pb_off  = (pb_x[1] < X0 || pb_x[0] >= DISPLAY_H_RES);
+        if (vfo_off && pb_off) {
             const int th = 22;                       /* half-height of the arrow */
             const int tw = 14;                       /* how far it juts inwards  */
             int mid = SPECTRUM_H / 2;
@@ -11795,6 +12361,40 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 int x = (cx < X0) ? (X0 + i) : (DISPLAY_H_RES - 1 - i);
                 for (int y = mid - half; y <= mid + half; y++)
                     if (y >= 0 && y < SPECTRUM_H) px[y * DISPLAY_H_RES + x] = center_color;
+            }
+        }
+        /* ⭐ AND IT IS TAPPABLE - the arrow says where the dial went, and the
+         * tap takes you back, so finding it again is not another drag.
+         * Operator, 2026-10-30: "It could also be clickable so that it would
+         * move the bw (and marker) to the middle of the screen if clicked (then
+         * no need to drag again to look for it)."
+         *
+         * Shown and hidden with the arrow, exactly as spots_lane.c does with its
+         * edge counters: an invisible live target left over empty spectrum would
+         * steal tap-to-tune. Guarded on a change so this does not call into LVGL
+         * ten times a second forever - see the label-bar opacity above for why
+         * that matters on core 0. */
+        {
+            static int s_arrow_shown = -1;           /* -1 none, 0 left, 1 right */
+            int want = (vfo_off && pb_off) ? ((cx < X0) ? 0 : 1) : -1;
+            if (want != s_arrow_shown) {
+                if (s_vfo_arrow_hit_l) {
+                    if (want == 0) {
+                        /* The arrow is drawn at X0, which is CW_PANE_W on the CW
+                         * page - the target is built at x=0 and would sit behind
+                         * the pane, where no tap can reach it. Move it with the
+                         * drawn edge rather than trusting the build-time x. */
+                        lv_obj_set_x(s_vfo_arrow_hit_l, X0);
+                        lv_obj_clear_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+                    } else {
+                        lv_obj_add_flag(s_vfo_arrow_hit_l, LV_OBJ_FLAG_HIDDEN);
+                    }
+                }
+                if (s_vfo_arrow_hit_r) {
+                    if (want == 1) lv_obj_clear_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+                    else           lv_obj_add_flag(s_vfo_arrow_hit_r, LV_OBJ_FLAG_HIDDEN);
+                }
+                s_arrow_shown = want;
             }
         }
 
@@ -13014,7 +13614,16 @@ static void touch_event_cb(lv_event_t *e)
                 // objects, hidden directly here and faded back in with a
                 // matching lv_obj_fade_in() on release.
                 s_stroll_active = true;
-                if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
+                /* A dim block instead of none, in EVERY mode - the same rule
+                 * and the same reason as the spectrum tint in the render loop.
+                 * On this strip the passband is only ~6 px wide and it is the
+                 * thing being aimed at. Gyula HA3HZ, 2026-10-29 (BLE mouse, so
+                 * this is the same handler a finger takes); widened from CW to
+                 * all modes by the operator on 2026-10-30. */
+                if (s_bp_passband) {
+                    lv_obj_set_style_opa(s_bp_passband,
+                                         (lv_opa_t)(255 * 35 / 100), 0);
+                }
                 for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
                     if (s_bp_seg_lbl[i]) lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
                 }
@@ -13125,8 +13734,11 @@ static void touch_event_cb(lv_event_t *e)
                 s_hide_passband_now = true;
                 s_passband_fade_start_us = esp_timer_get_time();
                 if (s_bp_passband && !lv_obj_has_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN)) {
-                    lv_obj_set_style_opa(s_bp_passband, LV_OPA_TRANSP, 0);
-                    lv_obj_fade_in(s_bp_passband, PASSBAND_FADE_DURATION_MS, PASSBAND_FADE_DELAY_MS);
+                    /* ⛔ It was never hidden, so fading it up FROM ZERO would
+                     * blink out the one thing the drag kept visible, at the
+                     * exact moment the finger lifts. Straight back to full
+                     * instead - there is nothing to fade in from. */
+                    lv_obj_set_style_opa(s_bp_passband, LV_OPA_COVER, 0);
                 }
                 for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
                     if (s_bp_seg_lbl[i] && !lv_obj_has_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN)) {
@@ -17181,7 +17793,7 @@ static void drawer_build(void)
      * docs/js8-feasibility.md - so this control is offered without a promise
      * that the far end will hear it. */
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_JS8SUB, y, 100);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_JS8SUB, y, 190);
         lv_obj_t *js_hdr = lv_label_create(sec);
         lv_label_set_text(js_hdr, "JS8 submode");
         lv_obj_set_style_text_color(js_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -17200,7 +17812,31 @@ static void drawer_build(void)
         /* Unfold the whole list rather than scrolling four items - same
          * reasoning as the frequency-format dropdown above. */
         lv_obj_add_event_cb(s_js8sub_dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 100;
+
+        /* T132: also decode ONE other sub-mode, on a duty cycle, out of the
+         * audio this slot already captured. A station calling on Fast is
+         * otherwise invisible on Normal - Ryan KK6DZB lost JS8 entirely to
+         * that, and JS8Call's own multi-decoder defaults to on.
+         *
+         * ⚠ RECEIVE ONLY, and unproven on air. It shows you who is there on
+         * the other speed; it does not let you work them, because our TX is
+         * on the sub-mode above. */
+        lv_obj_t *ja_hdr = lv_label_create(sec);
+        lv_label_set_text(ja_hdr, "Also decode (RX only)");
+        lv_obj_set_style_text_color(ja_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ja_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(ja_hdr, LV_ALIGN_TOP_LEFT, 0, 96);
+
+        s_js8alt_dd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_js8alt_dd, js8_alt_options_lvgl());
+        lv_obj_set_size(s_js8alt_dd, DRAWER_W - 32, 50);
+        lv_obj_align(s_js8alt_dd, LV_ALIGN_TOP_LEFT, 0, 136);
+        lv_obj_set_style_text_font(s_js8alt_dd, &lv_font_montserrat_28, 0);
+        drawer_refresh_js8_alt();
+        lv_obj_add_event_cb(s_js8alt_dd, drawer_js8_alt_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_js8alt_dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
+
+        y += 190;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
@@ -17793,6 +18429,7 @@ static void drawer_open(void)
     drawer_refresh_cw_profiles();
     /* The submode is settable over the API too - see drawer_refresh_js8_submode. */
     drawer_refresh_js8_submode();
+    drawer_refresh_js8_alt();
     /* ...and so is every other checkbox in here - see drawer_refresh_checkboxes. */
     drawer_refresh_checkboxes();
     s_drawer_open = true;
@@ -20273,6 +20910,9 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  * A BLE MOUSE does not count: bt_hid_keyboard_active() requires the device's own
  * report map to declare a keyboard. And it goes false on disconnect, so a
  * keyboard that runs flat or walks out of range brings this straight back.
+ * The snap-on keyboard answers the same question through
+ * tab5_keyboard_present(), and goes false on a physical detach - see
+ * ui_phys_kbd_active() below, which is the predicate every caller uses.
  *
  * ⛔ EVERY CALLER MUST BE WIRED TO LV_EVENT_CLICKED AS WELL AS LV_EVENT_FOCUSED,
  * AND THAT IS NOT BELT-AND-BRACES - IT IS THE ONLY ONE THAT ALWAYS FIRES.
@@ -20294,11 +20934,28 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg);
  * does not depend on knowing. */
 static lv_obj_t *s_osk_cur = NULL;   /* the on-screen keyboard currently shown */
 
+/* ⛔ BOTH PHYSICAL KEYBOARDS, NOT JUST BLE. T131, 2026-10-30.
+ *
+ * This gate tested bt_hid_keyboard_active() alone for its whole life, so the
+ * SNAP-ON keyboard raised a redundant 280 px on-screen keyboard over the
+ * bottom 45% of the screen in every modal - activation, CQ, filter, ADIF
+ * search, JS8 text. tab5_keyboard_present() existed the entire time and had
+ * ZERO callers anywhere in the tree; the two halves were written apart and
+ * nothing ever joined them.
+ *
+ * ⚠ Both predicates can go false again on a detach, which is the point: a
+ * keyboard unplugged mid-field must bring the on-screen one back. Neither is
+ * cached. */
+bool ui_phys_kbd_active(void)
+{
+    return bt_hid_keyboard_active() || tab5_keyboard_present();
+}
+
 void ui_osk_show(lv_obj_t *kb)
 {
     if (!kb) return;
     s_osk_cur = kb;
-    if (bt_hid_keyboard_active()) {
+    if (ui_phys_kbd_active()) {
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         return;
     }
@@ -20306,12 +20963,15 @@ void ui_osk_show(lv_obj_t *kb)
     lv_obj_move_foreground(kb);
 }
 
-/* A Bluetooth keyboard that wakes AFTER the field was tapped left the on-screen
+/* A physical keyboard that wakes AFTER the field was tapped left the on-screen
  * keyboard sitting there: the tap happened while nothing was connected, so
  * showing it was right at the time, and nothing revisited that decision when the
  * keyboard turned up two seconds later. Reported from the bench - the first two
  * or three keystrokes land in the field with the on-screen keyboard still
  * covering half the screen.
+ *
+ * ⛔ T131: this watched the BLE flag only, so clicking the snap-on keyboard on
+ * mid-field did not retire the on-screen one either. Both are checked now.
  *
  * Runs on the LVGL task, which is why the BLE side only sets a flag and never
  * touches a widget itself. */
@@ -20319,7 +20979,7 @@ static void osk_bt_retire_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_osk_cur || !lv_obj_is_valid(s_osk_cur)) { s_osk_cur = NULL; return; }
-    if (bt_hid_keyboard_active() && !lv_obj_has_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN))
+    if (ui_phys_kbd_active() && !lv_obj_has_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN))
         lv_obj_add_flag(s_osk_cur, LV_OBJ_FLAG_HIDDEN);
 }
 

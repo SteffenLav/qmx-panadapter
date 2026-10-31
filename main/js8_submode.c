@@ -19,15 +19,30 @@ static const char *TAG = "js8sub";
 static const struct {
     uint8_t     value;          /* JS8Call NSUBMODE */
     const char *label;
+    int         secs;           /* the slot period, as a NUMBER - see below */
 } S[] = {
-    { 0, "Normal - 15 s" },
-    { 1, "Fast - 10 s"   },
-    { 2, "Turbo - 6 s"   },
-    { 4, "Slow - 30 s"   },
+    { 0, "Normal - 15 s", 15 },
+    { 1, "Fast - 10 s",   10 },
+    { 2, "Turbo - 6 s",    6 },
+    { 4, "Slow - 30 s",   30 },
 };
+
+/* The seconds appear twice on each row, once inside the label and once as an
+ * integer. That is deliberate and it is still ONE row: a caller that needs to
+ * compute with the period (the macro sheet prints the airtime a press will
+ * cost) cannot parse it out of a display string without a second copy of the
+ * formatting rules. Keeping both in the same row means a new submode cannot
+ * get one and not the other. */
 #define N_SUBMODES ((int)(sizeof(S) / sizeof(S[0])))
 
 int js8_submode_count(void) { return N_SUBMODES; }
+
+int js8_submode_secs(uint8_t value)
+{
+    for (int i = 0; i < N_SUBMODES; i++)
+        if (S[i].value == value) return S[i].secs;
+    return S[0].secs;   /* unknown reads as Normal, as index_of() already does */
+}
 
 uint8_t js8_submode_value(int index)
 {
@@ -58,6 +73,58 @@ const char *js8_submode_options_lvgl(void)
         for (int i = 0; i < N_SUBMODES && n < sizeof(buf) - 1; i++)
             n += (size_t)snprintf(buf + n, sizeof(buf) - n, "%s%s",
                                   i ? "\n" : "", S[i].label);
+    }
+    return buf;
+}
+
+/* ---- the alternate picker, built from the SAME table -------------------
+ *
+ * Index 0 is "Off"; indices 1.. are S[] with Normal skipped. Nothing here
+ * decides whether a choice can actually be decoded - a sub-mode whose slot is
+ * longer than the primary's never fits and js8_alt_select() refuses it by
+ * arithmetic. Offering it anyway is deliberate: the primary can change, and a
+ * picker that silently dropped Slow when you were on Normal and grew it back
+ * on Slow would read as a bug. */
+#define ALT_OFF_LABEL  "Off - primary only"
+
+int js8_alt_count(void)
+{
+    int n = 1;                                  /* Off */
+    for (int i = 0; i < N_SUBMODES; i++) if (S[i].value != 0) n++;
+    return n;
+}
+
+uint8_t js8_alt_value(int index)
+{
+    if (index <= 0) return 255;
+    int n = 0;
+    for (int i = 0; i < N_SUBMODES; i++) {
+        if (S[i].value == 0) continue;
+        if (++n == index) return S[i].value;
+    }
+    return 255;
+}
+
+int js8_alt_index_of(uint8_t value)
+{
+    int n = 0;
+    for (int i = 0; i < N_SUBMODES; i++) {
+        if (S[i].value == 0) continue;
+        n++;
+        if (S[i].value == value) return n;
+    }
+    return 0;                                   /* unknown reads as Off */
+}
+
+const char *js8_alt_options_lvgl(void)
+{
+    static char buf[128];
+    if (buf[0] == 0) {
+        size_t n = (size_t)snprintf(buf, sizeof(buf), "%s", ALT_OFF_LABEL);
+        for (int i = 0; i < N_SUBMODES && n < sizeof(buf) - 1; i++) {
+            if (S[i].value == 0) continue;
+            n += (size_t)snprintf(buf + n, sizeof(buf) - n, "\n%s", S[i].label);
+        }
     }
     return buf;
 }

@@ -21,10 +21,18 @@
 static const char *TAG = "spurmap";
 
 // ---- Tuning -------------------------------------------------------------
-// 25 Hz: big enough that even the slowest window measured (multiplier ~3.75,
+// 30 Hz: big enough that even the slowest window measured (multiplier ~3.75,
 // itself uncertain) moves a spur ~2 bins, small enough that a real signal stays
-// inside its own bin (0.53) and a CW note shifts only 25 Hz.
-#define DITHER_HZ            25
+// inside its own bin (0.64) and a CW note shifts only 30 Hz.
+//
+// ⛔ 30 AND NOT 25, BECAUSE THE DIAL HAS A 10 Hz GRID. cat_set_frequency()
+// rounds every write to the QMX's encoder step, so a 25 Hz dither was WRITTEN
+// as +30 and then waited for a readback of +25 that the radio can never report.
+// Steve KX7R, v1.22.0: the radio walked up the band 30 Hz every ~7 s. The
+// comparisons below now quantise as well, so an off-grid value could only cost
+// the measurement, never the dial - but naming the real step keeps the log
+// honest, and the numbers above are the measured ones re-stated at 30 Hz.
+#define DITHER_HZ            30
 // Timing, tightened 2026-08-13 after the operator measured 8-10 s to settle and
 // found it restarting on every retune. The whole sequence is now ~2 s.
 //
@@ -451,6 +459,13 @@ static bool safe_to_dither(void)
 static bool tune_and_confirm(uint32_t target, bool *sent_out)
 {
     if (sent_out) *sent_out = false;
+    /* ⛔ COMPARE AGAINST WHAT THE RADIO CAN HOLD, NOT WHAT WE ASKED FOR.
+     * cat_set_frequency() rounds to the 10 Hz encoder grid, so an off-grid
+     * target is written rounded and then never confirms: 50 tries x 60 ms of
+     * waiting, an abandoned measurement, and - because the dial is now at
+     * neither of the two values the restore recognises - a radio left where
+     * the nudge put it. That is the whole of KX7R's band walk. */
+    target = cat_quantise_dial_hz(target);
     if (cat_poll_is_paused()) return false;      /* would be parked, not sent */
     cat_set_frequency_forced(target);
     if (sent_out) *sent_out = true;
@@ -468,6 +483,20 @@ static bool tune_and_confirm(uint32_t target, bool *sent_out)
              (unsigned long)target);
     return false;
 }
+
+/* ⛔⛔ A MEASUREMENT THAT LEAVES THE RADIO SOMEWHERE ELSE MUST NOT BE RETRIED
+ * FOR EVER. The dial walk KX7R saw was not one bad nudge: the nudge failed,
+ * the restore refused, the task saw a NEW frequency, and it measured again -
+ * 30 Hz per cycle with nothing to stop it. 7 MHz to the band edge is about
+ * three hours of that, unattended.
+ *
+ * The quantisation above removes today's cause. This removes the SHAPE of the
+ * fault, so the next cause - a radio on the menus, a jammed pipe, a firmware
+ * that answers FA differently - costs three steps and a message instead of the
+ * band. It is a runtime stop only: the operator's setting in NVS is untouched,
+ * so a reboot gives back what they chose. */
+#define ABANDON_LIMIT 3
+static int s_abandoned_in_a_row = 0;
 
 static void detect_at(uint32_t freq)
 {
@@ -523,7 +552,10 @@ static void detect_at(uint32_t freq)
          * to ~150 ms, so the pre-nudge frequency can still be the last one
          * reported. */
         const uint32_t now = cat_get_frequency();
-        if (now != freq + DITHER_HZ && now != freq) {
+        /* Quantised for the same reason tune_and_confirm() quantises: the dial
+         * holds the rounded nudge, and an un-rounded comparison here reads our
+         * own write as someone else's tune and refuses to put the radio back. */
+        if (now != cat_quantise_dial_hz(freq + DITHER_HZ) && now != freq) {
             ESP_LOGW(TAG, "dial moved to %lu Hz while nudged - leaving it there "
                           "rather than restoring %lu Hz over someone else's tune",
                      (unsigned long)now, (unsigned long)freq);
@@ -587,6 +619,15 @@ static void detect_at(uint32_t freq)
         for (int k = 0; k < n; k++)
             if (found[k].power_lin < 0.0f) found[k].power_lin = -found[k].power_lin;
 
+        s_abandoned_in_a_row = 0;   /* a full measurement landed - start over */
+    } else if (++s_abandoned_in_a_row >= ABANDON_LIMIT) {
+        ESP_LOGE(TAG, "%d measurements in a row could not be completed - switching "
+                      "spur suppression OFF so the dial stops moving. The setting "
+                      "is unchanged; it comes back on the next boot.",
+                 s_abandoned_in_a_row);
+        s_mode = SPUR_MODE_OFF;
+        publish(NULL, 0, 0);
+        s_abandoned_in_a_row = 0;
     }
     s_measuring = false;
 }

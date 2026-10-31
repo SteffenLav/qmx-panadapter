@@ -146,7 +146,61 @@
  * and jammed httpd with extra connections, so it was reverted. This frame is
  * already going out 10 times a second; two more bytes on 1026 is 1.6 kbit/s
  * and costs no new connection. */
-#define WS_TRAILER_LEN          2
+/* VIEW SEQUENCE - one more trailer byte, appended for the same reason the
+ * S-meter was: the header is full at 24 and growing it would shift the payload
+ * under any cached page.
+ *
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN + 2]    view sequence, uint8, wraps
+ *
+ * ⛔ WHY IT EXISTS. The browser's right-drag previews the pan locally and has
+ * to drop that preview on the exact frame whose bins were captured AFTER the
+ * pan was applied. Six attempts to infer that moment from the browser alone
+ * failed in front of the operator, because above zoom x1 the frame carries no
+ * viewport (span = 0, the zoom-FFT path) and there is nothing in it to compare.
+ * Correlating the bins was tried and the band was noise.
+ *
+ * The device knows the answer exactly and costs one byte to say it: this
+ * counter steps every time the view actually moves. A frame whose sequence
+ * differs from the one the browser saw at release is, by construction, the
+ * first frame drawn on the new window. No inference, no tolerance, works at
+ * every zoom.
+ *
+ * uint8 and wrapping is deliberate - the browser only ever asks "is this
+ * different from the one I held", never "how many", so 256 is ample and a
+ * wrap costs nothing. */
+/* THE LIVE VIEWPORT - eight more trailer bytes, and the reason the right-drag
+ * preview can stop guessing.
+ *
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN + 3 .. +6]   view_lo Hz, int32 LE
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN + 7 .. +10]  view_span Hz, uint32 LE
+ *   [WS_HEADER_LEN + WS_PAYLOAD_LEN + 11 .. +14] pan offset Hz, int32 LE
+ *
+ * ⛔ THESE ARE VALID ON BOTH FFT PATHS, and that is the whole point. The
+ * header's own view_lo/span at [6..13] come from ui_pan_view_current(), which
+ * declines while the zoom FFT drives the display, so above zoom x1 every
+ * header field is zero. The page's only other source for the viewport is the
+ * 1 Hz /api/status poll, so at the zoom the operator actually uses it was
+ * drawing a pan up to a second late and could not see its own pan land at all.
+ *
+ * ui_screen_view_hz() is the part that is always knowable - "whichever FFT is
+ * driving the display", its own words - while which BIN a frequency lands in
+ * is not, because dsp_set_zoom() has mixed the pan target to DC. So the
+ * viewport goes out every frame on every path and the bin mapping stays
+ * conditional, exactly the split /api/status already makes.
+ *
+ * ⭐ WHAT IT BUYS. The browser previews a right-drag by translating its
+ * canvases, and then has to get rid of that translate without a visible step.
+ * Every attempt to pick the INSTANT to drop it failed, because there is no
+ * single instant: the device pans, the EMA crossfades, the waterfall reframes.
+ * With the viewport on every frame the translate is no longer a flag at all -
+ * it is DERIVED, each frame, as the difference between where the view was
+ * asked to go and where this frame says it is. It starts at the drag distance
+ * and reaches zero when the device arrives, by arithmetic rather than by
+ * timing, and any partial or multi-stage move is tracked instead of guessed.
+ *
+ * Appended, not in the header, for the reason stated above: the header is full
+ * at 24 and growing it shifts the payload under a cached page. */
+#define WS_TRAILER_LEN          15
 #define WS_SIGNAL_NONE          ((int16_t)0x8000)
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN + WS_TRAILER_LEN)
 
@@ -720,6 +774,29 @@ static void ws_push_task(void *arg)
             }
             s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN]     = (uint8_t)((uint16_t)sig_q);
             s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 1] = (uint8_t)(((uint16_t)sig_q) >> 8);
+        }
+        /* Sampled HERE, beside the bins it describes, not when the frame is
+         * queued: the two must name the same instant or the browser drops its
+         * preview one frame early or late, which is the whole of the fault this
+         * byte exists to end. */
+        s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 2] = ui_view_seq8();
+
+        /* The viewport, on every path - see WS_TRAILER_LEN. Sampled here with
+         * the sequence byte and the bins, so a frame cannot describe one view
+         * and be stamped with another. */
+        {
+            int64_t vlo = 0; int32_t vspan = 0;
+            ui_screen_view_hz(&vlo, &vspan);
+            ws_put_u32(&s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 3], (uint32_t)(int32_t)vlo);
+            ws_put_u32(&s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 7], (uint32_t)vspan);
+            /* The pan EXACTLY, not derived from lo. view_lo is snapped to a
+             * whole Tab5 pixel by view_lo_snapped(), so lo + span/2 - dial is
+             * up to half a pixel out - and a browser that sends that back as
+             * its new pan walks the view a little on every single drag. Sending
+             * the number the device actually holds removes the round trip
+             * through the dial and the snap entirely. */
+            ws_put_u32(&s_payload[WS_HEADER_LEN + WS_PAYLOAD_LEN + 11],
+                       (uint32_t)(int32_t)ui_get_pan_offset_hz());
         }
 
         // Budget for finishing a frame we are already committed to. Deliberately

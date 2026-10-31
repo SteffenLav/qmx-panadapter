@@ -67,6 +67,13 @@ static bool same_run(const js8_chat_msg_t *a, const js8_chat_msg_t *b)
     const int TOL_HZ = 15;
     int d = a->freq_hz - b->freq_hz;
     if (d < 0) d = -d;
+    /* ⛔ THE SUBMODE IS PART OF THE KEY (T132). Two stations on different JS8
+     * speeds can transmit in the same slot at the same audio offset and have
+     * nothing to do with each other; without this the duty-cycled alternate
+     * decode would silently OVERWRITE the primary submode's message with a
+     * different station's text, and the page would show one row that had
+     * never been sent by anybody. */
+    if (a->proto != b->proto) return false;
     return a->first_utc == b->first_utc && d <= TOL_HZ;
 }
 

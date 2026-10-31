@@ -218,6 +218,12 @@ js8_frame_type_t js8_frame_type(const uint8_t frame[JS8_FRAME_BYTES]);
  * string literal, never allocated, "?" for an index with no wording. */
 const char* js8_cmd_text(uint8_t cmd);
 
+/* The reverse: "GRID?" -> 4, "73" -> 28. JS8_CMD_NONE for anything with no
+ * sendable directed form - free text, ">", the MSG/QUERY family that needs an
+ * argument, and the deprecated HEARTBEAT SNR. Exact match, no trimming. The
+ * reasons are written at the function. */
+uint8_t js8_cmd_from_text(const char* text);
+
 /* Spelling of a Heartbeat frame's bits3, e.g. CQ 0 -> "CQ CQ CQ". */
 const char* js8_cq_text(bool is_cq, uint8_t bits3);
 

@@ -152,11 +152,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.22.0 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
+**v1.23.1 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, and the radio's own menus
 on the screen.** The panadapter, FT8/FT4 receive and transmit, WSPR, ADIF logging and all
 four logbook uploads — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable
-and in daily use. **JS8 Normal is a beta**, and **audio on the Tab5 is a beta** — see below. **v1.22.0** lets you log CW and SSB contacts by hand, on the Tab5 and in the browser — the digital modes always logged themselves, phone and CW could not be logged at all. Activation now covers seven ?OTA programmes, writes each one's own ADIF file when you stop, and shows the contact count on its own button. A Scheduled events pane puts the contest calendar and the ?OTA schedule on one timeline. FT8, FT4 and JS8 each keep their own frequency, and the waterfall no longer shows history from before a WSPR or FT8 visit.
+and in daily use. **JS8 Normal is a beta**, and **audio on the Tab5 is a beta** — see below. In **v1.23.1** the browser gains the five controls only the Tab5 had: zero-beat (and SSB auto-tune on the same button), CW keyer speed in CW, park and restore a RIT offset, and transmit power per band. A finished QSO no longer claims the other station never answered. And a boot where WiFi fails to start can no longer abort the device.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -326,7 +326,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.22.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.23.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

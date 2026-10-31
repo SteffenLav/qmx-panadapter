@@ -608,9 +608,17 @@ static void ft8_sim_task(void *arg)
          * window synthesis was starved for minutes, against ~73% idle on the
          * same page in live RX. Injecting phantoms into a decode list nobody is
          * looking at is pure cost, so gate on the page as well as the setting. */
-        if (!s.sim_mode_en || ui_mode_get() != UI_MODE_FT8) {
+        /* ⛔ AND NOT IN JS8. This gate was protocol-blind, so turning sim
+         * mode on while the JS8 screen was up ran THIS simulator: it would
+         * have synthesized FT8 waveforms, decoded them with the FT8 decoder
+         * and injected "CQ W1ABC FN42" as 77-bit standard messages into a
+         * JS8 station list. js8_sim.c is the one that belongs there, and it
+         * gates on the same setting with the opposite protocol test - one
+         * switch, two simulators, and the protocol decides. */
+        if (!s.sim_mode_en || ui_mode_get() != UI_MODE_FT8 ||
+            ft8_op_mode_get() == FT8_OP_MODE_JS8) {
             if (was_active) {
-                ESP_LOGI(TAG, "sim mode idle (off, or not on the FT8 page)");
+                ESP_LOGI(TAG, "sim mode idle (off, not on the FT8 page, or JS8 - js8_sim has it)");
                 was_active = false;
                 // Fresh session next time: worked phantoms answer CQs again,
                 // and nothing pending survives the toggle.

@@ -24,6 +24,8 @@
 #include "settings.h"
 #include "ui.h"           // ui_get_passband_width_hz() - the QMX's actual selected filter width
 
+#include "util/mem_where.h"
+
 static const char *TAG = "rx_audio";
 
 #ifndef M_PI
@@ -2706,6 +2708,17 @@ void rx_audio_init(void)
         ESP_LOGE(TAG, "buffer alloc failed; RX audio disabled");
         return;
     }
+    /* T134 - these five are deliberately internal (the PSRAM spill saturates
+     * at 6 simultaneous FIR instances, see the note above), but "internal"
+     * on this part includes the slow LP/RTC block and all five are far under
+     * 16 KB. Print where they landed rather than assume L2. */
+    ESP_LOGI(TAG, "FIR state coef=%p/%s lo_re=%p/%s lo_im=%p/%s "
+                  "hi_re=%p/%s hi_im=%p/%s",
+             (void *)s_coeff_half,    mem_where(s_coeff_half),
+             (void *)s_delay_low_re,  mem_where(s_delay_low_re),
+             (void *)s_delay_low_im,  mem_where(s_delay_low_im),
+             (void *)s_delay_high_re, mem_where(s_delay_high_re),
+             (void *)s_delay_high_im, mem_where(s_delay_high_im));
     /* ⚠ THE COEFFICIENTS MUST EXIST BEFORE THE FIRST FRAME, and retune()
      * cannot be relied on to create them: set_decim_factor() returns early
      * when D is already the value asked for, which at boot it is. Without this

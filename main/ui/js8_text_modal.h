@@ -13,7 +13,7 @@ extern "C" {
 //
 // All THREE keyboards reach it, and none of that is new code here: the snap-on
 // keyboard and a BLE keyboard both arrive through ui_kbd_note_focus(), and
-// ui_osk_show() puts up the on-screen keyboard only when no BLE keyboard is
+// ui_osk_show() puts up the on-screen keyboard only when NEITHER physical keyboard is
 // connected. See the long comment at ui_osk_show() in ui.c.
 
 // Build the modal (idempotent). Optional - show() builds lazily anyway.

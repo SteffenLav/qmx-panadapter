@@ -92,6 +92,19 @@ void ft8_screen_view_freetext_result(char *out, size_t out_len);
  * row click selects and transmits nothing - see js8_target.h. */
 void ft8_screen_view_request_js8_macro(int which);
 
+/* The macro sheet from the browser. Records the directive; the 1 Hz LVGL
+ * timer sends it, because arming must not happen on the HTTP task. The word
+ * is the one js8_cmd_text() spells - "GRID?", "HW CPY?" - plus "RR73". What
+ * became of it lands in /api/status with the other web results. */
+void ft8_screen_view_request_js8_directive(const char *cmd_text);
+
+/* The macro SHEET's sends - any directive js8_cmd_from_text() accepts, plus
+ * "RR73". Composes "<them> <us> <cmd>", builds a one-frame request through
+ * the round-trip guard and arms it. Returns false with the refusal in *out,
+ * which is the text both the toast and the browser show. Must be called on
+ * the LVGL task: it arms. */
+bool ft8_screen_view_js8_directive(const char *cmd_text, char *out, size_t out_len);
+
 // CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
 // TXCQ button and the web page drive the SAME state - set is deferred to the
 // LVGL task, get is a plain read.
@@ -167,6 +180,8 @@ void ft8_screen_view_refresh_mode_label(void);
  * so both surfaces run the one code path. */
 void ft8_screen_view_request_js8_flush(void);
 
-/* Which JS8 pane is showing. Reported in /api/status so the capture and the
- * API can say what is on the screen without asking the operator. */
-bool ft8_screen_view_js8_tab_is_conversation(void);
+/* ⛔ ft8_screen_view_js8_tab_is_conversation() WAS HERE and is gone - T14.
+ * It answered "which JS8 pane is showing" for /api/status. All three panes
+ * are up at once now, so the question has no answer and the API reports
+ * "all" literally rather than this returning a constant that reads like a
+ * live reading. */

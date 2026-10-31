@@ -9,7 +9,7 @@
 //
 // ⭐ ALL THREE KEYBOARDS REACH IT, and none of that is new code here. The
 // snap-on keyboard and a BLE keyboard both arrive through ui_kbd_note_focus(),
-// and ui_osk_show() puts up the on-screen keyboard only when no BLE keyboard is
+// and ui_osk_show() puts up the on-screen keyboard only when NEITHER physical keyboard is
 // connected - see the long comment at ui_osk_show() in ui.c.
 //
 // ⭐ THE AIR TIME IS SHOWN BEFORE THE RADIO IS KEYED. js8_ftx_plan() answers
