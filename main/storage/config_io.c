@@ -228,7 +228,7 @@ char *config_io_export(size_t *out_len)
     APP("listen_every = %u\n", (unsigned)c.cq_listen_every);  // 0 = never pause to listen
 
     APP("\n[cw]\n");
-    APP("# keyer memories 1-6; {MYCALL} and {PARK} expand at send time\n");
+    APP("# keyer memories 1-6; {MYCALL}, {PARK} and {CALL} expand at send time\n");
     for (int i = 0; i < 6; i++) APP("%d = %s\n", i + 1, c.cw_msg[i]);
     APP("park = %s\n", c.cw_park);
 
