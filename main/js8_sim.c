@@ -534,9 +534,20 @@ static void js8_sim_task(void *arg)
                 sim_reset();
                 /* Phantoms left on screen after the toggle are tappable, and a
                  * tap transmits. Clearing on the way out is the same rule
-                 * ft8_sim.c follows, and for the same reason. */
+                 * ft8_sim.c follows, and for the same reason.
+                 *
+                 * ⛔ THE CONVERSATION PANE TOO, not just the stations list.
+                 * This simulator feeds BOTH sinks, so clearing only the one
+                 * ft8_sim.c knows about left every phantom message sitting in
+                 * the pane - under a real callsign, in a QSO the operator
+                 * never had, mixed in with whatever real traffic arrived next.
+                 * Reported from the glass, 2026-10-31: "you need to clear /
+                 * flush the decoding screen whenever you leave sim or the
+                 * screen/page". Both transitions, because "want" goes false
+                 * for leaving the page exactly as it does for the toggle. */
                 ft8_screen_clear();
                 ft8_pileup_clear();
+                js8_chat_clear();
             }
             last_tx_slot = -1;
             continue;
@@ -557,9 +568,11 @@ static void js8_sim_task(void *arg)
             sim_reset();
             /* Real decodes sitting on screen from before the toggle are as
              * confusing as leftover phantoms after it - a station the operator
-             * has just been told is not real. Clear on the way IN as well. */
+             * has just been told is not real. Clear on the way IN as well, and
+             * the conversation pane with them. */
             ft8_screen_clear();
             ft8_pileup_clear();
+            js8_chat_clear();
         }
 
         char my_call[16];

@@ -9051,6 +9051,74 @@ static void pinch_poll_cb(lv_timer_t *t)
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
 
+    /* ⭐ THREE FINGERS HELD -> SIMULATION MODE ON/OFF, on the FT8 page in any
+     * sub-mode (FT8, FT4 and JS8 share one sim_mode_en).
+     *
+     * Operator, 2026-10-31: "It takes a lot of resources and the scrolling
+     * down in the drawer is REALY slow". The toggle is near the bottom of a
+     * long drawer, and simulation is the one setting that gets turned on and
+     * off repeatedly in a testing session - so it is the one that should not
+     * cost a scroll.
+     *
+     * ⛔ THREE, NOT TWO. Two fingers are already spoken for twice over on this
+     * page: pinch-zooms the spectrum, and a two-finger double-tap sleeps the
+     * display. Three is the first count with nothing on it.
+     *
+     * ⛔ THE WHOLE TOUCH SESSION IS SWALLOWED, not just the moment it fires.
+     * Fingers never land or lift together, so a three-finger press passes
+     * through npts==2 on the way in AND on the way out. Without the latch the
+     * way in starts a spectrum pinch and the way out reads as a two-finger
+     * tap - two of those put the display to sleep, which is exactly the wrong
+     * answer to a gesture meant to toggle a setting. So: once three fingers
+     * are seen, every poll returns here until the panel reports zero, and the
+     * two-finger trackers are cleared rather than left mid-gesture.
+     *
+     * The setting is written and nothing else: the 1 Hz sim_border_keepalive
+     * already follows it and repaints both drawer checkboxes and the red
+     * bezel, so there is one path that reacts to a change whatever made it -
+     * the drawer, the web API, or this. */
+    {
+        static uint64_t s_3f_down_us = 0;
+        static bool     s_3f_fired   = false;
+        static bool     s_3f_lock    = false;   /* swallow until ALL fingers lift */
+        const uint64_t  HOLD_US      = 1200000; /* a deliberate press, not a rest */
+        uint64_t now_us = esp_timer_get_time();
+
+        if (npts >= 3 && ui_mode_get() == UI_MODE_FT8) {
+            if (!s_3f_lock) {
+                s_3f_lock    = true;
+                s_3f_down_us = now_us;
+                s_3f_fired   = false;
+                /* Whatever the first two fingers started, end it now. */
+                stroll_cancel();
+                s_2f_down_us     = 0;
+                s_2f_last_tap_us = 0;
+                s_2f_moved       = true;
+            }
+            if (!s_3f_fired && now_us - s_3f_down_us >= HOLD_US) {
+                s_3f_fired = true;
+                /* ⛔ THE NARROW ACCESSOR. settings_load_all() puts 3636 bytes on
+                 * taskLVGL's stack and this runs on it every 50 ms. */
+                bool want = !settings_get_sim_mode_en();
+                settings_set_sim_mode_en(want);
+                ui_toast(want ? "Simulation ON - the radio is not keyed"
+                              : "Simulation off");
+                ESP_LOGI(TAG, "three-finger hold: simulation %s",
+                         want ? "ON (radio not keyed)" : "off");
+            }
+        }
+
+        if (s_3f_lock) {
+            s_multi_lockout_us = now_us + MULTI_LOCKOUT_MS * 1000;
+            if (npts == 0) {
+                s_3f_lock    = false;
+                s_3f_down_us = 0;
+                s_3f_fired   = false;
+            }
+            return;
+        }
+    }
+
     // While the freq pad is open, raw touch handling belongs to it alone -
     // a two-finger pinch toggles its size; nothing else from this function
     // (spectrum pan/zoom) should fire underneath a popup the user can't
