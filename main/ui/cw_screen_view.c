@@ -356,6 +356,68 @@ static void edit_kb_event_cb(lv_event_t *e)
  * lv_keyboard_get_textarea() reads back NULL once the keyboard is hidden, and
  * the buttons have to work with it down. */
 static lv_obj_t *s_edit_focus = NULL;
+static lv_obj_t *s_edit_macro_lbl[3];   /* the three button labels */
+static lv_obj_t *s_edit_sends = NULL;   /* the live "sends:" line */
+
+/* What each button PASTES - always the token, never the value. The label
+ * shows the value; the memory must keep the macro or it would freeze at
+ * whatever was current when it was written. */
+static const char *const EDIT_MACROS[3] = { "{MYCALL}", "{PARK}", "{CALL}" };
+
+/* What each button SAYS. The value once it is known, the plain name until
+ * then - operator, 2026-11-01: "My call should only say My call until I have
+ * filled out the Call sign form. Same with My park."
+ *
+ * ⛔ THE LABELS ARE REFRESHED ON EVERY OPEN, not built once. The editor
+ * window is built lazily and then lives for the boot, so a callsign entered
+ * afterwards, an activation started, or a station adopted would all leave
+ * these reading the name they had when the window was first created. */
+static void edit_macro_labels_refresh(void)
+{
+    char buf[20];
+
+    if (s_edit_macro_lbl[0]) {
+        settings_get_my_callsign(buf, sizeof(buf));
+        lv_label_set_text(s_edit_macro_lbl[0], buf[0] ? buf : "My call");
+    }
+    if (s_edit_macro_lbl[1]) {
+        char ref[16];
+        lv_label_set_text(s_edit_macro_lbl[1],
+                          park_resolve(ref, sizeof(ref), NULL) ? ref : "My park");
+    }
+    if (s_edit_macro_lbl[2]) {
+        char tgt[16];
+        cw_qso_get_target(tgt, sizeof(tgt));
+        lv_label_set_text(s_edit_macro_lbl[2], tgt[0] ? tgt : "Their call");
+    }
+}
+
+/* ⭐ WHAT THIS MEMORY WILL ACTUALLY KEY, under the field being edited. The
+ * braces were the whole confusion: the pane shows a memory EXPANDED and this
+ * window shows it RAW, and nothing said they were the same line. Operator,
+ * 2026-11-01: "I dont get the idea here". One line of the finished text
+ * explains the mechanism better than any label naming it could. */
+static void edit_sends_refresh(void)
+{
+    if (!s_edit_sends) return;
+    if (!s_edit_focus) { lv_label_set_text(s_edit_sends, ""); return; }
+
+    const char *raw = lv_textarea_get_text(s_edit_focus);
+    if (!raw || !raw[0]) { lv_label_set_text(s_edit_sends, ""); return; }
+
+    char exp[CW_SEND_MAX + 1];
+    const char *missing = NULL;
+    if (expand_macros(raw, exp, sizeof(exp), &missing))
+        lv_label_set_text_fmt(s_edit_sends, "sends:  %s", exp);
+    else
+        lv_label_set_text_fmt(s_edit_sends, "needs %s", missing ? missing : "a value");
+}
+
+static void edit_ta_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    edit_sends_refresh();
+}
 
 /* ⭐ MACROS GO IN WITH ONE TAP. They could always be typed, and that was the
  * whole problem: { and } live on LVGL's symbol layer, so "{CALL}" cost eight
@@ -371,13 +433,36 @@ static void edit_macro_cb(lv_event_t *e)
 {
     const char *macro = (const char *)lv_event_get_user_data(e);
     if (!s_edit_focus || !macro) return;
-    lv_textarea_add_text(s_edit_focus, macro);
+
+    /* A TRAILING SPACE, because a macro is never the whole message and the
+     * next thing typed would otherwise run into it - "{CALL}UR". Operator,
+     * 2026-11-01: "+ a space". */
+    char ins[20];
+    snprintf(ins, sizeof(ins), "%s ", macro);
+    lv_textarea_add_text(s_edit_focus, ins);
+
+    /* ⛔ AND THE CURSOR STAYS IN THE FIELD. Tapping the button moves LVGL's
+     * focus to the button, so the textarea loses LV_STATE_FOCUSED and its
+     * cursor stops blinking - the field looks inert right after the paste,
+     * at the exact moment the operator is about to keep typing. Re-assert
+     * the state and keep the keyboard pointed at the same field. Operator,
+     * 2026-11-01: "the blinking yellow cursor should stay there after the
+     * insert". lv_textarea_add_text() has already moved the cursor past what
+     * it inserted, so there is no position to restore. */
+    lv_obj_add_state(s_edit_focus, LV_STATE_FOCUSED);
+    if (s_edit_kb) {
+        lv_keyboard_set_textarea(s_edit_kb, s_edit_focus);
+        lv_obj_clear_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_edit_kb);
+    }
+    edit_sends_refresh();
 }
 
 static void edit_ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
     s_edit_focus = ta;
+    edit_sends_refresh();
     // One blinking cursor at a time, keyboard follows the focused field.
     for (int i = 0; i < N_CW_MEM; i++)
         if (s_edit_ta6[i] && s_edit_ta6[i] != ta)
@@ -424,27 +509,37 @@ static void edit_build(void)
      * out by hand was the gap, not the information. Tapping one says what it
      * does better than the sentence did. */
     {
-        static const char *MACROS[] = { "{MYCALL}", "{PARK}", "{CALL}" };
-        static const int   MW[]     = { 150, 124, 124 };
-        int mx = 212;
+        /* ⛔ x=320, NOT 212. "CW memories" at montserrat_28 runs to about
+         * x=180, so a row starting at 212 sat on the title's shoulder.
+         * 320 is where the hint line these buttons replaced used to start,
+         * and it leaves the gap the operator asked for.
+         *
+         * Fixed widths, not content-sized: the labels swap between a name
+         * and a callsign as settings change, and a row that re-flows every
+         * time a station is adopted would move the button under the finger
+         * that is reaching for it. 140 holds "Their call" and a 9-character
+         * callsign at montserrat_20. */
+        int mx = 320;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
-            lv_obj_set_size(b, MW[i], 48);
+            lv_obj_set_size(b, 140, 48);
             lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 0);
             lv_obj_set_style_bg_color(b, lv_color_hex(0x2a2f37), 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
             lv_obj_set_style_border_width(b, 1, 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_add_event_cb(b, edit_macro_cb, LV_EVENT_CLICKED,
-                                (void *)MACROS[i]);
-            lv_obj_t *l = lv_label_create(b);
-            lv_label_set_text(l, MACROS[i]);
+                                (void *)EDIT_MACROS[i]);
+            s_edit_macro_lbl[i] = lv_label_create(b);
+            /* Text comes from edit_macro_labels_refresh() on every open. */
+            lv_label_set_text(s_edit_macro_lbl[i], "");
             /* CW blue, the page's own colour - these insert, they do not
              * commit, so they must not read as Save. */
-            lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-            lv_obj_center(l);
-            mx += MW[i] + 8;
+            lv_obj_set_style_text_color(s_edit_macro_lbl[i],
+                                        lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
+            lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_20, 0);
+            lv_obj_center(s_edit_macro_lbl[i]);
+            mx += 148;
         }
     }
 
@@ -489,7 +584,19 @@ static void edit_build(void)
         lv_obj_set_style_text_font(s_edit_ta6[i], &lv_font_montserrat_22, 0);
         ui_theme_style_textarea(s_edit_ta6[i]);
         lv_obj_add_event_cb(s_edit_ta6[i], edit_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+        lv_obj_add_event_cb(s_edit_ta6[i], edit_ta_changed_cb,
+                            LV_EVENT_VALUE_CHANGED, NULL);
     }
+
+    /* Under the six fields, inside the panel's 420 px: the last field ends
+     * at y=378 and the pad leaves room to y=404. */
+    s_edit_sends = lv_label_create(panel);
+    lv_label_set_text(s_edit_sends, "");
+    lv_obj_set_style_text_color(s_edit_sends, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_edit_sends, &lv_font_montserrat_18, 0);
+    lv_label_set_long_mode(s_edit_sends, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_edit_sends, 1010);
+    lv_obj_set_pos(s_edit_sends, 34, 384);
 
     s_edit_kb = lv_keyboard_create(s_edit_modal);
     style_edit_keyboard(s_edit_kb);
@@ -514,6 +621,8 @@ static void edit_open(int slot)
      * macro button tapped first would otherwise land in whichever line was
      * focused the last time this window was used. */
     s_edit_focus = NULL;
+    edit_macro_labels_refresh();
+    edit_sends_refresh();
     lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_modal);
