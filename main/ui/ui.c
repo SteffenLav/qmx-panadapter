@@ -3283,7 +3283,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_DISTANCE   17  // distance unit (km/miles) - shown in FT8 AND WSPR,
                                   // since both decode lists honour it
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
-#define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
+#define DRAWER_SEC_SIMMODE    19  // FT8 PAGE, every sub-mode: phantom-station simulation (practice/testing, never keys the radio). FT8/FT4 are ft8_sim.c, JS8 is js8_sim.c - one toggle, the protocol picks
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
 #define DRAWER_SEC_TUNE2      21  // Antenna Tune (1_04+ only) - own section right above
                                    // WiFi setup; the panadapter layout closes its slot

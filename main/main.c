@@ -51,6 +51,7 @@
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
+#include "js8_sim.h"
 #include "net/pskreporter.h"
 #include "net/spots.h"
 #include "net/qrz_coords.h"
@@ -808,6 +809,7 @@ void app_main(void)
     ft8_qso_init();
     ft8_pileup_init();
     ft8_sim_init();
+    js8_sim_init();
     pskreporter_init();
     spots_init();          // live POTA spots on the spectrum (WiFi, opt-out)
     psk_rx_selftest();     // attribute names still match the collector's output

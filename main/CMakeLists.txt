@@ -152,6 +152,7 @@ idf_component_register(
         "ft8_directed_cq.c"
         "tx_band_guard.c"
         "ft8_sim.c"
+        "js8_sim.c"
         "wspr_proto.c"
         "wspr_fano.c"
         "wspr_decode.c"
