@@ -1038,20 +1038,8 @@ static void modal_build(void)
      * hand-built button grid, not an lv_keyboard, and the five OTHER
      * lv_keyboards in this firmware (ft8_cq, ft8_filter, identity_config,
      * js8_text, adif_view, qmx_term) all share one look. Five against one
-     * makes the five the house style, so this now uses the same style_kb_btn
-     * the others do and leaves the main part to ui_theme_style_keyboard(). */
-    static lv_style_t style_kb_btn;
-    static bool kb_btn_style_inited = false;
-    if (!kb_btn_style_inited) {
-        lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
-        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb_btn, lv_color_white());
-        lv_style_set_border_width(&style_kb_btn, 1);
-        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
-        kb_btn_style_inited = true;
-    }
-    lv_obj_add_style(s_action_kb, &style_kb_btn, LV_PART_ITEMS);
+     * makes the five the house style, so this now takes the whole look -
+     * keys included - from ui_theme_style_keyboard(). */
     ui_theme_style_keyboard(s_action_kb);
     lv_obj_set_size(s_action_kb, LV_PCT(100), 280);
     lv_obj_align(s_action_kb, LV_ALIGN_BOTTOM_MID, 0, 0);

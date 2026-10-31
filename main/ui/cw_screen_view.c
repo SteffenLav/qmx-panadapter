@@ -252,22 +252,10 @@ static lv_obj_t *s_edit_kb    = NULL;
 
 static void refresh_next_label(void);   // fwd (ESM section below)
 
-// Same key styling as the WiFi/Callsign/CQ modals (ui_theme_style_keyboard
-// alone leaves the per-key look at LVGL defaults - operator noticed).
+// Size, placement and caps behaviour for both of this page's keyboards. The
+// LOOK is ui_theme_style_keyboard()'s job alone now, keys included.
 static void style_edit_keyboard(lv_obj_t *kb)
 {
-    static lv_style_t style_kb_btn;
-    static bool inited = false;
-    if (!inited) {
-        lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
-        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb_btn, lv_color_white());
-        lv_style_set_border_width(&style_kb_btn, 1);
-        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
-        inited = true;
-    }
-    lv_obj_add_style(kb, &style_kb_btn, LV_PART_ITEMS);
     ui_theme_style_keyboard(kb);
     lv_obj_set_size(kb, LV_PCT(100), 280);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -972,11 +960,21 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_pane, 0, 0);
     lv_obj_clear_flag(s_pane, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Page header - the FT8 pane's "MODE: FT8" gold title, same font and
-    // colour, so the two pages read as siblings (operator request 2026-08-01).
+    /* Page header, at the FT8 pane's size and position so the two pages read
+     * as siblings (operator request 2026-08-01).
+     *
+     * ⛔ CW BLUE, NOT GOLD. Gold is FT8's accent, and it was copied here when
+     * CW was the second page and there was nothing else for it to clash with.
+     * Each mode now owns a colour, and the left drawer's button carries it:
+     * "it is not the drawer but the button label that must be the same colour
+     * as the page it opens" (operator, on left_drawer_add_btn). This title and
+     * that button are the same object seen from inside and outside the page,
+     * so they read the same constant - gold here made the pair disagree.
+     * Operator, 2026-10-31: "MODE: CW on the page is not the same blue colour
+     * as we have in the left drawer". */
     lv_obj_t *hdr = lv_label_create(s_pane);
     lv_label_set_text(hdr, "MODE: CW");
-    lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
     lv_obj_set_style_text_font(hdr, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(hdr, 14, 6);
 

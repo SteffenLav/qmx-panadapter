@@ -823,6 +823,10 @@ static esp_err_t status_handler(httpd_req_t *req)
      * host test could see it: the bug is which endpoint serves the field, not
      * what the field contains. */
     cJSON_AddBoolToObject(root, "wspr_en", wspr_feature_enabled());
+    /* So the browser can grey its own "Switch to CW" rather than offering a
+     * door that answers 403 - the refusal below is the authority, this is
+     * only the menu agreeing with it in advance. */
+    cJSON_AddBoolToObject(root, "cw_en", settings_get_cw_page_en());
     // #218: firmware version + whether a newer release exists. The update check
     // has run since v1.1 but announced itself ONLY inside the on-device Reader,
     // so anyone who never opened the manual was never told - which is how people
@@ -2400,7 +2404,27 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  * a menu entry that does nothing. */
                 ui_request_base_mode_m(UI_MODE_WSPR);
             }
-            else if (!strcmp(scr, "cw"))   ui_request_base_mode_m(UI_MODE_CW);
+            else if (!strcmp(scr, "cw")) {
+                /* ⛔ REFUSED ON THE CHANNEL THE CALLER USED. ui_set_base_mode()
+                 * already turns this away, but it does it by returning - and a
+                 * silent return here would answer {"ok":true} while nothing
+                 * moved, which is the T67 shape this action exists to avoid.
+                 *
+                 * NOT self-enabling, unlike the "wspr" branch above: WSPR is a
+                 * finished page whose flag is vestigial, the CW page is not.
+                 * It keys the radio over CAT KY with no way to abort a message
+                 * in flight, so asking for the page is not consent to that. */
+                if (!settings_get_cw_page_en()) {
+                    cJSON_Delete(root);
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_status(req, "403 Forbidden");
+                    httpd_resp_sendstr(req,
+                        "{\"ok\":false,\"error\":\"the CW page is off - "
+                        "enable it with {\\\"action\\\":\\\"cw_enable\\\",\\\"on\\\":true}\"}");
+                    return ESP_OK;
+                }
+                ui_request_base_mode_m(UI_MODE_CW);
+            }
             else if (!strcmp(scr, "pan") || !strcmp(scr, "panadapter")) {
                 ui_request_base_mode_m(UI_MODE_PANADAPTER);
             }
@@ -3899,6 +3923,37 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         }
         char buf[96];
         snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_en\":%s}",
+                 want ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        cJSON_Delete(root);
+        return ESP_OK;
+    } else if (action && strcmp(action, "cw_enable") == 0) {
+        /* The CW page's master switch. Same shape as wspr_enable above and
+         * logged for the same measured reason - a route that writes NVS and
+         * says nothing leaves a user's "I cannot get to the CW page" report
+         * with no evidence in it.
+         *
+         * {"action":"cw_enable","on":true}   - and it persists in NVS.
+         *
+         * ⚠ The page is UNFINISHED, and that is why this switch exists rather
+         * than being vestigial like wspr_en: CAT KY has no abort, so a sent
+         * message runs to the end of the radio's 80-character buffer. Default
+         * OFF ships the firmware without offering that to anyone who did not
+         * go looking for it.
+         *
+         * Turning it OFF while the page is up also leaves it, or the operator
+         * is standing on a page whose door has just been removed. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        ESP_LOGW(TAG, "CW page master switch -> %s (over /api/cmd)",
+                 want ? "ENABLED" : "DISABLED - the page loses its drawer door");
+        settings_set_cw_page_en(want);
+        if (!want && ui_mode_get() == UI_MODE_CW) {
+            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+        }
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"cw_en\":%s}",
                  want ? "true" : "false");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, buf);

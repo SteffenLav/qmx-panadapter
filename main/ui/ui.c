@@ -225,8 +225,10 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 // whatever's actually underneath it (FT8 rows, the Preset button, etc).
 #define N_TOPBAR_HIT_ZONES 5
 /* Index into s_topbar_hit_zones[] / hit_zones[] - Band, Mode, BW, Freq, Zoom in
- * that order. Named because the WSPR page keeps this one live and disables the
- * other four; see sync_nav_affordances(). */
+ * that order. Named because the WSPR page keeps FREQ live and disables the
+ * other four, and the CW page does the reverse to MODE; see
+ * top_bar_apply_mode(). */
+#define TOPBAR_ZONE_MODE   1
 #define TOPBAR_ZONE_FREQ   3
 static lv_obj_t *s_topbar_hit_zones[N_TOPBAR_HIT_ZONES] = {0};
 /* ⛔ THE DEEP DEPTH IS COMPUTED ONCE AND MUST BE REMEMBERED, NOT RE-STATED.
@@ -10166,13 +10168,28 @@ static void top_bar_apply_mode(void)
      * starts lower and has nothing underneath. */
     const bool freq_live = (m == UI_MODE_WSPR) && !owned;
 
+    /* ⛔ AND MODE IS DEAD ON THE CW PAGE, which is the same rule running the
+     * other way. The CW page is a tuning page, so the line above keeps all
+     * five controls live - but the mode there is PINNED to CW, and
+     * mode_label_clicked_cb() has always returned without opening a popup
+     * because a one-entry dropdown is noise. That left the one bright control
+     * on this board that does nothing when pressed: the exact broken promise
+     * the block above says it removed by construction.
+     *
+     * Derived here rather than dimmed at the transition, for the v1.12.1
+     * reason restated above: a board that BOOTS into CW has no transition.
+     * Operator, 2026-10-31: "Mode on top bar should be dimmed as it cannot be
+     * changed here". */
+    const bool mode_dead = (m == UI_MODE_CW);
+
     /* Same order as the hit_zones[] table this indexes - Band, Mode, BW, Freq,
      * Zoom - so TOPBAR_ZONE_FREQ addresses the label and its zone together. */
     lv_obj_t *labels[N_TOPBAR_HIT_ZONES] = { s_band_label, s_mode_label, s_bw_label,
                                              s_freq_label, s_zoom_label };
 
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
-        const bool live = !inert || (i == TOPBAR_ZONE_FREQ && freq_live);
+        bool live = !inert || (i == TOPBAR_ZONE_FREQ && freq_live);
+        if (i == TOPBAR_ZONE_MODE && mode_dead) live = false;
 
         /* The LABELS are clickable in their own right, with 90-110 px click
          * halos (ext_click_area, so they are hittable on glass) that between
@@ -19985,7 +20002,11 @@ void ui_apply_saved_mode_view(void)
      * tuning page, so the bar stays bright) and the shallow hit depth the
      * pane's top memory buttons need. Telling the bar rather than letting it
      * derive is exactly what v1.12.1 had to undo. */
-    if (s_saved_ui_mode == UI_MODE_CW) {
+    /* Gated like WSPR's restore below, and for a sharper reason: turning the
+     * CW page off must not leave a unit booting into a page it no longer
+     * offers, with no door in the drawer to leave by. Falls through to the
+     * Panadapter, which is what last_ui_mode means when its page is gone. */
+    if (s_saved_ui_mode == UI_MODE_CW && settings_get_cw_page_en()) {
         ui_mode_set(UI_MODE_CW);
         drawer_set_mode(UI_MODE_CW);
         ui_update_mode("CW");           /* optimistic - no MD; poll without a QMX */
@@ -20059,7 +20080,7 @@ void ui_apply_saved_mode_start(void)
      * CAT does not exist when the view is composed. Same shape as FT8's DiGi
      * write below: through the poll task, so it is retried rather than dropped
      * by the 200 ms rate limit. */
-    if (s_saved_ui_mode == UI_MODE_CW) {
+    if (s_saved_ui_mode == UI_MODE_CW && settings_get_cw_page_en()) {
         cat_request_mode("CW");
         ESP_LOGI(TAG, "restore: CW mode requested from the radio");
         return;
@@ -20167,6 +20188,23 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     if (next == UI_MODE_WSPR && !wspr_feature_enabled()) {
         ESP_LOGI(TAG, "WSPR selected - enabling the page (wspr_en was off)");
         settings_set_wspr_en(true);
+    }
+    /* ⛔ CW IS THE OPPOSITE CASE, AND DELIBERATELY SO: asking for the page
+     * does NOT enable it. WSPR's unlock above is vestigial - the page is
+     * finished and has a door, so a separate switch could only produce a
+     * button that does nothing. The CW page is NOT finished: it keys the
+     * radio over CAT KY with no way to abort a message in flight, so the
+     * flag is a real gate and self-enabling would void it.
+     *
+     * It sits here for the same reason the WSPR unlock does - the one
+     * function the drawer, the boot restore and /api/cmd all pass through -
+     * so there is no arrangement in which the Tab5 and the browser disagree
+     * about which page is up. The surfaces each refuse on their OWN channel
+     * as well (set_screen answers an error; the drawer hides the button),
+     * because a silent no-op here reads exactly like a typo. */
+    if (next == UI_MODE_CW && !settings_get_cw_page_en()) {
+        ESP_LOGW(TAG, "CW page requested but cw_page_en is OFF - refused");
+        return;
     }
     ESP_LOGI(TAG, "Base mode: %s -> %s%s",
              mode_name(cur), mode_name(next), animate ? "" : " (instant)");
@@ -20568,8 +20606,8 @@ static void left_drawer_scrim_cb(lv_event_t *e)
     left_drawer_close();
 }
 
-static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
-                                uint32_t hex, void *dest)
+static lv_obj_t *left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
+                                     uint32_t hex, void *dest)
 {
     lv_obj_t *b = lv_btn_create(parent);
     lv_obj_set_size(b, s_ld_btn_w, LD_BTN_H);
@@ -20594,6 +20632,7 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
     lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
 
     lv_obj_add_event_cb(b, left_drawer_btn_cb, LV_EVENT_CLICKED, dest);
+    return b;
 }
 
 /* The labels, in the order they are stacked. Kept as one list so the
@@ -20603,6 +20642,47 @@ static void left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
 static const char *LD_LABELS[] = {
     "PANADAPTER", "MODE: CW", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
 };
+
+/* The buttons in LD_LABELS order, so the layout pass below can reach them.
+ * Built once; which of them are SHOWN can change while the drawer exists. */
+static lv_obj_t *s_ld_btn[sizeof(LD_LABELS) / sizeof(LD_LABELS[0])];
+
+/* Position and show only the doors this firmware is offering, and re-centre
+ * the stack over however many that is.
+ *
+ * ⛔ RUN ON EVERY OPEN, NOT ONCE AT BUILD. The drawer is built lazily and
+ * then lives for the rest of the boot, so a gate evaluated at build time is a
+ * belief that goes stale the moment the flag is written over /api/cmd - the
+ * operator would turn the CW page on and still find no way in until a reboot.
+ * Same failure the sim bezels had when they were evaluated during the drawer
+ * build and the page was restored afterwards.
+ *
+ * The drawer's WIDTH is deliberately NOT recomputed: left_drawer_measure()
+ * spans every label whether shown or not, so the chrome does not jump when a
+ * page is enabled or disabled. */
+static void left_drawer_layout(void)
+{
+    const int n_all = (int)(sizeof(LD_LABELS) / sizeof(LD_LABELS[0]));
+    bool show[sizeof(LD_LABELS) / sizeof(LD_LABELS[0])];
+    int  n_show = 0;
+    for (int i = 0; i < n_all; i++) {
+        /* Index 1 is MODE: CW - gated, default off. Everything else is a
+         * finished page and always has a door. */
+        show[i] = (i == 1) ? settings_get_cw_page_en() : true;
+        if (show[i]) n_show++;
+    }
+
+    const int stack_h = n_show * LD_BTN_H + (n_show - 1) * LD_BTN_GAP;
+    int y = (DISPLAY_V_RES - stack_h) / 2 - LD_PAD;
+    if (y < 0) y = 0;
+    for (int i = 0; i < n_all; i++) {
+        if (!s_ld_btn[i]) continue;
+        if (!show[i]) { lv_obj_add_flag(s_ld_btn[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_clear_flag(s_ld_btn[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(s_ld_btn[i], y);
+        y += LD_BTN_H + LD_BTN_GAP;
+    }
+}
 
 static void left_drawer_measure(void)
 {
@@ -20663,12 +20743,11 @@ static void left_drawer_build(void)
      * 104 and a 12 gap the stack is 684 of 720, so top-aligned it would sit
      * high with an empty tail. Computed from the list length, so the count
      * can change without this number being edited. */
-    const int n_btn   = (int)(sizeof(LD_LABELS) / sizeof(LD_LABELS[0]));
-    const int stack_h = n_btn * LD_BTN_H + (n_btn - 1) * LD_BTN_GAP;
-    int y = (DISPLAY_V_RES - stack_h) / 2 - LD_PAD;
-    if (y < 0) y = 0;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
-                        LD_DEST(UI_MODE_PANADAPTER, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
+    /* y is settled by left_drawer_layout() at the end, which knows which
+     * buttons are shown. Everything is created at 0 and then placed. */
+    int y = 0;
+    s_ld_btn[0] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
+                        LD_DEST(UI_MODE_PANADAPTER, 0xFF));
     /* CW takes no sub-mode: 0xFF is "leave the dial alone", the same value
      * PANADAPTER and WSPR pass. The page itself picks up the band-plan CW
      * segment on entry.
@@ -20677,20 +20756,20 @@ static void left_drawer_build(void)
      * 2.9:1 as a label on this button and was the dimmest of the six. The
      * fill is unchanged - see the note on the constant for why brightening
      * the shared one only moves the problem onto the band-plan strip. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW_TEXT,
-                        LD_DEST(UI_MODE_CW, 0xFF)); y += LD_BTN_H + LD_BTN_GAP;
+    s_ld_btn[1] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW_TEXT,
+                        LD_DEST(UI_MODE_CW, 0xFF));
     /* UI_COLOR_ACCENT_GOLD, not the 0xFFDD00 that was written here: the FT8
      * page's title is the theme constant (0xFFD700) and this button is meant
      * to BE that title seen from outside. Six units of green apart is nothing
      * on the glass, but it is a hand-copied colour in a block whose own
      * comment says the colours are read out of the code - which is how the
      * other three would have drifted too. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], UI_COLOR_ACCENT_GOLD,
-                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], FT4_ACCENT_HEX,
-                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4)); y += LD_BTN_H + LD_BTN_GAP;
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], JS8_ACCENT_HEX,
-                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8)); y += LD_BTN_H + LD_BTN_GAP;
+    s_ld_btn[2] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], UI_COLOR_ACCENT_GOLD,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8));
+    s_ld_btn[3] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], FT4_ACCENT_HEX,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4));
+    s_ld_btn[4] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], JS8_ACCENT_HEX,
+                        LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8));
     /* ⛔ NO wspr_feature_enabled() GATE HERE, and the old cycle's gate was not
      * a reason to copy one. I wrote that WSPR was gated "because the page is
      * half-built"; the operator corrected it - it was disabled over a BUG, not
@@ -20698,14 +20777,18 @@ static void left_drawer_build(void)
      * finished page from the operator who fixed it. WSPR is a peer mode and
      * gets a door like the rest. */
     /* _TEXT for the same reason CW uses it - see the constants. */
-    left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR_TEXT,
+    s_ld_btn[5] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR_TEXT,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
+    left_drawer_layout();
 }
 
 static void left_drawer_open(void)
 {
     left_drawer_build();
     if (!s_left_drawer || s_left_drawer_open) return;
+    /* Re-evaluated here, not only at build: the CW door can be opened or
+     * closed over /api/cmd while this drawer already exists. */
+    left_drawer_layout();
 
     lv_obj_clear_flag(s_left_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_left_drawer_scrim);

@@ -76,6 +76,7 @@ char *config_io_export(size_t *out_len)
     APP("spot_map           = %s\n", yn(c.spotmap_en));
     APP("spots_sota         = %s\n", yn(c.sota_en));
     APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
+    APP("cw_page_enabled    = %s\n", yn(c.cw_page_en)); /* the CW page master switch - default OFF, see settings.h */
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -444,6 +445,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "spot_map"))          settings_set_spotmap_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
             else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
+            else if (!strcasecmp(key, "cw_page_enabled"))  settings_set_cw_page_en(to_bool(val));
             /* ⛔ DEAD KEY, kept only so an old config file still imports without
                a surprise. The quiet auto-download was removed in v1.14.4 and
                settings_set_ota_autodl() now changes nothing that runs. It has

@@ -73,6 +73,7 @@ static const char *TAG = "settings";
 #define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites
 #define KEY_CW_PARK    "cw_park"
 #define KEY_CW_SIM     "cw_sim"
+#define KEY_CW_PAGE_EN "cw_page_en"
 #define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
@@ -485,6 +486,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_FT4_FREQ        149  /* T89 per-sub-mode preset frequency */
 #define DIRTY_JS8_FREQ        150  /* T89 per-sub-mode preset frequency */
 #define DIRTY_JS8_ALT_SUB     151  /* T132 duty-cycled alternate-submode decode */
+#define DIRTY_CW_PAGE_EN      152  /* master switch for the CW page - default OFF */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -519,6 +521,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
+    DIRTY_CW_PAGE_EN,   /* same - config_io_export() prints cw_page_enabled */
     DIRTY_STILL_VIEW,   /* #298 - config_io_export() carries still_spectrum */
     /* RX audio: a level the operator set by ear belongs in a config backup for
      * the same reason the power calibration does - nobody can recreate it from
@@ -695,6 +698,7 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap->cw_park);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_PAGE_EN)) nvs_set_u8(s_nvs, KEY_CW_PAGE_EN, snap->cw_page_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap->hound_mode);
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap->cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap->onboarded ? 1 : 0);
@@ -1005,6 +1009,10 @@ static void load_from_nvs(qmx_settings_t *out)
     strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
     out->cw_park[0] = '\0';
     out->cw_sim_en = false;
+    /* OFF until the CW page is finished - see the note on the field. The
+     * page keys the radio and cannot abort a message in flight, so it is
+     * not something to hand a user who did not ask for it. */
+    out->cw_page_en = false;
     out->hound_mode   = 0;   // off: Hound changes TX behaviour, so it is opt-in
     out->cq_listen_every = 0;
     out->onboarded = false;
@@ -1217,6 +1225,7 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
+    { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_PAGE_EN, &v8) == ESP_OK) out->cw_page_en = v8 != 0; }
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
@@ -1942,6 +1951,30 @@ void settings_set_cw_sim_en(bool v)
     s_pending.cw_sim_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_SIM);
+}
+
+void settings_set_cw_page_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_page_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_page_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PAGE_EN);
+}
+
+/* Narrow for the same measured reason as settings_get_cw_sim_en() below:
+ * left_drawer_build() and ui_apply_saved_mode_view() both call this, and both
+ * run on stacks that a 3.9 kB qmx_settings_t local would overflow. WSPR's
+ * equivalent gate does use settings_load_all(), which is a hazard inherited
+ * rather than copied - do not follow it here. */
+bool settings_get_cw_page_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cw_page_en;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 // Narrow (#409): ft8_qso.c's rearm_current() reads this from whatever task

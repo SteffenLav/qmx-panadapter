@@ -250,23 +250,12 @@ static void modal_build(void)
     ui_kbd_set_buttons(s_btn_send, btn_cancel);
 
     /* ⛔ THE SAME KEYBOARD AS EVERY OTHER MODAL. A bare lv_keyboard_create()
-     * gets LVGL's default white keys at the default font, which is what shipped
-     * to the bench and was immediately spotted. The project's look is three
-     * calls - the key style, ui_theme_style_keyboard() and the 28 px font - and
-     * they are copied here from ft8_filter_modal.c rather than reinvented. */
+     * gets LVGL's default white keys at the default font, which is what
+     * shipped to the bench and was immediately spotted. This file used to
+     * copy the key style from ft8_filter_modal.c to avoid that; it is inside
+     * ui_theme_style_keyboard() now, so the look is that call plus the 28 px
+     * font. */
     s_keyboard = lv_keyboard_create(s_modal);
-    static lv_style_t style_kb_btn;
-    static bool kb_btn_style_inited = false;
-    if (!kb_btn_style_inited) {
-        lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
-        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb_btn, lv_color_hex(UI_COLOR_TEXT));
-        lv_style_set_border_width(&style_kb_btn, 1);
-        lv_style_set_border_color(&style_kb_btn, lv_color_hex(UI_COLOR_BORDER));
-        kb_btn_style_inited = true;
-    }
-    lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
     ui_theme_style_keyboard(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);

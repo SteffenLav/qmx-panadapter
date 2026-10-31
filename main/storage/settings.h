@@ -419,6 +419,26 @@ typedef struct {
     char     cw_msg[6][44];    // 6 CW keyer memories ({MYCALL}/{PARK} macros; see cw_screen_view.c)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
     bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
+    /* MASTER SWITCH FOR THE CW PAGE, and the reason it can ship on main at
+     * all. The page is in development: it keys the radio over CAT KY and has
+     * NO WAY TO ABORT a message once sent, so a release that offered it to
+     * everyone would be offering an unfinished transmit path.
+     *
+     * DEFAULT OFF, and unlike wspr_en that is by design rather than by
+     * caution - this is the branch contract written into the firmware instead
+     * of into a merge discipline. When the page is finished the default
+     * flips; nothing else has to change.
+     *
+     * ⚠ Off hides the DOOR, not the cost. The page's .bss is linked in
+     * either way, exactly as wspr_en's note says. Never reason from "the flag
+     * is off" to "it costs nothing".
+     *
+     * Deliberately has no drawer control, for the same reason wspr_en has
+     * none: a page still being built should be reachable by someone who went
+     * looking for it, not offered in a list of settings. Turned on with
+     * /api/cmd {"action":"cw_enable","on":true}, or cw_page_enabled = yes in
+     * an imported config file. */
+    bool     cw_page_en;
     // FT8 Fox/Hound (DXpedition) mode - the HOUND side only. Fox is impossible on
     // this radio: it needs up to five simultaneous signals and we emit one CAT
     // "TA" tone per symbol. 0 = off, 1 = guided, 2 = automatic. See ft8_hound.h.
@@ -1035,6 +1055,13 @@ uint8_t settings_get_cq_listen_every(void); // narrow, same reason (#409)
 // so the CW page is usable before anything is edited. Debounced flush.
 void settings_set_cw_msg(uint8_t idx, const char *text);
 void settings_set_cw_park(const char *park);
+
+// Master switch for the CW page - default OFF. The getter is a NARROW read
+// (mutex + one bool), never settings_load_all(): it is called from the drawer
+// build, from boot restore and from the web API, and a 3.9 kB struct on any of
+// those stacks is the overflow this project has already paid for twice.
+void settings_set_cw_page_en(bool v);
+bool settings_get_cw_page_en(void);
 
 // CW phantom-practice toggle. Deliberately its OWN flag, not sim_mode_en:
 // enabling CW practice must not arm the FT8 phantoms when swiping to that

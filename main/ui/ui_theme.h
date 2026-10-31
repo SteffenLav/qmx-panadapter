@@ -254,6 +254,44 @@ static inline void ui_theme_style_keyboard(lv_obj_t *kb)
     lv_obj_set_style_border_color(kb, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(kb, 1, 0);
 
+    /* ⛔ THE KEY FILL LIVES HERE NOW, AND NOT IN TEN COPIES.
+     *
+     * Every panel with a keyboard used to open with the same fifteen lines -
+     * a file-static lv_style_t, an inited flag, and an lv_obj_add_style() on
+     * LV_PART_ITEMS - copied from the panel written before it. js8_text_modal
+     * says so in its own comment: "copied here from ft8_filter_modal.c rather
+     * than reinvented".
+     *
+     * activation_modal.c was the one that did NOT get the block, so its keys
+     * fell back to the LVGL default theme's fill while every other panel drew
+     * the dark key. Operator, 2026-10-31: "Activation keyb is NOT the usual
+     * keyb style we use". That is what a hand-copied block costs - not the
+     * nine that were right, the tenth that was never written.
+     *
+     * Two of the copies had also drifted: a literal 0x505050 border where the
+     * rest read UI_COLOR_BORDER (0x555555). Five units is nothing on the
+     * glass; it is the drift itself that matters, because it shows the copies
+     * were being maintained separately.
+     *
+     * Every one of those panels already called THIS function, so moving the
+     * style in fixes the missing case and deletes the other ten.
+     *
+     * The style is function-local static: one per translation unit that uses
+     * the keyboard, which is a handful of structs and never freed - the same
+     * lifetime the file-static copies had. */
+    static lv_style_t s_kb_key;
+    static bool s_kb_key_inited = false;
+    if (!s_kb_key_inited) {
+        lv_style_init(&s_kb_key);
+        lv_style_set_bg_color(&s_kb_key, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&s_kb_key, LV_OPA_COVER);
+        lv_style_set_text_color(&s_kb_key, lv_color_hex(UI_COLOR_TEXT));
+        lv_style_set_border_width(&s_kb_key, 1);
+        lv_style_set_border_color(&s_kb_key, lv_color_hex(UI_COLOR_BORDER));
+        s_kb_key_inited = true;
+    }
+    lv_obj_add_style(kb, &s_kb_key, LV_PART_ITEMS);
+
     /* KEY LABELS BIG ENOUGH TO READ OUTSIDE.
      *
      * Don WB0LQW, 2026-10-22, about the Activation panel: "I love the little
