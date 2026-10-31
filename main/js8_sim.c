@@ -49,6 +49,24 @@ static const char *TAG = "js8_sim";
  * suffix forms. A compound call would need the COMPOUND frame, which this
  * simulator does not build.
  *
+ * ⚠ VK3DEF's QF22 RENDERS AS "QF23", and that is NOT a typo in this table.
+ * js8_pack_grid() -> js8_unpack_grid() is not an identity for any grid whose
+ * SECOND LETTER IS A-I: exactly 16200 of the 32400 four-character squares,
+ * which is the whole southern hemisphere, come back one square north. Swept
+ * on the host, all 32400, 2026-10-31. The cause is visible in the packer:
+ * `(int)dlat + 90` truncates TOWARD ZERO, which rounds a negative latitude
+ * up, while the unpacker subtracts 90 exactly.
+ *
+ * ⛔ NOT FIXED HERE, AND NOT FIXED AT ALL YET. The packer's own comment
+ * says that truncation is deliberate - "the reference assigns a float to an
+ * int" - so a real JS8Call may do exactly the same thing, in which case our
+ * pack is faithful and changing it would make us the odd station out. The
+ * round trip disagreeing says the two halves differ; it does NOT say which
+ * one is wrong. varicode.cpp's packGrid settles it and nothing here does.
+ *
+ * The phantom keeps its southern grid on purpose: the simulator should show
+ * what the real render path shows, and hiding this would make it lie.
+ *
  * `info` and `status` are what the phantom answers INFO? and STATUS? with.
  * They are free text, because a Directed frame has no field for them - the
  * same reason our own sheet leaves the mailbox family on the free-text path. */
@@ -446,10 +464,19 @@ static void js8_sim_task(void *arg)
     int64_t last_tx_slot = -1;
     int64_t last_idle_slot = -1;
 
+    /* ⛔ STATIC, NOT ON THE STACK. qmx_settings_t is 3636 bytes - measured
+     * with the target compiler, not guessed - and this task used to declare
+     * one inside the loop. On the 8 KB stack it first shipped with, that one
+     * local was 44% of the whole stack before settings_load_all() had taken
+     * its own frame, and the task died of a stack-protection fault 31 s into
+     * the first run on bench1 (2026-10-31, right after injecting its first
+     * phantom). The task is this struct's only user, so a file-static costs
+     * nothing and removes the largest consumer whatever the stack size. */
+    static qmx_settings_t s;
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));
 
-        qmx_settings_t s;
         settings_load_all(&s);
 
         /* ⛔ THREE CONDITIONS, and each is a separate fact. The SETTING is the
@@ -543,10 +570,16 @@ static void js8_sim_task(void *arg)
 void js8_sim_init(void)
 {
     /* PSRAM stack, low priority, core 1 - the same placement ft8_sim.c uses.
-     * Much smaller than its 64 KB because nothing here synthesizes or decodes;
-     * the biggest thing on this stack is qmx_settings_t. */
+     *
+     * ⛔ 32 KB, NOT THE 8 KB THIS SHIPPED WITH. 8 KB died of a stack
+     * protection fault on the first run, and the measured cause - a 3636-byte
+     * qmx_settings_t on the stack - is fixed above. This is deliberately NOT
+     * sized back down to what the fix makes sufficient: the generous number
+     * is the one that survives the next local somebody adds, and the thing
+     * this task does on overflow is reboot the board. Still half of
+     * ft8_sim.c's 64 KB, which also has to carry a synth and a decode. */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-        js8_sim_task, "js8_sim", 8192, NULL,
+        js8_sim_task, "js8_sim", 32768, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) ESP_LOGE(TAG, "failed to spawn js8_sim_task (rc=%d)", (int)rc);
