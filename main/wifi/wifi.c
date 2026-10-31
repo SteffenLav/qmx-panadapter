@@ -1090,6 +1090,13 @@ void wifi_debug_kill_c6(void)
     bsp_set_wifi_power_enable(false);
 }
 
+/* Set once esp_netif_init() has returned, never cleared: the tcpip thread is
+ * not torn down for the life of the boot, and a flag that could go false
+ * would invite callers to poll it as a liveness test, which it is not. */
+static volatile bool s_tcpip_up = false;
+
+bool wifi_tcpip_stack_up(void) { return s_tcpip_up; }
+
 static void wifi_task(void *arg)
 {
     ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
@@ -1109,6 +1116,12 @@ static void wifi_task(void *arg)
 
     // ESP-IDF core init (event loop, default STA netif).
     ESP_ERROR_CHECK(esp_netif_init());
+    /* ⭐ THE TCPIP THREAD EXISTS FROM HERE, AND NOT ONE LINE EARLIER.
+     * Everything above this can return early - the esp_hosted_init() failure
+     * a few lines up does exactly that - and in that case no socket call
+     * anywhere in the firmware can be made without aborting the board. See
+     * wifi_tcpip_stack_up() in wifi.h for the measurement. */
+    s_tcpip_up = true;
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
