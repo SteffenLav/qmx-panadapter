@@ -43,6 +43,24 @@ The web UI provides full remote control:
 - **RIT** — click the **RIT** pill to arm it, then click a caller to receive off your
   transmit frequency without moving the dial. See
   [RIT](panadapter.md#rit-receiving-off-your-transmit-frequency)
+- **Park / Restore** — appears beside RIT only when there is an offset to stand down,
+  or a parked one to put back. Parking keeps the value; clearing RIT throws it away.
+  The Tab5 does the same thing with a long press on its RIT pill, and both screens
+  share the one parked value
+- **Tune** — put the dial on the signal. In CW it zero-beats the carrier; in USB or
+  LSB it snaps to the far station's own filter edge and onto the grid they are almost
+  certainly on. One press, one move — it never runs by itself, and it cannot transmit.
+  It says how far the dial went, or why it would not move
+- **Keyer** — your CW keyer speed, shown only when the radio is in CW. The speed is
+  sent to the radio and read back, so the figure is what the QMX accepted. **0** is a
+  real setting: it selects Straight Key mode, which is the quick way to key down for a
+  tune-up. This is what *you* send — the decoded-CW line shows the speed of the station
+  you are *hearing*, which is a different number
+- **PWR** — transmit power on this band, shown only where that band has been through
+  Calibrate Power. The levels offered are the ones your own sweep measured, so a figure
+  the PA never produced is refused rather than rounded to a neighbour. While a
+  transmission is in progress, or while WSPR owns the PA, the target is stored and the
+  page says so
 
 Everything mirrors the Tab5 display with sub-second latency.
 

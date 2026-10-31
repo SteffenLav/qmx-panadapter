@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.23.0** - 2026-10-30
+**v1.23.1** - 2026-10-31
+
+**Five controls the Tab5 had and the browser did not: zero-beat, CW keyer speed, RIT park, output power and SSB auto-tune. A finished QSO no longer claims the other station never answered. And a boot where WiFi fails to start can no longer take the device down.**
+
+- **Zero-beat from the browser** *(Ralph DL1HR)*. The Tab5 does it with a long press on the BW label, which a browser cannot offer, so it is a **Tune** button in the top bar. One button covers both cases because the device decides: in CW it zero-beats the carrier, in USB or LSB it snaps to the far station's own filter edge. Receive-only, one press, one move - it never runs by itself and it cannot transmit.
+- **CW keyer speed, one click away, in CW only** *(Ralph DL1HR)*. It was in the browser already but only inside the Settings panel - "too complicate to quickly act when someone calls me", which is exactly when it is wanted. There is now a **Keyer** button in the top bar whenever the radio is in CW. The speed is sent and read back, so the figure is what the QMX accepted, and **0** is a real setting: Straight Key mode, the quick way to key down for a tune-up.
+- **Park a RIT offset and put it back** *(Roy KI0ER)*. Clearing RIT throws the offset away, which is a different intention from standing it down for a turn. The browser now has its own Park / Restore button, visible only when there is something to park or restore, and it shares the Tab5's one parked value.
+- **Transmit power per band, from the browser.** The levels offered are the ones your own Calibrate Power sweep measured on that band, so there is nothing to type - a figure the PA never produced is refused by name rather than rounded to a neighbour. While transmitting, or while WSPR owns the PA, the target is stored and the page says so.
+- **A finished QSO no longer says the other station never answered** *(Randy N4OPI)*. "QSO complete" and "*call* has not acknowledged" could sit on screen together for five minutes. The device still watches for a few minutes in case your final was missed - that is worth keeping - but nothing ended the watch when the other station plainly had heard you. Their RR73, 73 or RRR now closes it, and a closing 73 of your own starts no watch at all. Silence still does not end it: a station that goes quiet and then repeats the report is the case the watch exists for.
+- **A diagnostic could abort the device on a boot where WiFi failed to start.** With no network stack the heap watchdog's ten-second socket check does not fail, it aborts - which looks like a single unexplained restart about sixteen seconds after power-on. Seen once here. Running with WiFi switched off was never affected.
+
+Audio and binaural CW remain a **declared beta**, and the alternate JS8 speed added in v1.23.0 is still default-off and unproven on air.
+
+## Previous Releases
+
+### v1.23.0 - 2026-10-30
 
 **Right-drag pans the spectrum, in the browser and with a BLE mouse on the Tab5. The JS8 panel shows stations, the conversation and a type box all at once. Spur suppression works for the first time since it was written, and the FT8/JS8 decoder is 2.2x faster.**
 
@@ -25,8 +40,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 ⚠ **One alternate JS8 speed can now be decoded alongside the one you are using**, one slot in five, off the audio the normal slot already captured. **Default off, and not proven.** It is receive-only by explicit refusal: a decode reaches the conversation pane tagged with the speed that heard it and nothing else - never the stations list, the QSO machine, the robot, transmit arming, PSK Reporter or the clock sync. No real station on another speed has ever been decoded with it, only my own encoder. Decoding all four speeds at once measures 118% of one processor core and does not fit.
 
 Audio and binaural CW remain a **declared beta**.
-
-## Previous Releases
 
 ### v1.22.0 - 2026-10-28
 
@@ -1205,7 +1218,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.23.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.23.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
