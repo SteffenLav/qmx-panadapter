@@ -9908,7 +9908,16 @@ function updateOutPwrPill() {
      be calibrated. An uncalibrated band has no levels to offer, and offering
      a watts box there would invite exactly the free-text wattage the device
      refuses. */
-  const ok = outPwrInfo && outPwrInfo.calibrated && outPwrInfo.band === lastBandStr;
+  /* ⛔ CASE-INSENSITIVE, AND THIS IS NOT DEFENSIVE PADDING - the two sources
+     genuinely disagree. Measured on bench1, 2026-10-31: /api/status reports
+     band "20m" and the out_power action reports "20M", because the ladder's
+     name comes from adif_log_band_for_freq() (ADIF bands are upper case) and
+     the status field comes from ui_get_band_str(). A strict === here meant
+     the pill was NEVER shown on any band, which is exactly what the first
+     run on hardware did. */
+  const sameBand = outPwrInfo && typeof outPwrInfo.band === "string" &&
+                   outPwrInfo.band.toUpperCase() === (lastBandStr || "").toUpperCase();
+  const ok = outPwrInfo && outPwrInfo.calibrated && sameBand;
   pill.style.display = ok ? "" : "none";
   if (!ok) return;
   const t = outPwrInfo.target_x100;
