@@ -641,6 +641,82 @@ static void test_unmapped_command_is_spelled(void)
     CHECK(strcmp(out, "OZ1LAV N2VGU YES") == 0, "got '%s'\n", out);
 }
 
+/* ⭐ THE WHOLE VOCABULARY, SWEPT - not a handful of the ones I expected to
+ * work. For every one of the 32 indices: if js8_cmd_from_text() accepts the
+ * spelling, then "TO FROM <spelling>" must pack AND render back as the exact
+ * same line. That is the condition ft8_tx.c's round-trip guard applies before
+ * it keys the radio, so a directive that fails here is one the operator would
+ * meet as "would go out as ..." instead of a transmission.
+ *
+ * Written as a sweep because the asymmetry it caught was invisible by
+ * inspection: a bare "RR" packs to cmd 21 and renders back as "RR73", which
+ * is why that index is refused. Three or four hand-picked cases would have
+ * missed it. */
+static void test_every_accepted_directive_round_trips(void)
+{
+    int accepted = 0;
+    for (int i = 0; i < 32; i++)
+    {
+        const char* spell = js8_cmd_text((uint8_t)i);
+        if (!spell || strcmp(spell, "?") == 0) continue;
+        if (js8_cmd_from_text(spell) == JS8_CMD_NONE) continue;
+
+        accepted++;
+        CHECK(js8_cmd_from_text(spell) == (uint8_t)i,
+              "'%s' maps to %u, not %d\n", spell, js8_cmd_from_text(spell), i);
+
+        char line[JS8_TEXT_MAX];
+        snprintf(line, sizeof(line), "N2VGU OZ1LAV %s", spell);
+
+        uint8_t frame[JS8_FRAME_BYTES];
+        uint8_t itype = 0;
+        if (!js8_text_to_frame(line, frame, &itype)) {
+            g_fail++;
+            printf("  FAIL: '%s' (cmd %d) has no frame\n", line, i);
+            continue;
+        }
+        CHECK(itype == JS8_ITYPE_SINGLE, "'%s' itype %u\n", line, itype);
+        CHECK(js8_frame_type(frame) == JS8_FRAME_DIRECTED,
+              "'%s' is not a Directed frame\n", line);
+
+        char out[JS8_TEXT_MAX] = "";
+        CHECK(js8_frame_to_text(frame, out, sizeof(out)), "'%s' will not render\n", line);
+        CHECK(strcmp(out, line) == 0, "'%s' round-trips as '%s'\n", line, out);
+    }
+
+    /* A count, so a lookup that silently stopped accepting anything cannot
+     * pass this test by skipping every case. 32 minus free text, ">", the
+     * four MSG/QUERY forms that need an argument, the deprecated HEARTBEAT
+     * SNR and the bare RR = 24. */
+    CHECK(accepted == 24, "accepted %d directives, expected 24\n", accepted);
+}
+
+/* The refusals are the half that keys the radio when it is wrong. */
+static void test_directives_that_must_not_pack(void)
+{
+    CHECK(js8_cmd_from_text("") == JS8_CMD_NONE, "empty must not match free text (31)\n");
+    CHECK(js8_cmd_from_text(">") == JS8_CMD_NONE, "'>' carries a payload we cannot\n");
+    CHECK(js8_cmd_from_text("MSG") == JS8_CMD_NONE, "MSG needs an argument\n");
+    CHECK(js8_cmd_from_text("MSG TO:") == JS8_CMD_NONE, "MSG TO: needs a callsign\n");
+    CHECK(js8_cmd_from_text("QUERY") == JS8_CMD_NONE, "QUERY needs an argument\n");
+    CHECK(js8_cmd_from_text("QUERY CALL") == JS8_CMD_NONE, "QUERY CALL needs a callsign\n");
+    CHECK(js8_cmd_from_text("HEARTBEAT SNR") == JS8_CMD_NONE, "deprecated\n");
+    CHECK(js8_cmd_from_text("RR") == JS8_CMD_NONE, "bare RR renders back as RR73\n");
+
+    /* QUERY MSGS is complete on its own and must still be sendable. */
+    CHECK(js8_cmd_from_text("QUERY MSGS") == 12, "QUERY MSGS is complete\n");
+
+    /* Exact match only - no trimming, no case folding. A caller that built the
+     * line itself gets a refusal, not a frame that is nearly what it meant. */
+    CHECK(js8_cmd_from_text("grid?") == JS8_CMD_NONE, "lower case must not match\n");
+    CHECK(js8_cmd_from_text("GRID? ") == JS8_CMD_NONE, "a trailing space must not match\n");
+    CHECK(js8_cmd_from_text("GRIDX") == JS8_CMD_NONE, "a near miss must not match\n");
+
+    /* And the lines that had no frame before must still have none. */
+    expect_refused("N2VGU OZ1LAV HELLO", "free text is still free text");
+    expect_refused("N2VGU OZ1LAV JO65", "a locator is still not a directive");
+}
+
 int main(void)
 {
     printf("JS8 text seam\n");
@@ -661,6 +737,8 @@ int main(void)
     test_longest_line_fits_the_row();
     test_unpackable_callsign_refuses();
     test_unmapped_command_is_spelled();
+    test_every_accepted_directive_round_trips();
+    test_directives_that_must_not_pack();
 
     if (g_fail) { printf("\nFAILED: %d check(s)\n", g_fail); return 1; }
     printf("\nall checks passed\n");
