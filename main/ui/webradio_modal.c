@@ -243,6 +243,49 @@ static const wr_genre_t WR_GENRES[] = {
 #define WR_GENRE_N ((int)(sizeof(WR_GENRES) / sizeof(WR_GENRES[0])))
 static int s_genre = 0;            /* index into WR_GENRES; 0 = all */
 
+/* ---- stations that did not play ----------------------------------------
+ *
+ * ⛔ THE DIRECTORY CANNOT TELL US THIS, which is why the list is kept here.
+ * MEASURED on the 450 km reply 2026-11-01: all 198 MP3 rows have
+ * lastcheckok=1, every one was checked OK within 5 days (median: today), and
+ * ssl_error is 0 for all of them. `hidebroken=true` is already set. There is
+ * no field left to filter on - by the directory's own account every station
+ * in the pane works.
+ *
+ * So the only honest signal is OUR OWN attempt. A station that fails to start
+ * drops out of the list for the rest of the session; Refresh brings them all
+ * back, because most of these failures are transient and a permanent hide
+ * built on one bad evening would be worse than the problem.
+ *
+ * ⚠ The large majority of what he saw was not the stations at all - it was
+ * the Location header never being read, so every 3xx died. That is fixed. */
+#define WR_BAD_MAX 64
+static uint32_t s_bad[WR_BAD_MAX];
+static int      s_bad_n = 0;
+
+static uint32_t url_hash(const char *s)
+{
+    uint32_t h = 2166136261u;                       /* FNV-1a */
+    for (; s && *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h;
+}
+
+static bool url_is_bad(const char *u)
+{
+    uint32_t h = url_hash(u);
+    for (int i = 0; i < s_bad_n; i++) if (s_bad[i] == h) return true;
+    return false;
+}
+
+/* Returns true if this is the first time we have seen it fail. */
+static bool mark_bad(const char *u)
+{
+    if (!u || !u[0] || url_is_bad(u)) return false;
+    if (s_bad_n >= WR_BAD_MAX) return false;
+    s_bad[s_bad_n++] = url_hash(u);
+    return true;
+}
+
 static bool genre_matches(const rb_station_t *st)
 {
     if (s_genre <= 0 || s_genre >= WR_GENRE_N) return true;
@@ -322,6 +365,8 @@ static void start_fetch(void)
             return;
         }
     }
+    /* Refresh is the "try them all again" button, so it clears the hides. */
+    s_bad_n = 0;
     s_fetch_state = 1;
     lv_obj_clean(s_list);
     lv_obj_t *l = lv_label_create(s_list);
@@ -365,10 +410,11 @@ static void fill_list(void)
     char qf[sizeof(s_query) * 2];
     search_fold(s_query, qf, sizeof(qf));
 
-    int shown = 0;
+    int shown = 0, hidden = 0;
     for (int i = 0; i < s_n_st; i++) {
         if (!genre_matches(&s_st[i])) continue;
         if (!station_matches(&s_st[i], qf)) continue;
+        if (url_is_bad(s_st[i].url)) { hidden++; continue; }
         shown++;
 
         lv_obj_t *b = lv_button_create(s_list);
@@ -414,6 +460,20 @@ static void fill_list(void)
             snprintf(m, sizeof(m), "Nothing matches \"%.24s\"", s_query);
         lv_label_set_text(l, m);
         lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    }
+
+    /* ⛔ SAY SO RATHER THAN JUST HIDING. A station that silently vanishes
+     * from a list the operator was reading is a worse fault than one that
+     * would not play, and this line is also where he learns Refresh brings
+     * them back. Dim and not a button, so it cannot be tapped. */
+    if (hidden) {
+        lv_obj_t *l = lv_label_create(s_list);
+        char m[96];
+        snprintf(m, sizeof(m), "%d hidden - would not play. Refresh to try again.",
+                 hidden);
+        lv_label_set_text(l, m);
+        lv_obj_set_style_text_font(l, &font_ui_latin_20, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     }
 }
@@ -516,6 +576,13 @@ static void tick_cb(lv_timer_t *t)
     case WEBRADIO_ERROR:
         lv_label_set_text(s_station, name);
         lv_label_set_text(s_now, err);
+        /* First time this URL has failed: take it out of the list. The
+         * player is the source of the URL, not the row that was tapped -
+         * after a memory recall those are different stations. */
+        if (mark_bad(webradio_current_url())) {
+            ESP_LOGW(TAG, "hiding '%s' - %s", name, err);
+            fill_list();
+        }
         break;
     default:
         lv_label_set_text(s_station, webradio_is_paused() ? "Paused" : "");
