@@ -267,51 +267,66 @@ static void webradio_task(void *arg)
     claimed = true;
 
     int have = 0;                   /* bytes of MP3 held in s_in */
+    int rd   = 0;                   /* read cursor into s_in - see below      */
     int reported_rate = 0;
     s_state = WEBRADIO_PLAYING;
     ESP_LOGI(TAG, "playing '%s'", s_name);
 
     while (!s_stop_req) {
-        /* Top the buffer up. The codec write below is what paces this loop. */
-        if (have < IN_BYTES / 2) {
+        /* ⛔ A READ CURSOR, NOT A memmove PER BYTE. The first cut compacted
+         * the buffer with memmove() on every consumed frame AND on every byte
+         * skipped while resyncing - up to 16 KB copied per byte on a stream
+         * with any corruption in it. Measured on the bench 2026-11-01: core 1
+         * went from 97% idle to 0.7% with one 128 kbps station playing, and
+         * the audio broke up continuously. A 128 kbps MP3 is nowhere near a
+         * core on this chip; the cost was entirely this loop.
+         *
+         * Now the cursor walks forward and the tail is compacted only when
+         * the buffer is running out of room. */
+        if (have - rd < IN_BYTES / 4) {
+            if (rd > 0) {
+                memmove(s_in, s_in + rd, (size_t)(have - rd));
+                have -= rd;
+                rd = 0;
+            }
             int n = read_audio(cl, s_in + have, IN_BYTES - have);
-            if (n <= 0 && have == 0) { set_err("The stream ended"); break; }
+            if (n <= 0 && have - rd == 0) { set_err("The stream ended"); break; }
             have += n;
         }
 
-        int off = MP3FindSyncWord(s_in, have);
-        if (off < 0) { have = 0; continue; }     /* nothing usable - refill */
-        if (off > 0) { memmove(s_in, s_in + off, (size_t)(have - off)); have -= off; }
+        int avail = have - rd;
+        if (avail < 4) continue;
 
-        uint8_t *p = s_in;
-        int left = have;
+        int off = MP3FindSyncWord(s_in + rd, avail);
+        if (off < 0) { rd = have; continue; }      /* nothing usable in here */
+        rd += off;
+        avail = have - rd;
+
+        uint8_t *p = s_in + rd;
+        int left = avail;
         int rc = MP3Decode(dec, &p, &left, s_pcm, 0);
         if (rc != ERR_MP3_NONE) {
             if (rc == ERR_MP3_INDATA_UNDERFLOW || rc == ERR_MP3_MAINDATA_UNDERFLOW) {
-                /* Not an error: the frame is simply not all here yet. Keep
-                 * what we have and read more. */
-                memmove(s_in, p, (size_t)left);
-                have = left;
+                /* Not an error - the frame is simply not all here yet. Leave
+                 * the cursor where it is and read more. */
+                if (have >= IN_BYTES) { rd = have; }   /* full and still short: drop it */
                 continue;
             }
-            /* A corrupt frame mid-stream is normal on a lossy link. Skip one
-             * byte past the sync word and look for the next one rather than
-             * tearing the connection down. */
-            memmove(s_in, s_in + 1, (size_t)(have - 1));
-            have--;
+            /* A corrupt frame is normal on a lossy link. Step one byte past
+             * this sync word and look for the next - no copying. */
+            rd += 1;
             continue;
         }
-        memmove(s_in, p, (size_t)left);
-        have = left;
+        rd = (int)(p - s_in);
 
         MP3FrameInfo fi;
         MP3GetLastFrameInfo(dec, &fi);
+        if (fi.outputSamps <= 0 || fi.samprate <= 0 || fi.nChans <= 0) continue;
         if (fi.samprate != reported_rate) {
             reported_rate = fi.samprate;
             ESP_LOGI(TAG, "stream: %d Hz, %d ch, %d kbps", fi.samprate, fi.nChans,
                      fi.bitrate / 1000);
         }
-        if (fi.outputSamps <= 0) continue;
 
         /* Helix gives MONO as one channel; the output is stereo, so a mono
          * stream is duplicated rather than played at half rate. */
