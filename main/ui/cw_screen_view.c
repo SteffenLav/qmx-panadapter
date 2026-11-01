@@ -524,16 +524,22 @@ static void edit_layout(bool kb_up)
 {
     if (!s_edit_panel) return;
 
-    /* Panel: 600 tall and centred (60..660 of 720) with the keyboard down;
+    /* Panel: 648 tall and centred (36..684 of 720) with the keyboard down;
      * 424 tall at y=8 with it up, so its bottom edge lands 8 px clear of the
      * keyboard at y=440 instead of being swallowed by it. */
-    lv_obj_set_height(s_edit_panel, kb_up ? 424 : 600);
-    lv_obj_align(s_edit_panel, LV_ALIGN_TOP_MID, 0, kb_up ? 8 : 60);
+    lv_obj_set_height(s_edit_panel, kb_up ? 424 : 648);
+    lv_obj_align(s_edit_panel, LV_ALIGN_TOP_MID, 0, kb_up ? 8 : 36);
 
-    /* Content box is 1168 x (panel - 32). Title row 0..40, button row
-     * 48..104, list from 116. Six rows at pitch 70 are 408 px. */
-    lv_obj_set_height(s_edit_list, kb_up ? 240 : 408);
-    lv_obj_set_y(s_edit_sends, kb_up ? 364 : 532);
+    /* Content box is 948 x (panel - 32), and the three rows are spaced 32 px
+     * apart, not 8 and 12: title 0..40, buttons 72..128, list from 160.
+     * Operator, 2026-11-02: "too little space between 1st and 2nd and 3rd
+     * row". Six fields at pitch 70 are 408 px.
+     *
+     * The list is the only thing that gives when the keyboard is up - the
+     * row rhythm above it stays put, because a header that re-flows the
+     * moment a field is tapped moves the buttons under the finger. */
+    lv_obj_set_height(s_edit_list, kb_up ? 196 : 408);
+    lv_obj_set_y(s_edit_sends, kb_up ? 364 : 580);
 }
 
 static void edit_build(void)
@@ -553,10 +559,16 @@ static void edit_build(void)
 
     lv_obj_t *panel = lv_obj_create(s_edit_modal);
     s_edit_panel = panel;
-    /* 1200 of 1280 - the widest the screen takes with a margin either side.
+    /* ⛔ 960, NOT 1200. The window was 1200 wide for one reason: Cancel and
+     * Save were pinned to the right edge while the three macro buttons sat
+     * at the left, so the button row carried a 195 px hole and the window
+     * had to be wide enough to hold it. Operator, 2026-11-02: "Cancel and
+     * Save buttons too far to the right so window need to be wider than
+     * necessary". Group all five left instead and the row measures 928, so
+     * the window is 240 px narrower with nothing lost.
      * Height and placement belong to edit_layout(); this is just a start. */
-    lv_obj_set_size(panel, 1200, 600);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_set_size(panel, 980, 648);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 36);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(panel, 2, 0);
@@ -574,23 +586,34 @@ static void edit_build(void)
      * line so CW memories sat alone on the top line". */
     lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    /* THE SECOND LINE: three macro buttons left, Cancel and Save right, all
-     * 56 tall. With the title out of the way there is room for 190 px each
-     * and montserrat_24 labels - the old 128 px at montserrat_20 was what a
-     * shared top line left over, and the third button still ran under
-     * Cancel. The row ends at 590 and Cancel starts at 788, so the overlap
-     * class is gone rather than narrowly avoided.
+    /* THE SECOND ROW, all five buttons in one left-aligned group of 928:
+     *
+     *   0   My call 170 | 182 My park 170 | 364 Their call 200  -> 564
+     *   612 Cancel  160 | 788 Save    160                       -> 948
+     *
+     * The 48 px between "Their call" and Cancel is the only gap in the row -
+     * enough that a thumb reaching for a macro cannot land on Save, and the
+     * two are red and green besides. Nothing is pinned to the right edge any
+     * more, which is what used to set the window's width.
      *
      * Fixed widths, not content-sized: the labels swap between a name and a
      * callsign as settings change, and a row that re-flows every time a
      * station is adopted would move the button under the finger reaching
-     * for it. */
+     * for it.
+     *
+     * ⛔ ALL FIVE LABELS ARE montserrat_28. The three macro buttons were 24
+     * while Cancel and Save were 28, which the operator spotted at once:
+     * "the blue text in those buttons are smaller why?". There was no
+     * reason for it - 24 was what fitted when these buttons were 128 px
+     * wide, and it outlived that. "Their call" takes 200 rather than 180 at
+     * the larger size so a 9-character callsign still fits inside it. */
     {
-        int mx = 0;
+        static const int MX[3] = { 0, 182, 364 };
+        static const int MW[3] = { 170, 170, 200 };
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
-            lv_obj_set_size(b, 190, 56);
-            lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 48);
+            lv_obj_set_size(b, MW[i], 56);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, MX[i], 72);
             lv_obj_set_style_bg_color(b, lv_color_hex(0x2a2f37), 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
             lv_obj_set_style_border_width(b, 1, 0);
@@ -604,15 +627,14 @@ static void edit_build(void)
              * commit, so they must not read as Save. */
             lv_obj_set_style_text_color(s_edit_macro_lbl[i],
                                         lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
-            lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_28, 0);
             lv_obj_center(s_edit_macro_lbl[i]);
-            mx += 200;
         }
     }
 
     lv_obj_t *btn_cancel = lv_btn_create(panel);
-    lv_obj_set_size(btn_cancel, 180, 56);
-    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -200, 48);
+    lv_obj_set_size(btn_cancel, 160, 56);
+    lv_obj_align(btn_cancel, LV_ALIGN_TOP_LEFT, 612, 72);
     lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(btn_cancel, 8, 0);
     lv_obj_add_event_cb(btn_cancel, edit_cancel_cb, LV_EVENT_CLICKED, NULL);
@@ -623,8 +645,8 @@ static void edit_build(void)
     lv_obj_center(lc);
 
     lv_obj_t *btn_save = lv_btn_create(panel);
-    lv_obj_set_size(btn_save, 180, 56);
-    lv_obj_align(btn_save, LV_ALIGN_TOP_RIGHT, 0, 48);
+    lv_obj_set_size(btn_save, 160, 56);
+    lv_obj_align(btn_save, LV_ALIGN_TOP_LEFT, 788, 72);
     lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_radius(btn_save, 8, 0);
     lv_obj_add_event_cb(btn_save, edit_save_cb, LV_EVENT_CLICKED, NULL);
@@ -640,8 +662,8 @@ static void edit_build(void)
      * list is doing. Transparent and borderless: it is a viewport, not a
      * box, and must not read as one. */
     s_edit_list = lv_obj_create(panel);
-    lv_obj_set_width(s_edit_list, 1168);
-    lv_obj_set_y(s_edit_list, 116);
+    lv_obj_set_width(s_edit_list, 948);
+    lv_obj_set_y(s_edit_list, 160);
     lv_obj_set_x(s_edit_list, 0);
     lv_obj_set_style_bg_opa(s_edit_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_edit_list, 0, 0);
@@ -661,13 +683,14 @@ static void edit_build(void)
         lv_obj_set_style_text_font(s_edit_num[i], &lv_font_montserrat_28, 0);
         lv_obj_set_pos(s_edit_num[i], 4, fy + 14);
 
-        /* 1020 wide, not 1010 of a wider panel: the fields do not need the
-         * whole window. Operator, 2026-11-02: "the fields for 1-6 need not
-         * be this wide". 43 characters at montserrat_28 is about 690 px, so
-         * there is room to spare, and the slack on the right is where the
-         * scrollbar sits without covering any text. */
+        /* 904 of the list's 948, after the number column. The fields never
+         * needed the full 1020 of the old window - operator, 2026-11-02:
+         * "the fields for 1-6 need not be this wide" - and 43 characters at
+         * montserrat_28 measures about 730 px, so the longest message still
+         * has room. The slack on the right is where the scrollbar sits
+         * without covering any text. */
         s_edit_ta6[i] = lv_textarea_create(s_edit_list);
-        lv_obj_set_size(s_edit_ta6[i], 1020, 58);
+        lv_obj_set_size(s_edit_ta6[i], 904, 58);
         lv_obj_set_pos(s_edit_ta6[i], 44, fy);
         lv_textarea_set_one_line(s_edit_ta6[i], true);
         lv_textarea_set_max_length(s_edit_ta6[i], 43);
@@ -686,8 +709,8 @@ static void edit_build(void)
     lv_obj_set_style_text_color(s_edit_sends, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_edit_sends, &lv_font_montserrat_22, 0);
     lv_label_set_long_mode(s_edit_sends, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_edit_sends, 1020);
-    lv_obj_set_pos(s_edit_sends, 44, 532);
+    lv_obj_set_width(s_edit_sends, 904);
+    lv_obj_set_pos(s_edit_sends, 44, 580);
 
     edit_layout(false);
 
