@@ -74,16 +74,19 @@ static esp_err_t http_ev(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-/* ⛔ THE DISPLAY FONT IS ASCII ONLY, so a Danish station name arrives as
- * boxes. Measured, not assumed: lv_font_montserrat_24.c was generated with
- * "-r 0x20-0x7F,0xB0,0x2022" - printable ASCII, the degree sign and a bullet.
- * "DR P4 København" therefore drew as "DR P4 K?benhavn" with a square, and
- * the operator saw it on the first list (2026-11-01).
+/* ⭐ SUPERSEDED FOR DISPLAY, 2026-11-01 - now the DE-DUPLICATION KEY ONLY.
  *
- * The cheap honest answer is to fold the name to ASCII rather than to add a
- * font: a custom range costs flash in every build for a list of radio
- * stations, and the Nordic digraphs (oe, ae, aa) are how these names are
- * written on an ASCII keyboard anyway.
+ * This was the whole answer while the display font was ASCII: LVGL's built-in
+ * montserrat carries "0x20-0x7F,0xB0,0x2022" and nothing else, so "DR P4
+ * København" drew with a square and the operator saw it on the first list.
+ * Folding to "Koebenhavn" hid that honestly but wrote his own language wrong,
+ * and the ICY programme text was never folded at all, so it kept showing the
+ * squares raw - he sent a screenshot of exactly that.
+ *
+ * The real fix is font_ui_latin_* (Montserrat with Latin-1), so the stored
+ * name is now UTF-8 via to_latin1_utf8() below. Folding survives here because
+ * it is still the right thing for the KEY: "DR P4 København" and "DR P4
+ * Kobenhavn" are one station and must dedupe together.
  *
  * ⛔ THE NAME ONLY. The URL is never touched - folding a byte there would
  * point at a different stream, or at nothing.
@@ -137,6 +140,73 @@ static void fold_ascii(const char *in, char *out, size_t cap)
         for (int i = 0; i < NMAP && !rep; i++) if (MAP[i].cp == cp) rep = MAP[i].rep;
         if (!rep) { out[o++] = '?'; continue; }
         for (const char *r = rep; *r && o + 1 < cap; r++) out[o++] = *r;
+    }
+    out[o] = '\0';
+}
+
+/* What the operator actually READS. Keeps UTF-8 for everything font_ui_latin_*
+ * can draw - ASCII plus Latin-1 Supplement, which covers æøå, the German
+ * umlauts and ß, and the accented vowels of every language in range of this
+ * radio - and replaces anything else with '?'.
+ *
+ * ⛔ A '?' RATHER THAN A DROP, and rather than a square. A Cyrillic or Greek
+ * station is still obviously a name and still distinguishable from the one
+ * above it; a dropped character silently merges two different stations in the
+ * eye, and a square is what this whole change exists to remove.
+ *
+ * ⛔ NEVER CUTS A CHARACTER IN HALF. A 2-byte sequence is written whole or not
+ * at all, so a truncated name is still valid UTF-8 - LVGL draws a stray
+ * continuation byte as a square, which would reintroduce the fault at exactly
+ * the length limit. */
+void rb_text_to_latin1(const char *in, char *out, int capi)
+{
+    if (!out || capi <= 0) return;
+    size_t cap = (size_t)capi;
+    out[0] = '\0';
+    if (!in) return;
+
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 1 < cap; ) {
+        uint32_t cp;
+
+        if (*p < 0x80) {
+            if (*p < 0x20) { p++; continue; }        /* no control codes */
+            out[o++] = (char)*p++;
+            continue;
+        }
+
+        int len = 0;
+        if      ((*p & 0xE0) == 0xC0) { cp = (uint32_t)(*p & 0x1F); len = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = (uint32_t)(*p & 0x0F); len = 3; }
+        else if ((*p & 0xF8) == 0xF0) { cp = (uint32_t)(*p & 0x07); len = 4; }
+        else                          { cp = *p; len = 0; }
+
+        if (len) {
+            bool ok = true;
+            for (int i = 1; i < len; i++) {
+                if ((p[i] & 0xC0) != 0x80) { ok = false; break; }
+                cp = (cp << 6) | (uint32_t)(p[i] & 0x3F);
+            }
+            /* ⭐ NOT UTF-8 AFTER ALL -> READ IT AS LATIN-1. The ICY spec never
+             * settled an encoding and plenty of European Icecast servers send
+             * raw ISO-8859-1, where a lone 0xF8 IS 'ø'. Rejecting it as bad
+             * UTF-8 would print '?' for exactly the stations this change is
+             * meant to fix. */
+            if (!ok) { cp = *p; len = 1; }
+            p += len;
+        } else {
+            p++;                                      /* lone high byte = Latin-1 */
+        }
+
+        if (cp >= 0xA0 && cp <= 0xFF) {
+            if (o + 2 >= cap) break;                 /* whole, or not at all */
+            out[o++] = (char)(0xC0 | (cp >> 6));
+            out[o++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp >= 0x20 && cp < 0x7F) {
+            out[o++] = (char)cp;
+        } else {
+            out[o++] = '?';
+        }
     }
     out[o] = '\0';
 }
@@ -319,7 +389,7 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
 
         rb_station_t *st = &out[n];
         memset(st, 0, sizeof(*st));
-        fold_ascii(jname->valuestring, st->name, sizeof(st->name));
+        rb_text_to_latin1(jname->valuestring, st->name, (int)sizeof(st->name));
         snprintf(st->url,  sizeof(st->url),  "%s", jurl->valuestring);
 
         const cJSON *jbr = cJSON_GetObjectItemCaseSensitive(it, "bitrate");

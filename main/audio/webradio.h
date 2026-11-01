@@ -62,6 +62,15 @@ webradio_state_t webradio_state(void);
 // What to put on screen. `name` is the station from the directory; `title` is
 // the ICY StreamTitle the server pushes - the programme or track playing - and
 // is "" until one arrives. `err` carries the last failure for the operator.
+// The URL of what is playing (or was last played), "" if there has never been
+// one. Borrowed, not copied: valid until the next webradio_play().
+//
+// ⛔ THE PLAYER IS THE SOURCE OF TRUTH for "what am I hearing", not whichever
+// row the operator last tapped. After a memory recall, a resume, or a search
+// that reorders the list, those two are different things - and storing a
+// station memory from the list selection would quietly save the wrong one.
+const char *webradio_current_url(void);
+
 void webradio_get_name(char *out, int cap);
 void webradio_get_title(char *out, int cap);
 void webradio_get_error(char *out, int cap);

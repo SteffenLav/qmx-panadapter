@@ -40,6 +40,7 @@
 #include "webradio.h"
 
 #include "rx_audio.h"
+#include "net/radio_browser.h"   /* rb_text_to_latin1 - one sanitiser, two callers */
 #include "dsp/dsp.h"              /* DSP_SAMPLE_RATE_HZ - the channel's rate   */
 
 #include "esp_http_client.h"
@@ -76,10 +77,13 @@ static TaskHandle_t              s_task   = NULL;   /* decoder */
 static TaskHandle_t              s_net    = NULL;   /* reader  */
 static volatile bool             s_net_done = true;
 
-static char s_url[192]  = "";
-static char s_name[48]  = "";
-static char s_title[96] = "";
-static char s_err[80]   = "";
+static char s_url[192]   = "";
+static char s_name[64]   = "";   /* UTF-8: RB_NAME_LEN, and for the same reason */
+/* ⚠ BYTES, NOT CHARACTERS, and the operator asked for the whole title to be
+ * visible. A Danish programme blurb runs well past 96 bytes once æøå cost two
+ * each - his screenshot was cut mid-word at the old size. */
+static char s_title[224] = "";
+static char s_err[80]    = "";
 
 /* ---- buffers ------------------------------------------------------------
  *
@@ -140,7 +144,13 @@ static void icy_take_title(const char *block)
     char tmp[sizeof(s_title)];
     memcpy(tmp, p, (size_t)n);
     tmp[n] = '\0';
-    snprintf(s_title, sizeof(s_title), "%s", tmp);
+    /* ⛔ THE SAME SANITISER THE STATION NAME GETS, and for a day it did not.
+     * Names were folded to ASCII in radio_browser.c while the title was
+     * copied through untouched, so the title - and only the title - drew
+     * squares where æøå should be. The operator photographed it. Now both go
+     * through one function, which also handles the ISO-8859-1 that plenty of
+     * Icecast servers send instead of UTF-8. */
+    rb_text_to_latin1(tmp, s_title, (int)sizeof(s_title));
     ESP_LOGI(TAG, "ICY title: '%s'", s_title);
 }
 
@@ -845,6 +855,8 @@ void webradio_resume(void)
 
 bool webradio_is_paused(void) { return s_paused; }
 webradio_state_t webradio_state(void) { return s_state; }
+
+const char *webradio_current_url(void) { return s_url; }
 
 void webradio_get_name(char *o, int c)  { if (o && c) snprintf(o, (size_t)c, "%s", s_name); }
 void webradio_get_title(char *o, int c) { if (o && c) snprintf(o, (size_t)c, "%s", s_title); }
