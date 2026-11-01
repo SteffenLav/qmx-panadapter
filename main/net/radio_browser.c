@@ -9,6 +9,8 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"        /* vTaskDelay - the gap between retries */
 
 #include <ctype.h>
 #include <stdio.h>
@@ -23,18 +25,38 @@ static char s_err[80] = "";
  * kilobytes of JSON - every row carries tags, homepage, favicon and a dozen
  * fields we throw away. This cannot go on a task stack and must not go in
  * internal RAM, which this board runs within ~30 KB of (#65). */
-#define RB_BUF_BYTES (320 * 1024)
+/* ⛔ MEASURED, not estimated (2026-11-01, from the PC against the same query
+ * the device sends): 174 rows at 300 km is 203 KB of JSON and 250 rows at
+ * 500 km is 313 KB. 512 KB therefore has real margin, and an overflow is not
+ * a short list but a parse failure - the sink truncates mid-object and the
+ * operator sees "The directory's reply did not parse". PSRAM: this cannot go
+ * on a task stack and must not go in internal RAM (#65). */
+#define RB_BUF_BYTES (512 * 1024)
 
 /* How many rows to ASK for, against how many we keep. The directory returns
  * duplicates and AAC rows that we drop, so asking for exactly RB_MAX_STATIONS
- * would hand back a short list after filtering. */
-#define RB_FETCH_ROWS 60
+ * would hand back a short list after filtering.
+ *
+ * ⚠ 250 IS THE DIRECTORY'S OWN CEILING on this query, measured: limit=250 and
+ * limit=200 both returned 250 rows at 500 km, and at 150 km both returned the
+ * same 54. Asking for more is free and changes nothing. */
+#define RB_FETCH_ROWS 250
 
 typedef struct {
     char  *buf;
     size_t cap;
     size_t len;
 } rb_sink_t;
+
+/* A-Z for the pane, case-insensitive. See the call site for why the SELECTION
+ * stays ordered by clickcount and only the display order changes. */
+static int by_name_ci(const void *a, const void *b)
+{
+    const rb_station_t *x = (const rb_station_t *)a;
+    const rb_station_t *y = (const rb_station_t *)b;
+    int c = strcasecmp(x->name, y->name);
+    return c ? c : strcmp(x->name, y->name);
+}
 
 static esp_err_t http_ev(esp_http_client_event_t *evt)
 {
@@ -164,12 +186,40 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
     /* hidebroken drops the dead streams the directory already knows about;
      * ordering by clickcount puts the stations people actually listen to at
      * the top, which is what makes a 24-row cap usable. */
+    /* ⛔ ONE HOST AND NO RETRY MADE EVERY TRANSIENT A DEAD END.
+     *
+     * The first cut hard-coded de1 and reported "Directory unreachable" on any
+     * failure. MEASURED on field 2026-11-01: two attempts died with
+     * `mbedtls_ssl_handshake returned -0x0050` (MBEDTLS_ERR_NET_CONN_RESET)
+     * while the SAME host answered HTTP 200 from the PC on the same network in
+     * 128 ms, and HTTPS from the same board to GitHub worked seconds later
+     * (update_check forced over the API). So it was neither the host, nor the
+     * cert bundle, nor the board's TLS - it was a transient reset with nothing
+     * to catch it.
+     *
+     * `all.api` is the project's documented round-robin and is tried first;
+     * de1 is the named mirror we used to pin. ⚠ nl1 and at1 did not answer at
+     * all from this network on that date, so they are NOT in the list - an
+     * unreachable mirror in a retry chain only spends the operator's time. */
+    static const char *const RB_HOSTS[] = {
+        "all.api.radio-browser.info",
+        "de1.api.radio-browser.info",
+    };
+    const int rb_hosts = (int)(sizeof(RB_HOSTS) / sizeof(RB_HOSTS[0]));
+    const int rb_tries = 2;                 /* per host */
+
     char url[320];
+    esp_err_t err = ESP_FAIL;
+    int status = 0;
+
+    for (int attempt = 0; attempt < rb_hosts * rb_tries; attempt++) {
+    const char *host = RB_HOSTS[attempt % rb_hosts];
+    sink.len = 0; buf[0] = '\0';
     snprintf(url, sizeof(url),
-             "https://de1.api.radio-browser.info/json/stations/search"
+             "https://%s/json/stations/search"
              "?geo_lat=%.4f&geo_long=%.4f&geo_distance=%d"
              "&hidebroken=true&order=clickcount&reverse=true&limit=%d",
-             lat, lon, radius_km * 1000, RB_FETCH_ROWS);
+             host, lat, lon, radius_km * 1000, RB_FETCH_ROWS);
 
     esp_http_client_config_t hc = {
         .url                   = url,
@@ -200,14 +250,26 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
     }
     esp_http_client_set_header(cl, "User-Agent", "qmx-panadapter/1.0");
 
-    esp_err_t err = esp_http_client_perform(cl);
-    int status = esp_http_client_get_status_code(cl);
+    err = esp_http_client_perform(cl);
+    status = esp_http_client_get_status_code(cl);
     esp_http_client_cleanup(cl);
+
+    if (err == ESP_OK && status == 200) break;
+
+    /* WARN every attempt, with the host named: a retry that hides its
+     * failures turns a mirror that is always down into a slow success and
+     * nobody ever learns which one it was. */
+    ESP_LOGW(TAG, "attempt %d/%d via %s failed: %s status=%d",
+             attempt + 1, rb_hosts * rb_tries, host,
+             esp_err_to_name(err), status);
+    if (attempt + 1 < rb_hosts * rb_tries) vTaskDelay(pdMS_TO_TICKS(400));
+    }
 
     if (err != ESP_OK || status != 200) {
         snprintf(s_err, sizeof(s_err), "Directory unreachable (%s, HTTP %d)",
                  esp_err_to_name(err), status);
-        ESP_LOGW(TAG, "fetch failed: %s status=%d", esp_err_to_name(err), status);
+        ESP_LOGW(TAG, "fetch failed after %d attempts: %s status=%d",
+                 rb_hosts * rb_tries, esp_err_to_name(err), status);
         free(buf);
         return -2;
     }
@@ -268,7 +330,21 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
     }
     cJSON_Delete(root);
 
+    /* ⭐ SELECTION BY POPULARITY, DISPLAY BY NAME - two different orders, and
+     * conflating them would be the wrong answer to "sort them A-Z".
+     *
+     * The query above orders by clickcount so the rows we KEEP are the ones
+     * people actually listen to; sorting here then puts those rows in the
+     * order the operator reads them. Sorting the directory instead would have
+     * handed back the 50 alphabetically-first stations in northern Europe,
+     * which is not a list anybody wants. Asked for 2026-11-01.
+     *
+     * Case-insensitive, and a tie falls back to the signed compare so the
+     * order is total - qsort is not stable and two stations differing only in
+     * case would otherwise swap places between fetches. */
+    qsort(out, (size_t)n, sizeof(out[0]), by_name_ci);
+
     if (!n) snprintf(s_err, sizeof(s_err), "No MP3 stations within %d km", radius_km);
-    ESP_LOGI(TAG, "kept %d station(s) of %d asked for", n, RB_FETCH_ROWS);
+    ESP_LOGI(TAG, "kept %d station(s) of %d asked for, sorted A-Z", n, RB_FETCH_ROWS);
     return n;
 }

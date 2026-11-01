@@ -23,7 +23,11 @@
 
 #define RB_NAME_LEN   48
 #define RB_URL_LEN    192
-#define RB_MAX_STATIONS 24     /* one pane, no paging - see the .c */
+/* 50 on the operator's ask (2026-11-01). The pane scrolls, so the only real
+ * limits are the directory's supply and where the array lives - at 244 B a
+ * row, 50 of them is 12.2 KB, which is why webradio_modal.c keeps it in PSRAM
+ * and not in .bss (#65: this board runs ~30 KB of internal free). */
+#define RB_MAX_STATIONS 50
 
 typedef struct {
     char     name[RB_NAME_LEN];

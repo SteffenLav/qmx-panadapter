@@ -23,6 +23,7 @@
 #include "ui.h"
 #include "lvgl.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"    /* the station list is PSRAM, not .bss - see below */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -43,13 +44,22 @@ static bool s_open = false;
 
 /* The list, and the worker's handshake with the timer. `s_fetch_state` is the
  * only thing the two share: 0 idle, 1 running, 2 done, 3 failed. */
-static rb_station_t s_st[RB_MAX_STATIONS];
+/* ⛔ PSRAM, NOT .bss. At RB_MAX_STATIONS 50 this array is 12.2 KB, and as a
+ * static it was 12.2 KB of INTERNAL RAM on a board that runs ~30 KB free
+ * (#65) - held for the whole session for a pane that is open for seconds.
+ * Allocated on first open and kept (one allocation, never grows). */
+static rb_station_t *s_st = NULL;
 static volatile int s_n_st = 0;
 static volatile int s_fetch_state = 0;
 
-/* How far to look. 150 km reaches the national broadcasters and the nearest
- * city's local stations without filling the list with another country's. */
-#define WR_RADIUS_KM 150
+/* ⛔ 300 km, AND THE NUMBER WAS MEASURED BEFORE IT WAS CHANGED. The operator
+ * asked for 50 stations in the list (2026-11-01). At the old 150 km the
+ * directory holds only 54 rows in total for his grid - 46 MP3, 44 unique -
+ * so 50 was NOT REACHABLE at any row limit, and raising RB_FETCH_ROWS alone
+ * would have looked like a fix and delivered 44. 300 km returns 147 unique
+ * MP3 stations, which covers Denmark, southern Sweden and northern Germany.
+ * If the list ever has to come back to one country, this is the line. */
+#define WR_RADIUS_KM 300
 
 static void fetch_task(void *arg)
 {
@@ -64,6 +74,18 @@ static void fetch_task(void *arg)
 static void start_fetch(void)
 {
     if (s_fetch_state == 1) return;
+    /* The worker writes straight into this, so it has to exist before the
+     * task starts - not inside it, where a failure would race the timer. */
+    if (!s_st) {
+        s_st = heap_caps_calloc(RB_MAX_STATIONS, sizeof(rb_station_t),
+                                MALLOC_CAP_SPIRAM);
+        if (!s_st) {
+            s_n_st = 0;
+            s_fetch_state = 3;
+            ui_toast("No PSRAM for the station list");
+            return;
+        }
+    }
     s_fetch_state = 1;
     lv_obj_clean(s_list);
     lv_obj_t *l = lv_label_create(s_list);
@@ -79,7 +101,7 @@ static void start_fetch(void)
 static void station_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx >= s_n_st) return;
+    if (!s_st || idx < 0 || idx >= s_n_st) return;
     ESP_LOGI(TAG, "play '%s'", s_st[idx].name);
     if (!webradio_play(s_st[idx].url, s_st[idx].name)) {
         char m[96];

@@ -53,6 +53,8 @@
 #include "freertos/idf_additions.h"   /* xStreamBufferCreateWithCaps - PSRAM */
 
 #include "mp3dec.h"               /* chmorgan/esp-libhelix-mp3 */
+#include "mp3common.h"            /* MP3DecInfo - public, and it holds the 8 */
+#include "util/mem_where.h"       /* LP SRAM is not L2. T133/T134 */
 
 #include <stdlib.h>
 #include <string.h>
@@ -395,6 +397,41 @@ static void webradio_task(void *arg)
     bool claimed = false;
 
     if (!dec) { set_err("No memory for the MP3 decoder"); goto done; }
+
+    /* ⛔ WHERE HELIX'S OWN STATE LANDED, AND WHY IT IS WORTH A LOG LINE.
+     *
+     * MEASURED on field 2026-11-01: MP3Decode burns 95.8% of core 1 and needs
+     * 30.6 ms of CPU per 24 ms frame - 1.28x too slow in real time, which is
+     * the 75% of samples the operator hears as break-up. The same library on
+     * the same chip keeps up in dmatking/esp32-p4-webradio, and our build is
+     * the MORE optimised one (-O2 against its -Og), with identical CPU, PSRAM
+     * and flash settings. So the difference is not the library.
+     *
+     * AllocateBuffers() makes EIGHT PLAIN mallocs, all under
+     * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384, so every one lands in
+     * "internal" RAM - a lottery on this board that includes LP SRAM at 2.5x
+     * slower than cached PSRAM (T133). HuffmanInfo, IMDCTInfo and SubbandInfo
+     * are the per-frame hot state. The reference wins that lottery for free:
+     * 4.5 kLOC of firmware and a roomy L2 heap, where ours runs ~30 KB free.
+     *
+     * ⭐ NO STANDING PATCH IS NEEDED TO SEE THIS. MP3DecInfo is a PUBLIC
+     * struct and it holds all eight pointers, so the addresses can be read
+     * straight off the handle. Only moving them would need to touch
+     * buffers.c, and that is not worth doing until these lines say it is. */
+    {
+        MP3DecInfo *di = (MP3DecInfo *)dec;
+        ESP_LOGW(TAG, "helix: dec %p %s | huff %p %s | imdct %p %s | subband %p %s",
+                 (void *)di, mem_where(di),
+                 di->HuffmanInfoPS, mem_where(di->HuffmanInfoPS),
+                 di->IMDCTInfoPS,   mem_where(di->IMDCTInfoPS),
+                 di->SubbandInfoPS, mem_where(di->SubbandInfoPS));
+        ESP_LOGW(TAG, "helix: fh %p %s | si %p %s | sfi %p %s | dq %p %s | in %s pcm %s out %s",
+                 di->FrameHeaderPS,     mem_where(di->FrameHeaderPS),
+                 di->SideInfoPS,        mem_where(di->SideInfoPS),
+                 di->ScaleFactorInfoPS, mem_where(di->ScaleFactorInfoPS),
+                 di->DequantInfoPS,     mem_where(di->DequantInfoPS),
+                 mem_where(s_in), mem_where(s_pcm), mem_where(s_out));
+    }
 
     s_state = WEBRADIO_CONNECTING;
     s_title[0] = '\0';
