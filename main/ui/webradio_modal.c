@@ -36,6 +36,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "util/psram_task.h"   /* reapable: wr_fetch runs once per Refresh */
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -49,7 +50,6 @@ static lv_obj_t *s_now   = NULL;   /* the ICY programme text, wrapped      */
 static lv_obj_t *s_list  = NULL;   /* the scrollable station list          */
 static lv_obj_t *s_btn_play = NULL;
 static lv_obj_t *s_lbl_play = NULL;
-static lv_obj_t *s_slider   = NULL;
 static lv_obj_t *s_lbl_vol  = NULL;
 static lv_obj_t *s_search_ta = NULL;
 static lv_obj_t *s_search_kb = NULL;
@@ -257,7 +257,10 @@ static void fetch_task(void *arg)
     if (n > 0) { s_n_st = n; s_fetch_state = 2; }
     else       { s_n_st = 0; s_fetch_state = 3; }
     ESP_LOGI(TAG, "fetch returned %d", n);
-    vTaskDelete(NULL);
+    /* ⛔ PARK, NOT DELETE. This task is created again on every Refresh, and
+     * vTaskDelete() on a static stack+TCB frees neither - the same leak that
+     * took the internal heap to 739 B on 2026-11-01. See psram_task.h. */
+    psram_task_park();
 }
 
 static void start_fetch(void)
@@ -282,9 +285,12 @@ static void start_fetch(void)
     lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     /* 12 KB because radio_browser_fetch() loads settings and runs mbedTLS. */
-    xTaskCreatePinnedToCoreWithCaps(fetch_task, "wr_fetch", 12288, NULL,
-                                    tskIDLE_PRIORITY + 2, NULL, 1,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    psram_task_reap();
+    if (!psram_task_create_reapable(fetch_task, "wr_fetch", 12288, NULL,
+                                    tskIDLE_PRIORITY + 2, 1)) {
+        s_fetch_state = 3;
+        ui_toast("Could not start the directory fetch");
+    }
 }
 
 static void station_cb(lv_event_t *e)
@@ -321,7 +327,7 @@ static void fill_list(void)
         shown++;
 
         lv_obj_t *b = lv_button_create(s_list);
-        lv_obj_set_size(b, LV_PCT(100), 52);
+        lv_obj_set_size(b, LV_PCT(100), 60);
         lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
         lv_obj_set_style_radius(b, 6, 0);
         lv_obj_set_style_border_width(b, 0, 0);
@@ -339,7 +345,7 @@ static void fill_list(void)
         lv_label_set_text(l, t);
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
         lv_obj_set_width(l, LV_PCT(100));
-        lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
+        lv_obj_set_style_text_font(l, &font_ui_latin_28, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_obj_center(l);
     }
@@ -396,10 +402,12 @@ static void refresh_cb(lv_event_t *e)
     start_fetch();
 }
 
-static void vol_cb(lv_event_t *e)
+static void vol_step_cb(lv_event_t *e)
 {
-    lv_obj_t *s = lv_event_get_target(e);
-    int v = (int)lv_slider_get_value(s);
+    int step = (int)(intptr_t)lv_event_get_user_data(e);
+    int v = webradio_get_volume() + step;
+    if (v < 0)   v = 0;
+    if (v > 100) v = 100;
     webradio_set_volume(v);
     if (s_lbl_vol) {
         char t[16];
@@ -520,7 +528,7 @@ static void modal_build(void)
     s_station = lv_label_create(s_panel);
     lv_label_set_long_mode(s_station, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_station, WR_INNER_W - 70);
-    lv_obj_align(s_station, LV_ALIGN_TOP_LEFT, 0, 52);
+    lv_obj_align(s_station, LV_ALIGN_TOP_LEFT, 0, 50);
     lv_obj_set_style_text_font(s_station, &font_ui_latin_28, 0);
     lv_obj_set_style_text_color(s_station, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(s_station, "");
@@ -528,8 +536,12 @@ static void modal_build(void)
     s_now = lv_label_create(s_panel);
     lv_label_set_long_mode(s_now, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_now, WR_INNER_W);
-    lv_obj_set_height(s_now, 92);                 /* three lines at 24 px */
-    lv_obj_align(s_now, LV_ALIGN_TOP_LEFT, 0, 92);
+    /* ⛔ TWO LINES, NOT THREE. Three was his first ask and his second was to
+     * take one back: a DR blurb is longer than any panel, so the third line
+     * bought a word and cost 30 px that the list and the memory row needed
+     * more. Dotted at the end rather than wrapped forever. */
+    lv_obj_set_height(s_now, 62);
+    lv_obj_align(s_now, LV_ALIGN_TOP_LEFT, 0, 88);
     lv_obj_set_style_text_font(s_now, &font_ui_latin_24, 0);
     lv_obj_set_style_text_color(s_now, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(s_now, "Pick a station below");
@@ -541,17 +553,17 @@ static void modal_build(void)
     lv_textarea_set_one_line(s_search_ta, true);
     lv_textarea_set_placeholder_text(s_search_ta, "Type to filter stations");
     lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
-    lv_obj_set_size(s_search_ta, WR_COL_L, 50);
-    lv_obj_align(s_search_ta, LV_ALIGN_TOP_LEFT, 0, 196);
-    lv_obj_set_style_text_font(s_search_ta, &font_ui_latin_24, 0);
+    lv_obj_set_size(s_search_ta, WR_COL_L, 56);
+    lv_obj_align(s_search_ta, LV_ALIGN_TOP_LEFT, 0, 162);
+    lv_obj_set_style_text_font(s_search_ta, &font_ui_latin_28, 0);
     ui_theme_style_textarea(s_search_ta);
     lv_obj_add_event_cb(s_search_ta, search_cb,       LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_search_ta, search_focus_cb, LV_EVENT_FOCUSED,       NULL);
     lv_obj_add_event_cb(s_search_ta, search_done_cb,  LV_EVENT_DEFOCUSED,     NULL);
 
     s_list = lv_obj_create(s_panel);
-    lv_obj_set_size(s_list, WR_COL_L, 236);
-    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 256);
+    lv_obj_set_size(s_list, WR_COL_L, 280);
+    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 230);
     lv_obj_set_style_bg_color(s_list, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(s_list, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(s_list, 1, 0);
@@ -563,13 +575,13 @@ static void modal_build(void)
 
     struct { const char *txt; uint32_t col; lv_event_cb_t cb; int y; lv_obj_t **lbl_out; lv_obj_t **btn_out; }
     B[3] = {
-        { "Play",    UI_COLOR_SUCCESS, play_cb,    196, &s_lbl_play, &s_btn_play },
-        { "Stop",    UI_COLOR_DANGER,  stop_cb,    268, NULL,        NULL        },
-        { "Refresh", UI_COLOR_PRIMARY, refresh_cb, 340, NULL,        NULL        },
+        { "Play",    UI_COLOR_SUCCESS, play_cb,    162, &s_lbl_play, &s_btn_play },
+        { "Stop",    UI_COLOR_DANGER,  stop_cb,    238, NULL,        NULL        },
+        { "Refresh", UI_COLOR_PRIMARY, refresh_cb, 314, NULL,        NULL        },
     };
     for (int i = 0; i < 3; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
-        lv_obj_set_size(b, WR_COL_R_W, 64);
+        lv_obj_set_size(b, WR_COL_R_W, 68);
         lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X, B[i].y);
         lv_obj_set_style_bg_color(b, lv_color_hex(B[i].col), 0);
         lv_obj_set_style_radius(b, 8, 0);
@@ -578,30 +590,49 @@ static void modal_build(void)
         lv_obj_add_event_cb(b, B[i].cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, B[i].txt);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_obj_center(l);
         if (B[i].lbl_out) *B[i].lbl_out = l;
         if (B[i].btn_out) *B[i].btn_out = b;
     }
 
-    lv_obj_t *vl = lv_label_create(s_panel);
-    lv_label_set_text(vl, "Volume");
-    lv_obj_set_style_text_font(vl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(vl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(vl, LV_ALIGN_TOP_LEFT, 0, 504);
-
-    s_slider = lv_slider_create(s_panel);
-    lv_obj_set_size(s_slider, 620, 20);
-    lv_obj_align(s_slider, LV_ALIGN_TOP_LEFT, 120, 508);
-    lv_slider_set_range(s_slider, 0, 100);
-    lv_obj_add_event_cb(s_slider, vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    s_lbl_vol = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, 766, 504);
-    lv_label_set_text(s_lbl_vol, "0");
+    /* ⛔ BUTTONS, NOT A SLIDER, AND NOT ACROSS THE BOTTOM. The slider ran the
+     * width of the list and was 20 px tall - easy to miss on a touch screen,
+     * and the operator said so. A step pair under Refresh keeps every control
+     * that changes the sound in one column, and each target is 100x68. */
+    {
+        struct { const char *txt; int dx; int step; } V[2] = {
+            { "-", 0,   -5 },
+            { "+", 250, +5 },
+        };
+        for (int i = 0; i < 2; i++) {
+            lv_obj_t *b = lv_button_create(s_panel);
+            lv_obj_set_size(b, 100, 68);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X + V[i].dx, 398);
+            lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+            lv_obj_set_style_border_width(b, 1, 0);
+            lv_obj_add_event_cb(b, vol_step_cb, LV_EVENT_CLICKED,
+                                (void *)(intptr_t)V[i].step);
+            /* Held down, it repeats - 0 to 100 in fives is 20 taps otherwise. */
+            lv_obj_add_event_cb(b, vol_step_cb, LV_EVENT_LONG_PRESSED_REPEAT,
+                                (void *)(intptr_t)V[i].step);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, V[i].txt);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+            lv_obj_center(l);
+        }
+        s_lbl_vol = lv_label_create(s_panel);
+        lv_obj_set_width(s_lbl_vol, 150);
+        lv_obj_set_style_text_align(s_lbl_vol, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, WR_COL_R_X + 100, 414);
+        lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_32, 0);
+        lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_label_set_text(s_lbl_vol, "0");
+    }
 
     /* The memory row. One hint line, because "long press to store" is not
      * discoverable and a button that silently does nothing on a tap is worse
@@ -610,12 +641,12 @@ static void modal_build(void)
     lv_label_set_text(mh, "Memory - tap to play, hold to store what is playing");
     lv_obj_set_style_text_font(mh, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(mh, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(mh, LV_ALIGN_TOP_LEFT, 0, 540);
+    lv_obj_align(mh, LV_ALIGN_TOP_LEFT, 0, 520);
 
     for (int i = 0; i < WR_MEM_N; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
-        lv_obj_set_size(b, WR_MEM_W, 60);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (WR_MEM_W + WR_MEM_GAP), 560);
+        lv_obj_set_size(b, WR_MEM_W, 70);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (WR_MEM_W + WR_MEM_GAP), 542);
         lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -625,14 +656,9 @@ static void modal_build(void)
         lv_obj_add_event_cb(b, mem_long_cb,  LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
         s_mem_btn[i] = b;
 
-        char slot[8];
-        snprintf(slot, sizeof(slot), "M%d", i + 1);
-        lv_obj_t *sl = lv_label_create(b);
-        lv_label_set_text(sl, slot);
-        lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(sl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_align(sl, LV_ALIGN_TOP_MID, 0, 0);
-
+        /* ⛔ NO "M1" ROW. It was a slot number nobody needs next to the only
+         * thing that identifies the button - the station - and it stole half
+         * the height from the text that matters. The operator said so. */
         /* ⛔ DOT-TRUNCATED AND WIDTH-BOUND. "(((EBM-Radio)))" and "DR P4
          * København" both overflow 180 px at any readable size, and an
          * unbounded label in LVGL does not clip - it draws straight over its
@@ -643,8 +669,8 @@ static void modal_build(void)
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
         lv_obj_set_width(l, WR_MEM_W - 16);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_text_font(l, &font_ui_latin_20, 0);
+        lv_obj_center(l);
+        lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
         s_mem_lbl[i] = l;
         mem_paint(i);
     }
@@ -652,10 +678,35 @@ static void modal_build(void)
     /* Built last so it draws over the panel, and hidden until the search
      * field is focused. */
     s_search_kb = lv_keyboard_create(s_modal);
-    lv_obj_set_size(s_search_kb, LV_PCT(100), 240);
-    lv_obj_align(s_search_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_add_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN);
+    /* ⛔⛔ THE HOUSE KEYBOARD, NOT LVGL'S. ui_theme_style_keyboard() styles the
+     * keyboard's BACKGROUND and nothing else, so on its own it leaves LVGL's
+     * default white keys at LVGL's default label size - which is a different
+     * keyboard from every other one in this app, and the operator has had to
+     * say so more than once. adif_view_modal.c carries the same three parts
+     * and the same warning; this is a copy of it, deliberately.
+     *
+     * The per-key style is what makes the keys dark, and the explicit
+     * montserrat_28 on the keyboard is what makes the LETTERS match - that
+     * second one is the difference the eye actually catches. */
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(0x303030));
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
+    }
+    lv_obj_add_style(s_search_kb, &style_kb_btn, LV_PART_ITEMS);
     ui_theme_style_keyboard(s_search_kb);
+    lv_obj_set_size(s_search_kb, LV_PCT(100), 280);
+    lv_obj_align(s_search_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    /* Lower case: these are station names, not callsigns. */
+    lv_keyboard_set_mode(s_search_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    ui_theme_keyboard_attach_caps_cycle_upper(s_search_kb);
+    lv_obj_set_style_text_font(s_search_kb, &lv_font_montserrat_28, 0);
+    lv_obj_add_flag(s_search_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_search_kb, search_done_cb, LV_EVENT_READY,  NULL);
     lv_obj_add_event_cb(s_search_kb, search_done_cb, LV_EVENT_CANCEL, NULL);
 
@@ -683,7 +734,6 @@ void webradio_modal_show(void)
     if (s_open) return;
 
     int v = webradio_get_volume();
-    lv_slider_set_value(s_slider, v, LV_ANIM_OFF);
     char t[16];
     snprintf(t, sizeof(t), "%d", v);
     lv_label_set_text(s_lbl_vol, t);

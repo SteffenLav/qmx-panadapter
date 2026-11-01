@@ -52,6 +52,7 @@
 #include "freertos/task.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/idf_additions.h"   /* xStreamBufferCreateWithCaps - PSRAM */
+#include "util/psram_task.h"          /* reapable tasks - see webradio_play() */
 
 #include "mp3dec.h"               /* chmorgan/esp-libhelix-mp3 */
 #include "mp3common.h"            /* MP3DecInfo - public, and it holds the 8 */
@@ -408,7 +409,7 @@ done:
     s_net = NULL;
     s_net_done = true;
     ESP_LOGI(TAG, "reader exit");
-    vTaskDelete(NULL);
+    psram_task_park();          /* NOT vTaskDelete - see webradio_play() */
 }
 
 /* =========================================================================
@@ -761,7 +762,7 @@ done:
     s_title[0] = '\0';
     s_task = NULL;
     ESP_LOGI(TAG, "task exit (state=%d)", (int)s_state);
-    vTaskDelete(NULL);
+    psram_task_park();          /* NOT vTaskDelete - see webradio_play() */
 }
 
 static bool buffers_ready(void)
@@ -797,22 +798,43 @@ bool webradio_play(const char *url, const char *name)
      * speaker comes first, and the reader has 4 s of ring to catch up in.
      * Stacks are generous and in PSRAM, where 12 MB is free - the lesson paid
      * for twice on the web task stacks. */
-    BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-        webradio_net_task, "webradio_net", 8192, NULL,
-        tskIDLE_PRIORITY + 2, &s_net, 1,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (rc != pdPASS) {
-        s_net = NULL; s_net_done = true;
+    /* ⛔⛔ REAPABLE, AND THE FIRST CUT LEAKED THE BOARD DRY.
+     *
+     * These two tasks are created on every play and end on every stop, and
+     * they were made with xTaskCreatePinnedToCoreWithCaps() and ended with
+     * vTaskDelete(NULL). That combination frees NOTHING: the stack and the
+     * TCB are ours, not FreeRTOS's, and - read the IDF source, line 44 of
+     * idf_additions.c - "the TCB must be in internal memory". So every
+     * play/stop cycle leaked two TCBs out of the ~30 KB internal pool this
+     * board has (#65).
+     *
+     * MEASURED on field 2026-11-01: 99 play/stop cycles in one session, 133
+     * failed allocations, internal free down to 739 B, and task creation
+     * finally failing outright - the operator saw "Could not start the reader
+     * task" and a player that would not start again.
+     *
+     * psram_task.h already had the answer and says so in its own header:
+     * create_reapable + park + reap, with the same leak measured at 64 KB a
+     * round trip on wspr_rx (#279). Reaping HERE is the easy place: whatever
+     * ended last time is provably parked by now.
+     *
+     * ⛔ NOT vTaskDeleteWithCaps(NULL) either. Self-deletion there spawns a
+     * temporary clean-up task and abort()s if it cannot be created - which is
+     * exactly the state an exhausted heap is in, so it would turn this leak
+     * into a crash. */
+    psram_task_reap();
+
+    s_net = psram_task_create_reapable(webradio_net_task, "webradio_net", 8192,
+                                       NULL, tskIDLE_PRIORITY + 2, 1);
+    if (!s_net) {
+        s_net_done = true;
         set_err("Could not start the reader task");
         return false;
     }
 
-    rc = xTaskCreatePinnedToCoreWithCaps(
-        webradio_task, "webradio", 12288, NULL,
-        tskIDLE_PRIORITY + 3, &s_task, 1,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (rc != pdPASS) {
-        s_task = NULL;
+    s_task = psram_task_create_reapable(webradio_task, "webradio", 12288,
+                                        NULL, tskIDLE_PRIORITY + 3, 1);
+    if (!s_task) {
         s_stop_req = true;              /* take the reader down with it */
         set_err("Could not start the player task");
         return false;
