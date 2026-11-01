@@ -772,14 +772,21 @@ static void modal_build(void)
      * and the operator said so. A step pair under Refresh keeps every control
      * that changes the sound in one column, and each target is 100x68. */
     {
+        /* ⭐ 72 px GLYPHS, FROM A TWO-CHARACTER FONT. "At least double as big"
+         * (operator) and the largest built-in montserrat here is 48 - 1.5x,
+         * not 2x. A full 72 px face costs a few hundred KB; + and - alone
+         * cost 7.5 KB, and a stepper needs exactly two characters.
+         *
+         * 120 x 110 targets, so the pair plus the reading fill the 350 px
+         * column exactly: 120 + 110 + 120. */
         struct { const char *txt; int dx; int step; } V[2] = {
             { "-", 0,   -5 },
-            { "+", 250, +5 },
+            { "+", 230, +5 },
         };
         for (int i = 0; i < 2; i++) {
             lv_obj_t *b = lv_button_create(s_panel);
-            lv_obj_set_size(b, 100, 68);
-            lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X + V[i].dx, 412);
+            lv_obj_set_size(b, 120, 110);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X + V[i].dx, 404);
             lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -791,15 +798,17 @@ static void modal_build(void)
                                 (void *)(intptr_t)V[i].step);
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, V[i].txt);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
+            lv_obj_set_style_text_font(l, &font_ui_pm_72, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
             lv_obj_center(l);
         }
+        /* The reading at the header's size, so the number you are changing is
+         * as readable as the panel's own title. */
         s_lbl_vol = lv_label_create(s_panel);
-        lv_obj_set_width(s_lbl_vol, 150);
+        lv_obj_set_width(s_lbl_vol, 110);
         lv_obj_set_style_text_align(s_lbl_vol, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, WR_COL_R_X + 100, 428);
-        lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_32, 0);
+        lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, WR_COL_R_X + 120, 432);
+        lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_label_set_text(s_lbl_vol, "0");
     }

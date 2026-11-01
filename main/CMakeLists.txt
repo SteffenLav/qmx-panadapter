@@ -49,6 +49,7 @@ idf_component_register(
         "ui/font_ui_latin_20.c"
         "ui/font_ui_latin_24.c"
         "ui/font_ui_latin_28.c"
+        "ui/font_ui_pm_72.c"
         "ui/reader_diagram.c"
         "ui/watermark_img.c"
         "util/status.c"

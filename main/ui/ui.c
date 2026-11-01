@@ -3471,13 +3471,16 @@ typedef struct { int id; const char *label; bool basic; } drawer_item_t;
 typedef struct { const char *title; const drawer_item_t *items; int n; } drawer_group_t;
 
 static const drawer_item_t GRP_STATION[] = {
+    /* ⭐ FIRST, AND IN BASIC TOO (operator, 2026-11-01). It was filed last and
+     * Advanced-only on the argument that it is an amusement and Basic is for
+     * the controls somebody needs to operate. He reaches for it more than
+     * that argument assumed, and a thing you open often belongs at the top of
+     * the group rather than under four setup rows you touch once. */
+    { DRAWER_SEC_WEBRADIO, "Web radio", true },
     { DRAWER_SEC_IDENTITY, "Callsign & Grid square", false },
     { DRAWER_SEC_MANLOG, "Log a contact (CW/SSB)", true },
     { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)", true },
     { DRAWER_SEC_BPREGION, "Band-plan region", false },
-    /* Advanced by default: it is an amusement, and the Basic view is for
-     * the controls somebody needs to operate. */
-    { DRAWER_SEC_WEBRADIO, "Web radio", false },
 };
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },

@@ -12,3 +12,7 @@
 LV_FONT_DECLARE(font_ui_latin_20);
 LV_FONT_DECLARE(font_ui_latin_24);
 LV_FONT_DECLARE(font_ui_latin_28);
+
+/* Two glyphs, + and -, at 72 px: the volume steppers. See the .c for
+ * why a two-character font exists. */
+LV_FONT_DECLARE(font_ui_pm_72);
