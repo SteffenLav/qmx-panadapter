@@ -517,12 +517,20 @@ static void edit_build(void)
          * Fixed widths, not content-sized: the labels swap between a name
          * and a callsign as settings change, and a row that re-flows every
          * time a station is adopted would move the button under the finger
-         * that is reaching for it. 140 holds "Their call" and a 9-character
-         * callsign at montserrat_20. */
+         * that is reaching for it. 128 holds "Their call" and a 9-character
+         * callsign at montserrat_20.
+         *
+         * ⛔ THE ROW MUST END BEFORE CANCEL, AND THE PANEL'S CONTENT BOX IS
+         * 1048 WIDE, NOT 1080 - pad_all(16) takes 16 off each side, and
+         * lv_obj_set_pos/align here are content-relative. At 140 wide the
+         * third button ran 616..756 while Cancel starts at 1048-166-150 =
+         * 732, so they overlapped by 24 px. Measured, not noticed: the
+         * operator saw it on the glass first. 128 + 8 puts the row at
+         * 320..720 with 12 px clear. */
         int mx = 320;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
-            lv_obj_set_size(b, 140, 48);
+            lv_obj_set_size(b, 128, 48);
             lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 0);
             lv_obj_set_style_bg_color(b, lv_color_hex(0x2a2f37), 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -539,7 +547,7 @@ static void edit_build(void)
                                         lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
             lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_20, 0);
             lv_obj_center(s_edit_macro_lbl[i]);
-            mx += 148;
+            mx += 136;
         }
     }
 
@@ -569,7 +577,7 @@ static void edit_build(void)
     ui_kbd_set_buttons(btn_save, btn_cancel);
 
     for (int i = 0; i < N_CW_MEM; i++) {
-        int fy = 60 + i * 54;
+        int fy = 54 + i * 52;
         s_edit_num[i] = lv_label_create(panel);
         lv_label_set_text_fmt(s_edit_num[i], "%d", i + 1);
         lv_obj_set_style_text_color(s_edit_num[i], lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
@@ -577,7 +585,7 @@ static void edit_build(void)
         lv_obj_set_pos(s_edit_num[i], 4, fy + 12);
 
         s_edit_ta6[i] = lv_textarea_create(panel);
-        lv_obj_set_size(s_edit_ta6[i], 1010, 48);
+        lv_obj_set_size(s_edit_ta6[i], 1010, 46);
         lv_obj_set_pos(s_edit_ta6[i], 34, fy);
         lv_textarea_set_one_line(s_edit_ta6[i], true);
         lv_textarea_set_max_length(s_edit_ta6[i], 43);
@@ -588,15 +596,24 @@ static void edit_build(void)
                             LV_EVENT_VALUE_CHANGED, NULL);
     }
 
-    /* Under the six fields, inside the panel's 420 px: the last field ends
-     * at y=378 and the pad leaves room to y=404. */
+    /* ⛔ INSIDE THE CONTENT BOX, WHICH IS 388 TALL, NOT 420. Same mistake as
+     * the row above and the reason the operator said something was off: the
+     * panel is 420 with pad_all(16), so a child at y=384 is drawn past the
+     * bottom and clipped - 18 px of a 22 px line, leaving a sliver that read
+     * as a rendering fault rather than a missing feature.
+     *
+     * The six fields were re-pitched from 54 to 52 and 48 to 46 to make the
+     * room, rather than shrinking this line's font: the panel cannot grow
+     * (its bottom is 8 px from the keyboard at y=440) and the font is the
+     * one thing that does not get traded away. The block now ends at y=360
+     * and this line occupies 364..386. */
     s_edit_sends = lv_label_create(panel);
     lv_label_set_text(s_edit_sends, "");
     lv_obj_set_style_text_color(s_edit_sends, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_edit_sends, &lv_font_montserrat_18, 0);
     lv_label_set_long_mode(s_edit_sends, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_edit_sends, 1010);
-    lv_obj_set_pos(s_edit_sends, 34, 384);
+    lv_obj_set_pos(s_edit_sends, 34, 364);
 
     s_edit_kb = lv_keyboard_create(s_edit_modal);
     style_edit_keyboard(s_edit_kb);
