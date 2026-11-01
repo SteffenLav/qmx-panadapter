@@ -13,6 +13,7 @@
 #include "dsp/dsp.h"              /* DSP_SAMPLE_RATE_HZ - the channel's rate   */
 
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -203,8 +204,11 @@ static void webradio_task(void *arg)
         .url                         = s_url,
         .timeout_ms                  = 10000,
         .buffer_size                 = 4096,
-        .skip_cert_common_name_check = true,
-        .crt_bundle_attach           = NULL,
+        /* Same trap as radio_browser.c: a NULL bundle is not "no verification",
+         * it is a client esp-tls refuses to create. Most Icecast streams are
+         * plain http and never reach this, but url_resolved from the directory
+         * is https often enough to matter. */
+        .crt_bundle_attach           = esp_crt_bundle_attach,
     };
     cl = esp_http_client_init(&hc);
     if (!cl) { set_err("Could not start the stream"); goto done; }

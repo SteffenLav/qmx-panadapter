@@ -5,6 +5,7 @@
 #include "ft8/js8_message.h"      /* js8_grid_to_latlon - the only position we trust */
 
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "cJSON.h"
@@ -108,14 +109,19 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
         .event_handler         = http_ev,
         .user_data             = &sink,
         .timeout_ms            = 15000,
-        .crt_bundle_attach     = NULL,
-        .skip_cert_common_name_check = true,
-        /* ⛔ NO CERTIFICATE BUNDLE ON PURPOSE. Attaching one costs ~64 KB of
-         * flash and the payload is a public list of radio station URLs - there
-         * is nothing here worth authenticating a server for, and a failed
-         * chain would turn a list refresh into a support question. Nothing
-         * from this reply is executed; it is parsed as data and the only field
-         * that leaves is a URL the operator then chooses to play. */
+        /* ⛔ THE BUNDLE IS NOT OPTIONAL. The first cut passed NULL here with a
+         * comment arguing that a public list of radio stations is not worth
+         * authenticating a server for. That reasoning never got the chance to
+         * be wrong or right: esp-tls REFUSES to build a client with no
+         * verification option at all -
+         *   "No server verification option set in esp_tls_cfg_t structure"
+         *   -> ESP_ERR_MBEDTLS_SSL_SETUP_FAILED -> ESP_ERR_HTTP_CONNECT
+         * and the operator saw "Directory unreachable" on the first try
+         * (bench, 2026-11-01). Skipping verification is a deliberate API call,
+         * not an omission; the bundle is already in this build
+         * (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE), so it costs nothing to attach
+         * and it is the correct answer anyway. */
+        .crt_bundle_attach     = esp_crt_bundle_attach,
         .transport_type        = HTTP_TRANSPORT_OVER_SSL,
         .buffer_size           = 4096,
     };
