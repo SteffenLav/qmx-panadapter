@@ -40,6 +40,27 @@ while ((Get-Date) -lt $end) {
         # Default is 4096 bytes = ~100 s of steady state but well under one
         # second of a boot log. 256 KB removes the overflow window entirely.
         $sp.ReadBufferSize = 262144
+        # ⛔⛔ LATIN-1, NOT THE DEFAULT ASCII - THE CAPTURE WAS DESTROYING BYTES.
+        #
+        # SerialPort.Encoding defaults to ASCIIEncoding, whose decoder replaces
+        # EVERY byte >= 0x80 with '?'. MEASURED 2026-11-01: not one non-ASCII
+        # byte existed in 2 MB of capture-field.txt, and a UTF-8 'ø' logged by
+        # the firmware arrived in the file as two literal 0x3F.
+        #
+        # That is not cosmetic. It cost a real diagnosis: the web radio's ICY
+        # title read "F??rst" in the log, which is indistinguishable from the
+        # firmware itself having written '?' - so the capture looked like
+        # evidence that a just-shipped UTF-8 fix had failed, when the device
+        # was correct and the instrument was lying. The capture IS the
+        # diagnostic record; an instrument that silently rewrites the bytes it
+        # records is worse than no instrument.
+        #
+        # ISO-8859-1 (28591) is the right choice rather than UTF-8: it maps
+        # bytes 0x00-0xFF to U+0000-U+00FF one-for-one, so the file is a
+        # faithful byte log whatever the firmware emits - UTF-8, Latin-1 or a
+        # stray binary byte - and never throws on an invalid sequence. Read it
+        # back with the same encoding to recover the original bytes.
+        $sp.Encoding = [System.Text.Encoding]::GetEncoding(28591)
         $sp.Open()
         [System.IO.File]::AppendAllText($Out,
             "`n=== [capture] port opened $(Get-Date -Format HH:mm:ss) (reconnect #$reconnects) ===`n")
@@ -58,7 +79,13 @@ while ((Get-Date) -lt $end) {
         while ((Get-Date) -lt $end) {
             $chunk = $sp.ReadExisting()          # throws when the device vanishes
             if ($chunk.Length -gt 0) {
-                [System.IO.File]::AppendAllText($Out, $chunk)
+                # ⛔ THE SAME LATIN-1 ON THE WAY OUT, or the round trip is
+                # still lossy in the other direction: AppendAllText defaults
+                # to UTF-8, so a char the port decoded from byte 0xC3 would be
+                # written back as TWO bytes and the firmware's own UTF-8 would
+                # arrive double-encoded. Byte in, same byte out.
+                [System.IO.File]::AppendAllText($Out, $chunk,
+                    [System.Text.Encoding]::GetEncoding(28591))
                 $consecutiveLost = 0                 # real bytes = the port is back
             }
             Start-Sleep -Milliseconds 100
