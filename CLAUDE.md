@@ -178,66 +178,35 @@ Detailed sections moved to memory for session speed:
 - [Release process](../../../memory/project_release_process.md)
 - [Internal RAM audit](../../../memory/project_internal_ram_bss_audit.md) — where the 445 KB goes, what may and may NOT move to PSRAM
 
-## CW page lives on `feat/cw-page`, NOT on main (branch contract)
+## CW page is ON MAIN now, DARK - `cw_page_en` defaults OFF
 
-The CW page is in-progress and deliberately held back from releases: `main` is
-kept release-clean, and all CW work lives on the local branch
-**`feat/cw-page`**, which is **never pushed**. Keep the branch current by
-merging `main` into it, resolving conflicts by keeping the CW-aware side. When
-the page ships, merge `feat/cw-page` -> `main`. Things that live only on the
-branch and must not be assumed present on main: `cw_qso.c`,
-`ui/cw_screen_view.c`, `ui/cw_screen_view_*.c`, and the `s_ky_ts480_compat` KY
-experiment in `cat.c`.
+Merged 2026-11-02 (fast-forward, 104 commits). `feat/cw-page` is gone; do
+not recreate it - CW work is ordinary main work from here.
 
-**The way IN to the CW page is the left drawer, not a swipe.** Main replaced
-the 4-stop swipe carousel with the drawer page picker on 2026-10-24, which
-left this branch with an unreachable page until `MODE: CW` was added under
-PANADAPTER (2026-10-28, verified on the glass). `ui_advance_page()` is
-DELETED here and still present on main - expect that in the next merge.
-
-⭐ **THE HOLD-BACK IS NOW A FIRMWARE GATE, NOT ONLY A BRANCH DISCIPLINE**
-(2026-10-31, proven on bench2 and seen on the glass). `cw_page_en` defaults
-OFF; the drawer hides `MODE: CW` and re-centres the stack, `set_screen "cw"`
-answers 403, boot restore falls through to the Panadapter, and
-`ui_set_base_mode()` refuses. Turn it on with
+⭐ **It ships disabled and that is deliberate.** The gate is firmware, not
+branch discipline, on four surfaces: the drawer hides `MODE: CW` and
+re-centres the stack, `set_screen "cw"` answers 403, boot restore falls
+through to the Panadapter, and `ui_set_base_mode()` refuses. Turn it on with
 `{"action":"cw_enable","on":true}` or `cw_page_enabled = yes` in a config
-file. ⛔ Unlike `wspr_en`, **asking for the page does NOT enable it** - WSPR
-is finished and its flag is vestigial, this one is a real gate, because `KY`
-still has no abort.
+file. ⛔ Unlike `wspr_en`, **asking for the page does NOT enable it**.
 
-**So the branch could now merge to main dark**, the way WSPR once shipped.
-That is the operator's call and has NOT been made - do not act on it.
+⚠ **Why it stays dark: `KY` has no abort.** The CAT manual documents none in
+TS480-compat-OFF mode, so a sent message runs to the end of the radio's
+80-character buffer. That is the open hardware question, and the gate comes
+off when it is answered - not before.
 
-⭐ **CW TRANSMIT WORKS — CAT `KY` KEYS THE RADIO, confirmed OFF AIR by the
-operator on 2026-09-30:** *"the cw is keyed clearly on the antenna - i have
-tried it and it works"*. It may be described as working.
+⭐ **CW TRANSMIT WORKS - CAT `KY` KEYS THE RADIO**, confirmed off air by the
+operator 2026-09-30: *"the cw is keyed clearly on the antenna - i have tried
+it and it works"*. ⛔ Two bench evenings in August concluded the opposite on
+the strength of no sidetone and no LCD `M` - **practice mode suppresses both
+for message sending**, so the evidence for "it does not key" was two
+instruments that were switched off. Do not reinstate an "unverified" caveat.
+Generalise it: a negative result needs its instruments proved alive just as
+much as a positive one.
 
-⛔ **This section said the opposite for two months, and the old text is worth
-keeping for WHY it was wrong rather than deleting.** Two bench evenings
-(2026-08-03/04, QMX+ on 1_04_004) concluded `KY` did not key, on the strength
-of no sidetone and no LCD `M` indicator. **Practice mode suppresses BOTH of
-those for message sending** — the same file said so in the next sentence — so
-the evidence for "it does not key" was two instruments that were both
-switched off. The finding is explained, not contradicted.
-
-⭐ **Generalise it: a negative result needs its instruments proved alive just
-as much as a positive one.** "Nothing happened" and "nothing was measured"
-read identically — the same trap as a dead serial capture looking like a quiet
-device, and as the silent USB patches that needed counters before anyone could
-tell a handled fault from an absent one. **RF on an antenna is the observable
-that cannot lie**, and it is what settled this. Do not reinstate an
-"unverified" caveat on the KY path.
-
-Still true and still useful: `TB`'s t-field (characters left to send) is the
-honest counter for what the radio is actually sending, and `KY;` GET readings
-depend on buffer state, so take a baseline only after a QMX power cycle (an
-un-drained buffer makes the radio report itself permanently "sending").
-
-⚠ **Genuinely still open, and NOT covered by the above: there is no abort.**
-The CAT manual documents no `KY` abort in TS480-compat-OFF mode, so a sent
-message runs to the end of the radio's 80-character buffer. That is the next
-hardware question. Full history, including the retracted wrong conclusions and
-the untested TS480-compat path, is in `docs/cw-page-design.md`.
+`TB`'s t-field is the honest counter for what the radio is sending, and
+`KY;` GET readings depend on buffer state - baseline only after a QMX power
+cycle. Full history in `docs/cw-page-design.md`.
 
 See MEMORY.md index for complete topic list.
 
