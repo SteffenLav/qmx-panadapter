@@ -213,6 +213,47 @@ void rb_text_to_latin1(const char *in, char *out, int capi)
 
 /* Upper-cased, spaces and punctuation dropped: "DR P6 Beat" and "DR P6 BEAT"
  * are the same station listed twice, and both are in the real data. */
+/* Copy `in` to `out`, dropping a trailing QUALITY qualifier - "FluxFM 60s |
+ * 64k MP3" becomes "FluxFM 60s". Only for the de-duplication key; the name on
+ * screen keeps whatever the broadcaster chose.
+ *
+ * ⛔ NARROW ON PURPOSE, AND THE WIDE VERSION WAS MEASURED AND REJECTED. The
+ * obvious rule - strip a trailing number - merged "RADIO 100", "Radio21" and
+ * "Radio 94,3" into ONE row on the real 450 km reply: three different
+ * stations, hidden. Station names end in numbers all the time. So this fires
+ * only on a SEPARATOR (| ( [) followed by something that can only be a
+ * quality tag: 2-3 digits, 'k', optionally a codec word. MEASURED effect on
+ * that same reply: 188 unique names -> 187, nothing else touched. */
+static void strip_quality(const char *in, char *out, size_t cap)
+{
+    snprintf(out, cap, "%s", in);
+    char *sep = NULL;
+    for (char *p = out; *p; p++) if (*p == '|' || *p == '(' || *p == '[') sep = p;
+    if (!sep || sep == out) return;
+
+    const char *t = sep + 1;
+    while (*t == ' ') t++;
+    int digits = 0;
+    while (*t >= '0' && *t <= '9') { t++; digits++; }
+    if (digits < 2 || digits > 3) return;
+    while (*t == ' ') t++;
+    if (*t != 'k' && *t != 'K') return;
+    t++;
+    if (strncasecmp(t, "bps", 3) == 0) t += 3;
+    while (*t == ' ') t++;
+    static const char *CODEC[] = { "mp3", "aacp", "aac+", "aac", "ogg" };
+    for (int i = 0; i < 5; i++) {
+        size_t l = strlen(CODEC[i]);
+        if (strncasecmp(t, CODEC[i], l) == 0) { t += l; break; }
+    }
+    while (*t == ' ' || *t == ')' || *t == ']') t++;
+    if (*t) return;                       /* something else followed - leave it */
+
+    /* Trim the separator and any space before it. */
+    *sep = '\0';
+    for (char *p = sep - 1; p >= out && (*p == ' ' || *p == '-'); p--) *p = '\0';
+}
+
 static void norm_name(const char *in, char *out, size_t cap)
 {
     size_t j = 0;
@@ -379,15 +420,39 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
 
         char key[RB_NAME_LEN];
         char folded[RB_NAME_LEN];
-        fold_ascii(jname->valuestring, folded, sizeof(folded));
+        char bare[RB_NAME_LEN];
+        strip_quality(jname->valuestring, bare, sizeof(bare));
+        fold_ascii(bare, folded, sizeof(folded));
         norm_name(folded, key, sizeof(key));
         if (!key[0]) continue;
-        bool dup = false;
-        for (int i = 0; i < n && !dup; i++) dup = (strcmp(seen[i], key) == 0);
-        if (dup) continue;
-        snprintf(seen[n], RB_NAME_LEN, "%s", key);
+        /* ⭐ A DUPLICATE REPLACES THE ROW IF ITS STREAM IS BETTER, rather than
+         * being dropped on sight.
+         *
+         * The first cut kept whichever copy the directory listed first, which
+         * is the most-clicked one - and the operator still saw doubles,
+         * because the directory carries the same station several times at
+         * different bitrates with slightly different names ("DR P1", "DR P1
+         * (MP3)"). norm_name() folds those to one key, so the SECOND one was
+         * being discarded even when it was the 192 kbps copy and the one on
+         * screen was 64 kbps.
+         *
+         * So: same key, higher bitrate wins; the row is rewritten in place and
+         * nothing is appended. Equal bitrate keeps the incumbent, which is
+         * the more-clicked one. He asked for "only the one with better
+         * streaming speed". */
+        int dup_at = -1;
+        for (int i = 0; i < n && dup_at < 0; i++)
+            if (strcmp(seen[i], key) == 0) dup_at = i;
 
-        rb_station_t *st = &out[n];
+        unsigned this_br = 0;
+        {
+            const cJSON *jb = cJSON_GetObjectItemCaseSensitive(it, "bitrate");
+            if (cJSON_IsNumber(jb) && jb->valuedouble > 0) this_br = (unsigned)jb->valuedouble;
+        }
+        if (dup_at >= 0 && this_br <= out[dup_at].bitrate_kbps) continue;
+
+        rb_station_t *st = (dup_at >= 0) ? &out[dup_at] : &out[n];
+        if (dup_at < 0) snprintf(seen[n], RB_NAME_LEN, "%s", key);
         memset(st, 0, sizeof(*st));
         rb_text_to_latin1(jname->valuestring, st->name, (int)sizeof(st->name));
         snprintf(st->url,  sizeof(st->url),  "%s", jurl->valuestring);
@@ -406,11 +471,13 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
             st->genre[o] = '\0';
         }
 
-        const cJSON *jbr = cJSON_GetObjectItemCaseSensitive(it, "bitrate");
-        if (cJSON_IsNumber(jbr)) st->bitrate_kbps = (uint16_t)jbr->valuedouble;
+        st->bitrate_kbps = (uint16_t)this_br;
         const cJSON *jd = cJSON_GetObjectItemCaseSensitive(it, "geo_distance");
         if (cJSON_IsNumber(jd)) st->distance_km = (uint16_t)(jd->valuedouble / 1000.0);
-        n++;
+        /* ⛔ ONLY A NEW ROW ADVANCES n. A replacement rewrote out[dup_at] and
+         * must not also append, or the better copy would appear twice - the
+         * exact fault this block exists to remove. */
+        if (dup_at < 0) n++;
     }
     cJSON_Delete(root);
 

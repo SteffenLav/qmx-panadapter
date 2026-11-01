@@ -101,6 +101,9 @@ static volatile int s_fetch_state = 0;
 #define WR_MEM_N        6
 #define WR_MEM_W      180
 #define WR_MEM_GAP     12                        /* 6*180 + 5*12 = 1140     */
+/* Reserved on the right of a list row for "192 kbps  386 km" at 24 px, plus
+ * the row's own padding. The name gets the rest and dots at that edge. */
+#define WR_META_W     260
 
 /* ---- station memories ---------------------------------------------------
  *
@@ -425,25 +428,34 @@ static void fill_list(void)
         lv_obj_set_style_pad_all(b, 6, 0);
         lv_obj_add_event_cb(b, station_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
-        lv_obj_t *l = lv_label_create(b);
-        /* Distance and bitrate are on the row because both change whether a
-         * station is worth tapping: a 32 kbps stream sounds like a telephone,
-         * and 140 km away is a different town's local news. */
-        char t[RB_NAME_LEN + 48];
-        snprintf(t, sizeof(t), "%s   %u kbps  %u km",
-                 s_st[i].name, (unsigned)s_st[i].bitrate_kbps,
-                 (unsigned)s_st[i].distance_km);
-        lv_label_set_text(l, t);
-        /* ⛔ ONE LINE, AND THE HEIGHT IS WHAT MAKES IT ONE. LV_LABEL_LONG_DOT
+        /* ⭐ TWO LABELS, NOT ONE STRING. The station is what the eye should
+         * land on; the bitrate and distance are the small print that decides
+         * whether it is worth tapping - a 32 kbps stream sounds like a
+         * telephone and 140 km away is a different town's local news. One
+         * label can only have one colour, so the row is split: white name on
+         * the left, dimmed figures on the right.
+         *
+         * ⛔ ONE LINE, AND THE HEIGHT IS WHAT MAKES IT ONE. LV_LABEL_LONG_DOT
          * fills the available HEIGHT before it starts dotting, so a label
-         * with a fixed width and an automatic height wraps to two lines first
-         * - which is what shipped and what he asked to have cut off. Pinning
-         * the height to a single line is the whole fix. */
+         * with a fixed width and an automatic height wraps first. Pinning the
+         * height to a single line is the whole fix. */
+        lv_obj_t *meta = lv_label_create(b);
+        char mt[32];
+        snprintf(mt, sizeof(mt), "%u kbps  %u km",
+                 (unsigned)s_st[i].bitrate_kbps, (unsigned)s_st[i].distance_km);
+        lv_label_set_text(meta, mt);
+        lv_obj_set_style_text_font(meta, &font_ui_latin_24, 0);
+        lv_obj_set_style_text_color(meta, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_align(meta, LV_ALIGN_RIGHT_MID, 0, 0);
+
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, s_st[i].name);
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_size(l, LV_PCT(100), 36);
+        /* Leaves room for the figures; the name dots rather than runs under. */
+        lv_obj_set_size(l, WR_COL_L - WR_META_W, 36);
         lv_obj_set_style_text_font(l, &font_ui_latin_28, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_center(l);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
     }
 
     if (!shown) {
@@ -632,7 +644,7 @@ static void modal_build(void)
      * linked - 32. */
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "Web radio");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -640,8 +652,8 @@ static void modal_build(void)
      * was sitting next to Stop, which is a destructive-looking place for the
      * one button that does nothing to the radio. */
     lv_obj_t *xb = lv_button_create(s_panel);
-    lv_obj_set_size(xb, 56, 56);
-    lv_obj_align(xb, LV_ALIGN_TOP_RIGHT, 0, -4);
+    lv_obj_set_size(xb, 60, 60);
+    lv_obj_align(xb, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(xb, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_set_style_radius(xb, 8, 0);
     lv_obj_set_style_border_width(xb, 0, 0);
@@ -659,7 +671,7 @@ static void modal_build(void)
     s_station = lv_label_create(s_panel);
     lv_label_set_long_mode(s_station, LV_LABEL_LONG_DOT);
     lv_obj_set_width(s_station, WR_INNER_W - 70);
-    lv_obj_align(s_station, LV_ALIGN_TOP_LEFT, 0, 50);
+    lv_obj_align(s_station, LV_ALIGN_TOP_LEFT, 0, 66);
     lv_obj_set_style_text_font(s_station, &font_ui_latin_28, 0);
     lv_obj_set_style_text_color(s_station, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(s_station, "");
@@ -672,7 +684,7 @@ static void modal_build(void)
      * bought a word and cost 30 px that the list and the memory row needed
      * more. Dotted at the end rather than wrapped forever. */
     lv_obj_set_height(s_now, 62);
-    lv_obj_align(s_now, LV_ALIGN_TOP_LEFT, 0, 88);
+    lv_obj_align(s_now, LV_ALIGN_TOP_LEFT, 0, 104);
     lv_obj_set_style_text_font(s_now, &font_ui_latin_24, 0);
     lv_obj_set_style_text_color(s_now, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(s_now, "Pick a station below");
@@ -685,7 +697,7 @@ static void modal_build(void)
     lv_textarea_set_placeholder_text(s_search_ta, "Type to filter stations");
     lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
     lv_obj_set_size(s_search_ta, WR_COL_L / 2 - 6, 56);
-    lv_obj_align(s_search_ta, LV_ALIGN_TOP_LEFT, 0, 162);
+    lv_obj_align(s_search_ta, LV_ALIGN_TOP_LEFT, 0, 176);
     lv_obj_set_style_text_font(s_search_ta, &font_ui_latin_28, 0);
     ui_theme_style_textarea(s_search_ta);
     lv_obj_add_event_cb(s_search_ta, search_cb,       LV_EVENT_VALUE_CHANGED, NULL);
@@ -703,7 +715,7 @@ static void modal_build(void)
         lv_obj_t *dd = lv_dropdown_create(s_panel);
         lv_dropdown_set_options(dd, opts);
         lv_obj_set_size(dd, WR_COL_L / 2 - 6, 56);
-        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, WR_COL_L / 2 + 6, 162);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, WR_COL_L / 2 + 6, 176);
         lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
         lv_obj_set_style_bg_color(dd, lv_color_hex(UI_COLOR_KEY_BG), 0);
         lv_obj_set_style_border_color(dd, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -720,8 +732,8 @@ static void modal_build(void)
     }
 
     s_list = lv_obj_create(s_panel);
-    lv_obj_set_size(s_list, WR_COL_L, 280);
-    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 230);
+    lv_obj_set_size(s_list, WR_COL_L, 270);
+    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, 244);
     lv_obj_set_style_bg_color(s_list, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(s_list, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(s_list, 1, 0);
@@ -733,9 +745,9 @@ static void modal_build(void)
 
     struct { const char *txt; uint32_t col; lv_event_cb_t cb; int y; lv_obj_t **lbl_out; lv_obj_t **btn_out; }
     B[3] = {
-        { "Play",    UI_COLOR_SUCCESS, play_cb,    162, &s_lbl_play, &s_btn_play },
-        { "Stop",    UI_COLOR_DANGER,  stop_cb,    238, NULL,        NULL        },
-        { "Refresh", UI_COLOR_PRIMARY, refresh_cb, 314, NULL,        NULL        },
+        { "Play",    UI_COLOR_SUCCESS, play_cb,    176, &s_lbl_play, &s_btn_play },
+        { "Stop",    UI_COLOR_DANGER,  stop_cb,    252, NULL,        NULL        },
+        { "Refresh", UI_COLOR_PRIMARY, refresh_cb, 328, NULL,        NULL        },
     };
     for (int i = 0; i < 3; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
@@ -748,7 +760,7 @@ static void modal_build(void)
         lv_obj_add_event_cb(b, B[i].cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, B[i].txt);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_obj_center(l);
         if (B[i].lbl_out) *B[i].lbl_out = l;
@@ -767,7 +779,7 @@ static void modal_build(void)
         for (int i = 0; i < 2; i++) {
             lv_obj_t *b = lv_button_create(s_panel);
             lv_obj_set_size(b, 100, 68);
-            lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X + V[i].dx, 398);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, WR_COL_R_X + V[i].dx, 412);
             lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
@@ -786,20 +798,17 @@ static void modal_build(void)
         s_lbl_vol = lv_label_create(s_panel);
         lv_obj_set_width(s_lbl_vol, 150);
         lv_obj_set_style_text_align(s_lbl_vol, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, WR_COL_R_X + 100, 414);
+        lv_obj_align(s_lbl_vol, LV_ALIGN_TOP_LEFT, WR_COL_R_X + 100, 428);
         lv_obj_set_style_text_font(s_lbl_vol, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_color(s_lbl_vol, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_label_set_text(s_lbl_vol, "0");
     }
 
-    /* The memory row. One hint line, because "long press to store" is not
-     * discoverable and a button that silently does nothing on a tap is worse
-     * than no button. */
-    lv_obj_t *mh = lv_label_create(s_panel);
-    lv_label_set_text(mh, "Memory - tap to play, hold to store what is playing");
-    lv_obj_set_style_text_font(mh, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(mh, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(mh, LV_ALIGN_TOP_LEFT, 0, 520);
+    /* ⛔ NO HINT LINE ABOVE THE MEMORY ROW. It read "tap to play, hold to
+     * store" at 14 px - unreadable, and unnecessary because long press IS the
+     * standard way to save a memory on a radio. Removed on his second asking:
+     * the first attempt deleted the comment and left the label, so it carried
+     * on showing through between and above the buttons. */
 
     for (int i = 0; i < WR_MEM_N; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
