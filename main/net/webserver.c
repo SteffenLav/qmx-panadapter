@@ -77,6 +77,7 @@
 #include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
+#include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
@@ -3470,6 +3471,45 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             "again when done. Read the four per-channel RMS lines in the serial "
             "log. The QMX will need a power cycle.\"}");
         mic_probe_request();      /* does not return */
+        return ESP_OK;
+    } else if (action && strcmp(action, "webradio_play") == 0) {
+        /* ⭐ DEV: play a URL WITHOUT THE DIRECTORY.
+         *
+         * The decode measurement needs a stream, and until now the only way
+         * to start one was to tap a station on the glass - so a transient
+         * radio-browser.info failure blocked a bench measurement that has
+         * nothing to do with the directory. That happened on field
+         * 2026-11-01 ("Directory unreachable", a TLS reset, while the same
+         * host answered the PC in 128 ms). It also means a stream can be
+         * repeated EXACTLY, which comparing two decoder arms needs.
+         *
+         * {"action":"webradio_play","url":"http://...","name":"..."}
+         * {"action":"webradio_stop"}
+         *
+         * No guard beyond a URL: this touches no transmit path, only the
+         * speaker, and it is already reachable from the drawer. */
+        const cJSON *ju = cJSON_GetObjectItem(root, "url");
+        const cJSON *jn = cJSON_GetObjectItem(root, "name");
+        if (!cJSON_IsString(ju) || !ju->valuestring[0]) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"url is required\"}");
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "webradio: play '%s' over /api/cmd", ju->valuestring);
+        bool ok = webradio_play(ju->valuestring,
+                                cJSON_IsString(jn) ? jn->valuestring : "dev");
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, ok ? "{\"ok\":true,\"note\":\"see the webradio loop: lines\"}"
+                                   : "{\"ok\":false,\"err\":\"could not start\"}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "webradio_stop") == 0) {
+        ESP_LOGW(TAG, "webradio: stop over /api/cmd");
+        webradio_stop();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
     } else if (action && strcmp(action, "cpu_owners") == 0) {
         // TEMP INSTRUMENT (#284) - dev only. Names the task eating a core.

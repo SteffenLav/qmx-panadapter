@@ -100,6 +100,7 @@ static const char *TAG = "settings";
 #define KEY_CL_STATION   "cl_stn"
 #define KEY_CL_UPLOADED  "cl_upl_n"
 #define KEY_RX_AUD_EN    "rx_aud_en"
+#define KEY_WEBRADIO_EN  "webradio_en"
 #define KEY_RX_AUD_VOL   "rx_aud_vol"
 #define KEY_WF_BLACK     "wf_black"
 #define KEY_WF_CONTRAST  "wf_contr"
@@ -220,6 +221,13 @@ static const char *TAG = "settings";
 #define DEF_LAST_MODE     (0)
 #define DEF_WIFI_ENABLED  (true)
 #define DEF_RX_AUD_EN     (false)
+/* ⭐ TRUE, unlike RX audio. The codec can only be opened at boot, so this
+ * flag is what decides whether the web-radio player has an output at all
+ * later in the session - defaulting it off would mean the feature does
+ * nothing until the operator finds a setting and reboots, which is how the
+ * player first failed on the bench. Turn it off to keep the I2S/DMA claim
+ * off a unit that uses neither. */
+#define DEF_WEBRADIO_EN   (true)
 #define DEF_RX_AUD_VOL    (60)
 #define DEF_WF_BLACK      (9.0f)
 #define DEF_WF_CONTRAST   (45.0f)
@@ -486,7 +494,13 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_FT4_FREQ        149  /* T89 per-sub-mode preset frequency */
 #define DIRTY_JS8_FREQ        150  /* T89 per-sub-mode preset frequency */
 #define DIRTY_JS8_ALT_SUB     151  /* T132 duty-cycled alternate-submode decode */
-#define DIRTY_CW_PAGE_EN      152  /* master switch for the CW page - default OFF */
+#define DIRTY_WEBRADIO_EN     152  /* web-radio player: open the codec at boot */
+/* 153, not 152: the web-radio switch and the CW-page gate were written on
+   two branches against the same tree and both took 152. main had it first,
+   so the CW gate moved. Runtime bitmap indices only - nothing on flash
+   carries them, the NVS KEY strings do - and tools/check_dirty_bits.py is
+   the authority on what is free. */
+#define DIRTY_CW_PAGE_EN      153  /* master switch for the CW page - default OFF */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -731,6 +745,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap->cloudlog_station);
         if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap->cloudlog_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_RX_AUD_EN))  nvs_set_u8(s_nvs, KEY_RX_AUD_EN,  snap->rx_audio_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WEBRADIO_EN)) nvs_set_u8(s_nvs, KEY_WEBRADIO_EN, snap->webradio_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RX_AUD_VOL)) nvs_set_u8(s_nvs, KEY_RX_AUD_VOL, snap->rx_audio_vol);
         if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap->wf_black_db);
         if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap->wf_contrast_db);
@@ -1056,6 +1071,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cloudlog_station[0] = '\0';
     out->cloudlog_uploaded_n = 0;
     out->rx_audio_en  = DEF_RX_AUD_EN;
+    out->webradio_en  = DEF_WEBRADIO_EN;
     out->rx_audio_vol = DEF_RX_AUD_VOL;
     out->wf_black_db    = DEF_WF_BLACK;
     out->wf_contrast_db = DEF_WF_CONTRAST;
@@ -1310,6 +1326,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u32(s_nvs, KEY_CL_UPLOADED, &out->cloudlog_uploaded_n);
 
     if (nvs_get_u8(s_nvs, KEY_RX_AUD_EN, &u8v) == ESP_OK) out->rx_audio_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_WEBRADIO_EN, &u8v) == ESP_OK) out->webradio_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_RX_AUD_VOL, &out->rx_audio_vol);
 
     if (nvs_get_float(KEY_WF_BLACK,    &fv)) out->wf_black_db    = fv;
@@ -2405,6 +2422,23 @@ void settings_set_passband_width_hz(uint32_t hz)
     s_pending.passband_width_hz = hz;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_PASSBAND_HZ);
+}
+
+void settings_set_webradio_en(bool v)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.webradio_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.webradio_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WEBRADIO_EN);
+}
+
+bool settings_get_webradio_en(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.webradio_en;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_rx_audio_en(bool v)

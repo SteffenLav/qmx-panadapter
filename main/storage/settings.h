@@ -477,6 +477,10 @@ typedef struct {
     char     cloudlog_station[8];// station_profile_id, as text - it is an opaque id, not arithmetic
     uint32_t cloudlog_uploaded_n;// count of ADIF records already uploaded to Cloudlog
     bool     rx_audio_en;     // demodulated RX audio on Tab5 speaker/headphone, any supported mode (default false)
+    /* The web-radio player needs the codec, and the codec can only be
+     * opened at boot - so this decides at START-UP whether the player
+     * will have an output later. Default TRUE; see settings.c. */
+    bool     webradio_en;
     uint8_t  rx_audio_vol;    // RX audio output volume 0..100 (default 60)
     float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
@@ -1088,6 +1092,8 @@ void settings_set_kbd_bindings(const kbd_bindings_t *b);
 // RX audio output: enable demodulated audio on the Tab5 speaker/headphone
 // (CW/CW-R/USB/LSB - see rx_audio.c), and its volume 0..100 (debounced flush).
 void settings_set_rx_audio_en(bool v);
+void settings_set_webradio_en(bool v);
+bool settings_get_webradio_en(void);
 void settings_set_rx_audio_vol(uint8_t v);
 
 // Waterfall colorisation (debounced flush). Black level and contrast are in

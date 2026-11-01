@@ -433,6 +433,26 @@ static void deg2grid(float dlong, float dlat, char out[5])
     out[4] = '\0';
 }
 
+/* The Maidenhead square's CENTRE, in degrees. Exposed because the web-radio
+ * station search needs a latitude and a longitude and the operator's grid is
+ * the only position this device is sure of - the GPS may not have a fix, and
+ * asking him to type coordinates he has already typed as a locator would be
+ * a second source of the same truth.
+ *
+ * ⚠ THE SQUARE'S CENTRE, NOT A FIX. A 4-character square is about 111 km
+ * tall and 70 km wide at this latitude, so treat the answer as "within a
+ * district", never as a position. */
+void js8_grid_to_latlon(const char* grid4, float* out_lat, float* out_lon)
+{
+    float dlong = 0.0f, dlat = 0.0f;
+    if (grid4 && grid4[0] && grid4[1] && grid4[2] && grid4[3])
+        grid2deg(grid4, &dlong, &dlat);
+    if (out_lat) *out_lat = dlat;
+    /* grid2deg returns longitude WEST-positive, as the reference does; every
+     * ordinary consumer wants east-positive. */
+    if (out_lon) *out_lon = -dlong;
+}
+
 uint16_t js8_pack_grid(const char* grid)
 {
     if (!grid) return NMAXGRID;
