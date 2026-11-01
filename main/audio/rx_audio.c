@@ -3067,6 +3067,20 @@ bool rx_audio_aux_active(void) { return s_aux_claimed; }
 int rx_audio_aux_write(const int16_t *pcm, int frames)
 {
     if (!s_aux_claimed || !s_codec || !pcm || frames <= 0) return 0;
+    /* ⭐ THE AUX WRITER GETS RECORDED TOO, and until 2026-11-01 it did not.
+     *
+     * rxcap sits on the RX path above, which this call deliberately bypasses
+     * - so while the web radio owned the speaker there was NO WAY to capture
+     * what was actually played. Three rounds of diagnosing a break-up were
+     * done entirely on path counters (CPU, ring level, frames/s) with no
+     * recording of the sound itself, and the operator had to ask for the
+     * signature before anyone looked for one. This is the single point every
+     * played sample passes through, so it is the right place.
+     *
+     * Same arm and dump as the RX path: POST /api/cmd {"action":"rxcap",
+     * "seconds":N} then GET /api/rxaudio.wav. Costs one branch when not
+     * armed. */
+    rxcap_push(pcm, frames);
     /* Stereo, 16-bit, at this channel's rate - the caller resamples. Blocking,
      * which is deliberate: the codec write is what paces the decode task, the
      * same way it paces the RX chain above. */

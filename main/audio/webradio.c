@@ -58,6 +58,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>              /* strcasecmp - the ICY header is any case */
 
 static const char *TAG = "webradio";
 
@@ -257,6 +258,45 @@ static void feed_ring(const uint8_t *d, int len)
     }
 }
 
+/* ⛔⛔ THE METAINT MUST COME FROM AN EVENT HANDLER, AND THIS COST A WHOLE
+ * SESSION.
+ *
+ * The first cut read it with esp_http_client_get_header("icy-metaint") after
+ * fetch_headers(). That returns nothing for an arbitrary response header in
+ * the open()/fetch_headers() streaming flow, so s_metaint stayed 0 FOREVER -
+ * and 0 means "this server sends no metadata", which is a legitimate state.
+ * So the player silently fed every ICY block into the decoder as audio.
+ *
+ * MEASURED, field 2026-11-01: one corrupt MP3 frame per metadata interval -
+ * resyncs at out samples 46394, 141688, 378670, 426318, 472711, 568005,
+ * 902790, whose spacing is an exact multiple of 38 MP3 frames = one metaint
+ * of 16000 B at 128 kbps. The operator heard it as a click every 1-3 s. The
+ * whole ICY de-interleaver below is correct - it was simply never switched on.
+ *
+ * ⛔ TWO INSTRUMENTS AGREED AND BOTH WERE WRONG about where to look: the
+ * audio we hand the codec is clean, and both clocks are within ppm, because
+ * the damage is one byte in the BITSTREAM, upstream of all of it. What found
+ * it was that our firmware had never once logged "ICY metaint" - the 16 lines
+ * in the capture all carry the tag `stream:`, which is the third-party image
+ * this bench ran for part of that day. A log line that never appears is
+ * evidence; absence of a title was too, and nobody read either for hours.
+ *
+ * radio_browser.c in this project already did it this way, and so does the
+ * reference (dmatking/esp32-p4-webradio, main/stream.c). Both were in front
+ * of me. */
+static esp_err_t webradio_http_ev(esp_http_client_event_t *evt)
+{
+    if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key &&
+        strcasecmp(evt->header_key, "icy-metaint") == 0 && evt->header_value) {
+        s_metaint = atoi(evt->header_value);
+        if (s_metaint < 0) s_metaint = 0;
+        s_until_meta = s_metaint;
+        s_meta_need = s_meta_have = 0;
+        ESP_LOGI(TAG, "ICY metaint = %d", s_metaint);
+    }
+    return ESP_OK;
+}
+
 static void webradio_net_task(void *arg)
 {
     (void)arg;
@@ -269,6 +309,7 @@ static void webradio_net_task(void *arg)
         .url                         = s_url,
         .timeout_ms                  = 10000,
         .buffer_size                 = NET_CHUNK,
+        .event_handler               = webradio_http_ev,
         /* Same trap as radio_browser.c: a NULL bundle is not "no verification",
          * it is a client esp-tls refuses to create. Most Icecast streams are
          * plain http and never reach this, but url_resolved from the directory
@@ -293,6 +334,11 @@ static void webradio_net_task(void *arg)
      * the speaker. */
     int status = 0;
     for (int hop = 0; hop < 4; hop++) {
+        /* ⛔ CLEARED PER HOP. The handler fires on the 3xx response too, and a
+         * metaint carried over from a redirect that the final host does not
+         * use would misalign every block from the first byte. */
+        s_metaint = s_until_meta = 0;
+        s_meta_need = s_meta_have = 0;
         if (esp_http_client_open(cl, 0) != ESP_OK) { set_err("Station did not answer"); goto done; }
         (void)esp_http_client_fetch_headers(cl);
         status = esp_http_client_get_status_code(cl);
@@ -323,14 +369,17 @@ static void webradio_net_task(void *arg)
         set_err(m);
         goto done;
     }
-    {
-        char *v = NULL;
-        if (esp_http_client_get_header(cl, "icy-metaint", &v) == ESP_OK && v) {
-            s_metaint = atoi(v);
-            s_until_meta = s_metaint;
-            ESP_LOGI(TAG, "ICY metaint = %d", s_metaint);
-        }
-    }
+    /* ⛔ SAY SO WHEN THERE IS NONE. metaint 0 is a legitimate state - plenty
+     * of servers send no metadata - which is exactly why its silence hid the
+     * fault above for a whole session. WARN, because on a station that DOES
+     * advertise it, 0 means the handler never fired and every block is about
+     * to be decoded as audio. */
+    if (s_metaint > 0)
+        ESP_LOGI(TAG, "ICY: metadata every %d B of audio", s_metaint);
+    else
+        ESP_LOGW(TAG, "ICY: this station sent no icy-metaint - no track titles, "
+                      "and if it is interleaving blocks anyway they WILL be "
+                      "decoded as audio");
 
     {
         uint8_t *buf = heap_caps_malloc(NET_CHUNK, MALLOC_CAP_SPIRAM);
@@ -370,7 +419,57 @@ typedef struct {
     uint32_t ring_min, ring_max;       /* bytes held in the jitter buffer    */
     uint64_t ring_sum; uint32_t ring_n;
     uint32_t resync, underflow;
+    /* ⭐ THE GAP IS THE GLITCH, and totals cannot show it. "ms dec 165" and
+     * "frames 99%" were both healthy while the operator still heard a click
+     * every 1-3 s (2026-11-01): a 100 ms stall once a second is 10% of the
+     * second and rounds away in every average on this line, but the I2S DMA
+     * ring is dma_desc_num 12 x dma_frame_num 320 = 80 ms, so ANY gap past
+     * that is a hole in the audio. Same reasoning as rx_audio.c's
+     * `write late N/M` counters, and the same threshold logic. */
+    int64_t  gap_max_us;
+    uint32_t gap_late;                 /* gaps over GAP_LATE_US              */
+    uint32_t writes;
+    /* ⭐ THE UNDERRUN PROXY. esp_codec_dev_write() blocks until the DMA ring
+     * has room, so in steady state every write takes about one frame period.
+     * A write that returns in near-zero time means the ring had a whole frame
+     * of space free - i.e. it had just DRAINED, which is an underrun and is
+     * what the speaker hears. No API exposes the ring level, and the gap
+     * metric cannot see this because the gap stays one frame wide either way. */
+    int64_t  wr_min_us;
+    uint32_t wr_fast;                  /* writes that returned under 5 ms     */
 } dec_stats_t;
+
+/* 60 ms: under the 80 ms the DMA ring holds, so a "late" write is a warning
+ * rather than an already-audible hole. */
+#define GAP_LATE_US 60000
+
+static int64_t s_last_write_us = 0;
+
+/* ⛔ THE ONE MEASUREMENT NOBODY HAS TAKEN ON THIS BOARD: the TRUE rate of
+ * each clock, against esp_timer.
+ *
+ * Three instruments were blind in turn, each in exactly the region the next
+ * fault lived in (2026-11-01): cpu_stats reads per-core IDLE, so a task
+ * blocked on a socket is invisible; the per-write gap below returns as soon
+ * as the DMA ring has room, so it cannot see an underrun; and rxcap records
+ * what we HAND the codec, so it cannot see anything the I2S does afterwards.
+ * The captured samples came back clean while the operator still heard a
+ * glitch every 1-3 s, which puts the fault past all three.
+ *
+ * What is left is a clock mismatch. The resampler converts by a FIXED
+ * 44100/48000, so if either clock is not its nominal value we over- or
+ * under-feed for ever. Both are measurable here because the codec write
+ * paces this loop: out_frames/elapsed IS the I2S rate, and
+ * mp3_frames*1152/elapsed IS the encoder's rate. Cumulative since play
+ * started, so a minute resolves it to five digits - a per-second window
+ * cannot, which is why "frames 99%" sat in the log for hours meaning
+ * nothing. */
+static int64_t  s_play_t0_us   = 0;
+static uint64_t s_tot_out      = 0;   /* PCM frames handed to the codec */
+static uint64_t s_tot_in       = 0;   /* input sample frames decoded   */
+static uint64_t s_tot_mp3      = 0;   /* MP3 frames decoded            */
+static int      s_tot_src_rate = 0;   /* the stream's nominal rate     */
+static int64_t  s_rate_next_us = 0;
 
 static void stats_report(dec_stats_t *s, int64_t window_us)
 {
@@ -378,15 +477,19 @@ static void stats_report(dec_stats_t *s, int64_t window_us)
     unsigned want = (unsigned)((uint64_t)DSP_SAMPLE_RATE_HZ * (uint64_t)window_us / 1000000ULL);
     unsigned pct  = want ? (unsigned)((uint64_t)s->frames * 100 / want) : 0;
     ESP_LOGI(TAG, "loop: ring %u/%u/%u B of %d | frames %u of %u (%u%%) | "
-                  "ms ring %d dec %d write %d | resync %u underflow %u",
+                  "ms ring %d dec %d write %d (min %d, fast %u) | "
+                  "gap max %d ms late %u/%u | resync %u underflow %u",
              (unsigned)(s->ring_n ? s->ring_min : 0),
              (unsigned)(s->ring_n ? s->ring_sum / s->ring_n : 0),
              (unsigned)s->ring_max, RING_BYTES,
              (unsigned)s->frames, want, pct,
              (int)(s->t_ring / 1000), (int)(s->t_dec / 1000), (int)(s->t_wr / 1000),
+             (int)(s->writes ? s->wr_min_us / 1000 : 0), (unsigned)s->wr_fast,
+             (int)(s->gap_max_us / 1000), (unsigned)s->gap_late, (unsigned)s->writes,
              (unsigned)s->resync, (unsigned)s->underflow);
     memset(s, 0, sizeof(*s));
-    s->ring_min = 0xffffffffu;
+    s->ring_min  = 0xffffffffu;
+    s->wr_min_us = INT64_MAX;
 }
 
 static void webradio_task(void *arg)
@@ -463,7 +566,13 @@ static void webradio_task(void *arg)
     {
     int have = 0;                   /* bytes of MP3 held in s_in */
     int reported_rate = 0;
-    dec_stats_t st; memset(&st, 0, sizeof(st)); st.ring_min = 0xffffffffu;
+    dec_stats_t st; memset(&st, 0, sizeof(st));
+    st.ring_min = 0xffffffffu; st.wr_min_us = INT64_MAX;
+    /* Zero per PLAY, not per window: the first gap of a session would
+     * otherwise be measured from the previous station and read as a stall. */
+    s_last_write_us = 0;
+    s_play_t0_us = 0; s_tot_out = 0; s_tot_in = 0; s_tot_mp3 = 0;
+    s_tot_src_rate = 0; s_rate_next_us = 0;
     int64_t win_t0 = esp_timer_get_time();
 
     s_state = WEBRADIO_PLAYING;
@@ -525,7 +634,25 @@ static void webradio_task(void *arg)
                 continue;
             }
             /* A corrupt frame is normal on a lossy link. Step one byte past
-             * this sync word and look for the next. */
+             * this sync word and look for the next.
+             *
+             * ⭐ NAME THE ERROR AND SHOW THE HEADER, rate-limited. A resync
+             * costs a whole frame - 24 ms of audio - so one or two a second
+             * IS the click the operator hears, and the counter alone cannot
+             * say whether the stream is corrupt or our framing is wrong. An
+             * INVALID_FRAMEHEADER on a false sync inside audio data is
+             * expected and harmless to find; anything else is ours. */
+            /* ⭐ THE OUTPUT SAMPLE INDEX, so the log and the rxcap recording
+             * share one timeline. Without it the two instruments could not be
+             * compared at all: the capture came back clean while the resync
+             * counter said 1-2 a second, and there was no way to tell whether
+             * they described the same moments. Arm rxcap BEFORE play and
+             * sample 0 lines up with the first write. */
+            ESP_LOGW(TAG, "resync: rc=%d at out sample %llu (%.3f s) "
+                          "hdr %02x %02x %02x %02x have %d",
+                     rc, (unsigned long long)s_tot_out,
+                     (double)s_tot_out / (double)DSP_SAMPLE_RATE_HZ,
+                     s_in[0], s_in[1], s_in[2], s_in[3], have);
             memmove(s_in, s_in + 1, (size_t)(have - 1));
             have--;
             st.resync++;
@@ -560,8 +687,59 @@ static void webradio_task(void *arg)
         if (wrote > 0) {
             t0 = esp_timer_get_time();
             rx_audio_aux_write(s_out, wrote);
-            st.t_wr += esp_timer_get_time() - t0;
+            int64_t t1 = esp_timer_get_time();
+            int64_t wr = t1 - t0;
+            st.t_wr += wr;
+            if (wr < st.wr_min_us) st.wr_min_us = wr;
+            if (wr < 5000) st.wr_fast++;
             st.frames += (uint32_t)wrote;
+            /* Gap = write-return to write-return, so it covers the ring read,
+             * the sync search, the decode AND anything that preempted us -
+             * which is the point: the speaker does not care which stage was
+             * slow, only that nothing arrived. */
+            if (s_last_write_us) {
+                int64_t gap = t1 - s_last_write_us;
+                if (gap > st.gap_max_us) st.gap_max_us = gap;
+                if (gap > GAP_LATE_US)   st.gap_late++;
+            }
+            s_last_write_us = t1;
+            st.writes++;
+
+            /* ⛔ START THE CLOCK AT THE FIRST WRITE, not at play(): the
+             * connect, the redirect chain and the 2 s prebuffer all happen
+             * before any audio moves, and counting them would show a false
+             * deficit that looks exactly like the fault being hunted. */
+            if (!s_play_t0_us) {
+                s_play_t0_us = t1;
+                s_rate_next_us = t1 + 10000000;
+            } else {
+                s_tot_out += (uint64_t)wrote;
+                s_tot_in  += (uint64_t)frames;
+                s_tot_mp3 += 1;
+                s_tot_src_rate = fi.samprate;
+                if (t1 >= s_rate_next_us) {
+                    int64_t el = t1 - s_play_t0_us;
+                    /* Hz x1000 in integer, so no float in a log line. */
+                    uint64_t i2s_mhz = (uint64_t)s_tot_out * 1000000000ULL / (uint64_t)el;
+                    uint64_t enc_mhz = (uint64_t)s_tot_in * 1000000000ULL / (uint64_t)el;
+                    /* How far each clock is from nominal, in ppm. Signed. */
+                    long i2s_ppm = (long)((int64_t)i2s_mhz - (int64_t)DSP_SAMPLE_RATE_HZ * 1000)
+                                   * 1000000L / ((long)DSP_SAMPLE_RATE_HZ * 1000);
+                    long enc_ppm = s_tot_src_rate
+                                 ? (long)((int64_t)enc_mhz - (int64_t)s_tot_src_rate * 1000)
+                                   * 1000000L / ((long)s_tot_src_rate * 1000)
+                                 : 0;
+                    ESP_LOGW(TAG, "clocks over %d s: I2S %u.%03u Hz (%+ld ppm vs %d) | "
+                                  "encoder %u.%03u Hz (%+ld ppm vs %d) | out %llu mp3 %llu",
+                             (int)(el / 1000000),
+                             (unsigned)(i2s_mhz / 1000), (unsigned)(i2s_mhz % 1000),
+                             i2s_ppm, DSP_SAMPLE_RATE_HZ,
+                             (unsigned)(enc_mhz / 1000), (unsigned)(enc_mhz % 1000),
+                             enc_ppm, s_tot_src_rate,
+                             (unsigned long long)s_tot_out, (unsigned long long)s_tot_mp3);
+                    s_rate_next_us = t1 + 10000000;
+                }
+            }
         }
     }
     }
