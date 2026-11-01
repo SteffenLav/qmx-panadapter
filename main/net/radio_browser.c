@@ -52,6 +52,73 @@ static esp_err_t http_ev(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+/* ⛔ THE DISPLAY FONT IS ASCII ONLY, so a Danish station name arrives as
+ * boxes. Measured, not assumed: lv_font_montserrat_24.c was generated with
+ * "-r 0x20-0x7F,0xB0,0x2022" - printable ASCII, the degree sign and a bullet.
+ * "DR P4 København" therefore drew as "DR P4 K?benhavn" with a square, and
+ * the operator saw it on the first list (2026-11-01).
+ *
+ * The cheap honest answer is to fold the name to ASCII rather than to add a
+ * font: a custom range costs flash in every build for a list of radio
+ * stations, and the Nordic digraphs (oe, ae, aa) are how these names are
+ * written on an ASCII keyboard anyway.
+ *
+ * ⛔ THE NAME ONLY. The URL is never touched - folding a byte there would
+ * point at a different stream, or at nothing.
+ *
+ * Anything outside this table becomes '?' rather than being dropped, so a
+ * name in an alphabet we cannot show is still obviously a name and still
+ * distinguishable from its neighbours. */
+static void fold_ascii(const char *in, char *out, size_t cap)
+{
+    static const struct { uint16_t cp; const char *rep; } MAP[] = {
+        { 0xE6, "ae" }, { 0xC6, "AE" },      /* æ Æ */
+        { 0xF8, "oe" }, { 0xD8, "OE" },      /* ø Ø */
+        { 0xE5, "aa" }, { 0xC5, "AA" },      /* å Å */
+        { 0xE4, "ae" }, { 0xC4, "AE" },      /* ä Ä */
+        { 0xF6, "oe" }, { 0xD6, "OE" },      /* ö Ö */
+        { 0xFC, "ue" }, { 0xDC, "UE" },      /* ü Ü */
+        { 0xDF, "ss" },                      /* ß */
+        { 0xE9, "e"  }, { 0xC9, "E"  },
+        { 0xE8, "e"  }, { 0xC8, "E"  },
+        { 0xEA, "e"  }, { 0xEB, "e"  },
+        { 0xE0, "a"  }, { 0xE1, "a"  }, { 0xE2, "a"  }, { 0xE3, "a"  },
+        { 0xED, "i"  }, { 0xEE, "i"  }, { 0xEF, "i"  },
+        { 0xF3, "o"  }, { 0xF2, "o"  }, { 0xF4, "o"  }, { 0xF5, "o"  },
+        { 0xFA, "u"  }, { 0xF9, "u"  }, { 0xFB, "u"  },
+        { 0xF1, "n"  }, { 0xD1, "N"  },
+        { 0xE7, "c"  }, { 0xC7, "C"  },
+        { 0xFD, "y"  }, { 0xFF, "y"  },
+    };
+    const int NMAP = (int)(sizeof(MAP) / sizeof(MAP[0]));
+
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p && o + 1 < cap; ) {
+        if (*p < 0x80) { out[o++] = (char)*p++; continue; }
+
+        /* Decode just enough UTF-8 to get the code point; anything past the
+         * Basic Multilingual Plane is not something this table covers. */
+        uint16_t cp = 0;
+        int len = 0;
+        if ((*p & 0xE0) == 0xC0)      { cp = (uint16_t)(*p & 0x1F); len = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = (uint16_t)(*p & 0x0F); len = 3; }
+        else                          { p++; out[o++] = '?'; continue; }
+        bool ok = true;
+        for (int i = 1; i < len; i++) {
+            if ((p[i] & 0xC0) != 0x80) { ok = false; break; }
+            cp = (uint16_t)((cp << 6) | (p[i] & 0x3F));
+        }
+        if (!ok) { p++; out[o++] = '?'; continue; }
+        p += len;
+
+        const char *rep = NULL;
+        for (int i = 0; i < NMAP && !rep; i++) if (MAP[i].cp == cp) rep = MAP[i].rep;
+        if (!rep) { out[o++] = '?'; continue; }
+        for (const char *r = rep; *r && o + 1 < cap; r++) out[o++] = *r;
+    }
+    out[o] = '\0';
+}
+
 /* Upper-cased, spaces and punctuation dropped: "DR P6 Beat" and "DR P6 BEAT"
  * are the same station listed twice, and both are in the real data. */
 static void norm_name(const char *in, char *out, size_t cap)
@@ -179,7 +246,9 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
         if (strlen(jurl->valuestring) >= RB_URL_LEN) continue;
 
         char key[RB_NAME_LEN];
-        norm_name(jname->valuestring, key, sizeof(key));
+        char folded[RB_NAME_LEN];
+        fold_ascii(jname->valuestring, folded, sizeof(folded));
+        norm_name(folded, key, sizeof(key));
         if (!key[0]) continue;
         bool dup = false;
         for (int i = 0; i < n && !dup; i++) dup = (strcmp(seen[i], key) == 0);
@@ -188,7 +257,7 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
 
         rb_station_t *st = &out[n];
         memset(st, 0, sizeof(*st));
-        snprintf(st->name, sizeof(st->name), "%s", jname->valuestring);
+        fold_ascii(jname->valuestring, st->name, sizeof(st->name));
         snprintf(st->url,  sizeof(st->url),  "%s", jurl->valuestring);
 
         const cJSON *jbr = cJSON_GetObjectItemCaseSensitive(it, "bitrate");

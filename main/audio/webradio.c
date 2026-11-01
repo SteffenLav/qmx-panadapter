@@ -218,10 +218,36 @@ static void webradio_task(void *arg)
     esp_http_client_set_header(cl, "Icy-MetaData", "1");
     esp_http_client_set_header(cl, "User-Agent", "qmx-panadapter/1.0");
 
-    if (esp_http_client_open(cl, 0) != ESP_OK) { set_err("Station did not answer"); goto done; }
-    int64_t hdr = esp_http_client_fetch_headers(cl);
-    (void)hdr;
-    int status = esp_http_client_get_status_code(cl);
+    /* ⛔ REDIRECTS ARE OURS TO FOLLOW HERE. esp_http_client only chases them
+     * inside _perform(); this opens the connection by hand so it can stream,
+     * and a 3xx therefore arrives raw. Station directories are full of them -
+     * the first station tried on the bench, SR P4 Malmohus, answered 302 and
+     * the player reported "Station refused us (HTTP 302)" (2026-11-01).
+     *
+     * Bounded at four hops: a redirect loop must not spin a task that owns
+     * the speaker. */
+    int status = 0;
+    for (int hop = 0; hop < 4; hop++) {
+        if (esp_http_client_open(cl, 0) != ESP_OK) { set_err("Station did not answer"); goto done; }
+        (void)esp_http_client_fetch_headers(cl);
+        status = esp_http_client_get_status_code(cl);
+        if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308)
+            break;
+        char *loc = NULL;
+        if (esp_http_client_get_header(cl, "Location", &loc) != ESP_OK || !loc || !loc[0]) {
+            set_err("Station redirected us nowhere");
+            goto done;
+        }
+        ESP_LOGI(TAG, "redirect %d -> %s", status, loc);
+        /* Copy before close: the header buffer belongs to the client. */
+        char next[sizeof(s_url)];
+        snprintf(next, sizeof(next), "%s", loc);
+        esp_http_client_close(cl);
+        if (esp_http_client_set_url(cl, next) != ESP_OK) {
+            set_err("That redirect is not a URL we can follow");
+            goto done;
+        }
+    }
     if (status != 200) {
         char m[64];
         snprintf(m, sizeof(m), "Station refused us (HTTP %d)", status);

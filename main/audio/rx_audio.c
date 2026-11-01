@@ -2891,8 +2891,17 @@ static void preopen_body(void)
     // audio don't claim I2S/DMA at all (and there's zero risk to USB host).
     qmx_settings_t cfg;
     settings_load_all(&cfg);
-    if (!cfg.rx_audio_en) {
-        ESP_LOGI(TAG, "preopen skipped (RX audio disabled)");
+    /* ⛔ THE WEB-RADIO PLAYER IS THE SECOND CONSUMER OF THIS OUTPUT, and it
+     * cannot open the codec itself - by the time the operator taps a station
+     * the USB host has the DMA RAM. So the player's flag has to be read HERE,
+     * at boot, or it has no speaker at all.
+     *
+     * Found on the bench 2026-11-01: field came up with a wiped NVS, so
+     * rx_audio_en was at its default false, the codec was never opened, and
+     * every station tap answered "The audio output is not open". The player
+     * looked broken; the gate was one boot earlier. */
+    if (!cfg.rx_audio_en && !cfg.webradio_en) {
+        ESP_LOGI(TAG, "preopen skipped (RX audio and web radio both disabled)");
         return;
     }
     s_volume = cfg.rx_audio_vol;
