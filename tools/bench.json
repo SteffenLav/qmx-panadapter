@@ -21,7 +21,7 @@
     {
       "name": "bench1",
       "name_note": "WAS CALLED 'dev' until 2026-10-28, and most of the notes, commit messages and memory files in this project still say 'the dev bench' - they mean THIS board, Tab5 #1, MAC 30:ED:A0:EA:DD:57 on COM5. Renamed on the operator's instruction once bench2 arrived and the dev/bench naming collided. Its capture moved with it: scratchpad/capture-dev.txt is now capture-bench1.txt, same file, 783 MB of history carried over by rename, not copy.",
-      "role": "MAIN, on v1.20.5-31-g0cf92aeb (flashed 2026-10-24). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
+      "role": "MAIN, on v1.23.1-26-g31984a66 (flashed 2026-11-01 23:28 - the web-radio work: the ICY metaint fix, the Latin-1 fonts, search, genre filter and six station memories). Runs the newest main commit and is the bench every release is flasher-verified on. Standing PASSIVE capture (no -Reset) to scratchpad/capture-dev.txt - leave it running; it is the only record of a crash that happens while nobody is watching.",
       "role_note": [
         "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
         "what 'bench flash dev' builds from. A stale entry here does not read",
@@ -79,7 +79,7 @@
     },
     {
       "name": "field",
-      "role": "RUNS OUR FIRMWARE AGAIN since 2026-11-01 13:05 - cable-flashed by hand (app only, 0x10000) with v1.23.1-14-g0568e917-dirty, which is the content committed as ea93df76 (ELF sha256 1c7d50a28 matches the boot banner). It carried a THIRD-PARTY image for part of that day - dmatking/esp32-p4-webradio v2.0.1 - and that is GONE. Normally: Release + OTA verification, user simulator. ⛔ NVS was erased twice during that excursion, so WiFi came back but preferred_ssid is empty; check callsign and grid before any test that needs them.",
+      "role": "BACK ON THE RELEASE, v1.23.1, cable-flashed from the GitHub asset 2026-11-01 23:29 (app only at 0x10000, 5,483,376 B, hash verified by esptool). Its normal role - Release + OTA verification, user simulator - is therefore LIVE AGAIN. Earlier that day it carried the third-party dmatking/esp32-p4-webradio image and then a run of web-radio dev builds; both are gone. ⛔ Its NVS was erased twice during that excursion, so WiFi came back but preferred_ssid is empty; check callsign and grid before any test that needs them.",
       "board": "Tab5 #2",
       "mac": "80:F1:B2:D1:45:92",
       "ip": "192.168.1.175",
