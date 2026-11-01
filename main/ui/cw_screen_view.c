@@ -299,9 +299,13 @@ static void refresh_mem_labels(void)
 // ---- editor modal ------------------------------------------------------------
 // ALL SIX memories in one window (operator request 2026-08-02) - long-press
 // any memory button opens it with that field focused; Save writes all six.
-// Park mode (edit_open(-1)) reuses the same modal with only the first field
-// shown. Buttons live in the title row (the P4-style top-right placement
-// from v1.3.0) so six fields + the on-screen keyboard fit 720 px.
+// The park has its OWN window (park_build() below), not this one - the
+// comment that said otherwise outlived the split by months.
+//
+// Three rows: the title alone, then the five buttons, then the six fields in
+// a scrollable container. edit_layout() owns every number that depends on
+// whether the keyboard is up, and the arithmetic for why it has to is
+// written there.
 static lv_obj_t *s_edit_modal = NULL;
 static lv_obj_t *s_edit_ta6[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_num[N_CW_MEM] = {0};
@@ -309,6 +313,7 @@ static lv_obj_t *s_edit_title = NULL;
 static lv_obj_t *s_edit_kb    = NULL;
 
 static void refresh_next_label(void);   // fwd (ESM section below)
+static void edit_layout(bool kb_up);    // fwd (defined with edit_build)
 
 // Size, placement and caps behaviour for both of this page's keyboards. The
 // LOOK is ui_theme_style_keyboard()'s job alone now, keys included.
@@ -348,8 +353,10 @@ static void edit_cancel_cb(lv_event_t *e) { (void)e; edit_close(); }
 static void edit_kb_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
         lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
+        edit_layout(false);
+    }
 }
 
 /* The field the macro buttons paste into. The keyboard already tracks it, but
@@ -358,6 +365,8 @@ static void edit_kb_event_cb(lv_event_t *e)
 static lv_obj_t *s_edit_focus = NULL;
 static lv_obj_t *s_edit_macro_lbl[3];   /* the three button labels */
 static lv_obj_t *s_edit_sends = NULL;   /* the live "sends:" line */
+static lv_obj_t *s_edit_panel = NULL;   /* the window itself - it resizes */
+static lv_obj_t *s_edit_list  = NULL;   /* the six fields, scrollable */
 
 /* What each button PASTES - always the token, never the value. The label
  * shows the value; the memory must keep the macro or it would freeze at
@@ -374,12 +383,15 @@ static const char *const EDIT_MACROS[3] = { "{MYCALL}", "{PARK}", "{CALL}" };
  * these reading the name they had when the window was first created. */
 static void edit_macro_labels_refresh(void)
 {
-    char buf[20];
-
-    if (s_edit_macro_lbl[0]) {
-        settings_get_my_callsign(buf, sizeof(buf));
-        lv_label_set_text(s_edit_macro_lbl[0], buf[0] ? buf : "My call");
-    }
+    /* ⛔ ALWAYS "My call", never the callsign itself. Operator, 2026-11-02:
+     * "revert to My call on the first top button - not whatever the Callsign
+     * reads in the Settings drawer". This is the one of the three whose value
+     * he already knows by heart, so printing it says nothing while the name
+     * says what the button will insert. The other two keep showing their
+     * values, which DO change: the park reference and the station being
+     * worked. */
+    if (s_edit_macro_lbl[0])
+        lv_label_set_text(s_edit_macro_lbl[0], "My call");
     if (s_edit_macro_lbl[1]) {
         char ref[16];
         lv_label_set_text(s_edit_macro_lbl[1],
@@ -454,6 +466,8 @@ static void edit_macro_cb(lv_event_t *e)
         lv_keyboard_set_textarea(s_edit_kb, s_edit_focus);
         lv_obj_clear_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_edit_kb);
+        edit_layout(true);
+        lv_obj_scroll_to_view(s_edit_focus, LV_ANIM_OFF);
     }
     edit_sends_refresh();
 }
@@ -471,6 +485,55 @@ static void edit_ta_focused_cb(lv_event_t *e)
     lv_keyboard_set_textarea(s_edit_kb, ta);
     lv_obj_clear_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_kb);
+    /* ⛔ ORDER. Shrink the list before scrolling into it: scroll_to_view
+     * against the tall viewport decides nothing needs to move, and then the
+     * resize leaves the focused field below the fold. */
+    edit_layout(true);
+    lv_obj_scroll_to_view(ta, LV_ANIM_OFF);
+}
+
+/* ⛔ TWO GEOMETRIES, ONE WINDOW - the keyboard decides which.
+ *
+ * Operator, 2026-11-02: "the CW memories window should be centred on the
+ * screen - now its sitting at the top", "I like a bit more space between
+ * the fields 1-6", and "I want the whole window including all fonts on
+ * fields, text, headers and buttons labels to be bigger - we are 60+ most
+ * of the HAM's and wear glasses".
+ *
+ * Those three cannot all hold at once on 720 px, and the arithmetic says so
+ * plainly: six fields at a readable pitch need ~410 px, the title and button
+ * rows take 104, the "sends:" preview 28, the panel's own padding 32. That
+ * is 574 px of window. The keyboard is 280. 574 + 280 = 854 > 720, short by
+ * 134 px. Every candidate fix is a trade:
+ *
+ *   - shrink the keyboard: 1 px per px, and 134 px off 280 puts the key rows
+ *     at 36 px. He asked for bigger targets, not smaller ones.
+ *   - two columns: a 43-character field at montserrat_28 is ~690 px wide.
+ *     Two of them do not fit 1168.
+ *   - leave the fonts alone: that is the request, refused.
+ *
+ * So the window is full size and the FIELD LIST scrolls, but only while the
+ * keyboard is up - which is the one moment the operator is looking at a
+ * single line anyway. With the keyboard down, which is what he sees when the
+ * window opens, all six fields are visible at full size and the window is
+ * centred. Nothing is traded away in the state he judged it in.
+ *
+ * ⛔ THE "sends:" LINE MOVES WITH THE LIST. It is the live preview of the
+ * field being typed into, so it is worth nothing behind the keys. */
+static void edit_layout(bool kb_up)
+{
+    if (!s_edit_panel) return;
+
+    /* Panel: 600 tall and centred (60..660 of 720) with the keyboard down;
+     * 424 tall at y=8 with it up, so its bottom edge lands 8 px clear of the
+     * keyboard at y=440 instead of being swallowed by it. */
+    lv_obj_set_height(s_edit_panel, kb_up ? 424 : 600);
+    lv_obj_align(s_edit_panel, LV_ALIGN_TOP_MID, 0, kb_up ? 8 : 60);
+
+    /* Content box is 1168 x (panel - 32). Title row 0..40, button row
+     * 48..104, list from 116. Six rows at pitch 70 are 408 px. */
+    lv_obj_set_height(s_edit_list, kb_up ? 240 : 408);
+    lv_obj_set_y(s_edit_sends, kb_up ? 364 : 532);
 }
 
 static void edit_build(void)
@@ -489,8 +552,11 @@ static void edit_build(void)
     lv_obj_add_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(panel, 1080, 420);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 8);
+    s_edit_panel = panel;
+    /* 1200 of 1280 - the widest the screen takes with a margin either side.
+     * Height and placement belong to edit_layout(); this is just a start. */
+    lv_obj_set_size(panel, 1200, 600);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 60);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(panel, 2, 0);
@@ -501,37 +567,30 @@ static void edit_build(void)
     s_edit_title = lv_label_create(panel);
     lv_label_set_text(s_edit_title, "CW memories");
     lv_obj_set_style_text_color(s_edit_title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_28, 0);
-    lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 4);
+    lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_32, 0);
+    /* ALONE ON THE TOP LINE. The five buttons used to share it, which is
+     * what forced them narrow and put the third one under Cancel. Operator,
+     * 2026-11-02: "the five buttons at the top could jump down on the 2nd
+     * line so CW memories sat alone on the top line". */
+    lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    /* The hint line that used to be here is GONE, replaced by the buttons it
-     * described - a label naming three macros the operator then had to spell
-     * out by hand was the gap, not the information. Tapping one says what it
-     * does better than the sentence did. */
+    /* THE SECOND LINE: three macro buttons left, Cancel and Save right, all
+     * 56 tall. With the title out of the way there is room for 190 px each
+     * and montserrat_24 labels - the old 128 px at montserrat_20 was what a
+     * shared top line left over, and the third button still ran under
+     * Cancel. The row ends at 590 and Cancel starts at 788, so the overlap
+     * class is gone rather than narrowly avoided.
+     *
+     * Fixed widths, not content-sized: the labels swap between a name and a
+     * callsign as settings change, and a row that re-flows every time a
+     * station is adopted would move the button under the finger reaching
+     * for it. */
     {
-        /* ⛔ x=320, NOT 212. "CW memories" at montserrat_28 runs to about
-         * x=180, so a row starting at 212 sat on the title's shoulder.
-         * 320 is where the hint line these buttons replaced used to start,
-         * and it leaves the gap the operator asked for.
-         *
-         * Fixed widths, not content-sized: the labels swap between a name
-         * and a callsign as settings change, and a row that re-flows every
-         * time a station is adopted would move the button under the finger
-         * that is reaching for it. 128 holds "Their call" and a 9-character
-         * callsign at montserrat_20.
-         *
-         * ⛔ THE ROW MUST END BEFORE CANCEL, AND THE PANEL'S CONTENT BOX IS
-         * 1048 WIDE, NOT 1080 - pad_all(16) takes 16 off each side, and
-         * lv_obj_set_pos/align here are content-relative. At 140 wide the
-         * third button ran 616..756 while Cancel starts at 1048-166-150 =
-         * 732, so they overlapped by 24 px. Measured, not noticed: the
-         * operator saw it on the glass first. 128 + 8 puts the row at
-         * 320..720 with 12 px clear. */
-        int mx = 320;
+        int mx = 0;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
-            lv_obj_set_size(b, 128, 48);
-            lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 0);
+            lv_obj_set_size(b, 190, 56);
+            lv_obj_align(b, LV_ALIGN_TOP_LEFT, mx, 48);
             lv_obj_set_style_bg_color(b, lv_color_hex(0x2a2f37), 0);
             lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
             lv_obj_set_style_border_width(b, 1, 0);
@@ -545,75 +604,92 @@ static void edit_build(void)
              * commit, so they must not read as Save. */
             lv_obj_set_style_text_color(s_edit_macro_lbl[i],
                                         lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
-            lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_font(s_edit_macro_lbl[i], &lv_font_montserrat_24, 0);
             lv_obj_center(s_edit_macro_lbl[i]);
-            mx += 136;
+            mx += 200;
         }
     }
 
     lv_obj_t *btn_cancel = lv_btn_create(panel);
-    lv_obj_set_size(btn_cancel, 150, 48);
-    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -166, 0);
+    lv_obj_set_size(btn_cancel, 180, 56);
+    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -200, 48);
     lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(btn_cancel, 8, 0);
     lv_obj_add_event_cb(btn_cancel, edit_cancel_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lc = lv_label_create(btn_cancel);
     lv_label_set_text(lc, "Cancel");
     lv_obj_set_style_text_color(lc, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lc, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(lc, &lv_font_montserrat_28, 0);
     lv_obj_center(lc);
 
     lv_obj_t *btn_save = lv_btn_create(panel);
-    lv_obj_set_size(btn_save, 150, 48);
-    lv_obj_align(btn_save, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_size(btn_save, 180, 56);
+    lv_obj_align(btn_save, LV_ALIGN_TOP_RIGHT, 0, 48);
     lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_radius(btn_save, 8, 0);
     lv_obj_add_event_cb(btn_save, edit_save_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *ls = lv_label_create(btn_save);
     lv_label_set_text(ls, "Save");
     lv_obj_set_style_text_color(ls, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(ls, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(ls, &lv_font_montserrat_28, 0);
     lv_obj_center(ls);
     ui_kbd_set_buttons(btn_save, btn_cancel);
 
+    /* The six fields live in their own container so the title and the two
+     * buttons CANNOT scroll away - Save has to stay reachable whatever the
+     * list is doing. Transparent and borderless: it is a viewport, not a
+     * box, and must not read as one. */
+    s_edit_list = lv_obj_create(panel);
+    lv_obj_set_width(s_edit_list, 1168);
+    lv_obj_set_y(s_edit_list, 116);
+    lv_obj_set_x(s_edit_list, 0);
+    lv_obj_set_style_bg_opa(s_edit_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_edit_list, 0, 0);
+    lv_obj_set_style_pad_all(s_edit_list, 0, 0);
+    lv_obj_set_style_radius(s_edit_list, 0, 0);
+    lv_obj_set_scroll_dir(s_edit_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_edit_list, LV_SCROLLBAR_MODE_AUTO);
+
     for (int i = 0; i < N_CW_MEM; i++) {
-        int fy = 54 + i * 52;
-        s_edit_num[i] = lv_label_create(panel);
+        /* Pitch 70 for a 58-tall field: 12 px of air between the lines,
+         * where it used to be 6. Operator, 2026-11-02: "I like a bit more
+         * space between the fields 1-6". */
+        int fy = i * 70;
+        s_edit_num[i] = lv_label_create(s_edit_list);
         lv_label_set_text_fmt(s_edit_num[i], "%d", i + 1);
         lv_obj_set_style_text_color(s_edit_num[i], lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        lv_obj_set_style_text_font(s_edit_num[i], &lv_font_montserrat_24, 0);
-        lv_obj_set_pos(s_edit_num[i], 4, fy + 12);
+        lv_obj_set_style_text_font(s_edit_num[i], &lv_font_montserrat_28, 0);
+        lv_obj_set_pos(s_edit_num[i], 4, fy + 14);
 
-        s_edit_ta6[i] = lv_textarea_create(panel);
-        lv_obj_set_size(s_edit_ta6[i], 1010, 46);
-        lv_obj_set_pos(s_edit_ta6[i], 34, fy);
+        /* 1020 wide, not 1010 of a wider panel: the fields do not need the
+         * whole window. Operator, 2026-11-02: "the fields for 1-6 need not
+         * be this wide". 43 characters at montserrat_28 is about 690 px, so
+         * there is room to spare, and the slack on the right is where the
+         * scrollbar sits without covering any text. */
+        s_edit_ta6[i] = lv_textarea_create(s_edit_list);
+        lv_obj_set_size(s_edit_ta6[i], 1020, 58);
+        lv_obj_set_pos(s_edit_ta6[i], 44, fy);
         lv_textarea_set_one_line(s_edit_ta6[i], true);
         lv_textarea_set_max_length(s_edit_ta6[i], 43);
-        lv_obj_set_style_text_font(s_edit_ta6[i], &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_font(s_edit_ta6[i], &lv_font_montserrat_28, 0);
         ui_theme_style_textarea(s_edit_ta6[i]);
         lv_obj_add_event_cb(s_edit_ta6[i], edit_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
         lv_obj_add_event_cb(s_edit_ta6[i], edit_ta_changed_cb,
                             LV_EVENT_VALUE_CHANGED, NULL);
     }
 
-    /* ⛔ INSIDE THE CONTENT BOX, WHICH IS 388 TALL, NOT 420. Same mistake as
-     * the row above and the reason the operator said something was off: the
-     * panel is 420 with pad_all(16), so a child at y=384 is drawn past the
-     * bottom and clipped - 18 px of a 22 px line, leaving a sliver that read
-     * as a rendering fault rather than a missing feature.
-     *
-     * The six fields were re-pitched from 54 to 52 and 48 to 46 to make the
-     * room, rather than shrinking this line's font: the panel cannot grow
-     * (its bottom is 8 px from the keyboard at y=440) and the font is the
-     * one thing that does not get traded away. The block now ends at y=360
-     * and this line occupies 364..386. */
+    /* WHAT THIS MEMORY WILL ACTUALLY KEY, under the field being edited. Its
+     * y belongs to edit_layout(): it has to follow the list up when the
+     * keyboard rises, because a preview behind the keys is worth nothing. */
     s_edit_sends = lv_label_create(panel);
     lv_label_set_text(s_edit_sends, "");
     lv_obj_set_style_text_color(s_edit_sends, lv_color_hex(0xFFA040), 0);
-    lv_obj_set_style_text_font(s_edit_sends, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_edit_sends, &lv_font_montserrat_22, 0);
     lv_label_set_long_mode(s_edit_sends, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_edit_sends, 1010);
-    lv_obj_set_pos(s_edit_sends, 34, 364);
+    lv_obj_set_width(s_edit_sends, 1020);
+    lv_obj_set_pos(s_edit_sends, 44, 532);
+
+    edit_layout(false);
 
     s_edit_kb = lv_keyboard_create(s_edit_modal);
     style_edit_keyboard(s_edit_kb);
@@ -641,6 +717,8 @@ static void edit_open(int slot)
     edit_macro_labels_refresh();
     edit_sends_refresh();
     lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
+    edit_layout(false);
+    lv_obj_scroll_to_y(s_edit_list, 0, LV_ANIM_OFF);
     lv_obj_clear_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_modal);
 }
