@@ -37,9 +37,18 @@
  * widening - see WR_RADIUS_KM in webradio_modal.c. */
 #define RB_MAX_STATIONS 150
 
+/* ⭐ THE TAGS WERE ALWAYS IN THE REPLY and were always thrown away. Every row
+ * the directory sends carries a comma-separated tag list - MEASURED in range
+ * of his grid: pop 44, news 28, culture 24, rock 23, oldies 12, techno 12,
+ * talk 11, house 10, dance 9. That is what the genre filter reads, and it
+ * costs one more field rather than a second query. Lower-cased on the way in
+ * so matching never has to care. */
+#define RB_GENRE_LEN  56
+
 typedef struct {
     char     name[RB_NAME_LEN];
     char     url[RB_URL_LEN];
+    char     genre[RB_GENRE_LEN];   /* the directory's tags, lower case */
     uint16_t bitrate_kbps;
     uint16_t distance_km;
 } rb_station_t;

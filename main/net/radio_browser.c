@@ -392,6 +392,20 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
         rb_text_to_latin1(jname->valuestring, st->name, (int)sizeof(st->name));
         snprintf(st->url,  sizeof(st->url),  "%s", jurl->valuestring);
 
+        const cJSON *jtags = cJSON_GetObjectItemCaseSensitive(it, "tags");
+        if (cJSON_IsString(jtags) && jtags->valuestring) {
+            size_t o = 0;
+            for (const char *q = jtags->valuestring;
+                 *q && o + 1 < sizeof(st->genre); q++) {
+                /* ASCII lower case only; a tag outside it is not one of the
+                 * handful the picker offers, and the picker is the only
+                 * reader. */
+                unsigned char c = (unsigned char)*q;
+                st->genre[o++] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+            }
+            st->genre[o] = '\0';
+        }
+
         const cJSON *jbr = cJSON_GetObjectItemCaseSensitive(it, "bitrate");
         if (cJSON_IsNumber(jbr)) st->bitrate_kbps = (uint16_t)jbr->valuedouble;
         const cJSON *jd = cJSON_GetObjectItemCaseSensitive(it, "geo_distance");

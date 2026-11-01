@@ -295,17 +295,61 @@ static void feed_ring(const uint8_t *d, int len)
  * radio_browser.c in this project already did it this way, and so does the
  * reference (dmatking/esp32-p4-webradio, main/stream.c). Both were in front
  * of me. */
+/* ⛔⛔ AND THE SAME TRAP TOOK THE REDIRECTS, WHICH I DID NOT SWEEP FOR.
+ *
+ * The Location header was read with esp_http_client_get_header() too, so it
+ * was never found either and EVERY redirecting station died on "Station
+ * redirected us nowhere". MEASURED in the capture 2026-11-01: "redirect
+ * followed" 0 times, "redirected us nowhere" 14 - the redirect path had
+ * never once worked, which the operator saw as "a lot of stations lead to
+ * absolutely nothing". Station directories are full of 3xx.
+ *
+ * The lesson is the sweep, not the header: when get_header() turned out to be
+ * the wrong API for icy-metaint, the other get_header() call in the same
+ * function should have been fixed in the same change. */
+static char s_location[256];
+
 static esp_err_t webradio_http_ev(esp_http_client_event_t *evt)
 {
-    if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key &&
-        strcasecmp(evt->header_key, "icy-metaint") == 0 && evt->header_value) {
-        s_metaint = atoi(evt->header_value);
-        if (s_metaint < 0) s_metaint = 0;
-        s_until_meta = s_metaint;
-        s_meta_need = s_meta_have = 0;
-        ESP_LOGI(TAG, "ICY metaint = %d", s_metaint);
+    if (evt->event_id == HTTP_EVENT_ON_HEADER && evt->header_key && evt->header_value) {
+        if (strcasecmp(evt->header_key, "icy-metaint") == 0) {
+            s_metaint = atoi(evt->header_value);
+            if (s_metaint < 0) s_metaint = 0;
+            s_until_meta = s_metaint;
+            s_meta_need = s_meta_have = 0;
+            ESP_LOGI(TAG, "ICY metaint = %d", s_metaint);
+        } else if (strcasecmp(evt->header_key, "Location") == 0) {
+            snprintf(s_location, sizeof(s_location), "%s", evt->header_value);
+        }
     }
     return ESP_OK;
+}
+
+/* Resolve a Location against the URL it came from. A bare path is legal in
+ * HTTP and common on Icecast relays ("/stream.mp3"), and treating one as an
+ * absolute URL is how a working station becomes a dead row. */
+static void resolve_url(const char *base, const char *loc, char *out, size_t cap)
+{
+    if (!loc || !loc[0]) { out[0] = '\0'; return; }
+    if (strncasecmp(loc, "http://", 7) == 0 || strncasecmp(loc, "https://", 8) == 0) {
+        snprintf(out, cap, "%s", loc);
+        return;
+    }
+    const char *scheme_end = strstr(base, "://");
+    if (!scheme_end) { snprintf(out, cap, "%s", loc); return; }
+    const char *host = scheme_end + 3;
+    const char *slash = strchr(host, '/');
+    size_t root = slash ? (size_t)(slash - base) : strlen(base);
+
+    if (loc[0] == '/') {
+        snprintf(out, cap, "%.*s%s", (int)root, base, loc);
+    } else {
+        /* Relative to the directory of the current path. */
+        const char *last = slash ? strrchr(slash, '/') : NULL;
+        size_t dir = last ? (size_t)(last - base) + 1 : root;
+        snprintf(out, cap, "%.*s%s%s", (int)dir, base,
+                 (dir == root) ? "/" : "", loc);
+    }
 }
 
 static void webradio_net_task(void *arg)
@@ -344,26 +388,30 @@ static void webradio_net_task(void *arg)
      * Bounded at four hops: a redirect loop must not spin a task that owns
      * the speaker. */
     int status = 0;
+    /* The URL each hop is relative to; starts as the station's own. */
+    char cur[sizeof(s_url)];
+    snprintf(cur, sizeof(cur), "%s", s_url);
     for (int hop = 0; hop < 4; hop++) {
         /* ⛔ CLEARED PER HOP. The handler fires on the 3xx response too, and a
          * metaint carried over from a redirect that the final host does not
          * use would misalign every block from the first byte. */
         s_metaint = s_until_meta = 0;
         s_meta_need = s_meta_have = 0;
+        s_location[0] = '\0';
         if (esp_http_client_open(cl, 0) != ESP_OK) { set_err("Station did not answer"); goto done; }
         (void)esp_http_client_fetch_headers(cl);
         status = esp_http_client_get_status_code(cl);
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308)
             break;
-        char *loc = NULL;
-        if (esp_http_client_get_header(cl, "Location", &loc) != ESP_OK || !loc || !loc[0]) {
+        if (!s_location[0]) {
             set_err("Station redirected us nowhere");
             goto done;
         }
-        ESP_LOGI(TAG, "redirect %d -> %s", status, loc);
-        /* Copy before close: the header buffer belongs to the client. */
         char next[sizeof(s_url)];
-        snprintf(next, sizeof(next), "%s", loc);
+        resolve_url(cur, s_location, next, sizeof(next));
+        if (!next[0]) { set_err("Station redirected us nowhere"); goto done; }
+        ESP_LOGI(TAG, "redirect %d -> %s", status, next);
+        snprintf(cur, sizeof(cur), "%s", next);
         esp_http_client_close(cl);
         if (esp_http_client_set_url(cl, next) != ESP_OK) {
             set_err("That redirect is not a URL we can follow");

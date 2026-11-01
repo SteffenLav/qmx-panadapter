@@ -1,3 +1,6 @@
+    /* ⛔ NO HINT LINE. It read "tap to play, hold to store" at 14 px, which
+     * he could not read and did not need - long press IS the standard way to
+     * save a memory on a radio. It cost a row of height the buttons wanted. */
 // The web-radio player's control surface.
 //
 // Structurally js8_macro_modal.c: same scrim, same panel geometry. What is
@@ -155,7 +158,7 @@ static void mem_paint(int i)
     bool full = s_mem[i].url[0] != '\0';
     lv_label_set_text(s_mem_lbl[i], full ? s_mem[i].name : "empty");
     lv_obj_set_style_text_color(s_mem_lbl[i],
-        lv_color_hex(full ? UI_COLOR_TEXT : UI_COLOR_TEXT_SECONDARY), 0);
+        lv_color_hex(full ? 0xffffff : UI_COLOR_TEXT_SECONDARY), 0);
 }
 
 static void mem_click_cb(lv_event_t *e)
@@ -207,6 +210,47 @@ static void mem_long_cb(lv_event_t *e)
  * no re-sort. With 150 stations from four countries in the pane, this is what
  * makes the wider radius usable rather than noisy. */
 static char s_query[32] = "";
+
+/* ---- genre -------------------------------------------------------------
+ *
+ * ⭐ THE TAGS WERE ALREADY IN THE REPLY. Every directory row carries a
+ * comma-separated tag list that this file used to discard; rb_station_t now
+ * keeps it, so the picker is a local substring test over a list already
+ * fetched - no second query, no wait, and it composes with the text search.
+ *
+ * ⚠ THE LIST IS NOT INVENTED. These are the tags that actually occur within
+ * 450 km of his grid, counted from the real reply on 2026-11-01: pop 44,
+ * news 28, culture 24, rock 23, information 21, oldies 12, techno 12, talk
+ * 11, chillout 10, house 10, dance 9, electronic 9, 80s 8, 90s 8. A genre
+ * nobody broadcasts is a line that only ever shows an empty list.
+ *
+ * Several needles per entry because the directory is folksonomy, not a
+ * taxonomy: "news", "information" and "public service" are one thing to an
+ * operator looking for the news. */
+typedef struct { const char *label; const char *needles[6]; } wr_genre_t;
+static const wr_genre_t WR_GENRES[] = {
+    { "All genres",    { NULL } },
+    { "News & talk",   { "news", "talk", "information", "public service", "spoken", NULL } },
+    { "Pop",           { "pop", "contemporary", "chart", NULL } },
+    { "Rock",          { "rock", "metal", "alternative", NULL } },
+    { "Dance & club",  { "dance", "techno", "house", "electronic", "trance", "edm" } },
+    { "Jazz & blues",  { "jazz", "blues", "soul", NULL } },
+    { "Classical",     { "classical", "klassik", "classic music", "opera", NULL } },
+    { "Oldies",        { "oldies", "60s", "70s", "80s", "90s", NULL } },
+    { "Chill & easy",  { "chillout", "lounge", "easy", "ambient", "relax", NULL } },
+    { "Culture",       { "culture", "kultur", "documentary", NULL } },
+};
+#define WR_GENRE_N ((int)(sizeof(WR_GENRES) / sizeof(WR_GENRES[0])))
+static int s_genre = 0;            /* index into WR_GENRES; 0 = all */
+
+static bool genre_matches(const rb_station_t *st)
+{
+    if (s_genre <= 0 || s_genre >= WR_GENRE_N) return true;
+    const char *const *n = WR_GENRES[s_genre].needles;
+    for (int i = 0; i < 6 && n[i]; i++)
+        if (strstr(st->genre, n[i])) return true;
+    return false;
+}
 
 /* A key both sides of the comparison are folded into: lower case, and every
  * Latin-1 accented letter reduced to its base ASCII letter. So "koben" finds
@@ -323,11 +367,12 @@ static void fill_list(void)
 
     int shown = 0;
     for (int i = 0; i < s_n_st; i++) {
+        if (!genre_matches(&s_st[i])) continue;
         if (!station_matches(&s_st[i], qf)) continue;
         shown++;
 
         lv_obj_t *b = lv_button_create(s_list);
-        lv_obj_set_size(b, LV_PCT(100), 60);
+        lv_obj_set_size(b, LV_PCT(100), 52);
         lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
         lv_obj_set_style_radius(b, 6, 0);
         lv_obj_set_style_border_width(b, 0, 0);
@@ -343,8 +388,13 @@ static void fill_list(void)
                  s_st[i].name, (unsigned)s_st[i].bitrate_kbps,
                  (unsigned)s_st[i].distance_km);
         lv_label_set_text(l, t);
+        /* ⛔ ONE LINE, AND THE HEIGHT IS WHAT MAKES IT ONE. LV_LABEL_LONG_DOT
+         * fills the available HEIGHT before it starts dotting, so a label
+         * with a fixed width and an automatic height wraps to two lines first
+         * - which is what shipped and what he asked to have cut off. Pinning
+         * the height to a single line is the whole fix. */
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, LV_PCT(100));
+        lv_obj_set_size(l, LV_PCT(100), 36);
         lv_obj_set_style_text_font(l, &font_ui_latin_28, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
         lv_obj_center(l);
@@ -352,8 +402,16 @@ static void fill_list(void)
 
     if (!shown) {
         lv_obj_t *l = lv_label_create(s_list);
-        char m[96];
-        snprintf(m, sizeof(m), "Nothing matches \"%.24s\"", s_query);
+        char m[128];
+        /* Name BOTH filters: with a genre set, an empty list from a typo and
+         * an empty list from "no jazz within 450 km" look identical. */
+        if (s_query[0] && s_genre > 0)
+            snprintf(m, sizeof(m), "No %s station matches \"%.20s\"",
+                     WR_GENRES[s_genre].label, s_query);
+        else if (s_genre > 0)
+            snprintf(m, sizeof(m), "No %s stations in range", WR_GENRES[s_genre].label);
+        else
+            snprintf(m, sizeof(m), "Nothing matches \"%.24s\"", s_query);
         lv_label_set_text(l, m);
         lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -365,6 +423,12 @@ static void search_cb(lv_event_t *e)
     (void)e;
     const char *txt = lv_textarea_get_text(s_search_ta);
     snprintf(s_query, sizeof(s_query), "%s", txt ? txt : "");
+    fill_list();
+}
+
+static void genre_cb(lv_event_t *e)
+{
+    s_genre = (int)lv_dropdown_get_selected(lv_event_get_target(e));
     fill_list();
 }
 
@@ -553,13 +617,40 @@ static void modal_build(void)
     lv_textarea_set_one_line(s_search_ta, true);
     lv_textarea_set_placeholder_text(s_search_ta, "Type to filter stations");
     lv_textarea_set_max_length(s_search_ta, sizeof(s_query) - 1);
-    lv_obj_set_size(s_search_ta, WR_COL_L, 56);
+    lv_obj_set_size(s_search_ta, WR_COL_L / 2 - 6, 56);
     lv_obj_align(s_search_ta, LV_ALIGN_TOP_LEFT, 0, 162);
     lv_obj_set_style_text_font(s_search_ta, &font_ui_latin_28, 0);
     ui_theme_style_textarea(s_search_ta);
     lv_obj_add_event_cb(s_search_ta, search_cb,       LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(s_search_ta, search_focus_cb, LV_EVENT_FOCUSED,       NULL);
     lv_obj_add_event_cb(s_search_ta, search_done_cb,  LV_EVENT_DEFOCUSED,     NULL);
+
+    {
+        /* lv_dropdown wants one string with newline separators, and building
+         * it from WR_GENRES means the list and the matcher can never drift. */
+        char opts[WR_GENRE_N * 20];
+        int o = 0;
+        for (int i = 0; i < WR_GENRE_N && o < (int)sizeof(opts) - 1; i++)
+            o += snprintf(opts + o, sizeof(opts) - (size_t)o, "%s%s",
+                          i ? "\n" : "", WR_GENRES[i].label);
+        lv_obj_t *dd = lv_dropdown_create(s_panel);
+        lv_dropdown_set_options(dd, opts);
+        lv_obj_set_size(dd, WR_COL_L / 2 - 6, 56);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, WR_COL_L / 2 + 6, 162);
+        lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_bg_color(dd, lv_color_hex(UI_COLOR_KEY_BG), 0);
+        lv_obj_set_style_border_color(dd, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_text_color(dd, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_add_event_cb(dd, genre_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        /* The open list is taller than the panel's remaining room, so it has
+         * to be allowed to draw over everything below it. */
+        lv_obj_t *dl = lv_dropdown_get_list(dd);
+        if (dl) {
+            lv_obj_set_style_text_font(dl, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_bg_color(dl, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+            lv_obj_set_style_text_color(dl, lv_color_hex(UI_COLOR_TEXT), 0);
+        }
+    }
 
     s_list = lv_obj_create(s_panel);
     lv_obj_set_size(s_list, WR_COL_L, 280);
@@ -645,15 +736,24 @@ static void modal_build(void)
 
     for (int i = 0; i < WR_MEM_N; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
-        lv_obj_set_size(b, WR_MEM_W, 70);
-        lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (WR_MEM_W + WR_MEM_GAP), 542);
-        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+        /* The ADIF-log button's look, from ft8_screen_view.c: the darker blue
+         * fill with the primary border at 2 px is this app's "a real control
+         * lives here" treatment, and six of them read as a row of presets
+         * rather than six empty boxes. He asked for the looks only. */
+        lv_obj_set_size(b, WR_MEM_W, 86);
+        lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (WR_MEM_W + WR_MEM_GAP), 526);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x163d5e), 0);
         lv_obj_set_style_radius(b, 8, 0);
-        lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
-        lv_obj_set_style_border_width(b, 1, 0);
-        lv_obj_set_style_pad_all(b, 4, 0);
-        lv_obj_add_event_cb(b, mem_click_cb, LV_EVENT_CLICKED,      (void *)(intptr_t)i);
-        lv_obj_add_event_cb(b, mem_long_cb,  LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
+        lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+        lv_obj_set_style_border_width(b, 2, 0);
+        lv_obj_set_style_pad_all(b, 6, 0);
+        /* ⛔ SHORT_CLICKED, NOT CLICKED - a real defect, not a style note.
+         * LVGL sends CLICKED on release even when the press was long, so
+         * holding a button to STORE a memory also fired the play path: it
+         * stored the station and then immediately started it. The ADIF button
+         * splits them the same way and says so. */
+        lv_obj_add_event_cb(b, mem_click_cb, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(b, mem_long_cb,  LV_EVENT_LONG_PRESSED,  (void *)(intptr_t)i);
         s_mem_btn[i] = b;
 
         /* ⛔ NO "M1" ROW. It was a slot number nobody needs next to the only
@@ -665,9 +765,12 @@ static void modal_build(void)
          * neighbour. 20 px is the floor here: the rule on this display is
          * widen the panel rather than shrink the font, and six buttons across
          * 1140 px is already the widest this row can be. */
+        /* TWO lines, then dots. "DR P4 København" and "SmoothJazz.com" both
+         * need the second one, and a fixed two-line height is what gives it -
+         * same mechanism as the list rows above, used the other way round. */
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, WR_MEM_W - 16);
+        lv_obj_set_size(l, WR_MEM_W - 20, 64);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_center(l);
         lv_obj_set_style_text_font(l, &font_ui_latin_24, 0);
