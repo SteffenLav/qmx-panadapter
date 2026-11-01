@@ -96,6 +96,20 @@ uint32_t rx_audio_web_dropped(void);
 #define RX_AUDIO_WEB_RATE_HZ 12000
 
 // Output volume, 0..100 (persisted to NVS).
+/* ---- lending the speaker ------------------------------------------------
+ *
+ * The web-radio player writes through these rather than opening a codec of its
+ * own: the codec is opened once at boot, before USB host takes the DMA RAM, so
+ * there is only ever one output channel and it is this file's. While claimed,
+ * this file stops writing to the speaker; everything else in the chain keeps
+ * running. The caller must deliver stereo 16-bit at DSP_SAMPLE_RATE_HZ.
+ *
+ * claim(false) hands it straight back; it is safe to call either way twice.
+ * Returns false only when the codec was never opened at all. */
+bool rx_audio_aux_claim(bool on);
+bool rx_audio_aux_active(void);
+int  rx_audio_aux_write(const int16_t *pcm, int frames);
+
 void rx_audio_set_volume(uint8_t vol_0_100);
 uint8_t rx_audio_get_volume(void);
 

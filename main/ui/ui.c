@@ -4,6 +4,7 @@
 #include "util/pan_view.h"
 #include "util/format_freq.h"   // #302: ONE frequency format
 #include "util/freq_gridlines.h"
+#include "webradio_modal.h"
 #include "ui_theme.h"
 #include "gps_status_view.h"   // tapping the UTC field opens the GPS page
 #include "cw_decode.h"   /* the QMX decodes CW itself; this just shows it */
@@ -3425,6 +3426,10 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * Activation in the Station group: the two are one job in the field -
  * start the activation, then log the people you work by hand. */
 #define DRAWER_SEC_MANLOG     53
+/* The web-radio player. Not a radio setting and not tied to a page - it
+ * is an amusement that plays while the panadapter runs, so it lives in
+ * its own group and is visible everywhere. */
+#define DRAWER_SEC_WEBRADIO   54
 #define N_DRAWER_SECTIONS     56
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
@@ -3438,6 +3443,7 @@ _Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_JS8SUB  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_SERVER < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_MANLOG < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_WEBRADIO < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -3469,6 +3475,9 @@ static const drawer_item_t GRP_STATION[] = {
     { DRAWER_SEC_MANLOG, "Log a contact (CW/SSB)", true },
     { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)", true },
     { DRAWER_SEC_BPREGION, "Band-plan region", false },
+    /* Advanced by default: it is an amusement, and the Basic view is for
+     * the controls somebody needs to operate. */
+    { DRAWER_SEC_WEBRADIO, "Web radio", false },
 };
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
@@ -4311,6 +4320,16 @@ static void user_manual_cb(lv_event_t *e)
 static void drawer_set_mode(ui_mode_t mode);
 static void drawer_open(void);
 static void drawer_close(void);
+
+/* The drawer closes behind it: the modal is 940 px wide and the drawer
+ * would sit on top of its station list. Same handoff manual logging uses. */
+static void drawer_webradio_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+    webradio_modal_show();
+}
+
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_touch_cb(lv_event_t *e);
 static void drawer_scrim_cb(lv_event_t *e);
@@ -16336,6 +16355,24 @@ static void drawer_build(void)
     // Log a contact by hand (Brian KB9WFS). The quickest route he has to a
     // CW or SSB contact: one swipe, one tap, then the callsign. Everything
     // else the record needs is already on the device.
+    /* The web radio. One button; everything else is in its own modal,
+     * because a station list does not fit a 320 px drawer and the player
+     * keeps running after the drawer closes. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WEBRADIO, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_webradio_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, LV_SYMBOL_AUDIO " Web radio");
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+        lv_obj_center(l);
+        y += 72;
+    }
+
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_MANLOG, y, 72);
         lv_obj_t *btn = lv_btn_create(sec);
@@ -18102,6 +18139,8 @@ static void drawer_close(void)
     qmx_wait_poll_cb(NULL);   // prompt may come back now the drawer is gone
     ESP_LOGI(TAG, "Settings drawer closed");
 }
+
+
 
 // FT8 mode keeps the Flip-display toggle (top), the
 // distance-unit (km/miles) toggle (only meaningful on the FT8 decode list),

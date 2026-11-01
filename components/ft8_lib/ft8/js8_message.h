@@ -242,6 +242,11 @@ void     js8_unpack_alnum50(uint64_t packed, char out[16]);
 
 /* 15-bit grid. 0x7FFF means "no grid" and is what an empty or short locator
  * packs to. */
+/* The centre of a 4-character Maidenhead square, in degrees, longitude
+ * EAST-positive. Both outputs are 0 for a grid it cannot read. The square is
+ * ~111 x 70 km here, so this is a district, not a fix. */
+void js8_grid_to_latlon(const char* grid4, float* out_lat, float* out_lon);
+
 uint16_t js8_pack_grid(const char* grid);
 void     js8_unpack_grid(uint16_t packed, char out[5]);
 
