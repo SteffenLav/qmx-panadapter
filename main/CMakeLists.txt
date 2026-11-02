@@ -344,6 +344,23 @@ add_custom_command(
     VERBATIM
 )
 
+# Refuse to build a drawer whose section ids are not unique and in range.
+#
+# s_drawer_sections[] / _y[] / _h[] in ui.c are indexed BY the DRAWER_SEC_* id,
+# and the ids are hand-written #defines - the same shape as the dirty bits
+# above, with the same two failures. Out of range overruns all three arrays:
+# DRAWER_SEC_REBOOT went in as 46 against a bound of 46 and LVGL died minutes
+# later on a garbage object pointer. Duplicate is invisible to the
+# _Static_asserts in ui.c, because both ids are in range: DRAWER_SEC_CWSIM
+# went in as 22, which DRAWER_SEC_QMXVOL already held, and on the CW page the
+# second build silently took the slot.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_drawer_sections.py"
+    COMMENT "Checking drawer section ids are unique and in range"
+    VERBATIM
+)
+
 # Refuse to build a web UI whose JavaScript does not parse (TODO #183).
 #
 # v1.8.5 shipped with one unterminated string literal, which stops the ENTIRE

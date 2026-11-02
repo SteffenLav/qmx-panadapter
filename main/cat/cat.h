@@ -473,6 +473,72 @@ void cat_query_af_gain(void);
  * Divide by 4 for the dB figure the QMX displays. */
 int cat_get_af_gain(void);
 
+/* ---- CW sidetone (monitor) level: MMCW|Sidetone volume + Sidetone abs/rel --
+ *
+ * T139, Michael KZ4LY: "the Tab5 overwrites the CW monitor volume", so he
+ * cannot set the receive audio down and his own keying monitor up. He wanted
+ * QMX headphones plus Tab5 earbuds for a binaural setup.
+ *
+ * ⭐ NOTHING WAS OVERWRITING A STORED VALUE. It is the radio's own
+ * "Sidetone abs/rel" parameter, which ships as **Relative**. QMX operation
+ * manual 1_04_001, CW menu:
+ *
+ *   Relative: "the sidetone level is set by the Sidetone volume parameter,
+ *   however it is also affected by the main volume control. As you increase
+ *   the volume ... the received signals AND the sidetone volume both increase
+ *   by the same amount."
+ *
+ *   Absolute: "the sidetone level is fixed by the Sidetone volume parameter,
+ *   regardless of the setting of the main volume control."
+ *
+ * The drawer's "QMX volume" slider writes AG, which IS the main volume
+ * control, so on a factory-default radio it drags the monitor with it. What he
+ * asked for needs Absolute - and there is no AG-style two-letter command for
+ * either parameter. The CAT manual's whole command list has no sidetone entry;
+ * both live in the configuration menu and are reached with MM, which this file
+ * already speaks for the CW filters, the CW centre and the PA voltage.
+ *
+ * ⛔ NOTHING HERE IS STORED ON THE TAB5, deliberately. An MM Set writes the
+ * QMX's own EEPROM (CAT manual: "Menu Manager MM Set commands ARE stored in
+ * the configuration memory"), so the radio is the only copy. A shadow in NVS
+ * would be a second answer to "what is the monitor level", which is the exact
+ * confusion the second half of T139 is about - he could not tell who owned the
+ * value. Read it from the radio, write it to the radio, show what it says.
+ *
+ * ⛔ AN MM WRITE IS EXPENSIVE AND THE RANGE IS NOT GUESSED.
+ *  - Expensive: it sprays a menu redraw back down the CAT port, needs MU; to
+ *    take effect on "On demand", and MU; drops IQ mode so the panadapter
+ *    flattens until the handshake re-asserts Q9. That is ~0.6 s of flat
+ *    spectrum, so the drawer commits on slider RELEASE, like RF gain, and
+ *    skips a write that would not change anything.
+ *  - Not guessed: the operation manual gives the default (70) and NO range.
+ *    cat_sidetone_vol_max() is read off the radio with MM discovery
+ *    (MMCW|Sidetone volume?; -> MM<type>|<len>|Sidetone volume;) at first
+ *    connect, exactly as the CW filter mask is. It returns 0 when the radio
+ *    has not answered, and the drawer then shows no slider at all rather than
+ *    a scale invented here and displayed as if it were the radio's. */
+void cat_request_sidetone_vol(uint16_t v);
+
+/* Relative (false) or Absolute (true), the radio's own two values. */
+void cat_request_sidetone_absolute(bool absolute);
+
+/* Ask the radio for both; the answers land asynchronously in the two getters.
+ * Called when the drawer opens and when the web status page is loaded, for the
+ * same reason as AF gain - a surface showing a stale value is worse than one
+ * showing none. */
+void cat_query_sidetone(void);
+
+/* Last sidetone volume read back from the radio, or -1 if never read. */
+int cat_get_sidetone_vol(void);
+
+/* 1 = Absolute, 0 = Relative, -1 = never read. */
+int cat_get_sidetone_absolute(void);
+
+/* Top of the sidetone-volume range as the RADIO reports it, or 0 if discovery
+ * has not answered. 0 means "do not offer the control", never "the range is
+ * zero" - see the block above. */
+uint16_t cat_sidetone_vol_max(void);
+
 /* ---- CW keyer speed (KS), in words per minute --------------------------
  *
  * Asked for by Ralph Hellmig on the group, 2026-10-10: there was no way to

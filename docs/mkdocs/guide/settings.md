@@ -43,6 +43,21 @@ These reach the QMX itself over the CAT link.
 its LCD when you click its volume knob. Read back from the radio when you open the
 drawer, so it agrees with the rig even if you last changed it there.
 
+**CW monitor level** — the radio's CW sidetone volume, and whether it is held
+independently of the volume above. Shown in Panadapter and CW modes only.
+
+The QMX leaves the factory with its sidetone set **Relative**, which means the main
+volume control moves the received audio *and* your keying monitor together. If you
+want the receive audio down and your own monitor up — for headphones on the radio and
+earbuds on the Tab5, say — tick **Independent of QMX volume** and then set the level.
+
+Both values live in the radio's own configuration memory, not on the Tab5, and the row
+reads them back from the radio. The level is sent once when you let go of the slider,
+not while you drag it: applying it makes the radio reload its configuration, which
+blanks the spectrum for about half a second. If your firmware does not report the
+setting over CAT the row says so and points you at the radio's **CW > Sidetone volume**
+menu instead of offering a slider with an invented scale.
+
 **QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
 (the QMX default is 54). ⚠ **Measured 2026-10-27: changing it does not move the
 spectrum or the audio** — 54 dB out shifted the noise floor 0.06 dB. The radio

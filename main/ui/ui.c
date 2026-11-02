@@ -3402,6 +3402,11 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
 #define DRAWER_SEC_RESMON     11  // resource-monitor floating overlay toggle (slot was unused)
+/* T139, Michael KZ4LY: the CW monitor (sidetone) level and whether it is
+ * Absolute or Relative to the main volume. 12 was the one free slot below
+ * N_DRAWER_SECTIONS - see tools/check_drawer_sections.py, which prints the
+ * free list and refuses the build on a duplicate. */
+#define DRAWER_SEC_CWMON      12
 /* 12 retired 2026-09-23: the RX audio section moved to Resource Management.
  * The number is left unused rather than reassigned, so nothing silently
  * inherits a section id that used to mean something else. */
@@ -3453,7 +3458,17 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
 #define DRAWER_SEC_SIMMODE    19  // FT8 PAGE, every sub-mode: phantom-station simulation (practice/testing, never keys the radio). FT8/FT4 are ft8_sim.c, JS8 is js8_sim.c - one toggle, the protocol picks
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
-#define DRAWER_SEC_CWSIM      22  // CW-page-only: CW phantom practice (own flag, NOT sim_mode_en)
+/* ⛔ 55, AND IT WAS 22 UNTIL 2026-11-02 - THE SAME ID AS DRAWER_SEC_QMXVOL.
+ * s_drawer_sections[] / _y[] / _h[] are all indexed BY this id, so on the CW
+ * page - the only page that builds CWSIM, and QMXVOL falls through the mode
+ * gate to `return true` so it is built on every page - both blocks wrote slot
+ * 22 and the second build won. One row was then positioned twice and the
+ * other's object was never positioned or hidden at all.
+ *
+ * The _Static_asserts below guard the BOUND, which is the overrun that cost a
+ * Guru Meditation in October. They cannot see a DUPLICATE, which is why
+ * tools/check_drawer_sections.py now refuses the build on either fault. */
+#define DRAWER_SEC_CWSIM      55  // CW-page-only: CW phantom practice (own flag, NOT sim_mode_en)
 #define DRAWER_SEC_TUNE2      21  // Antenna Tune (1_04+ only) - own section right above
                                    // WiFi setup; the panadapter layout closes its slot
                                    // when hidden on <1_04 firmware and reopens it in
@@ -3598,7 +3613,7 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * is an amusement that plays while the panadapter runs, so it lives in
  * its own group and is visible everywhere. */
 #define DRAWER_SEC_WEBRADIO   54
-#define N_DRAWER_SECTIONS     56
+#define N_DRAWER_SECTIONS     56   /* ids 0..55; 12 is free, 55 is CWSIM */
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3610,6 +3625,8 @@ _Static_assert(DRAWER_SEC_PORTA   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS"
 _Static_assert(DRAWER_SEC_KEYER   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_JS8SUB  < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_SERVER < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_WEBRADIO < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_CWSIM   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_MANLOG < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_WEBRADIO < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
@@ -3653,6 +3670,11 @@ static const drawer_item_t GRP_STATION[] = {
 static const drawer_item_t GRP_RADIO[] = {
     { DRAWER_SEC_QMXVOL, "QMX volume", true },
     { DRAWER_SEC_QMXRF, "RF gain (radio's own audio)", true },
+    /* T139: under the two gains because it only makes sense read against them
+     * - while the radio is Relative, the QMX volume row above moves this one.
+     * Basic, because setting the monitor level is ordinary CW operating, not
+     * setup. */
+    { DRAWER_SEC_CWMON, "CW monitor level", true },
     /* Above CW centre (operator, 2026-09-07). It was filed under Spectrum with
      * the drawing controls, but it is not one: it trims the 12 kHz IF offset so
      * a signal lands where the dial says it is, which is the same conversation
@@ -4037,8 +4059,11 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * the `return true` below and appeared on every page. (RX audio used to be
      * named here too; its whole drawer section moved to Resource Management on
      * 2026-09-23, so there is nothing left to hide.) */
+    /* T139's monitor level joins the line below for exactly the reason given
+     * there: the sidetone exists in CW/CW-R, and both decode pages force the
+     * radio to DiGi on entry, so there would be nothing to monitor. */
     if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW ||
-        id == DRAWER_SEC_CWPROF) return !ft8 && !wspr;
+        id == DRAWER_SEC_CWPROF || id == DRAWER_SEC_CWMON) return !ft8 && !wspr;
     /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
@@ -4061,6 +4086,11 @@ static lv_obj_t *s_slider_qmx_vol = NULL;
 static lv_obj_t *s_lbl_qmx_vol    = NULL;
 static lv_obj_t *s_slider_qmx_rf  = NULL;
 static lv_obj_t *s_lbl_qmx_rf     = NULL;
+/* T139 CW monitor: the level slider, its label, and the Absolute checkbox. */
+static lv_obj_t *s_slider_cw_mon  = NULL;
+static lv_obj_t *s_lbl_cw_mon     = NULL;
+static lv_obj_t *s_check_cw_mon_abs = NULL;
+static lv_obj_t *s_lbl_cw_mon_note  = NULL;
 static lv_obj_t *s_lbl_pause_btn  = NULL;
 /* Flat mode does not use the dB range AT ALL - it draws dB above the measured
  * noise floor over a fixed 30 dB window, with gridlines hardcoded {10,20,30}.
@@ -4393,6 +4423,9 @@ static lv_obj_t *s_check_wspr_net;
 static void drawer_refresh_checkboxes(void);
 static void drawer_slider_qmx_rf_cb(lv_event_t *e);
 static void drawer_refresh_qmx_rf(void);
+static void drawer_slider_cw_mon_cb(lv_event_t *e);
+static void drawer_check_cw_mon_abs_cb(lv_event_t *e);
+static void drawer_refresh_cw_mon(void);
 static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
@@ -16170,7 +16203,7 @@ static void drawer_build(void)
         qmx_settings_t vcfg;
         settings_load_all(&vcfg);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 96);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 126);
         s_lbl_qmx_vol = lv_label_create(sec);
         char vbuf[32];
         snprintf(vbuf, sizeof(vbuf), "QMX volume: %u dB", (unsigned)vcfg.qmx_vol_db);
@@ -16188,7 +16221,21 @@ static void drawer_build(void)
         lv_slider_set_value(s_slider_qmx_vol, vcfg.qmx_vol_db, LV_ANIM_OFF);
         lv_obj_align(s_slider_qmx_vol, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_add_event_cb(s_slider_qmx_vol, drawer_slider_qmx_vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 96;
+
+        /* ⭐ T139's SECOND HALF, and it is a labelling fault not a code one.
+         * Michael KZ4LY could not tell that this row is the radio's own main
+         * volume control - the one his "Sidetone abs/rel = Relative" setting
+         * ties his CW monitor to. So it says so, and names the row below that
+         * breaks the tie. 96 -> 126 for the line. */
+        lv_obj_t *vcap = lv_label_create(sec);
+        lv_label_set_long_mode(vcap, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(vcap, DRAWER_W - 32);
+        lv_label_set_text(vcap, "The radio's main volume - moves the CW monitor too "
+                                "unless that is set Absolute below");
+        lv_obj_set_style_text_font(vcap, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(vcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_align(vcap, LV_ALIGN_TOP_LEFT, 0, 76);
+        y += 126;
     }
 
     // QMX RF gain (Stan's suggestion via Samuel W7STF, 2026-08-07), directly
@@ -16237,6 +16284,95 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(cap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_align(cap, LV_ALIGN_TOP_LEFT, 0, 76);
         y += 126;
+    }
+
+    /* CW monitor level (T139, Michael KZ4LY), directly under the two gain
+     * controls it has to be read against.
+     *
+     * ⭐ WHAT HE ACTUALLY HIT. He reported that "the Tab5 overwrites the CW
+     * monitor volume", so he could not run the receive audio down and his own
+     * keying monitor up for a binaural QMX-headphones/Tab5-earbuds setup.
+     * Nothing overwrites anything: the radio ships with "Sidetone abs/rel" set
+     * to Relative, where the main volume scales the sidetone along with the
+     * received signals (operation manual, CW menu). The QMX volume slider two
+     * rows up IS that main volume. So the fix he needs is the Absolute
+     * checkbox here, and then a level that stays put.
+     *
+     * ⭐ AND THE OTHER HALF OF HIS REPORT WAS "nothing says the Tab5 owns that
+     * value" - so this row says who owns it, in words, and stores NOTHING on
+     * the Tab5. Both parameters live in the radio's EEPROM and are read back
+     * from it; there is no NVS shadow to disagree with the radio later.
+     *
+     * ⛔ RELEASED, NOT VALUE_CHANGED, and for a harder reason than RF gain's.
+     * An MM write needs MU; to take effect, MU; drops IQ mode, and the
+     * spectrum is flat until the handshake re-asserts Q9 - about 0.6 s. A drag
+     * that streamed writes would strobe the panadapter.
+     *
+     * ⛔ NO SLIDER AT ALL when the radio has not told us the range. The
+     * operation manual gives the default (70) and no range, so the top comes
+     * from MM discovery (cat_sidetone_vol_max()); 0 means older firmware or no
+     * answer, and an invented 0-100 scale shown as if it were the radio's is
+     * worse than an absent control. */
+    {
+        const uint16_t mon_top = cat_sidetone_vol_max();
+        /* 126 with the slider, 96 without - same two geometries as the rows
+         * above, and drawer_section() records the height so the layout pass
+         * does not need a parallel table (that has gone wrong twice). */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWMON, y, mon_top ? 162 : 96);
+
+        s_lbl_cw_mon = lv_label_create(sec);
+        lv_obj_set_style_text_color(s_lbl_cw_mon, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_cw_mon, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_cw_mon, LV_ALIGN_TOP_LEFT, 0, 10);
+
+        if (mon_top) {
+            int mon_now = cat_get_sidetone_vol();
+            char mbuf[48];
+            if (mon_now >= 0)        snprintf(mbuf, sizeof(mbuf), "CW monitor: %d", mon_now);
+            else if (cat_is_ready()) snprintf(mbuf, sizeof(mbuf), "CW monitor: reading...");
+            else                     snprintf(mbuf, sizeof(mbuf), "CW monitor: radio not connected");
+            lv_label_set_text(s_lbl_cw_mon, mbuf);
+
+            s_slider_cw_mon = lv_slider_create(sec);
+            lv_obj_set_size(s_slider_cw_mon, DRAWER_W - 32, 30);
+            lv_slider_set_range(s_slider_cw_mon, 0, mon_top);
+            lv_slider_set_value(s_slider_cw_mon, mon_now >= 0 ? mon_now : 0, LV_ANIM_OFF);
+            lv_obj_align(s_slider_cw_mon, LV_ALIGN_TOP_LEFT, 0, 40);
+            /* Label under the finger on every tick; the radio hears about it
+               once, on release. */
+            lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_RELEASED, NULL);
+
+            lv_obj_t *abs_lbl = lv_label_create(sec);
+            lv_label_set_text(abs_lbl, "Independent of QMX volume");
+            lv_obj_set_style_text_color(abs_lbl, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_font(abs_lbl, &lv_font_montserrat_24, 0);
+            lv_obj_align(abs_lbl, LV_ALIGN_TOP_LEFT, 0, 84);
+            s_check_cw_mon_abs = make_drawer_checkbox(sec, cat_get_sidetone_absolute() == 1,
+                                                      drawer_check_cw_mon_abs_cb, NULL);
+            lv_obj_align(s_check_cw_mon_abs, LV_ALIGN_TOP_RIGHT, 0, 80);
+
+            s_lbl_cw_mon_note = lv_label_create(sec);
+            lv_label_set_long_mode(s_lbl_cw_mon_note, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(s_lbl_cw_mon_note, DRAWER_W - 32);
+            lv_obj_set_style_text_font(s_lbl_cw_mon_note, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_color(s_lbl_cw_mon_note,
+                                        lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+            lv_obj_align(s_lbl_cw_mon_note, LV_ALIGN_TOP_LEFT, 0, 126);
+            y += 162;
+        } else {
+            lv_label_set_text(s_lbl_cw_mon, cat_is_ready()
+                              ? "CW monitor: this radio does not offer it over CAT"
+                              : "CW monitor: radio not connected");
+            lv_obj_t *cap2 = lv_label_create(sec);
+            lv_label_set_long_mode(cap2, LV_LABEL_LONG_WRAP);
+            lv_obj_set_width(cap2, DRAWER_W - 32);
+            lv_label_set_text(cap2, "Set it on the radio: CW > Sidetone volume");
+            lv_obj_set_style_text_font(cap2, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_color(cap2, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+            lv_obj_align(cap2, LV_ALIGN_TOP_LEFT, 0, 46);
+            y += 96;
+        }
     }
 
     // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.
@@ -18339,7 +18475,7 @@ static void drawer_build(void)
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast,
-        s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
+        s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf, s_slider_cw_mon,
         s_slider_cwtxoff, s_outpwr_slider,
         /* ⛔ A SLIDER LEFT OUT OF THIS LIST LOOKS WRONG AND NOTHING SAYS SO.
            The keyer row was added without it and rendered a 30 px track
@@ -18469,6 +18605,7 @@ static void drawer_open(void)
     drawer_refresh_keyer();     // same: the QMX's own encoder moves this too
     drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
+    drawer_refresh_cw_mon();    // T139: and the CW monitor, which he may have set on the radio
     gain_resolve_start();       // ...and repaint whichever of those answers late
     // A Bluetooth restart can be owed from an earlier visit to the drawer, or
     // from the web settings page, so the offer is re-tested on every open
@@ -19142,6 +19279,75 @@ static void drawer_refresh_qmx_rf(void)
     cat_query_rf_gain();   // ask again for next time the drawer opens
 }
 
+/* ---- T139 CW monitor ------------------------------------------------------
+ * The note line says who owns the value, which is the half of Michael's report
+ * that was not about a number. It changes with the Absolute checkbox because
+ * the answer does: while the radio is Relative, the QMX volume slider really
+ * does move his monitor level, and saying so is the difference between a
+ * control that looks broken and one that explains itself. */
+static void paint_cw_mon_note(void)
+{
+    if (!s_lbl_cw_mon_note) return;
+    int a = cat_get_sidetone_absolute();
+    lv_label_set_text(s_lbl_cw_mon_note,
+        a == 1 ? "Held by the radio. QMX volume no longer moves it."
+      : a == 0 ? "The radio is Relative: QMX volume moves this too. Tick the box above."
+               : "Stored in the radio, not on the Tab5.");
+}
+
+static void paint_cw_mon(int v)
+{
+    if (!s_slider_cw_mon || v < 0) return;
+    lv_slider_set_value(s_slider_cw_mon, v, LV_ANIM_OFF);
+    if (s_lbl_cw_mon) {
+        char b[48];
+        snprintf(b, sizeof(b), "CW monitor: %d", v);
+        lv_label_set_text(s_lbl_cw_mon, b);
+    }
+    if (s_check_cw_mon_abs) {
+        /* Re-assert from the RADIO, not from what the box was left showing: a
+         * refused write has to be visible, and the read-back is the only thing
+         * that knows. */
+        if (cat_get_sidetone_absolute() == 1)
+            lv_obj_add_state(s_check_cw_mon_abs, LV_STATE_CHECKED);
+        else
+            lv_obj_clear_state(s_check_cw_mon_abs, LV_STATE_CHECKED);
+    }
+    paint_cw_mon_note();
+}
+
+static void drawer_slider_cw_mon_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    if (s_lbl_cw_mon) {
+        char b[48];
+        snprintf(b, sizeof(b), "CW monitor: %d", v);
+        lv_label_set_text(s_lbl_cw_mon, b);
+    }
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+    /* Skip a write that changes nothing. Every one of these costs MU; and ~0.6 s
+     * of flat spectrum, and a tap that lands on the current value is common. */
+    if (v == cat_get_sidetone_vol()) return;
+    cat_request_sidetone_vol((uint16_t)v);
+    ESP_LOGI(TAG, "CW monitor level -> %d (radio EEPROM, needs MU; to apply)", v);
+}
+
+static void drawer_check_cw_mon_abs_cb(lv_event_t *e)
+{
+    bool want = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    if ((cat_get_sidetone_absolute() == 1) == want) return;
+    cat_request_sidetone_absolute(want);
+    ESP_LOGI(TAG, "CW monitor -> %s", want ? "Absolute" : "Relative");
+}
+
+static void drawer_refresh_cw_mon(void)
+{
+    if (!s_lbl_cw_mon) return;
+    paint_cw_mon(cat_get_sidetone_vol());
+    paint_cw_mon_note();
+    cat_query_sidetone();   // ask again for next time the drawer opens
+}
+
 // --- Resolving a gain read-back that has not answered YET -------------------
 // Both refresh functions above ask the radio and paint whatever answer arrived
 // BEFORE the ask. On the first drawer open after boot there is no previous
@@ -19164,6 +19370,10 @@ static lv_timer_t *s_gain_resolve_timer = NULL;
 static int  s_gain_resolve_ticks = 0;
 static bool s_rf_unresolved = false;
 static bool s_af_unresolved = false;
+/* T139 joins this timer rather than growing a third copy of the same wait.
+ * Same fault to avoid: the first open after boot is before CAT link-up, so the
+ * row would say "reading..." for the whole session on one lost query. */
+static bool s_mon_unresolved = false;
 
 static void gain_resolve_stop(void)
 {
@@ -19199,7 +19409,14 @@ static void gain_resolve_cb(lv_timer_t *t)
         int ag = cat_get_af_gain();
         if (ag >= 0) { paint_qmx_vol(ag); s_af_unresolved = false; }
     }
-    if (!s_rf_unresolved && !s_af_unresolved) {
+    if (s_mon_unresolved) {
+        int mv = cat_get_sidetone_vol();
+        if (mv >= 0) { paint_cw_mon(mv); s_mon_unresolved = false; }
+        else if (s_lbl_cw_mon)
+            lv_label_set_text(s_lbl_cw_mon, cat_up ? "CW monitor: reading..."
+                                                   : "CW monitor: radio not connected");
+    }
+    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
         gain_resolve_stop();
         return;
     }
@@ -19214,6 +19431,8 @@ static void gain_resolve_cb(lv_timer_t *t)
 
     if (++s_gain_resolve_ticks >= GAIN_RESOLVE_MAX_TICKS) {
         if (s_rf_unresolved) paint_qmx_rf_unknown("no answer from radio");
+        if (s_mon_unresolved && s_lbl_cw_mon)
+            lv_label_set_text(s_lbl_cw_mon, "CW monitor: no answer from radio");
         gain_resolve_stop();
         return;
     }
@@ -19222,6 +19441,7 @@ static void gain_resolve_cb(lv_timer_t *t)
     if ((s_gain_resolve_ticks % GAIN_RESOLVE_REASK_EVERY) == 0) {
         if (s_rf_unresolved) cat_query_rf_gain();
         if (s_af_unresolved) cat_query_af_gain();
+        if (s_mon_unresolved) cat_query_sidetone();
     }
 }
 
@@ -19229,8 +19449,11 @@ static void gain_resolve_start(void)
 {
     s_rf_unresolved = (s_slider_qmx_rf  != NULL) && (cat_get_rf_gain() < 0);
     s_af_unresolved = (s_slider_qmx_vol != NULL) && (cat_get_af_gain() < 0);
+    s_mon_unresolved = (s_slider_cw_mon != NULL) && (cat_get_sidetone_vol() < 0);
     s_gain_resolve_ticks = 0;
-    if (!s_rf_unresolved && !s_af_unresolved) { gain_resolve_stop(); return; }
+    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
+        gain_resolve_stop(); return;
+    }
     if (!s_gain_resolve_timer) {
         s_gain_resolve_timer = lv_timer_create(gain_resolve_cb,
                                                GAIN_RESOLVE_PERIOD_MS, NULL);

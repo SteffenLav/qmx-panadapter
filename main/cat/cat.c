@@ -344,6 +344,20 @@ static volatile bool s_force_rx_pending = false;
 static volatile uint32_t s_pending_af_gain_p1 = 0;
 // Set when someone wants the radio's current AF gain read back (drawer open).
 static volatile bool s_af_gain_query_pending = false;
+/* T139 sidetone (CW monitor) level, both halves of it. +1 encoded like the AF
+ * gain: 0 has to mean "nothing pending" while a genuine request of 0 (silent
+ * monitor) still goes through. The abs/rel pending flag is a tri-state because
+ * both of its real values are meaningful. */
+static volatile uint32_t s_pending_sidetone_vol_p1 = 0;
+static volatile int      s_pending_sidetone_abs    = -1;   /* -1 = nothing pending */
+static volatile bool     s_sidetone_query_pending  = false;
+static volatile int      s_sidetone_vol = -1;              /* -1 = never read */
+static volatile int      s_sidetone_abs = -1;              /* -1 unknown, 0 rel, 1 abs */
+/* Top of the range as the RADIO reported it during MM discovery. 0 = not
+ * known, which the drawer reads as "offer no control" - the operation manual
+ * documents the default (70) and no range, so there is nothing to hard-code
+ * that would not be an invention. */
+static volatile uint16_t s_sidetone_vol_max = 0;
 /* +1 encoded for the same reason as the AF gain above: 0 has to mean
  * "nothing pending" while a genuine request of 0 WPM (straight key)
  * still goes through. */
@@ -568,6 +582,15 @@ void cat_user_pause_set(bool paused)
         s_rf_gain_query_pending = false;
         s_pending_keyer_p1      = 0;
         s_keyer_query_pending   = false;
+        /* T139: and the sidetone pair, which matters more than most here - the
+         * operator pauses us precisely to use the radio's own CW menu, and
+         * these two live in it. Flushing a queued write minutes later would
+         * overwrite what they just set by hand. The READ-BACKS are dropped
+         * too, and the stored values below are left alone on purpose: they are
+         * last known, which is what the surfaces label them as. */
+        s_pending_sidetone_vol_p1 = 0;
+        s_pending_sidetone_abs    = -1;
+        s_sidetone_query_pending  = false;
         ESP_LOGI(TAG, "CAT paused by operator - radio released (no polling)");
     } else {
         // Coming back: the radio may have been through its own menu, which can
@@ -575,6 +598,10 @@ void cat_user_pause_set(bool paused)
         // the handshake before trusting the spectrum again - the poll task does
         // it on its next cycle, since it owns the pipe.
         s_pending_iq_reassert = true;
+        /* T139: re-read the sidetone pair. The pause exists so the operator
+         * can work the radio's own CW menu, which is where both of these
+         * live, so assuming they are unchanged is exactly the wrong bet. */
+        s_sidetone_query_pending = true;
         ESP_LOGI(TAG, "CAT resumed by operator - re-checking IQ mode");
     }
 }
@@ -604,6 +631,34 @@ void cat_query_af_gain(void)
     // pipe (see cat_request_af_gain).
     s_af_gain_query_pending = true;
 }
+
+/* ---- T139: the CW sidetone (monitor) level -------------------------------
+ * See cat.h for why this is MM and not a two-letter command, why nothing is
+ * cached in NVS, and why the write is deferred to a slider RELEASE. */
+void cat_request_sidetone_vol(uint16_t v)
+{
+    uint16_t top = s_sidetone_vol_max;
+    /* No discovered range means no write. Clamping against a number invented
+     * here would send the radio a value its own menu may refuse, and the
+     * refusal arrives as a bare ?; that tells the operator nothing. */
+    if (!top) return;
+    if (v > top) v = top;
+    s_pending_sidetone_vol_p1 = (uint32_t)v + 1;
+}
+
+void cat_request_sidetone_absolute(bool absolute)
+{
+    s_pending_sidetone_abs = absolute ? 1 : 0;
+}
+
+void cat_query_sidetone(void)
+{
+    s_sidetone_query_pending = true;
+}
+
+int cat_get_sidetone_vol(void)      { return s_sidetone_vol; }
+int cat_get_sidetone_absolute(void) { return s_sidetone_abs; }
+uint16_t cat_sidetone_vol_max(void) { return s_sidetone_vol_max; }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
@@ -1804,6 +1859,101 @@ static void cw_filters_read(void)
     s_cw_filter_mask = mask;
 }
 
+/* ---- T139: read the sidetone pair off the radio ---------------------------
+ *
+ * One MM read each, both clean (only MM *writes* spray a menu redraw back at
+ * us). Called from the same places as cw_filters_read() plus on demand when a
+ * surface opens, because unlike the filter mask these two are things the
+ * operator may change on the radio's own CW menu mid-session.
+ *
+ * Paths are the operation manual's own spelling, CW menu: "Sidetone volume"
+ * and "Sidetone abs/rel". By NAME and not by index: the manual recommends it,
+ * and unlike "Choose filters" these row names are words, so there is no
+ * name-looks-like-an-index trap here (#350). */
+#define MM_SIDETONE_VOL  "MMCW|Sidetone volume"
+#define MM_SIDETONE_ABS  "MMCW|Sidetone abs/rel"
+
+/* Wait for an MM answer to land in s_mm_resp. Returns false on silence or on a
+ * bare "?;" refusal. Callers clear s_mm_resp_len before transmitting. */
+static bool mm_answer_wait(int tenths)
+{
+    for (int i = 0; i < tenths && s_mm_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) return false;
+    if (strncmp(s_mm_resp, "MM?", 3) == 0) return false;
+    return true;
+}
+
+/* Discovery: ask the radio what KIND of parameter the sidetone volume is, and
+ * derive the slider's top from that instead of hard-coding one.
+ *
+ * MMCW|Sidetone volume?;  ->  MM<type>|<len>|Sidetone volume;
+ *
+ * type 4 is Byte, which the CAT manual defines as 0-255. type 3 is Number with
+ * <len> giving the character length of the value field, so len 2 means 0-99.
+ * Anything else is not a number and we must not offer a slider for it. */
+static void sidetone_discover(void)
+{
+    s_mm_resp_len = 0;
+    const char *q = MM_SIDETONE_VOL "?;";
+    if (cat_tx(q, strlen(q), 200) != ESP_OK || !mm_answer_wait(30)) {
+        /* Older firmware, or a radio that does not have this menu item. Not
+         * worth alarming about - the surfaces simply do not offer the control,
+         * which is the honest outcome. */
+        ESP_LOGI(TAG, "sidetone: no discovery answer - the monitor-level control "
+                      "will not be offered");
+        s_sidetone_vol_max = 0;
+        return;
+    }
+    /* "MM4|0|Sidetone volume;" - type, then the length field, then the name. */
+    int type = atoi(s_mm_resp + 2);
+    const char *bar = strchr(s_mm_resp + 2, '|');
+    int len = bar ? atoi(bar + 1) : 0;
+
+    uint16_t top = 0;
+    if (type == 4) {
+        top = 255;                       /* Byte, per the CAT manual */
+    } else if (type == 3 && len >= 1 && len <= 3) {
+        top = 1;
+        for (int i = 0; i < len; i++) top = (uint16_t)(top * 10);
+        top = (uint16_t)(top - 1);       /* len 2 -> 99 */
+    } else {
+        ESP_LOGW(TAG, "sidetone: discovery says type %d len %d ('%s') - not a "
+                      "number this can offer a slider for", type, len, s_mm_resp);
+        s_sidetone_vol_max = 0;
+        return;
+    }
+    s_sidetone_vol_max = top;
+    ESP_LOGI(TAG, "sidetone: volume is MM type %d, range 0-%u (from the radio, "
+                  "not assumed)", type, (unsigned)top);
+}
+
+/* Read both current values. Leaves a getter at -1 if the radio did not answer,
+ * which the surfaces show as "reading..." rather than inventing a number. */
+static void sidetone_read(void)
+{
+    s_mm_resp_len = 0;
+    const char *qv = MM_SIDETONE_VOL ";";
+    if (cat_tx(qv, strlen(qv), 200) == ESP_OK && mm_answer_wait(30)) {
+        int v = atoi(s_mm_resp + 2);
+        if (v >= 0 && (s_sidetone_vol_max == 0 || v <= (int)s_sidetone_vol_max))
+            s_sidetone_vol = v;
+    }
+    vTaskDelay(pdMS_TO_TICKS(40));
+
+    s_mm_resp_len = 0;
+    const char *qa = MM_SIDETONE_ABS ";";
+    if (cat_tx(qa, strlen(qa), 200) == ESP_OK && mm_answer_wait(30)) {
+        /* The radio answers with the list VALUE, and the CAT manual's own
+         * example shows it upper-cased ("MMIAMBIC A;") where the menu prints
+         * mixed case - so match on the first letter, case-insensitively,
+         * rather than on an exact spelling we have not measured. */
+        char c = s_mm_resp[2];
+        if (c == 'A' || c == 'a')      s_sidetone_abs = 1;
+        else if (c == 'R' || c == 'r') s_sidetone_abs = 0;
+        else ESP_LOGW(TAG, "sidetone: abs/rel answered '%s', which is neither", s_mm_resp);
+    }
+}
+
 /* Defined further down, beside the link-up sequence that also uses it. */
 static bool iq_mode_handshake(int max_attempts);
 
@@ -1924,6 +2074,76 @@ static bool cw_profile_apply_pending(void)
                       "but radio reports 0x%02X. Try again; if it repeats, apply it on "
                       "the radio's own CW menu.",
                  centre_ok ? "ok" : "REFUSED", mask, s_cw_filter_mask);
+    }
+    return true;
+}
+
+/* ---- T139: drain of the sidetone writes, on the poll task ----------------
+ *
+ * Both halves in ONE pass, then ONE reload. They are nearly always set
+ * together (switch to Absolute, then pick a level), and MU; costs a flat
+ * spectrum while the IQ handshake runs - so paying that once for two writes
+ * rather than twice is the whole reason this is a combined drain and not two.
+ *
+ * ⛔ READ BACK, DO NOT TRUST THE WRITE. The exact same MM write inside the CW
+ * profile burst was refused with a bare ?; while the writes around it landed,
+ * and the apply still logged success because it had only checked that the
+ * bytes went out (2026-09-07, cw_center_write_confirmed). The confirming read
+ * here is the point; the write is not.
+ *
+ * Returns true if it used the pipe this cycle. */
+static bool sidetone_apply_pending(void)
+{
+    uint32_t vol_p1 = s_pending_sidetone_vol_p1;
+    int      abs_rq = s_pending_sidetone_abs;
+    if (!vol_p1 && abs_rq < 0) return false;
+    s_pending_sidetone_vol_p1 = 0;        /* claim both before the slow part */
+    s_pending_sidetone_abs    = -1;
+
+    char cmd[48];
+    if (abs_rq >= 0) {
+        int n = snprintf(cmd, sizeof(cmd), MM_SIDETONE_ABS "=%s;",
+                         abs_rq ? "Absolute" : "Relative");
+        if (n > 0) cat_tx(cmd, (size_t)n, 200);
+        /* 120 ms, not 40: an MM write sprays a menu redraw back down the port
+         * and the next command must not arrive into it - 40 ms was measured
+         * refusing the write that followed (cw_profile_apply_pending). */
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+    if (vol_p1) {
+        int n = snprintf(cmd, sizeof(cmd), MM_SIDETONE_VOL "=%u;",
+                         (unsigned)(vol_p1 - 1));
+        if (n > 0) cat_tx(cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    /* ⛔ WITHOUT THIS THE RADIO HAS STORED IT AND APPLIED NOTHING. "MM Effect"
+     * defaults to on demand, which cost a whole bench session on the WSPR PA
+     * guard where every read-back agreed and the radio still ran at full
+     * power. */
+    cat_tx("MU;", 3, 200);
+    vTaskDelay(pdMS_TO_TICKS(250));
+    /* ⛔ AND MU; DROPS IQ MODE - Q9 is session state, so the reload leaves the
+     * radio streaming ordinary audio and the spectrum goes flat. */
+    iq_mode_handshake(4);
+
+    int want_vol = vol_p1 ? (int)(vol_p1 - 1) : -1;
+    sidetone_read();
+
+    bool vol_ok = (want_vol < 0) || (s_sidetone_vol == want_vol);
+    bool abs_ok = (abs_rq  < 0)  || (s_sidetone_abs == abs_rq);
+    if (vol_ok && abs_ok) {
+        ESP_LOGI(TAG, "sidetone: radio now reports volume %d, %s", s_sidetone_vol,
+                 s_sidetone_abs == 1 ? "Absolute" :
+                 s_sidetone_abs == 0 ? "Relative" : "abs/rel unknown");
+    } else {
+        ESP_LOGW(TAG, "sidetone: only PARTLY applied - asked volume %d / %s, radio "
+                      "reports %d / %s. Try again; if it repeats, set it on the "
+                      "radio's own CW menu.",
+                 want_vol, abs_rq < 0 ? "(unchanged)" : abs_rq ? "Absolute" : "Relative",
+                 s_sidetone_vol,
+                 s_sidetone_abs == 1 ? "Absolute" :
+                 s_sidetone_abs == 0 ? "Relative" : "unknown");
     }
     return true;
 }
@@ -2481,6 +2701,24 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
+        /* T139 sidetone read-back, ahead of its own write for the same reason
+         * the AF gain query is: a surface has just opened and is showing
+         * "reading...". Discovery runs once per link, lazily - it is one extra
+         * round trip and only the first open pays it. */
+        if (s_sidetone_query_pending) {
+            s_sidetone_query_pending = false;
+            if (s_sidetone_vol_max == 0) sidetone_discover();
+            if (s_sidetone_vol_max != 0) sidetone_read();
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        /* The write, which ends in MU; + the IQ handshake - so like the CW
+         * profile it goes ahead of the routine maintainers and nothing else
+         * should be half-done around it. */
+        if (sidetone_apply_pending()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         uint32_t cwbw = s_pending_cw_passband;
         if (cwbw != 0) {
             s_pending_cw_passband = 0;
@@ -2918,6 +3156,16 @@ static void link_task(void *arg)
              * work. It runs on link_task, which owns the pipe before the poll
              * task starts, so it cannot interleave with FA/MD/FW. */
             cw_filters_read();
+            /* T139: the sidetone pair, same reasoning and the same task, but
+             * reset FIRST. These three describe THIS radio, and a reconnect
+             * can be a different one - leaving a discovered range or a last
+             * known level behind would have the drawer describing a radio that
+             * is no longer on the bus. */
+            s_sidetone_vol_max = 0;
+            s_sidetone_vol     = -1;
+            s_sidetone_abs     = -1;
+            sidetone_discover();
+            if (s_sidetone_vol_max != 0) sidetone_read();
             // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
             // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
             // VOX serves no purpose here. It is disabled defensively: with VOX on

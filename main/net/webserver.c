@@ -6531,6 +6531,21 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
      * whatever it was when the link came up. */
     cat_query_keyer_wpm();
     cJSON_AddNumberToObject(root, "keyer_wpm",       (double)cat_get_keyer_wpm());
+    /* T139 CW monitor (Michael KZ4LY). Live from the radio for the same reason
+     * as the keyer speed, and NOT persisted here: both values live in the
+     * QMX's own EEPROM, and a copy on this side would be a second answer to
+     * "what is the monitor level" - which is the half of his report that was
+     * about not knowing who owned the value.
+     *
+     * cw_mon_max is the range the RADIO reported during MM discovery, and 0
+     * means it never answered. The page must render 0 as "no control", never
+     * as a 0-100 slider: the operation manual documents the default and no
+     * range, so any scale invented on this side would be a fiction shown as
+     * the radio's. cw_mon_vol is -1 and cw_mon_abs is -1 until it answers. */
+    cat_query_sidetone();
+    cJSON_AddNumberToObject(root, "cw_mon_vol",      (double)cat_get_sidetone_vol());
+    cJSON_AddNumberToObject(root, "cw_mon_abs",      (double)cat_get_sidetone_absolute());
+    cJSON_AddNumberToObject(root, "cw_mon_max",      (double)cat_sidetone_vol_max());
     /* CW PROFILES (#359, Uwe DL8UG). Four slots of {name, centre, filter mask}.
      * An empty slot is centre 0 and is sent as such, so the page renders it as
      * empty rather than inventing a default the operator never chose.
@@ -6938,6 +6953,38 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
                 SET_WARN("CW keyer speed was not sent - no CAT link to the radio");
             else
                 cat_request_keyer_wpm((uint16_t)wpm);
+        }
+    }
+
+    {
+        /* T139 CW monitor -> the radio, over CAT, never stored here.
+         *
+         * Both halves accepted in one POST and drained together, which is also
+         * how the Tab5 sends them: an MM write needs MU; to take effect and
+         * MU; drops IQ mode, so two separate writes would flatten the spectrum
+         * twice for one change of mind.
+         *
+         * ⛔ A WARNING, NOT A 400, for the same reason as the keyer speed
+         * above (Randy N4OPI): no CAT link says nothing about the rest of the
+         * save, and there is nothing stored on this side to keep for later.
+         *
+         * An out-of-range level is clamped by cat_request_sidetone_vol()
+         * against the range the RADIO reported, not against one named here. */
+        cJSON *itv = cJSON_GetObjectItem(root, "cw_mon_vol");
+        cJSON *ita = cJSON_GetObjectItem(root, "cw_mon_abs");
+        bool want_v = cJSON_IsNumber(itv) && itv->valueint >= 0;
+        bool want_a = cJSON_IsNumber(ita) && ita->valueint >= 0;
+        if (want_v || want_a) {
+            if (!cat_is_ready()) {
+                SET_WARN("CW monitor was not sent - no CAT link to the radio");
+            } else if (want_v && cat_sidetone_vol_max() == 0) {
+                SET_WARN("CW monitor level was not sent - this radio has not "
+                         "reported the setting over CAT");
+                if (want_a) cat_request_sidetone_absolute(ita->valueint != 0);
+            } else {
+                if (want_a) cat_request_sidetone_absolute(ita->valueint != 0);
+                if (want_v) cat_request_sidetone_vol((uint16_t)itv->valueint);
+            }
         }
     }
 
