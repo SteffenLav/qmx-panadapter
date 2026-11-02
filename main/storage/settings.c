@@ -71,7 +71,9 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
 #define KEY_CQ_MAX     "cq_max"
-#define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites
+#define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites (set A, "General")
+#define KEY_CW_MSG_B   "cw_msgb"   // + digit 0..5 appended at use sites (set B, "Contest")
+#define KEY_CW_MSG_SET "cw_mset"   // which set is active: 0 = General, 1 = Contest
 #define KEY_CW_PARK    "cw_park"
 #define KEY_CW_SIM     "cw_sim"
 #define KEY_CW_PAGE_EN "cw_page_en"
@@ -274,7 +276,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 151, 8 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 156, 3 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -507,6 +509,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
    carries them, the NVS KEY strings do - and tools/check_dirty_bits.py is
    the authority on what is free. */
 #define DIRTY_CW_PAGE_EN      153  /* master switch for the CW page - default OFF */
+#define DIRTY_CW_MSG_B        155  /* all 6 slots of macro set B "Contest", ONE bit - only
+                                       5 free when this was added, unlike cw_msg's six (67..72) */
+#define DIRTY_CW_MSG_SET      156  /* active macro set toggle: 0 = General, 1 = Contest */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -716,6 +721,19 @@ static void flush_task(void *arg)
                 nvs_set_str(s_nvs, k, snap->cw_msg[i]);
             }
         }
+        if (dirty_test(&dirty_local, DIRTY_CW_MSG_B)) {
+            // ONE bit for all 6, unlike set A's six (DIRTY_CW_MSG0..72) - only
+            // 5 dirty bits were free when this set was added. Costs 6 NVS
+            // writes whenever ANY slot of this set is edited, instead of 1;
+            // the editor saves all 6 fields together anyway, so this never
+            // fires more often than set A's six already did per edit.
+            for (int i = 0; i < 6; i++) {
+                char k[12];
+                snprintf(k, sizeof(k), KEY_CW_MSG_B "%d", i);
+                nvs_set_str(s_nvs, k, snap->cw_msg_b[i]);
+            }
+        }
+        if (dirty_test(&dirty_local, DIRTY_CW_MSG_SET)) nvs_set_u8(s_nvs, KEY_CW_MSG_SET, snap->cw_msg_set);
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap->cw_park);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_PAGE_EN)) nvs_set_u8(s_nvs, KEY_CW_PAGE_EN, snap->cw_page_en ? 1 : 0);
@@ -1050,6 +1068,18 @@ static void load_from_nvs(qmx_settings_t *out)
     strcpy(out->cw_msg[3], "{CALL} TU 73 EE");
     strcpy(out->cw_msg[4], "AGN AGN BK");
     strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
+    // Set B defaults, "Contest" - same structure, 5NN instead of 599 (decided
+    // 2026-11-02, see memory/project_cw_macro_set_selector_decided.md). No
+    // {SERIAL} macro exists yet (never built past the design doc), so a real
+    // serial-exchange contest macro still needs a hand edit here - these are
+    // a starting point, not a finished contest sheet.
+    strcpy(out->cw_msg_b[0], "CQ CQ TEST DE {MYCALL} {MYCALL} K");
+    strcpy(out->cw_msg_b[1], "CQ TEST DE {MYCALL} {MYCALL} TEST");
+    strcpy(out->cw_msg_b[2], "{CALL} 5NN 5NN BK");
+    strcpy(out->cw_msg_b[3], "{CALL} TU 73 EE");
+    strcpy(out->cw_msg_b[4], "AGN AGN BK");
+    strcpy(out->cw_msg_b[5], "QRZ? DE {MYCALL} K");
+    out->cw_msg_set = 0;   // General first - the set that already had real use
     /* ⚠ NO DEFAULT USES {PARK}, and that is on purpose after looking at what
      * it would cost. expand_macros() REFUSES a message whose macro has no
      * value, so putting {PARK} in M2 would stop "CQ POTA" working for
@@ -1274,7 +1304,11 @@ static void load_from_nvs(qmx_settings_t *out)
         snprintf(k, sizeof(k), KEY_CW_MSG "%d", i);
         sz = sizeof(out->cw_msg[i]);
         nvs_get_str(s_nvs, k, out->cw_msg[i], &sz);   // absent key keeps the default
+        snprintf(k, sizeof(k), KEY_CW_MSG_B "%d", i);
+        sz = sizeof(out->cw_msg_b[i]);
+        nvs_get_str(s_nvs, k, out->cw_msg_b[i], &sz); // absent key keeps the default
     }
+    { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_MSG_SET, &v8) == ESP_OK) out->cw_msg_set = v8 > 1 ? 0 : v8; }
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_PAGE_EN, &v8) == ESP_OK) out->cw_page_en = v8 != 0; }
@@ -1983,6 +2017,34 @@ void settings_set_cw_msg(uint8_t idx, const char *text)
     strcpy(s_pending.cw_msg[idx], buf);
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_MSG0 + idx);
+}
+
+// Explicit-set sibling for the CW editor, which knows which set it is
+// showing and must not guess from s_pending.cw_msg_set (that would make a
+// save land in whichever set a web/CAT write happened to switch to mid-edit).
+// set==0 behaves exactly like settings_set_cw_msg(); config_io.c's import
+// keeps calling that one directly, so set A's NVS round-trip is unchanged.
+void settings_set_cw_msg_for_set(uint8_t set, uint8_t idx, const char *text)
+{
+    if (set == 0) { settings_set_cw_msg(idx, text); return; }
+    if (!s_ready || idx > 5) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    char buf[sizeof(s_pending.cw_msg_b[0])] = {0};
+    if (text) { strncpy(buf, text, sizeof(buf) - 1); }
+    if (strcmp(s_pending.cw_msg_b[idx], buf) == 0) { xSemaphoreGive(s_mutex); return; }
+    strcpy(s_pending.cw_msg_b[idx], buf);
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_MSG_B);   // one bit for the whole set, see its #define
+}
+
+void settings_set_cw_msg_set(uint8_t set)
+{
+    if (!s_ready || set > 1) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_msg_set == set) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_msg_set = set;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_MSG_SET);
 }
 
 void settings_set_cw_park(const char *park)

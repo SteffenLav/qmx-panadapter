@@ -54,6 +54,8 @@ static int64_t        s_cand_us;
 #define CAND_WINDOW_US  (30 * 1000000LL)
 static int64_t        s_heard_us;
 static char           s_rst_rcvd[4];
+static char           s_rst_sent[4] = "599";  // see cw_qso_note_sent() - T142-adjacent fix,
+                                               // was a hard-coded literal at the TU log site
 static int64_t        s_cq_sent_us;           // our last CQ went out
 static int64_t        s_addressed_us;         // our own call last decoded
 static bool           s_pending_auto_adopt;   // set by feed(), consumed on the LVGL tick
@@ -488,6 +490,26 @@ void cw_qso_note_sent(const char *text)
     if (!text) return;
     // "CQ" as a standalone leading token marks a CQ run for auto-adoption.
     bool is_cq = (strncmp(text, "CQ", 2) == 0) && (text[2] == ' ' || text[2] == '\0');
+
+    // The TU-step log used to hard-code rst_sent="599" because that is what
+    // the old single macro set always keyed. With a second set using 5NN,
+    // that would log a report nobody sent. Scan whatever was actually keyed
+    // for an RST-shaped token and remember it; cw_qso_on_next_sent() logs
+    // this instead of a literal. 88 covers the 80-char KY buffer plus margin;
+    // strtok_r needs a mutable copy, so this cannot alias `text`.
+    char buf[88];
+    snprintf(buf, sizeof(buf), "%s", text);
+    char *save = NULL;
+    for (char *tok = strtok_r(buf, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+        char rst[4];
+        if (is_rst(tok, rst)) {
+            portENTER_CRITICAL(&s_mux);
+            memcpy(s_rst_sent, rst, sizeof(rst));
+            portEXIT_CRITICAL(&s_mux);
+            break;
+        }
+    }
+
     portENTER_CRITICAL(&s_mux);
     if (is_cq) s_cq_sent_us = esp_timer_get_time();
     portEXIT_CRITICAL(&s_mux);
@@ -627,7 +649,7 @@ static bool compose(char *out, size_t out_sz, int mem_idx, bool prefix_target)
 {
     qmx_settings_t s;
     settings_load_all(&s);
-    const char *m = s.cw_msg[mem_idx];
+    const char *m = s.cw_msg_set ? s.cw_msg_b[mem_idx] : s.cw_msg[mem_idx];
     if (!m[0]) return false;
     char tgt[CALL_MAX];
     cw_qso_get_target(tgt, sizeof(tgt));
@@ -667,14 +689,18 @@ bool cw_qso_on_next_sent(void)
         return false;
     }
     if (st == CW_ESM_TU) {
-        // The TU is on its way: log the QSO. RST sent is genuinely 599 (it
-        // is what memory M3 keys); RST rcvd only if the capture heard one -
-        // never fabricated (the FT8 lesson, v1.3.4).
+        // The TU is on its way: log the QSO. RST sent is read back from what
+        // was actually keyed (cw_qso_note_sent()), not a literal - a Contest
+        // macro keying 5NN must not log 599. RST rcvd only if the capture
+        // heard one - never fabricated (the FT8 lesson, v1.3.4).
         qmx_settings_t s;
         settings_load_all(&s);
-        char tgt[CALL_MAX], rst[4];
+        char tgt[CALL_MAX], rst[4], sent[4];
         cw_qso_get_target(tgt, sizeof(tgt));
         cw_qso_get_rst_rcvd(rst, sizeof(rst));
+        portENTER_CRITICAL(&s_mux);
+        memcpy(sent, s_rst_sent, sizeof(sent));
+        portEXIT_CRITICAL(&s_mux);
         adif_qso_t q = {
             .their_call = tgt,
             .my_call    = s.my_callsign,
@@ -682,7 +708,7 @@ bool cw_qso_on_next_sent(void)
             .their_grid = "",
             .freq_hz    = cat_get_frequency(),  // 0 with no radio = sim/test record
             .mode       = "CW",
-            .rst_sent   = "599",
+            .rst_sent   = sent,
             .rst_rcvd   = rst,
             .qso_time   = time(NULL),
         };

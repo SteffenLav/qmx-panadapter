@@ -4153,6 +4153,7 @@ static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panada
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_check_wspr_test = NULL;       // the same setting, WSPR page ("Test station")
+static lv_obj_t *s_check_cw_sim = NULL;          // CW practice mode checkbox (own flag, cw_sim_en)
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
 static bool      s_sim_mode_locked = false;      // NEVER true since #256 - kept with the
                                                   // guard pattern apply_sim_mode_lock()
@@ -4855,6 +4856,7 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
     {
         qmx_settings_t s;
         settings_load_all(&s);
+        bool changed = false;
         if (s.sim_mode_en != s_sim_mode_en) {
             s_sim_mode_en = s.sim_mode_en;
             ESP_LOGI(TAG, "FT8 simulation mode changed elsewhere: %s",
@@ -4866,8 +4868,23 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
                 if (s_sim_mode_en) lv_obj_add_state(boxes[i], LV_STATE_CHECKED);
                 else               lv_obj_remove_state(boxes[i], LV_STATE_CHECKED);
             }
-            ui_refresh_sim_mode_indicator();
+            changed = true;
         }
+        // Same staleness class as sim_mode_en above, for CW's own flag: a
+        // cw_sim_en write from anywhere other than this drawer checkbox (none
+        // exists yet - see the sim_mode_en comment and T142) would otherwise
+        // leave the CW bezel breathing, or not breathing, on a stale state.
+        if (s.cw_sim_en != s_cw_sim_en) {
+            s_cw_sim_en = s.cw_sim_en;
+            ESP_LOGI(TAG, "CW simulation mode changed elsewhere: %s",
+                     s_cw_sim_en ? "ON (radio not keyed)" : "off");
+            if (s_check_cw_sim) {
+                if (s_cw_sim_en) lv_obj_add_state(s_check_cw_sim, LV_STATE_CHECKED);
+                else             lv_obj_remove_state(s_check_cw_sim, LV_STATE_CHECKED);
+            }
+            changed = true;
+        }
+        if (changed) ui_refresh_sim_mode_indicator();
     }
     // Reconcile the microSD-mounted bottom-bar dot here (LVGL thread, no lock
     // needed) - ui_set_sd_active() only records the wanted state. See s_sd_want.
@@ -15878,6 +15895,7 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_pskrep,         c.pskreporter_en);
     sync_cb(s_check_sim_mode,       c.sim_mode_en);
     sync_cb(s_check_wspr_test,      c.sim_mode_en);
+    sync_cb(s_check_cw_sim,         c.cw_sim_en);
     sync_cb(s_check_spots,          c.spots_en);
     sync_cb(s_check_rbn,            c.rbn_en);
     sync_cb(s_check_cluster,        c.cluster_en);
@@ -18080,8 +18098,8 @@ static void drawer_build(void)
         qmx_settings_t scfg_cwsim;
         settings_load_all(&scfg_cwsim);
         s_cw_sim_en = scfg_cwsim.cw_sim_en;
-        lv_obj_t *cb = make_drawer_checkbox(sec, s_cw_sim_en, drawer_check_cw_sim_cb, NULL);
-        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
+        s_check_cw_sim = make_drawer_checkbox(sec, s_cw_sim_en, drawer_check_cw_sim_cb, NULL);
+        lv_obj_align(s_check_cw_sim, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
     // The km/miles switch alone, for the WSPR page (DRAWER_SEC_WSPRDIST). Same

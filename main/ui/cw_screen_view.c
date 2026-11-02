@@ -98,6 +98,10 @@ static lv_obj_t *s_tk_now[CW_LINE_ROWS];
 static lv_obj_t *s_tk_prev[CW_LINE_ROWS];
 static lv_obj_t *s_tk_tx[CW_LINE_ROWS];
 static lv_obj_t *s_lbl_hint  = NULL;   // copilot: plain-language read of the decode
+static lv_obj_t *s_btn_set_a = NULL;   // "General" toggle half
+static lv_obj_t *s_btn_set_b = NULL;   // "Contest" toggle half
+static lv_obj_t *s_lbl_set_a = NULL;
+static lv_obj_t *s_lbl_set_b = NULL;
 static lv_obj_t *s_btn_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_wpm   = NULL;
@@ -255,6 +259,53 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
     return true;
 }
 
+// Which set's text a slot actually sends - toggle decided 2026-11-02 (see
+// memory/project_cw_macro_set_selector_decided.md). Every reader of cw_msg[]
+// goes through this, so there is exactly one place that knows the rule.
+static inline const char *active_cw_msg(const qmx_settings_t *s, int i)
+{
+    return s->cw_msg_set ? s->cw_msg_b[i] : s->cw_msg[i];
+}
+
+static void refresh_next_label(void);   // fwd (ESM section below) - needed early by set_toggle_cb
+static void refresh_mem_labels(void);    // fwd - defined right below, but set_toggle_cb (above it) needs it too
+
+// Highlights whichever half is active - filled CW blue, the other dimmed.
+// Called on page show and right after a toggle tap; nothing else writes
+// cw_msg_set today, so there is no staleness case to guard against yet.
+//
+// Label colour follows the fill: UI_COLOR_MODE_CW_TEXT (0x5CB4F0) is a light
+// blue, and white text on it reads as low-contrast (operator, 2026-11-02) -
+// black reads cleanly there, so the ON half gets black text and the OFF half
+// (dark 0x2a2f37) keeps white.
+static void refresh_set_toggle(void)
+{
+    if (!s_btn_set_a || !s_btn_set_b) return;
+    qmx_settings_t s;
+    settings_load_all(&s);
+    lv_obj_t *on  = s.cw_msg_set ? s_btn_set_b : s_btn_set_a;
+    lv_obj_t *off = s.cw_msg_set ? s_btn_set_a : s_btn_set_b;
+    lv_obj_t *lbl_on  = s.cw_msg_set ? s_lbl_set_b : s_lbl_set_a;
+    lv_obj_t *lbl_off = s.cw_msg_set ? s_lbl_set_a : s_lbl_set_b;
+    lv_obj_set_style_bg_color(on,  lv_color_hex(UI_COLOR_MODE_CW_TEXT), 0);
+    lv_obj_set_style_bg_opa(on, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(off, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_bg_opa(off, LV_OPA_COVER, 0);
+    if (lbl_on)  lv_obj_set_style_text_color(lbl_on,  lv_color_hex(0x000000), 0);
+    if (lbl_off) lv_obj_set_style_text_color(lbl_off, lv_color_hex(0xffffff), 0);
+}
+
+// Tap either half: switch the active set and refresh everything that reads
+// it (the memory previews, the NEXT ladder's next line, and this toggle).
+static void set_toggle_cb(lv_event_t *e)
+{
+    uint8_t set = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    settings_set_cw_msg_set(set);
+    refresh_set_toggle();
+    refresh_mem_labels();
+    refresh_next_label();
+}
+
 // Button label: the expanded preview when macros resolve, the raw text
 // otherwise — either way the operator sees what a tap will actually send.
 static void refresh_mem_labels(void)
@@ -265,8 +316,9 @@ static void refresh_mem_labels(void)
         if (!s_lbl_mem[i]) continue;
         char exp[CW_SEND_MAX + 1];
         const char *missing = NULL;
-        const char *txt = s.cw_msg[i][0] ? s.cw_msg[i] : "(empty)";
-        if (s.cw_msg[i][0] && expand_macros(s.cw_msg[i], exp, sizeof(exp), &missing))
+        const char *m = active_cw_msg(&s, i);
+        const char *txt = m[0] ? m : "(empty)";
+        if (m[0] && expand_macros(m, exp, sizeof(exp), &missing))
             txt = exp;
         lv_label_set_text(s_lbl_mem[i], txt);
     }
@@ -304,6 +356,9 @@ static lv_obj_t *s_edit_ta6[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_num[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_title = NULL;
 static lv_obj_t *s_edit_kb    = NULL;
+static uint8_t   s_edit_set   = 0;   // which set this editor instance is showing,
+                                      // captured at open so a toggle elsewhere mid-edit
+                                      // cannot move the Save onto the other set
 
 static void refresh_next_label(void);   // fwd (ESM section below)
 static void edit_layout(bool kb_up);    // fwd (defined with edit_build)
@@ -333,9 +388,9 @@ static void edit_save_cb(lv_event_t *e)
         const char *raw = lv_textarea_get_text(s_edit_ta6[i]);
         if (raw) snprintf(buf, sizeof(buf), "%s", raw);
         for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
-        settings_set_cw_msg((uint8_t)i, buf);
+        settings_set_cw_msg_for_set(s_edit_set, (uint8_t)i, buf);
     }
-    ESP_LOGI(TAG, "saved all 6 CW memories");
+    ESP_LOGI(TAG, "saved all 6 CW macros, set %s", s_edit_set ? "Contest" : "General");
     edit_close();
     refresh_mem_labels();
     refresh_next_label();
@@ -570,7 +625,7 @@ static void edit_build(void)
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     s_edit_title = lv_label_create(panel);
-    lv_label_set_text(s_edit_title, "CW memories");
+    lv_label_set_text(s_edit_title, "CW macros");   // edit_open() sets the real "- Contest/POTA" text
     lv_obj_set_style_text_color(s_edit_title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_32, 0);
     /* ALONE ON THE TOP LINE. The five buttons used to share it, which is
@@ -722,8 +777,12 @@ static void edit_open(int slot)
     edit_build();
     qmx_settings_t s;
     settings_load_all(&s);
+    s_edit_set = s.cw_msg_set;
+    if (s_edit_title)
+        lv_label_set_text_fmt(s_edit_title, "CW macros - %s",
+                               s_edit_set ? "Contest" : "General");
     for (int i = 0; i < N_CW_MEM; i++) {
-        lv_textarea_set_text(s_edit_ta6[i], s.cw_msg[i]);
+        lv_textarea_set_text(s_edit_ta6[i], active_cw_msg(&s, i));
         lv_obj_remove_state(s_edit_ta6[i], LV_STATE_FOCUSED);
     }
     /* No field is focused on open, so nothing is a paste target yet - a
@@ -923,8 +982,17 @@ static bool send_cw_text(const char *raw)
     cw_qso_note_sent(exp);
     ESP_LOGI(TAG, "CW send: '%s'%s", exp, cw_sim ? " [SIM]" : "");
     if (s_lbl_status) {
-        lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
-        lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
+        // T142: "Keying:" in red claims the radio is transmitting. A sim send
+        // never reaches CAT (see above) - the bezel already warns the whole
+        // screen that nothing here is real, so this line must not repeat the
+        // opposite claim for the ~500 ms before the next poll tick overwrites it.
+        if (cw_sim) {
+            lv_label_set_text_fmt(s_lbl_status, "Simulated:\n%s", exp);
+            lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        } else {
+            lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
+            lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
+        }
     }
     return true;
 }
@@ -942,10 +1010,12 @@ static bool send_cw_text(const char *raw)
 //   - lifting fires whatever is highlighted;
 //   - holding still on it for MEM_LONG_MS opens the editor instead.
 // The hold timer RESTARTS whenever the highlight moves, so time spent hunting
-// for the right button never counts toward the long-press - which is why the
-// threshold could go up to a comfortable 2 s (it was 600 ms, unusable once
-// dragging exists).
-#define MEM_LONG_MS   2000
+// for the right button never counts toward the long-press - 600 ms used to be
+// unusable for exactly that reason before the drag-correct highlight existed.
+// 2026-11-02: 2000 ms read as "ultra-long" to the operator once the highlight
+// made hunting free; 800 ms (near ota_modal's 700 ms precedent) trades back a
+// little of that accident margin for a press that feels normal.
+#define MEM_LONG_MS   800
 #define MEM_BG_IDLE   0x2a2f37
 #define MEM_BG_ARMED  0x5b636f   // light grey: "this one will fire"
 
@@ -1032,8 +1102,9 @@ static void mem_released_cb(lv_event_t *e)
 
     qmx_settings_t s;
     settings_load_all(&s);
-    if (!s.cw_msg[idx][0]) { edit_open(idx); return; }   // empty slot: edit it
-    send_cw_text(s.cw_msg[idx]);
+    const char *m = active_cw_msg(&s, idx);
+    if (!m[0]) { edit_open(idx); return; }   // empty slot: edit it
+    send_cw_text(m);
 }
 
 static void mem_press_lost_cb(lv_event_t *e)
@@ -1403,9 +1474,43 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // Pane order (operator, 2026-08-02): header, then the SETTINGS (WPM,
     // park), then the ACTIONS (NEXT, memories), status at the bottom.
+    //
+    // Macro set toggle (decided 2026-11-02, see
+    // memory/project_cw_macro_set_selector_decided.md): "a toggle at the TOP
+    // of the left panel", so it goes here, between the header and WPM -
+    // everything below shifts down by SET_ROW_SHIFT. 30 px row + 4 px gap =
+    // 34, same tight spacing already used between WPM/Park/NEXT (4-6 px) -
+    // chosen to leave the status line's existing two-line wrap room intact;
+    // operator confirmed on the glass 2026-11-02 that the slack is fine.
+#define SET_ROW_Y      58
+#define SET_ROW_H      30
+#define SET_ROW_SHIFT  34
+    {
+        int halfw = (PANE_W - 30) / 2;   // 10 margin each side, 10 gap between
+        s_btn_set_a = make_pane_btn(s_pane, 10, SET_ROW_Y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
+        lv_obj_add_event_cb(s_btn_set_a, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
+        // "POTA" renamed to "General" 2026-11-02 (operator): the set is not
+        // POTA-specific - M2's default text just happens to say "CQ POTA",
+        // which the operator can still edit - and POTA is one of several
+        // activation programmes (SOTA, IOTA, WWFF...), so the label should
+        // not single one out.
+        s_lbl_set_a = lv_label_create(s_btn_set_a);
+        lv_label_set_text(s_lbl_set_a, "General");
+        lv_obj_set_style_text_color(s_lbl_set_a, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(s_lbl_set_a, &lv_font_montserrat_20, 0);
+        lv_obj_center(s_lbl_set_a);
+
+        s_btn_set_b = make_pane_btn(s_pane, 10 + halfw + 10, SET_ROW_Y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
+        lv_obj_add_event_cb(s_btn_set_b, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+        s_lbl_set_b = lv_label_create(s_btn_set_b);
+        lv_label_set_text(s_lbl_set_b, "Contest");
+        lv_obj_set_style_text_color(s_lbl_set_b, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(s_lbl_set_b, &lv_font_montserrat_20, 0);
+        lv_obj_center(s_lbl_set_b);
+    }
 
     // WPM stepper row.
-    lv_obj_t *bm = make_pane_btn(s_pane, 10, 58, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_t *bm = make_pane_btn(s_pane, 10, 58 + SET_ROW_SHIFT, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lm = lv_label_create(bm);
     lv_label_set_text(lm, "-");
@@ -1423,9 +1528,9 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
     lv_obj_set_width(s_lbl_wpm, (PANE_W - 80) - 80);
     lv_obj_set_style_text_align(s_lbl_wpm, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_lbl_wpm, 80, 67);   // 58 + (48 - ~29 line height) / 2
+    lv_obj_set_pos(s_lbl_wpm, 80, 67 + SET_ROW_SHIFT);   // 58 + (48 - ~29 line height) / 2
 
-    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58 + SET_ROW_SHIFT, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lp = lv_label_create(bp);
     lv_label_set_text(lp, "+");
@@ -1434,7 +1539,7 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_center(lp);
 
     // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110 + SET_ROW_SHIFT, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
     lv_label_set_text(s_lbl_park, "Park: --");
@@ -1444,7 +1549,7 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // ESM NEXT button (Tier 2): green like every commit button; the body
     // label always states what a tap will key.
-    s_btn_next = make_pane_btn(s_pane, 10, 158, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
+    s_btn_next = make_pane_btn(s_pane, 10, 158 + SET_ROW_SHIFT, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
     lv_obj_add_event_cb(s_btn_next, next_pressed_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_btn_next, next_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_next_hdr = lv_label_create(s_btn_next);
@@ -1462,7 +1567,7 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // Six memory buttons, single-line previews (long-press shows the full
     // text in the editor; the NEXT button carries the full ladder text).
-    int y = 232;
+    int y = 232 + SET_ROW_SHIFT;
     for (int i = 0; i < N_CW_MEM; i++) {
         s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, MEM_BG_IDLE, 0x555555);
         // Press = preview, drag = re-pick, release = fire, hold = edit. Acting
@@ -1611,6 +1716,7 @@ void cw_screen_view_show(void)
         settings_load_all(&s);
         cw_qso_set_my_call(s.my_callsign);   // capture heuristics need it
     }
+    refresh_set_toggle();
     refresh_mem_labels();
     refresh_next_label();
     cat_query_keyer_wpm();

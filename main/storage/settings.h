@@ -416,7 +416,9 @@ typedef struct {
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
-    char     cw_msg[6][44];    // 6 CW keyer memories ({MYCALL}/{PARK} macros; see cw_screen_view.c)
+    char     cw_msg[6][44];    // 6 CW macros, SET A "General" ({MYCALL}/{PARK} macros; see cw_screen_view.c)
+    char     cw_msg_b[6][44];  // 6 CW macros, SET B "Contest" - same slots, same ladder indices
+    uint8_t  cw_msg_set;       // which set is active/edited: 0 = General, 1 = Contest (default 0)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
     bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
     /* MASTER SWITCH FOR THE CW PAGE, and the reason it can ship on main at
@@ -1064,7 +1066,9 @@ uint8_t settings_get_cq_listen_every(void); // narrow, same reason (#409)
 // CW keyer memories (idx 0..5) and the POTA park reference for the {PARK}
 // macro. Defaults are pre-filled (CQ / CQ POTA / exchange / TU 73 / AGN / QRZ)
 // so the CW page is usable before anything is edited. Debounced flush.
-void settings_set_cw_msg(uint8_t idx, const char *text);
+void settings_set_cw_msg(uint8_t idx, const char *text);          // set A ("General") only - config_io.c imports into this one
+void settings_set_cw_msg_for_set(uint8_t set, uint8_t idx, const char *text);  // explicit set, used by the CW editor
+void settings_set_cw_msg_set(uint8_t set);                        // 0 = General, 1 = Contest
 void settings_set_cw_park(const char *park);
 
 // The park reference alone, narrow - the CW page resolves {PARK} from its
