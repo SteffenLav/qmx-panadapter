@@ -88,6 +88,89 @@ This is what makes the page usable if you cannot yet copy CW by ear: the ticker 
 
 ---
 
+## Listening: the two audio paths, and what each one can do
+
+The Tab5 and the QMX produce **separate** audio from the same receiver, and
+knowing which is which is the difference between a setup that works first time
+and an evening of fighting it.
+
+| | QMX headphone output | Tab5 output (speaker or headphones) |
+|---|---|---|
+| Source | the QMX's own demodulator | the raw I/Q stream over USB |
+| Carries your keying sidetone | **yes** | **no, and it never will** |
+| Stereo separation of two stations | no | **yes** — Binaural CW |
+| Set its level with | the radio's volume (or **QMX volume** in the drawer) | **RX Volume** in Resource Management |
+
+**The two volumes are completely independent.** Measured on the bench
+2026-11-02: moving the QMX's AF gain across its whole useful range — 0 dB, then
+40 dB, a factor of 100 in amplitude, each confirmed by the radio's own
+read-back — changed the level arriving over USB by nothing at all. I/Q mode
+carries the samples from *before* the QMX's audio chain, so the radio's volume
+and its RF gain both stay on the radio's side of the glass. Turn the QMX right
+down and the Tab5 keeps playing at exactly the same level.
+
+### Why the Tab5 cannot give you a sidetone
+
+Its playback path is about **100 ms** deep — ~80 ms of I2S buffering, up to
+48.5 ms inside the codec write, plus a ~21 ms processing frame. A dot at
+20 WPM lasts 60 ms, so the tone would begin after the element that produced it
+had already ended, and under QSK you would hear the previous character while
+sending the next. This is measured, it is the Tab5's own latency rather than
+the radio's, and no setting changes it. FlexRadio reach the same conclusion
+about their own hardware: the sidetone is delivered by whatever device is doing
+the keying.
+
+So **your keying monitor always comes from the QMX.**
+
+### Binaural CW needs both ears
+
+**Binaural CW (stereo separation)** in Resource Management splits the CW
+passband the radio has already chosen into its lower and upper halves and pans
+them left and right, with a little cross-feed so a dead-centre station still
+sits in the middle. Two stations either side of your pitch then separate
+spatially instead of blurring into one note.
+
+Three things to know:
+
+- It needs **RX Audio** switched on first — the effect is produced on the Tab5.
+- It applies in **CW and CW-R only**. Every other mode is plain mono whatever
+  this is set to.
+- ⚠ **It is not remembered across a reboot.** Switch it back on after a power
+  cycle.
+- ⛔ **Do not split your headphones between the two radios while it is on.**
+  One ear then gives you one half of the passband and only a trace of the
+  other, so you would lose stations on the far side of your own pitch. If you
+  want the QMX in one ear and the Tab5 in the other, turn Binaural CW **off**
+  and accept mono on the Tab5 side.
+
+### The recommended setup for working stations by paddle
+
+Both ears on the Tab5 with Binaural CW on, and the QMX's sidetone switched into
+those same headphones on key-down — an analog audio switch driven from PTT.
+That is the only arrangement that gives you spatial separation while receiving
+*and* a monitor with correct QSK timing, because the switch moves the audio in
+hardware with no buffer in the way. The design is Michael KZ4LY's.
+
+Without a switch you have to choose one:
+
+- **Both ears on the Tab5** — best receiving, no keying monitor.
+- **QMX in one ear, Tab5 in the other, Binaural CW off** — a monitor in one
+  ear and mono receive in the other.
+
+On the radio's side, whichever you pick, set the monitor so it stops moving
+when you change receive volume:
+
+1. In the QMX's **CW** menu set **Sidetone abs/rel** to **Absolute**.
+2. Set **Sidetone volume** to taste.
+
+Left at the factory setting of *Relative*, the main volume control moves the
+received audio and your sidetone together by the same amount, so you cannot
+bring the receive level down without taking your own monitor with it. The
+**CW monitor level** row in the settings drawer sets both of these from the
+Tab5, and reads them back from the radio rather than keeping its own copy.
+
+---
+
 ## Running a QSO
 
 The **NEXT** button always shows exactly what it will send. One tap sends it and advances:
