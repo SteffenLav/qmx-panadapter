@@ -16204,7 +16204,11 @@ static void drawer_build(void)
         qmx_settings_t vcfg;
         settings_load_all(&vcfg);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 126);
+        /* 152: the caption added 2026-11-02 wraps to two 24 px lines from
+         * y=76, so it ends at 124 in what was a 126 px box - flush, with 2 px
+         * to spare, which is not margin. Same measurement as DRAWER_SEC_CWMON
+         * below. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 152);
         s_lbl_qmx_vol = lv_label_create(sec);
         char vbuf[32];
         snprintf(vbuf, sizeof(vbuf), "QMX volume: %u dB", (unsigned)vcfg.qmx_vol_db);
@@ -16236,7 +16240,7 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(vcap, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(vcap, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_align(vcap, LV_ALIGN_TOP_LEFT, 0, 76);
-        y += 126;
+        y += 152;
     }
 
     // QMX RF gain (Stan's suggestion via Samuel W7STF, 2026-08-07), directly
@@ -16326,7 +16330,17 @@ static void drawer_build(void)
      * range is still never invented: the slider carries no usable range until
      * cw_mon_apply_range() sets the one the radio reported. */
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWMON, y, 162);
+        /* ⛔ 190, NOT 162, AND THE 162 WAS MEASURED WRONG BY ME. The note at
+         * y=126 wraps to TWO lines of montserrat_20 in DRAWER_W-32 = 488 px,
+         * and a montserrat_20 line is 24 px on the glass (read off the
+         * operator's screenshot, 2026-11-02: the two lines sit at y 347 and
+         * 371). 126 + 48 = 174, so 162 clipped the second line - "too. Tick
+         * the box above." was cut by the row below it. 190 leaves 16 px.
+         *
+         * ⚠ The rule this broke is the project's own: a label's fit is
+         * PIXELS, not characters. I sized this section by eye from the rows
+         * around it instead of from the text it has to hold. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWMON, y, 190);
 
         s_lbl_cw_mon = lv_label_create(sec);
         lv_obj_set_style_text_color(s_lbl_cw_mon, lv_color_hex(0xFFFFFF), 0);
@@ -16369,7 +16383,7 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(s_lbl_cw_mon_note,
                                     lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_align(s_lbl_cw_mon_note, LV_ALIGN_TOP_LEFT, 0, 126);
-        y += 162;
+        y += 190;
     }
 
     // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.
