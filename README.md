@@ -622,6 +622,27 @@ Full chapter: [tab5.lav.dk/guide/audio](https://tab5.lav.dk/guide/audio/)
 
 ---
 
+## CW
+
+A CW page with the radio's own decoder on screen: a **decode ticker** that
+squelches a quiet band's endless lone `T`s, a **copilot hint line** that says
+what the copy *meant* ("W1AW is calling CQ — tap the card to answer"), memory
+messages, and a station card that tells you whether you have worked them
+before.
+
+It also sets out the one thing that catches everybody: **the Tab5 and the radio
+produce separate audio**, and only the radio's can carry your keying sidetone.
+The Tab5's playback path is about 100 ms deep, which is longer than a dot at
+20 WPM, so the tone would arrive after the element that made it. The chapter
+says which path does what, and what the two honest headphone arrangements are.
+
+The page ships **disabled**. Turn it on with `cw_page_enabled = yes` in a config
+file, or `{"action":"cw_enable","on":true}` over the API.
+
+Full chapter: [tab5.lav.dk/guide/cw](https://tab5.lav.dk/guide/cw/)
+
+---
+
 ## Live spots
 
 Other stations drawn straight onto your spectrum at the frequency they are

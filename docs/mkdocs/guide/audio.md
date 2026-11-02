@@ -12,7 +12,7 @@ type: flow
 title: From the radio to your ears, and where each control acts
 node: QMX / QMX+ - receiving, set to DiGi / IQ mode
 branch: QMX RF gain - per band, 0-99 dB. Measured: does NOT reach the I/Q, so it moves neither the spectrum nor the audio
-branch: QMX volume - the radio's own AF gain. Reaches everything downstream, the browser stream included
+branch: QMX volume - the radio's own AF gain. Measured: does NOT reach the I/Q either, so it moves neither the Tab5's audio nor the browser stream
 node: USB - 48 000 I/Q pairs per second, one cable
 node: Tab5 DSP - 48 kHz. The same I/Q feeds the spectrum and the demodulator
 node: AGC - ceiling, attack and release, or a fixed gain
@@ -102,7 +102,7 @@ There are three, and they act in different places — see
 
 | Control | Where | What it changes |
 |---|---|---|
-| **QMX volume** | Drawer → Radio | The **radio's own AF gain**, over CAT — the same number the QMX shows when you click its volume knob. Affects everything downstream, including the browser stream |
+| **QMX volume** | Drawer → Radio | The **radio's own AF gain**, over CAT — the same number the QMX shows when you click its volume knob. It sets the level in the **radio's own headphones** and nothing else. ⚠ **Corrected 2026-11-02:** this row used to say it affected everything downstream including the browser stream, and that was wrong. Measured on the bench — 0 dB then 40 dB, a factor of 100 in amplitude, each confirmed by the radio's own read-back — the level arriving over USB did not move at all. I/Q mode carries the samples from *before* the QMX's audio chain, which is the same reason RF gain does not reach it. (If you feed the radio's headphone output into the Tab5's 3.5 mm jack and select **Line in** as the source, then of course it does — that path *is* the radio's own audio.) |
 | **RX Volume** | Drawer → Audio Settings | The **Tab5's** speaker and headphone level only. Does not affect the browser stream |
 | Your browser's own volume | The browser or the operating system | The browser stream only |
 

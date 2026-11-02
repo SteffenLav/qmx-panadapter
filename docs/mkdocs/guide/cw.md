@@ -109,6 +109,10 @@ carries the samples from *before* the QMX's audio chain, so the radio's volume
 and its RF gain both stay on the radio's side of the glass. Turn the QMX right
 down and the Tab5 keeps playing at exactly the same level.
 
+The [Audio](audio.md) chapter covers the rest of the audio path — the AGC, the
+pan controls, and listening in a browser. What follows here is only what a CW
+operator has to decide.
+
 ### Why the Tab5 cannot give you a sidetone
 
 Its playback path is about **100 ms** deep — ~80 ms of I2S buffering, up to
@@ -135,8 +139,6 @@ Three things to know:
 - It needs **RX Audio** switched on first — the effect is produced on the Tab5.
 - It applies in **CW and CW-R only**. Every other mode is plain mono whatever
   this is set to.
-- ⚠ **It is not remembered across a reboot.** Switch it back on after a power
-  cycle.
 - ⛔ **Do not split your headphones between the two radios while it is on.**
   One ear then gives you one half of the passband and only a trace of the
   other, so you would lose stations on the far side of your own pitch. If you

@@ -153,8 +153,13 @@ void rx_audio_set_agc_off(bool off);
 // see rx_audio.c for the "pre-shift + real lowpass + remix" implementation
 // and why an earlier detuned-tone attempt was the wrong technique for this.
 // CW/CW-R only; any other mode is plain mono regardless of this setting.
-// RAM-only, not persisted - same class of live tuning as the AGC params
-// above, takes effect on the next retune (same loop that already tracks
+// ⭐ PERSISTED since 2026-11-02. This said "RAM-only, not persisted - same
+// class of live tuning as the AGC params above", and that was wrong about its
+// own class: the three pan sliders that SHAPE the split were already stored,
+// so the only part of the feature that died on a power cycle was the switch
+// that turns it on. The operator's call - a user should not have to remember
+// to re-enable it, and a caveat in the guide was documenting a defect.
+// Takes effect on the next retune (same loop that already tracks
 // mode/center-frequency changes).
 /* Re-read the stored gain/pan settings and apply them to the live DSP. Called
  * by rx_audio_init(), and by config import - which otherwise writes settings

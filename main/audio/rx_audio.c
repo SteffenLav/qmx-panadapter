@@ -2630,6 +2630,10 @@ void rx_audio_apply_settings(void)
     rx_audio_set_am_half_bw_hz ((int)settings_get_rxaud_am_half_bw_h100() * 100);
     rx_audio_set_agc_release_ms(settings_get_rxaud_agc_release_ms());
     rx_audio_set_agc_off       (settings_get_rxaud_agc_off());
+    /* The toggle, not just the shape. Without this the stored value was
+     * loaded and never reached the DSP, which is the same defect one layer
+     * down from the one being fixed. */
+    s_binaural_en = settings_get_binaural_en();
 }
 
 void rx_audio_init(void)
@@ -2640,7 +2644,7 @@ void rx_audio_init(void)
     settings_load_all(&cfg);
     s_enabled = cfg.rx_audio_en;
     s_volume  = cfg.rx_audio_vol;
-    rx_audio_apply_settings();   // gain ceiling + the three pan controls
+    rx_audio_apply_settings();   // gain ceiling, the three pan controls, binaural on/off
     // NOT net_quiet - that stays OTA-only (see net_quiet.h). Standing
     // feeds that should hold off while RX audio is on (SelfSpotter, RBN,
     // DX cluster, PSK Reporter RX) check rx_audio_is_enabled() directly
@@ -3180,7 +3184,18 @@ void rx_audio_get_tuning(rx_audio_tuning_t *out)
 // Takes effect via the same mode/center-tracking check rx_audio_task()
 // already runs every loop (binaural_prev comparison) - no restart, no
 // re-enable, same "live" promise as the AGC tuning above.
-void rx_audio_set_binaural_enabled(bool en) { s_binaural_en = en; }
+void rx_audio_set_binaural_enabled(bool en)
+{
+    s_binaural_en = en;
+    /* ⭐ PERSIST IT. Same shape as rx_audio_set_volume() right above: the
+     * setter stores, so every caller - the Resource Management row, the web
+     * {"binaural":...} command and a config import - gets it remembered
+     * without each one having to remember to. It was RAM-only until
+     * 2026-11-02 while the three pan sliders that shape the split were
+     * already stored, so the feature came back half-configured after every
+     * power cycle. */
+    settings_set_binaural_en(en);
+}
 bool rx_audio_get_binaural_enabled(void) { return s_binaural_en; }
 void rx_audio_set_pan_blend(float v) { if (v >= 0.0f && v <= 0.5f) s_pan_blend = v; }
 float rx_audio_get_pan_blend(void) { return s_pan_blend; }

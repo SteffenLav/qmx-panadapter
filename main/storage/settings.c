@@ -101,6 +101,7 @@ static const char *TAG = "settings";
 #define KEY_CL_STATION   "cl_stn"
 #define KEY_CL_UPLOADED  "cl_upl_n"
 #define KEY_RX_AUD_EN    "rx_aud_en"
+#define KEY_BINAURAL     "binaural_en"
 #define KEY_WEBRADIO_EN  "webradio_en"
 #define KEY_RX_AUD_VOL   "rx_aud_vol"
 #define KEY_WF_BLACK     "wf_black"
@@ -222,6 +223,7 @@ static const char *TAG = "settings";
 #define DEF_LAST_MODE     (0)
 #define DEF_WIFI_ENABLED  (true)
 #define DEF_RX_AUD_EN     (false)
+#define DEF_BINAURAL      (false)   /* an upgrade must not change anyone's audio */
 /* ⭐ TRUE, unlike RX audio. The codec can only be opened at boot, so this
  * flag is what decides whether the web-radio player has an output at all
  * later in the session - defaulting it off would mean the feature does
@@ -354,6 +356,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CL_STATION    93
 #define DIRTY_CL_UPLOADED   94
 #define DIRTY_RX_AUD_EN     32
+/* 154: the next free index - tools/check_dirty_bits.py prints the free list
+ * every build and is the authority on it, never a number written in prose. */
+#define DIRTY_BINAURAL     154
 #define DIRTY_RX_AUD_VOL    33
 #define DIRTY_WF_BLACK      34
 #define DIRTY_WF_CONTRAST   35
@@ -746,6 +751,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap->cloudlog_station);
         if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap->cloudlog_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_RX_AUD_EN))  nvs_set_u8(s_nvs, KEY_RX_AUD_EN,  snap->rx_audio_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BINAURAL))   nvs_set_u8(s_nvs, KEY_BINAURAL,   snap->binaural_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WEBRADIO_EN)) nvs_set_u8(s_nvs, KEY_WEBRADIO_EN, snap->webradio_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RX_AUD_VOL)) nvs_set_u8(s_nvs, KEY_RX_AUD_VOL, snap->rx_audio_vol);
         if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap->wf_black_db);
@@ -1080,6 +1086,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cloudlog_station[0] = '\0';
     out->cloudlog_uploaded_n = 0;
     out->rx_audio_en  = DEF_RX_AUD_EN;
+    out->binaural_en  = DEF_BINAURAL;
     out->webradio_en  = DEF_WEBRADIO_EN;
     out->rx_audio_vol = DEF_RX_AUD_VOL;
     out->wf_black_db    = DEF_WF_BLACK;
@@ -1335,6 +1342,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u32(s_nvs, KEY_CL_UPLOADED, &out->cloudlog_uploaded_n);
 
     if (nvs_get_u8(s_nvs, KEY_RX_AUD_EN, &u8v) == ESP_OK) out->rx_audio_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_BINAURAL, &u8v) == ESP_OK) out->binaural_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WEBRADIO_EN, &u8v) == ESP_OK) out->webradio_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_RX_AUD_VOL, &out->rx_audio_vol);
 
@@ -2446,6 +2454,23 @@ bool settings_get_webradio_en(void)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool v = s_pending.webradio_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+void settings_set_binaural_en(bool v)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.binaural_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.binaural_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_BINAURAL);
+}
+
+bool settings_get_binaural_en(void)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.binaural_en;
     xSemaphoreGive(s_mutex);
     return v;
 }

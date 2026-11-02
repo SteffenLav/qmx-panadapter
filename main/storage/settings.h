@@ -481,6 +481,13 @@ typedef struct {
      * opened at boot - so this decides at START-UP whether the player
      * will have an output later. Default TRUE; see settings.c. */
     bool     webradio_en;
+    /* Panoramic CW split on/off. ⭐ PERSISTED since 2026-11-02, and it was
+     * RAM-only before that for no reason anyone chose: the three pan sliders
+     * that SHAPE the split were already stored, so the one switch that turns
+     * it on was the only part of the feature that died on a power cycle. The
+     * operator's call - "it should not be a constraint for the user". Default
+     * false, so an upgrade changes nobody's audio. */
+    bool     binaural_en;
     uint8_t  rx_audio_vol;    // RX audio output volume 0..100 (default 60)
     float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
     float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
@@ -1092,6 +1099,8 @@ void settings_set_kbd_bindings(const kbd_bindings_t *b);
 // RX audio output: enable demodulated audio on the Tab5 speaker/headphone
 // (CW/CW-R/USB/LSB - see rx_audio.c), and its volume 0..100 (debounced flush).
 void settings_set_rx_audio_en(bool v);
+void settings_set_binaural_en(bool v);
+bool settings_get_binaural_en(void);
 void settings_set_webradio_en(bool v);
 bool settings_get_webradio_en(void);
 void settings_set_rx_audio_vol(uint8_t v);
