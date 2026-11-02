@@ -208,6 +208,17 @@ void cw_decode_clear(void);
 int  cw_decode_rows(void);
 void cw_decode_set_rows(int rows);
 
+/* How many COLUMNS the grid wraps at. The panadapter fits 72 of qmx_mono_25
+ * across 1280 px; the CW page's ticker sits beside a 320 px pane and fits 64.
+ * Whichever screen is up sets it, and like a row change the grid is wiped
+ * rather than re-wrapped - see the definition for why that is the honest
+ * choice while the ring cannot carry the TX mask. Clamped to [8, CW_LINE_COLS];
+ * the backing buffer is always the maximum, so this never reallocates. */
+void cw_decode_set_cols(int cols);
+
+/* What it is now - a renderer needs it to slice the grid into rows. */
+int cw_decode_cols(void);
+
 // Bytes currently staged for the microSD transcript, without copying any of
 // them - for logging/diagnostics only (e.g. "N bytes still waiting" on a
 // backed-off SD write). Cheap: no buffer, just the staged length under lock.

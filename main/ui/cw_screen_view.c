@@ -57,7 +57,18 @@ static const char *TAG = "cw_screen";
 // two pages read as the same grid - operator guidance 2026-08-01: reuse the
 // composition, not just the code ("I already know this page").
 #define PANE_W        CW_PANE_W   // exported in cw_screen_view.h - ui.c needs it too
+/* ⚠ STILL 100, AND IT CANNOT STAY 100 once the mono grid lands. Four rows of
+ * qmx_mono_25 need 4 * (lv_font_get_line_height() + 8) plus this container's
+ * own padding, and ui.c computes exactly that as row_px rather than hard-coding
+ * it - which is the pattern to copy, because a height guessed from the box
+ * instead of measured from the text is what clipped the drawer captions on
+ * 2026-11-02. Left at 100 deliberately: the grid renderer is not in yet, so
+ * raising it now would only make an empty box taller. */
 #define TICKER_H      100
+/* Columns the ticker fits: (MID_W - PANE_W) = 960 px at qmx_mono_25's 15 px
+ * advance, minus one so the rightmost glyph is not flush against the border.
+ * ⛔ This is the grid's WRAP MODULUS while this page is up, not a draw width. */
+#define CW_TICKER_COLS 63
 // The band-plan strip (BANDPLAN_H in ui.c) sits directly above the bottom
 // bar and MUST stay visible and touchable on the CW page - it is how the
 // operator sees they are inside the CW segment and drags along it. The pane
@@ -1559,6 +1570,13 @@ void cw_screen_view_show(void)
     cat_query_keyer_wpm();
     cat_cw_poll_set_active(true);
     if (!s_timer) s_timer = lv_timer_create(tick_cb, 500, NULL);
+    /* ⛔ THE GRID IS NARROWER HERE, and the decoder has to be told before the
+     * first character lands. This ticker sits to the right of a PANE_W pane, so
+     * it is MID_W - PANE_W = 960 px, which is CW_TICKER_COLS of qmx_mono_25 at
+     * its 15 px advance - against the panadapter's 72 across the full 1280.
+     * cw_decode_set_cols() is the wrap modulus, so a mismatch does not clip, it
+     * GARBLES: every row would start mid-word. Restored in _hide(). */
+    cw_decode_set_cols(CW_TICKER_COLS);
     s_shown = true;
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     // Deliberately NOT foregrounded: the edge-swipe strips must stay on top
@@ -1571,6 +1589,9 @@ void cw_screen_view_hide(void)
 {
     if (!s_container) return;
     s_shown = false;
+    /* Hand the full width back, or the panadapter draws a 64-column grid in a
+     * 72-column frame for the rest of the session. */
+    cw_decode_set_cols(CW_LINE_COLS);
     cat_cw_poll_set_active(false);
     if (s_timer) { lv_timer_delete(s_timer); s_timer = NULL; }
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);

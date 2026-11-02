@@ -787,7 +787,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                  * page draw four rows while the decoder wrapped over two -
                  * two of them permanently blank. */
                 cJSON_AddNumberToObject(c, "rows", cw_decode_rows());
-                cJSON_AddNumberToObject(c, "cols", CW_LINE_COLS);
+                cJSON_AddNumberToObject(c, "cols", cw_decode_cols());
                 cJSON_AddItemToObject(root, "cw", c);
             }
         }

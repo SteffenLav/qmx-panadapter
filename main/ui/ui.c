@@ -5409,7 +5409,14 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * LVGL 9.2 has no label recolour, and the existing comment below already
      * chose separate labels over colour markup to keep the column arithmetic
      * honest. This follows it. */
-    const int cells = rows * CW_LINE_COLS;
+    /* ⛔ cw_decode_cols(), NOT the constant. The grid's wrap modulus is runtime
+     * since 2026-11-02 because the CW page's ticker is narrower than this one -
+     * and slicing a 64-column grid as if it were 72 garbles every row. Exactly
+     * the fault the web's own `rows` field already records for the row count:
+     * "sending the constant would have the page draw four rows while the
+     * decoder wrapped over two". */
+    const int cols  = cw_decode_cols();
+    const int cells = rows * cols;
 
     char now_s[CW_LINE_ROWS][CW_LINE_COLS + 1], prev_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
     char tx_s[CW_LINE_ROWS][CW_LINE_COLS + 1];
@@ -5425,8 +5432,8 @@ static void cw_strip_tick_cb(lv_timer_t *t)
      * write position runs straight through, so the wrap down to line two is the
      * same event as any other character. */
     for (int r = 0; r < rows; r++) {
-        for (int i = 0; i < CW_LINE_COLS; i++) {
-            int  g = r * CW_LINE_COLS + i;
+        for (int i = 0; i < cols; i++) {
+            int  g = r * cols + i;
             char c = disp[g] ? disp[g] : ' ';
             /* TX wins the cell and is blanked from the other two, so the
              * three layers remain disjoint. The this-pass/previous-pass
@@ -5436,7 +5443,7 @@ static void cw_strip_tick_cb(lv_timer_t *t)
             prev_s[r][i] = (!tx && g >= col) ? c : ' ';
             tx_s[r][i]   = ( tx)             ? c : ' ';
         }
-        now_s[r][CW_LINE_COLS] = prev_s[r][CW_LINE_COLS] = tx_s[r][CW_LINE_COLS] = '\0';
+        now_s[r][cols] = prev_s[r][cols] = tx_s[r][cols] = '\0';
     }
 
     /* The slots above `base` are not in use - see the note where base is

@@ -208,9 +208,18 @@ static int              s_line_col;             /* where the next character land
  * decoded into rows nobody can see and the visible half would jump. So it
  * lives here, with the write position, and not in either screen. */
 static int              s_rows = CW_LINE_ROWS;
+/* ⛔ AND THE COLUMN COUNT IS A WRAP MODULUS TOO, for exactly the reason given
+ * above about the rows. It became runtime on 2026-11-02 because the two screens
+ * that draw this grid are not the same width: the panadapter has the whole
+ * 1280 px and fits 72 columns of qmx_mono_25 (15 px advance), while the CW
+ * page's ticker sits to the right of a 320 px pane and fits 64. Before this
+ * they could not share the grid at all - the CW page kept its own 512-byte
+ * ring and its own squelch instance, which is two models of one stream and the
+ * fault that file's own comment warns about one layer up. */
+static int              s_cols = CW_LINE_COLS;
 
 /* Cells currently in use. Not a macro: s_rows changes at run time. */
-static inline int grid_cells(void) { return s_rows * CW_LINE_COLS; }
+static inline int grid_cells(void) { return s_rows * s_cols; }
 static uint32_t        *s_stamp;
 static int              s_stamp_head, s_stamp_count;
 static char            *s_ring;
@@ -544,5 +553,31 @@ void cw_decode_set_rows(int rows)
     s_line_col = 0;
     if (s_lock) xSemaphoreGive(s_lock);
 }
+
+/* Same shape as set_rows above, and the same cost: the grid is WIPED rather
+ * than re-wrapped, so switching pages clears the visible pane.
+ *
+ * ⚠ That is deliberate and it is the conservative choice, not the nice one.
+ * s_ring still holds the history, so a re-wrap IS possible - but s_ring holds
+ * characters only, never the TX flags, so re-wrapping would repaint our own
+ * keying as received text. Showing the operator's own sending in the colour
+ * that means "the other station said this" is a worse fault than a cleared
+ * pane, so until the mask can be carried too this wipes, exactly as a row
+ * change already did. */
+void cw_decode_set_cols(int cols)
+{
+    if (cols < 8) cols = 8;
+    if (cols > CW_LINE_COLS) cols = CW_LINE_COLS;
+    if (cols == s_cols) return;
+
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_cols = cols;
+    memset(s_line, ' ', sizeof(s_line));
+    memset(s_line_tx, 0, sizeof(s_line_tx));
+    s_line_col = 0;
+    if (s_lock) xSemaphoreGive(s_lock);
+}
+
+int cw_decode_cols(void) { return s_cols; }
 
 #endif /* ESP_PLATFORM */
