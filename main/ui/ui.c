@@ -4090,6 +4090,7 @@ static lv_obj_t *s_lbl_qmx_rf     = NULL;
 static lv_obj_t *s_slider_cw_mon  = NULL;
 static lv_obj_t *s_lbl_cw_mon     = NULL;
 static lv_obj_t *s_check_cw_mon_abs = NULL;
+static lv_obj_t *s_lbl_cw_mon_abs   = NULL;
 static lv_obj_t *s_lbl_cw_mon_note  = NULL;
 static lv_obj_t *s_lbl_pause_btn  = NULL;
 /* Flat mode does not use the dB range AT ALL - it draws dB above the measured
@@ -16308,71 +16309,67 @@ static void drawer_build(void)
      * spectrum is flat until the handshake re-asserts Q9 - about 0.6 s. A drag
      * that streamed writes would strobe the panadapter.
      *
-     * ⛔ NO SLIDER AT ALL when the radio has not told us the range. The
-     * operation manual gives the default (70) and no range, so the top comes
-     * from MM discovery (cat_sidetone_vol_max()); 0 means older firmware or no
-     * answer, and an invented 0-100 scale shown as if it were the radio's is
-     * worse than an absent control. */
+     * ⛔⛔ THE WIDGETS ARE ALWAYS BUILT, AND HIDDEN UNTIL THE RADIO ANSWERS.
+     * The first version of this block chose its SHAPE from
+     * cat_sidetone_vol_max() at construction time, and that was dead on
+     * arrival: drawer_build() runs inside ui_init() at boot, ~17 s before CAT
+     * link-up (357 s on the boot that found this, because the radio was down
+     * after the flash), so the range is ALWAYS 0 here. The row therefore said
+     * "this radio does not offer it over CAT" for the whole session while the
+     * radio was answering 255 - and drawer_set_mode() positions sections but
+     * never rebuilds them, so nothing ever corrected it. Flashed and measured
+     * before it was found, which is why it is written down rather than
+     * quietly fixed.
+     *
+     * So the shape is fixed and the VISIBILITY is resolved later, which is the
+     * same bargain the RF gain row above already makes for its value. The
+     * range is still never invented: the slider carries no usable range until
+     * cw_mon_apply_range() sets the one the radio reported. */
     {
-        const uint16_t mon_top = cat_sidetone_vol_max();
-        /* 126 with the slider, 96 without - same two geometries as the rows
-         * above, and drawer_section() records the height so the layout pass
-         * does not need a parallel table (that has gone wrong twice). */
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWMON, y, mon_top ? 162 : 96);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWMON, y, 162);
 
         s_lbl_cw_mon = lv_label_create(sec);
         lv_obj_set_style_text_color(s_lbl_cw_mon, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_cw_mon, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_cw_mon, LV_ALIGN_TOP_LEFT, 0, 10);
+        lv_label_set_text(s_lbl_cw_mon, cat_is_ready() ? "CW monitor: reading..."
+                                                       : "CW monitor: radio not connected");
 
-        if (mon_top) {
-            int mon_now = cat_get_sidetone_vol();
-            char mbuf[48];
-            if (mon_now >= 0)        snprintf(mbuf, sizeof(mbuf), "CW monitor: %d", mon_now);
-            else if (cat_is_ready()) snprintf(mbuf, sizeof(mbuf), "CW monitor: reading...");
-            else                     snprintf(mbuf, sizeof(mbuf), "CW monitor: radio not connected");
-            lv_label_set_text(s_lbl_cw_mon, mbuf);
+        s_slider_cw_mon = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_cw_mon, DRAWER_W - 32, 30);
+        /* 0..1 and HIDDEN, deliberately. Not a scale - a placeholder that
+         * cannot be dragged into a wrong value if it ever became visible
+         * before the radio answered. cw_mon_apply_range() installs the real
+         * top and unhides. */
+        lv_slider_set_range(s_slider_cw_mon, 0, 1);
+        lv_slider_set_value(s_slider_cw_mon, 0, LV_ANIM_OFF);
+        lv_obj_align(s_slider_cw_mon, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_add_flag(s_slider_cw_mon, LV_OBJ_FLAG_HIDDEN);
+        /* Label under the finger on every tick; the radio hears about it
+           once, on release. */
+        lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_RELEASED, NULL);
 
-            s_slider_cw_mon = lv_slider_create(sec);
-            lv_obj_set_size(s_slider_cw_mon, DRAWER_W - 32, 30);
-            lv_slider_set_range(s_slider_cw_mon, 0, mon_top);
-            lv_slider_set_value(s_slider_cw_mon, mon_now >= 0 ? mon_now : 0, LV_ANIM_OFF);
-            lv_obj_align(s_slider_cw_mon, LV_ALIGN_TOP_LEFT, 0, 40);
-            /* Label under the finger on every tick; the radio hears about it
-               once, on release. */
-            lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_VALUE_CHANGED, NULL);
-            lv_obj_add_event_cb(s_slider_cw_mon, drawer_slider_cw_mon_cb, LV_EVENT_RELEASED, NULL);
+        s_lbl_cw_mon_abs = lv_label_create(sec);
+        lv_label_set_text(s_lbl_cw_mon_abs, "Independent of QMX volume");
+        lv_obj_set_style_text_color(s_lbl_cw_mon_abs, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_cw_mon_abs, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_cw_mon_abs, LV_ALIGN_TOP_LEFT, 0, 84);
+        lv_obj_add_flag(s_lbl_cw_mon_abs, LV_OBJ_FLAG_HIDDEN);
 
-            lv_obj_t *abs_lbl = lv_label_create(sec);
-            lv_label_set_text(abs_lbl, "Independent of QMX volume");
-            lv_obj_set_style_text_color(abs_lbl, lv_color_hex(0xFFFFFF), 0);
-            lv_obj_set_style_text_font(abs_lbl, &lv_font_montserrat_24, 0);
-            lv_obj_align(abs_lbl, LV_ALIGN_TOP_LEFT, 0, 84);
-            s_check_cw_mon_abs = make_drawer_checkbox(sec, cat_get_sidetone_absolute() == 1,
-                                                      drawer_check_cw_mon_abs_cb, NULL);
-            lv_obj_align(s_check_cw_mon_abs, LV_ALIGN_TOP_RIGHT, 0, 80);
+        s_check_cw_mon_abs = make_drawer_checkbox(sec, false,
+                                                  drawer_check_cw_mon_abs_cb, NULL);
+        lv_obj_align(s_check_cw_mon_abs, LV_ALIGN_TOP_RIGHT, 0, 80);
+        lv_obj_add_flag(s_check_cw_mon_abs, LV_OBJ_FLAG_HIDDEN);
 
-            s_lbl_cw_mon_note = lv_label_create(sec);
-            lv_label_set_long_mode(s_lbl_cw_mon_note, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(s_lbl_cw_mon_note, DRAWER_W - 32);
-            lv_obj_set_style_text_font(s_lbl_cw_mon_note, &lv_font_montserrat_20, 0);
-            lv_obj_set_style_text_color(s_lbl_cw_mon_note,
-                                        lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-            lv_obj_align(s_lbl_cw_mon_note, LV_ALIGN_TOP_LEFT, 0, 126);
-            y += 162;
-        } else {
-            lv_label_set_text(s_lbl_cw_mon, cat_is_ready()
-                              ? "CW monitor: this radio does not offer it over CAT"
-                              : "CW monitor: radio not connected");
-            lv_obj_t *cap2 = lv_label_create(sec);
-            lv_label_set_long_mode(cap2, LV_LABEL_LONG_WRAP);
-            lv_obj_set_width(cap2, DRAWER_W - 32);
-            lv_label_set_text(cap2, "Set it on the radio: CW > Sidetone volume");
-            lv_obj_set_style_text_font(cap2, &lv_font_montserrat_20, 0);
-            lv_obj_set_style_text_color(cap2, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-            lv_obj_align(cap2, LV_ALIGN_TOP_LEFT, 0, 46);
-            y += 96;
-        }
+        s_lbl_cw_mon_note = lv_label_create(sec);
+        lv_label_set_long_mode(s_lbl_cw_mon_note, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_lbl_cw_mon_note, DRAWER_W - 32);
+        lv_obj_set_style_text_font(s_lbl_cw_mon_note, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_lbl_cw_mon_note,
+                                    lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_align(s_lbl_cw_mon_note, LV_ALIGN_TOP_LEFT, 0, 126);
+        y += 162;
     }
 
     // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.
@@ -19295,6 +19292,34 @@ static void paint_cw_mon_note(void)
                : "Stored in the radio, not on the Tab5.");
 }
 
+/* ⛔⛔ THE RANGE ARRIVES AFTER THE WIDGETS DO, so this is the one place that
+ * installs it. drawer_build() runs at boot, CAT link-up is ~17 s later, and
+ * the first version of this row chose its shape at construction time and was
+ * therefore permanently stuck saying the radio does not offer the setting.
+ *
+ * Returns true once the row is live. Idempotent - called from the refresh and
+ * from the resolve timer, and setting the same range twice costs nothing. */
+static bool cw_mon_apply_range(void)
+{
+    if (!s_slider_cw_mon) return false;
+    uint16_t top = cat_sidetone_vol_max();
+    if (!top) {
+        /* Still unknown. Say which kind of unknown it is rather than one word
+         * that reads as a conversation in progress whether or not there is a
+         * radio - the fault Samuel W7STF found on the RF gain row. */
+        if (s_lbl_cw_mon)
+            lv_label_set_text(s_lbl_cw_mon, cat_is_ready() ? "CW monitor: reading..."
+                                                           : "CW monitor: radio not connected");
+        return false;
+    }
+    if (lv_slider_get_max_value(s_slider_cw_mon) != (int32_t)top)
+        lv_slider_set_range(s_slider_cw_mon, 0, top);
+    lv_obj_clear_flag(s_slider_cw_mon, LV_OBJ_FLAG_HIDDEN);
+    if (s_lbl_cw_mon_abs)   lv_obj_clear_flag(s_lbl_cw_mon_abs,   LV_OBJ_FLAG_HIDDEN);
+    if (s_check_cw_mon_abs) lv_obj_clear_flag(s_check_cw_mon_abs, LV_OBJ_FLAG_HIDDEN);
+    return true;
+}
+
 static void paint_cw_mon(int v)
 {
     if (!s_slider_cw_mon || v < 0) return;
@@ -19343,6 +19368,7 @@ static void drawer_check_cw_mon_abs_cb(lv_event_t *e)
 static void drawer_refresh_cw_mon(void)
 {
     if (!s_lbl_cw_mon) return;
+    cw_mon_apply_range();
     paint_cw_mon(cat_get_sidetone_vol());
     paint_cw_mon_note();
     cat_query_sidetone();   // ask again for next time the drawer opens
@@ -19410,11 +19436,15 @@ static void gain_resolve_cb(lv_timer_t *t)
         if (ag >= 0) { paint_qmx_vol(ag); s_af_unresolved = false; }
     }
     if (s_mon_unresolved) {
-        int mv = cat_get_sidetone_vol();
-        if (mv >= 0) { paint_cw_mon(mv); s_mon_unresolved = false; }
-        else if (s_lbl_cw_mon)
+        /* The RANGE first: it is what reveals the row at all, and it cannot be
+         * known at drawer_build() time. Then the value. */
+        bool live = cw_mon_apply_range();
+        int  mv   = cat_get_sidetone_vol();
+        if (live && mv >= 0) { paint_cw_mon(mv); s_mon_unresolved = false; }
+        else if (live && s_lbl_cw_mon)
             lv_label_set_text(s_lbl_cw_mon, cat_up ? "CW monitor: reading..."
                                                    : "CW monitor: radio not connected");
+        /* !live: cw_mon_apply_range() has already written the right words. */
     }
     if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
         gain_resolve_stop();
@@ -19432,7 +19462,9 @@ static void gain_resolve_cb(lv_timer_t *t)
     if (++s_gain_resolve_ticks >= GAIN_RESOLVE_MAX_TICKS) {
         if (s_rf_unresolved) paint_qmx_rf_unknown("no answer from radio");
         if (s_mon_unresolved && s_lbl_cw_mon)
-            lv_label_set_text(s_lbl_cw_mon, "CW monitor: no answer from radio");
+            lv_label_set_text(s_lbl_cw_mon, cat_sidetone_vol_max()
+                ? "CW monitor: no answer from radio"
+                : "CW monitor: not offered over CAT - set it in the radio's CW menu");
         gain_resolve_stop();
         return;
     }
@@ -19449,7 +19481,11 @@ static void gain_resolve_start(void)
 {
     s_rf_unresolved = (s_slider_qmx_rf  != NULL) && (cat_get_rf_gain() < 0);
     s_af_unresolved = (s_slider_qmx_vol != NULL) && (cat_get_af_gain() < 0);
-    s_mon_unresolved = (s_slider_cw_mon != NULL) && (cat_get_sidetone_vol() < 0);
+    /* Unresolved while EITHER is missing: the range reveals the row, the
+     * value fills it. The slider object always exists now, so this is a
+     * question about the radio and not about the widget. */
+    s_mon_unresolved = (s_slider_cw_mon != NULL) &&
+                       (cat_get_sidetone_vol() < 0 || cat_sidetone_vol_max() == 0);
     s_gain_resolve_ticks = 0;
     if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
         gain_resolve_stop(); return;
