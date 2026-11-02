@@ -1216,6 +1216,18 @@ static void wpm_step(int delta)
 static void wpm_minus_cb(lv_event_t *e) { (void)e; wpm_step(-1); }
 static void wpm_plus_cb(lv_event_t *e)  { (void)e; wpm_step(+1); }
 
+/* Set a ticker label only if the text actually differs - see the call sites.
+ * lv_label_set_text() always copies and invalidates, so an unchanged row costs
+ * a repaint for nothing. */
+static void tk_set(lv_obj_t *lbl, const char *txt)
+{
+    if (!lbl) return;
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+    const char *cur = lv_label_get_text(lbl);
+    if (cur && strcmp(cur, txt) == 0) return;
+    lv_label_set_text(lbl, txt);
+}
+
 // ---- 500 ms refresh: ticker text, WPM readback, TX status -------------------
 static void tick_cb(lv_timer_t *t)
 {
@@ -1259,12 +1271,18 @@ static void tick_cb(lv_timer_t *t)
                 tx_s[i]   = ( tx)             ? c : ' ';
             }
             now_s[cols] = prev_s[cols] = tx_s[cols] = '\0';
-            if (s_tk_now[r])  { lv_obj_clear_flag(s_tk_now[r],  LV_OBJ_FLAG_HIDDEN);
-                                lv_label_set_text(s_tk_now[r],  now_s); }
-            if (s_tk_prev[r]) { lv_obj_clear_flag(s_tk_prev[r], LV_OBJ_FLAG_HIDDEN);
-                                lv_label_set_text(s_tk_prev[r], prev_s); }
-            if (s_tk_tx[r])   { lv_obj_clear_flag(s_tk_tx[r],   LV_OBJ_FLAG_HIDDEN);
-                                lv_label_set_text(s_tk_tx[r],   tx_s); }
+            /* ⛔ ONLY WHEN IT CHANGED, and this is measured rather than tidy.
+             * The first cut set all twelve labels every 500 ms whether the
+             * grid had moved or not - the old single-label code only painted
+             * `if (dirty)` and I dropped that guard with the label. On a quiet
+             * band the ticker is unchanged for most ticks, so that was twelve
+             * needless invalidations a second holding the display lock, and
+             * "ui_update_frequency: freq label lock timeout" went from 1 per
+             * 151-278 s on this page to 1 per 53 s. Comparing against the
+             * label's own stored text needs no cache of our own. */
+            tk_set(s_tk_now[r],  now_s);
+            tk_set(s_tk_prev[r], prev_s);
+            tk_set(s_tk_tx[r],   tx_s);
         }
     }
 
