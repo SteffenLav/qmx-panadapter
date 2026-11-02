@@ -73,6 +73,15 @@ typedef struct {
 // out and returns how many. PORTABLE; host-tested.
 int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz);
 
+// T141: force a release of whatever is pending, for a caller with its own
+// clock to call once nothing new has arrived for a while - a real trailing
+// E/T can otherwise sit unreleased forever on a band that goes quiet right
+// behind it. Same run-length verdict cw_squelch_push would have applied: a
+// short run is real text and comes out verbatim; a long run is still noise
+// and is dropped. Writes to out (NUL-terminated) and returns how many
+// characters were released. PORTABLE; host-tested.
+int cw_squelch_flush_stale(cw_squelch_t *st, char *out, size_t out_sz);
+
 // ---- speed estimate --------------------------------------------------------
 //
 // Words per minute from characters and elapsed time, on the PARIS convention of

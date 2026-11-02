@@ -86,6 +86,21 @@ static int is_unresolved(char c) { return c == '*'; }
  * '*' they ARE real letters, so they are only dropped as part of a long run. */
 static int is_noise_char(char c) { return c == 'E' || c == 'T'; }
 
+/* Copies pend verbatim into out (not NUL-terminated - callers add whatever
+ * comes after) and clears n_pend/run. Shared by the "a settling character
+ * arrived" path (cw_squelch_push) and the "nothing arrived for a while, the
+ * caller's own clock says release it anyway" path (cw_squelch_flush_stale),
+ * so the two cannot drift into disagreeing about what "released verbatim"
+ * means. */
+static int release_pending(cw_squelch_t *st, char *out, size_t out_sz)
+{
+    size_t n = 0;
+    for (int i = 0; i < st->n_pend && n < out_sz - 1; i++) out[n++] = st->pend[i];
+    st->n_pend = 0;
+    st->run = 0;
+    return (int)n;
+}
+
 int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
 {
     if (!st || !out || out_sz == 0) return 0;
@@ -118,7 +133,7 @@ int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
          * noise and the branch below drops the lot. That is the bound which
          * keeps the measured 23.6% off the screen while still admitting that a
          * character was lost. */
-        for (int i = 0; i < st->n_pend && n < out_sz - 1; i++) out[n++] = st->pend[i];
+        n = (size_t)release_pending(st, out, out_sz);
     } else {
         // A long run was the decoder chewing on noise, so it goes. But if the
         // operator stopped sending, the noise ran, and then sending resumed,
@@ -128,13 +143,46 @@ int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
         // just indent the first word.
         int had_space = 0;
         for (int i = 0; i < st->n_pend; i++) if (st->pend[i] == ' ') had_space = 1;
+        st->n_pend = 0;
+        st->run = 0;
         if (had_space && st->emitted && n < out_sz - 1) out[n++] = ' ';
     }
     if (n < out_sz - 1) out[n++] = c;
     out[n] = '\0';
     if (n > 0) st->emitted = 1;
-    st->n_pend = 0;
-    st->run = 0;
+    return (int)n;
+}
+
+/* T141: on a quiet band the squelch can hold a genuinely real trailing E/T
+ * forever, because nothing short of a non-E/T settling character ever
+ * releases it - "CQ TTTTTTTT DE" (measured on the host probe) renders "CQ D",
+ * the final E of "DE" never shown, because the band went quiet right behind
+ * it. cw_squelch_push() cannot fix this itself: it is portable and has no
+ * clock, so a caller with ITS OWN clock calls this once it decides enough
+ * time has passed with nothing new arriving.
+ *
+ * Same run-length verdict as a settling character would have gotten: a short
+ * pending run was real text and is released verbatim (the T141 case); a long
+ * run is still a noise stretch that just never got a letter after it either,
+ * and is dropped with the same single-space-for-a-real-gap rule - staleness
+ * does not make noise stop being noise. PORTABLE; host-tested. */
+int cw_squelch_flush_stale(cw_squelch_t *st, char *out, size_t out_sz)
+{
+    if (!st || !out || out_sz == 0) return 0;
+    if (st->n_pend == 0) { out[0] = '\0'; return 0; }
+
+    size_t n = 0;
+    if (st->run < CW_SQUELCH_RUN) {
+        n = (size_t)release_pending(st, out, out_sz);
+    } else {
+        int had_space = 0;
+        for (int i = 0; i < st->n_pend; i++) if (st->pend[i] == ' ') had_space = 1;
+        st->n_pend = 0;
+        st->run = 0;
+        if (had_space && st->emitted && n < out_sz - 1) out[n++] = ' ';
+    }
+    out[n] = '\0';
+    if (n > 0) st->emitted = 1;
     return (int)n;
 }
 
@@ -179,6 +227,11 @@ int cw_wpm_estimate(int chars, unsigned elapsed_ms)
 #define CW_WPM_MIN_CHARS   12
 
 static cw_squelch_t     s_squelch;
+/* T141: last time any character (pending or released) was pushed into the
+ * squelch - cw_decode_flush_stale() is the clock cw_squelch_push() itself
+ * cannot have. */
+static uint32_t         s_squelch_touch_ms;
+#define CW_SQUELCH_STALE_MS 1500u   /* ~1.5 TB; polls (poll runs at ~1 Hz) */
 /* The buffer is always the MAXIMUM, CW_LINE_ROWS rows. Only the part in use is
  * written, copied and drawn - see s_rows. Sizing it to the current choice
  * would mean a reallocation on a settings change for no gain; 288 bytes is
@@ -356,6 +409,7 @@ void cw_decode_init(void)
     s_stamp_head = s_stamp_count = 0;
     s_total = 0;
     memset(&s_squelch, 0, sizeof(s_squelch));
+    s_squelch_touch_ms = 0;
     memset(s_line, ' ', sizeof(s_line));
     memset(s_line_tx, 0, sizeof(s_line_tx));
     s_line_col = 0;
@@ -377,34 +431,67 @@ void cw_decode_init(void)
  * is_tx marks the operator's own keying coming back through the radio's
  * decoder. The simulator passes false: its phantoms are received text, and
  * painting them in the TX colour would say the operator sent them. */
+
+/* One released character's path into the ring, the wrapping line, the speed
+ * stamps and the microSD transcript - shared by cw_decode_feed_text()'s loop
+ * and cw_decode_flush_stale()'s single release, so the T141 flush path is
+ * the SAME sink rather than a second copy that could drift. Caller holds
+ * s_lock. */
+static void sink_released_char(char c, uint8_t tx, uint32_t now_ms)
+{
+    s_ring[s_head] = c;
+    s_head = (s_head + 1) % CW_RING_CAP;
+    if (s_count < CW_RING_CAP) s_count++;
+    /* ...and into the wrapping line both screens draw from. */
+    s_line[s_line_col]    = c;
+    s_line_tx[s_line_col] = tx;
+    s_line_col = (s_line_col + 1) % grid_cells();
+    // Timestamp every accepted character for the speed estimate. Noise
+    // never reaches here, so it cannot drag the figure around.
+    s_stamp[s_stamp_head] = now_ms;
+    s_stamp_head = (s_stamp_head + 1) % CW_STAMP_CAP;
+    if (s_stamp_count < CW_STAMP_CAP) s_stamp_count++;
+    /* ...and into the microSD transcript (#323). Squelched noise and
+       the radio's '*' never reach here, so the file holds what the
+       screen showed, not the raw stream. */
+    sd_transcript_putc(c);
+}
+
 void cw_decode_feed_text(const char *text, int n, bool is_tx)
 {
     if (!s_ring || !text || n <= 0) return;
     const uint8_t tx = is_tx ? 1u : 0u;
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_squelch_touch_ms = (uint32_t)(esp_timer_get_time() / 1000);
     for (int i = 0; i < n; i++) {
         char rel[CW_SQUELCH_HOLD + 2];
         int m = cw_squelch_push(&s_squelch, text[i], rel, sizeof(rel));
-        for (int k = 0; k < m; k++) {
-            s_ring[s_head] = rel[k];
-            s_head = (s_head + 1) % CW_RING_CAP;
-            if (s_count < CW_RING_CAP) s_count++;
-            /* ...and into the wrapping line both screens draw from. */
-            s_line[s_line_col]    = rel[k];
-            s_line_tx[s_line_col] = tx;
-            s_line_col = (s_line_col + 1) % grid_cells();
-            // Timestamp every accepted character for the speed estimate. Noise
-            // never reaches here, so it cannot drag the figure around.
-            s_stamp[s_stamp_head] = (uint32_t)(esp_timer_get_time() / 1000);
-            s_stamp_head = (s_stamp_head + 1) % CW_STAMP_CAP;
-            if (s_stamp_count < CW_STAMP_CAP) s_stamp_count++;
-            /* ...and into the microSD transcript (#323). Squelched noise and
-               the radio's '*' never reach here, so the file holds what the
-               screen showed, not the raw stream. */
-            sd_transcript_putc(rel[k]);
-        }
+        for (int k = 0; k < m; k++) sink_released_char(rel[k], tx, s_squelch_touch_ms);
         s_total += (unsigned)m;
+    }
+    if (s_lock) xSemaphoreGive(s_lock);
+}
+
+/* T141: called on every IDLE TB; poll (nothing decoded this cycle) - the
+ * ~1 Hz poll cat.c already runs is this module's clock, so no new timer is
+ * needed. If something has sat in the squelch for CW_SQUELCH_STALE_MS with
+ * nothing new arriving to settle it, release it now. is_tx is unknown here
+ * (nothing came off the wire this cycle to carry a t-field), so a flushed
+ * character is marked received - the stale case is specifically a quiet
+ * band, never mid-KY-send. */
+static void cw_decode_flush_stale(void)
+{
+    if (!s_ring) return;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_squelch.n_pend > 0 && s_squelch_touch_ms &&
+        (now - s_squelch_touch_ms) >= CW_SQUELCH_STALE_MS) {
+        char rel[CW_SQUELCH_HOLD + 2];
+        int m = cw_squelch_flush_stale(&s_squelch, rel, sizeof(rel));
+        for (int k = 0; k < m; k++) sink_released_char(rel[k], 0, now);
+        s_total += (unsigned)m;
+        s_squelch_touch_ms = now;   // don't re-fire every idle poll after this
     }
     if (s_lock) xSemaphoreGive(s_lock);
 }
@@ -415,7 +502,10 @@ void cw_decode_feed(const char *resp)
     char chunk[CW_DECODE_MAX_CHUNK + 1];
     int tx_pending = 0;
     int n = cw_decode_parse_tb(resp, chunk, sizeof(chunk), &tx_pending);
-    if (n <= 0) return;   // malformed, or simply nothing decoded this poll
+    if (n <= 0) {
+        if (n == 0) cw_decode_flush_stale();   // valid idle poll, nothing decoded
+        return;                                 // n < 0: malformed, ignore
+    }
     /* t > 0 means a KY send is still running, so this payload is our own
      * keying coming back through the radio's decoder - see s_line_tx. */
     cw_decode_feed_text(chunk, n, tx_pending > 0);
@@ -545,6 +635,7 @@ void cw_decode_clear(void)
     s_head = s_count = 0;
     s_stamp_head = s_stamp_count = 0;
     memset(&s_squelch, 0, sizeof(s_squelch));
+    s_squelch_touch_ms = 0;
     memset(s_line, ' ', sizeof(s_line));
     memset(s_line_tx, 0, sizeof(s_line_tx));
     s_line_col = 0;

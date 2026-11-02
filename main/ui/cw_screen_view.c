@@ -23,9 +23,12 @@
 // reinstate an "unverified" caveat on the KY path.
 //
 // ⚠ Still unresolved, and NOT covered by that: there is NO abort button. The
-// manual documents no KY abort in TS480-compat-OFF mode, and guessing (RX;?
-// mode bounce?) risks worse than letting an 80-char buffer finish. That is
-// the next hardware question, not a code one.
+// manual documents no KY abort in TS480-compat-OFF mode. Tested on bench1
+// with a dummy load 2026-11-02 (see
+// memory/project_cw_ky_abort_rx_does_not_work.md): `RX;` mid-send and a
+// mode bounce (MD2;/MD3;) BOTH fail - the TB; t-field counts down to 0
+// unaffected either way, same as sending nothing. Nothing is left in the
+// CAT manual to try; the next step is asking QRP Labs, not another guess.
 
 #include "cw_screen_view.h"
 #include "ui_theme.h"
