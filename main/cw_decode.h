@@ -219,6 +219,16 @@ void cw_decode_set_cols(int cols);
 /* What it is now - a renderer needs it to slice the grid into rows. */
 int cw_decode_cols(void);
 
+/* Feed DECODED TEXT straight into the one model - squelch, ring, grid, speed
+ * stamps and the microSD transcript - for text that never arrived as a "TB...;"
+ * frame. The CW simulator is the caller that needs it: its phantom QSOs are
+ * generated locally, so without this they would reach cw_qso's capture logic
+ * and never the screen.
+ *
+ * is_tx = the operator's own keying coming back through the decoder. The
+ * simulator passes false; its phantoms are received text. */
+void cw_decode_feed_text(const char *text, int n, bool is_tx);
+
 // Bytes currently staged for the microSD transcript, without copying any of
 // them - for logging/diagnostics only (e.g. "N bytes still waiting" on a
 // backed-off SD write). Cheap: no buffer, just the staged length under lock.

@@ -361,28 +361,38 @@ void cw_decode_init(void)
     s_line_col = 0;
 }
 
-void cw_decode_feed(const char *resp)
+/* The text-level entry: squelch it, then into the ring, the grid, the speed
+ * stamps and the microSD transcript. Split out of cw_decode_feed() on
+ * 2026-11-02 so there is ONE model of the decode stream.
+ *
+ * ⛔ WHY THE SPLIT EXISTS, because it is not tidiness. The CW page used to keep
+ * its OWN 512-byte ring and its OWN squelch instance, fed by
+ * cw_screen_feed_decoded() - two models of one stream, which is the fault that
+ * file's own comment already warned about for the squelch alone. Moving its
+ * renderer onto this grid would have silently broken CW SIMULATION MODE: the
+ * phantom QSOs in cw_qso.c reach the screen through cw_screen_feed_decoded()
+ * and never through cw_decode_feed(), which only takes a raw "TB...;" frame.
+ * So the grid needed a way in for text that never came off the wire.
+ *
+ * is_tx marks the operator's own keying coming back through the radio's
+ * decoder. The simulator passes false: its phantoms are received text, and
+ * painting them in the TX colour would say the operator sent them. */
+void cw_decode_feed_text(const char *text, int n, bool is_tx)
 {
-    if (!s_ring) return;
-    char chunk[CW_DECODE_MAX_CHUNK + 1];
-    int tx_pending = 0;
-    int n = cw_decode_parse_tb(resp, chunk, sizeof(chunk), &tx_pending);
-    if (n <= 0) return;   // malformed, or simply nothing decoded this poll
-    /* t > 0 means a KY send is still running, so this payload is our own
-     * keying coming back through the radio's decoder - see s_line_tx. */
-    const uint8_t is_tx = (tx_pending > 0) ? 1u : 0u;
+    if (!s_ring || !text || n <= 0) return;
+    const uint8_t tx = is_tx ? 1u : 0u;
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < n; i++) {
         char rel[CW_SQUELCH_HOLD + 2];
-        int m = cw_squelch_push(&s_squelch, chunk[i], rel, sizeof(rel));
+        int m = cw_squelch_push(&s_squelch, text[i], rel, sizeof(rel));
         for (int k = 0; k < m; k++) {
             s_ring[s_head] = rel[k];
             s_head = (s_head + 1) % CW_RING_CAP;
             if (s_count < CW_RING_CAP) s_count++;
             /* ...and into the wrapping line both screens draw from. */
             s_line[s_line_col]    = rel[k];
-            s_line_tx[s_line_col] = is_tx;
+            s_line_tx[s_line_col] = tx;
             s_line_col = (s_line_col + 1) % grid_cells();
             // Timestamp every accepted character for the speed estimate. Noise
             // never reaches here, so it cannot drag the figure around.
@@ -397,6 +407,18 @@ void cw_decode_feed(const char *resp)
         s_total += (unsigned)m;
     }
     if (s_lock) xSemaphoreGive(s_lock);
+}
+
+void cw_decode_feed(const char *resp)
+{
+    if (!s_ring) return;
+    char chunk[CW_DECODE_MAX_CHUNK + 1];
+    int tx_pending = 0;
+    int n = cw_decode_parse_tb(resp, chunk, sizeof(chunk), &tx_pending);
+    if (n <= 0) return;   // malformed, or simply nothing decoded this poll
+    /* t > 0 means a KY send is still running, so this payload is our own
+     * keying coming back through the radio's decoder - see s_line_tx. */
+    cw_decode_feed_text(chunk, n, tx_pending > 0);
 }
 
 /* Where the next character will land - i.e. the cursor, in grid columns.

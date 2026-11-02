@@ -57,14 +57,13 @@ static const char *TAG = "cw_screen";
 // two pages read as the same grid - operator guidance 2026-08-01: reuse the
 // composition, not just the code ("I already know this page").
 #define PANE_W        CW_PANE_W   // exported in cw_screen_view.h - ui.c needs it too
-/* ⚠ STILL 100, AND IT CANNOT STAY 100 once the mono grid lands. Four rows of
- * qmx_mono_25 need 4 * (lv_font_get_line_height() + 8) plus this container's
- * own padding, and ui.c computes exactly that as row_px rather than hard-coding
- * it - which is the pattern to copy, because a height guessed from the box
- * instead of measured from the text is what clipped the drawer captions on
- * 2026-11-02. Left at 100 deliberately: the grid renderer is not in yet, so
- * raising it now would only make an empty box taller. */
-#define TICKER_H      100
+/* Four rows of qmx_mono_25 plus this container's 8 px padding top and bottom.
+ * 124 is the arithmetic for a 27 px line height; the exact pitch is measured
+ * from the font where the labels are built (tk_row_px), and this constant only
+ * has to be >= 4 * pitch + 16. A box sized by eye instead of from its text is
+ * what clipped the drawer captions on 2026-11-02 - so if the font ever changes,
+ * this changes with it. */
+#define TICKER_H      124
 /* Columns the ticker fits: (MID_W - PANE_W) = 960 px at qmx_mono_25's 15 px
  * advance, minus one so the rightmost glyph is not flush against the border.
  * ⛔ This is the grid's WRAP MODULUS while this page is up, not a draw width. */
@@ -87,7 +86,17 @@ static const char *TAG = "cw_screen";
 static lv_obj_t *s_container = NULL;
 static lv_obj_t *s_pane      = NULL;
 static lv_obj_t *s_ticker    = NULL;
-static lv_obj_t *s_ticker_lbl = NULL;
+LV_FONT_DECLARE(qmx_mono_25);
+/* Three layers per row, exactly as ui.c draws the panadapter's CW line, and
+ * for the reason written there: LVGL 9.2 has no label recolour, and two glyphs
+ * at one position in different colours leave an anti-aliased fringe. Spaces
+ * paint nothing, so the layers interleave cleanly on one line.
+ *  now  = cyan, written this pass
+ *  prev = green, surviving from the previous pass - the boundary IS the cursor
+ *  tx   = orange, the operator's own keying (UI_COLOR_TX_ACTIVE) */
+static lv_obj_t *s_tk_now[CW_LINE_ROWS];
+static lv_obj_t *s_tk_prev[CW_LINE_ROWS];
+static lv_obj_t *s_tk_tx[CW_LINE_ROWS];
 static lv_obj_t *s_lbl_hint  = NULL;   // copilot: plain-language read of the decode
 static lv_obj_t *s_btn_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_mem[N_CW_MEM] = {0};
@@ -112,24 +121,16 @@ static lv_obj_t *s_card_info  = NULL;
 static lv_obj_t *s_card_hint  = NULL;
 
 // ---- decode ring (written from the CDC RX context, read by the timer) ------
-#define DEC_RING_CAP 512
-static char           s_dec_ring[DEC_RING_CAP];
-static size_t         s_dec_len = 0;          // chars currently held (<= CAP)
-static bool           s_dec_dirty = false;
-/* ⛔ ONE SQUELCH, NOT TWO. This file used to carry its own noise filter, which
- * keyed on repeated single letters and knew nothing about the decoder's
- * unresolved-symbol marker - so the panadapter's CW line (cw_decode.c) dropped
- * '*' and the CW page's ticker printed it, from the same TB; bytes. Operator,
- * 2026-09-11: "the cw decoder needs the same filtering as we implemented on
- * the cw decoding on the panadapter - no * for example".
+/* ⭐ THE SECOND MODEL IS GONE (2026-11-02). This file used to keep its own
+ * 512-byte ring, its own squelch instance and its own spinlock, fed by
+ * cw_screen_feed_decoded() - two models of one stream, which is the fault the
+ * comment that used to live here already warned about for the squelch alone.
+ * The ticker now draws cw_decode.c's grid, the same one the panadapter and the
+ * browser draw, so there is one squelch, one ring and one wrap position.
  *
- * cw_squelch_push() is portable and host-tested, it drops '*' AND counts it
- * toward the E/T run (so "T*T*E*T" reads as one stretch of the decoder
- * struggling rather than as text interrupted by noise), and it is the same
- * code the other screen uses - which is the point. Two filters over one stream
- * is two answers to one question. */
-static cw_squelch_t   s_tick_sq;
-static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
+ * What that bought: per-character TX colour, which a proportional font could
+ * never give, and Bryan N0LUF's 2-or-4 row setting for free. What it cost: the
+ * CW simulator had to gain a way into the grid - see cw_decode_feed_text(). */
 
 // Wipe everything the decode stream produced: the ticker's ring, the copilot
 // hint, the captured/adopted station and the ESM ladder. Called when
@@ -139,57 +140,38 @@ static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 // exit. Safe from the LVGL thread only (touches labels).
 void cw_screen_clear_decode(void)
 {
-    portENTER_CRITICAL(&s_dec_mux);
-    s_dec_len = 0;
-    s_dec_dirty = false;
-    portEXIT_CRITICAL(&s_dec_mux);
-    memset(&s_tick_sq, 0, sizeof(s_tick_sq));   // drop whatever it was holding
+    /* The decode text itself lives in cw_decode.c now and is shared with the
+     * panadapter, so this no longer clears it - wiping a grid the other screen
+     * also draws would be this page reaching outside itself. The labels are
+     * blanked below; the grid ages out on its own. */
     cw_qso_reset();          // drops target + ladder
     cw_qso_clear_capture();  // drops the heard call and the hint
-    if (s_ticker_lbl) lv_label_set_text(s_ticker_lbl, "");
+    for (int r = 0; r < CW_LINE_ROWS; r++) {
+        if (s_tk_now[r])  lv_label_set_text(s_tk_now[r],  "");
+        if (s_tk_prev[r]) lv_label_set_text(s_tk_prev[r], "");
+        if (s_tk_tx[r])   lv_label_set_text(s_tk_tx[r],   "");
+    }
     if (s_lbl_hint)   lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
     if (s_card)       lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
 }
 
-// (The bespoke ticker squelch that used to be described here is gone - the
-// ticker now shares cw_decode.c's, which additionally drops the decoder's '*'
-// unresolved-symbol marker. See the note by s_tick_sq. The important property
-// is unchanged: the filter applies ONLY to the display string, because
-// cw_qso_feed() still gets the raw stream, so callsign capture, the copilot
-// hints and the ESM ladder cannot lose a character to it.)
-
-// Append one character. Short critical section - see the cyan-flash note.
-static void ticker_emit_char(char c)
-{
-    portENTER_CRITICAL(&s_dec_mux);
-    if (s_dec_len == DEC_RING_CAP) {
-        memmove(s_dec_ring, s_dec_ring + DEC_RING_CAP / 4,
-                DEC_RING_CAP - DEC_RING_CAP / 4);
-        s_dec_len = DEC_RING_CAP - DEC_RING_CAP / 4;
-    }
-    s_dec_ring[s_dec_len++] = c;
-    s_dec_dirty = true;
-    portEXIT_CRITICAL(&s_dec_mux);
-}
-
+/* ⭐ NO FILTER LIVES HERE ANY MORE. The ticker draws cw_decode.c's grid, which
+ * is squelched once on the way in, so this file holds no squelch, no ring and
+ * no spinlock of its own. The important property is unchanged and is the whole
+ * reason the split exists: the filter applies ONLY to what is displayed,
+ * because cw_qso_feed() below still gets the RAW stream - so callsign capture,
+ * the copilot hints and the ESM ladder cannot lose a character to it. */
 void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;
     cw_qso_feed(s, n);   // RAW stream: capture / ESM / hints are never filtered
-    // ⚠ Raw is right for cw_qso: its tokenizer already treats anything outside
-    // [A-Z0-9/-] as a token separator, so '*' splits tokens there instead of
-    // corrupting them, and the capture wants every character it can get.
-    //
-    // The TICKER is what the operator reads, and it goes through the same
-    // squelch as the panadapter's CW line - see the note by s_tick_sq.
-    // Characters reach it AS THEY DECODE apart from the few the squelch is
-    // holding to decide on, which is what an operator following a QSO needs
-    // (operator, 2026-08-04).
-    for (int i = 0; i < n; i++) {
-        char rel[CW_SQUELCH_HOLD + 2];
-        int m = cw_squelch_push(&s_tick_sq, s[i], rel, sizeof(rel));
-        for (int k = 0; k < m; k++) ticker_emit_char(rel[k]);
-    }
+    /* ⚠ Raw is right for cw_qso: its tokenizer already treats anything outside
+     * [A-Z0-9/-] as a token separator, so '*' splits tokens there instead of
+     * corrupting them, and the capture wants every character it can get.
+     *
+     * The TICKER is not fed from here any more - it draws cw_decode.c's grid,
+     * which cat.c fills from the same TB frame via cw_decode_feed(). So this
+     * function is now exactly what its first line does. */
 }
 
 /* ---- where {PARK} comes from ------------------------------------------------
@@ -1240,20 +1222,50 @@ static void tick_cb(lv_timer_t *t)
     (void)t;
     if (!s_shown) return;
 
-    bool dirty;
-    char snap[DEC_RING_CAP + 1];
-    size_t n;
-    portENTER_CRITICAL(&s_dec_mux);
-    dirty = s_dec_dirty;
-    s_dec_dirty = false;
-    n = s_dec_len;
-    if (dirty) memcpy(snap, s_dec_ring, n);
-    portEXIT_CRITICAL(&s_dec_mux);
-    if (dirty && s_ticker_lbl) {
-        snap[n] = '\0';
-        // Show the tail that fits: the label wraps ~3 lines; ~180 chars.
-        const char *tail = (n > 180) ? snap + (n - 180) : snap;
-        lv_label_set_text(s_ticker_lbl, tail);
+    /* Draw cw_decode.c's grid - the same one the panadapter and the browser
+     * draw. Three disjoint layers per row; see where the labels are declared.
+     * The boundary between `now` and `prev` IS the cursor, which is why no
+     * cursor glyph is needed (Samuel W7STF's problem, the operator's answer). */
+    {
+        const int rows = cw_decode_rows();
+        const int cols = cw_decode_cols();
+        char    disp[CW_GRID_CELLS + 1];
+        uint8_t txmask[CW_GRID_CELLS] = {0};
+        cw_decode_line(disp, sizeof(disp));
+        cw_decode_line_tx(txmask, sizeof(txmask));
+        int col = cw_decode_line_col();
+        if (col < 0) col = 0;
+        if (col > rows * cols) col = rows * cols;
+
+        for (int r = 0; r < CW_LINE_ROWS; r++) {
+            if (r >= rows) {
+                /* Rows the operator chose not to have (Bryan N0LUF's 2-or-4
+                 * setting) are hidden, not blanked - a blank label still
+                 * reserves its line. */
+                if (s_tk_now[r])  lv_obj_add_flag(s_tk_now[r],  LV_OBJ_FLAG_HIDDEN);
+                if (s_tk_prev[r]) lv_obj_add_flag(s_tk_prev[r], LV_OBJ_FLAG_HIDDEN);
+                if (s_tk_tx[r])   lv_obj_add_flag(s_tk_tx[r],   LV_OBJ_FLAG_HIDDEN);
+                continue;
+            }
+            char now_s[CW_LINE_COLS + 1], prev_s[CW_LINE_COLS + 1], tx_s[CW_LINE_COLS + 1];
+            for (int i = 0; i < cols; i++) {
+                const int  g  = r * cols + i;
+                const char c  = disp[g] ? disp[g] : ' ';
+                /* TX wins the cell and is blanked from the other two, so the
+                 * three layers stay disjoint. */
+                const bool tx = (g < CW_GRID_CELLS) && txmask[g];
+                now_s[i]  = (!tx && g <  col) ? c : ' ';
+                prev_s[i] = (!tx && g >= col) ? c : ' ';
+                tx_s[i]   = ( tx)             ? c : ' ';
+            }
+            now_s[cols] = prev_s[cols] = tx_s[cols] = '\0';
+            if (s_tk_now[r])  { lv_obj_clear_flag(s_tk_now[r],  LV_OBJ_FLAG_HIDDEN);
+                                lv_label_set_text(s_tk_now[r],  now_s); }
+            if (s_tk_prev[r]) { lv_obj_clear_flag(s_tk_prev[r], LV_OBJ_FLAG_HIDDEN);
+                                lv_label_set_text(s_tk_prev[r], prev_s); }
+            if (s_tk_tx[r])   { lv_obj_clear_flag(s_tk_tx[r],   LV_OBJ_FLAG_HIDDEN);
+                                lv_label_set_text(s_tk_tx[r],   tx_s); }
+        }
     }
 
     int wpm = cat_get_keyer_wpm();
@@ -1476,13 +1488,29 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_ticker, 8, 0);
     lv_obj_clear_flag(s_ticker, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_ticker_lbl = lv_label_create(s_ticker);
-    lv_label_set_text(s_ticker_lbl, "CW decode (from the QMX's own decoder) appears here");
-    lv_label_set_long_mode(s_ticker_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_ticker_lbl, MID_W - PANE_W - 24);
-    lv_obj_set_style_text_color(s_ticker_lbl, lv_color_hex(0xc8d0c8), 0);
-    lv_obj_set_style_text_font(s_ticker_lbl, &lv_font_montserrat_22, 0);
-    lv_obj_set_pos(s_ticker_lbl, 0, 0);
+    /* Row pitch MEASURED from the font, not guessed - the same arithmetic
+     * ui.c's row_px uses. Sizing a box from the rows around it instead of from
+     * the text it holds is what clipped the drawer captions on 2026-11-02. */
+    const int tk_row_px = (int)lv_font_get_line_height(&qmx_mono_25) + 2;
+    for (int r = 0; r < CW_LINE_ROWS; r++) {
+        struct { lv_obj_t **obj; uint32_t colour; } layer[] = {
+            { &s_tk_now[r],  0x30E0E0 },            /* this pass, cyan */
+            { &s_tk_prev[r], 0x30E060 },            /* previous pass, green */
+            { &s_tk_tx[r],   UI_COLOR_TX_ACTIVE },  /* our own keying, orange */
+        };
+        for (size_t i = 0; i < sizeof(layer) / sizeof(layer[0]); i++) {
+            lv_obj_t *l = lv_label_create(s_ticker);
+            *layer[i].obj = l;
+            lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+            lv_obj_set_width(l, MID_W - PANE_W - 16);
+            lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(layer[i].colour), 0);
+            lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_all(l, 0, 0);
+            lv_label_set_text(l, "");
+            lv_obj_set_pos(l, 0, r * tk_row_px);
+        }
+    }
 
     // Copilot hint line, immediately above the ticker and left-aligned with
     // it: the ticker is the raw copy, this is the interpretation. Kept OUT of

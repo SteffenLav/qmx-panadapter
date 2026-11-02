@@ -20,6 +20,7 @@
 #include "adif/adif_log.h"
 #include "cat/cat.h"
 #include "ui/cw_screen_view.h"
+#include "cw_decode.h"   // cw_decode_feed_text() - phantoms must reach the grid
 
 #include <string.h>
 #include <strings.h>   // strncasecmp, for the {CALL} test in compose()
@@ -759,7 +760,14 @@ static void sim_feed(const char *what, const char *clean)
     char dirty[128];
     sim_corrupt(dirty, sizeof(dirty), clean);
     ESP_LOGI(TAG, "[SIM] %s: '%s' -> copied as '%s'", what, clean, dirty);
+    /* ⛔ BOTH, and the second is why CW simulation still reaches the ticker.
+     * cw_screen_feed_decoded() is the RAW stream for capture/ESM/hints only;
+     * the screen draws cw_decode.c's grid, which a phantom never reaches by
+     * itself because it was never a "TB...;" frame off the wire. false =
+     * received text: painting a phantom in the TX colour would tell the
+     * operator they sent it. */
     cw_screen_feed_decoded(dirty, (int)strlen(dirty));
+    cw_decode_feed_text(dirty, (int)strlen(dirty), false);
 }
 
 // Idle band noise: short dit/dah-ish fragments, exactly what the QMX decoder
@@ -776,6 +784,7 @@ static void sim_feed_noise(void)
     buf[o++] = ' ';
     buf[o] = '\0';
     cw_screen_feed_decoded(buf, o);
+    cw_decode_feed_text(buf, o, false);   /* see sim_feed() - the screen reads the grid */
 }
 
 void cw_qso_sim_arm(void)
