@@ -48,6 +48,14 @@ extern "C" {
 // noise and is dropped. Spaces neither start nor break a run - noise produces
 // plenty of them - but any other character ends it.
 //
+// ⭐ THE SAME VERDICT GOVERNS THE DECODER'S '*', and that is the whole point of
+// routing both through one run counter. A SHORT run of '*' is the decoder
+// losing a character inside real text, so ONE '*' is printed - the radio's own
+// notation, which is what the operator reads on the QMX's LCD. A LONG run was
+// the decoder chewing on noise and is dropped as before. So the screen stays
+// consistent with the radio without taking back the 23.6%-of-everything flood
+// that dropping '*' was measured to remove.
+//
 // This cannot make a wrong decision permanently: at most CW_SQUELCH_RUN
 // characters are ever held, and a genuine "EEEE" (unusual in real CW) costs
 // nothing but those characters.
@@ -57,7 +65,7 @@ extern "C" {
 typedef struct {
     char pend[CW_SQUELCH_HOLD];
     int  n_pend;   // held, waiting on a verdict
-    int  run;      // consecutive E/T (may exceed CW_SQUELCH_RUN)
+    int  run;      // consecutive E/T AND '*' (may exceed CW_SQUELCH_RUN)
     int  emitted;  // anything released yet? - stops a leading space
 } cw_squelch_t;
 

@@ -116,10 +116,36 @@ int main(void)
           { "run resets after real text",  "CQ TTTTTTTT DE K",      "CQ DE K"     },
           /* '*' is the decoder saying it could not resolve a symbol. Measured at
              23.6% of everything arriving on a live band - the biggest single
-             contributor to the mess, and never part of real text. */
-          { "unresolved symbols dropped",  "C*Q* D*E K",            "CQ DE K"     },
+             contributor to the mess, and never part of real text.
+
+             ⛔ THE CONTRACT CHANGED 2026-11-02 AND THIS TEST CAUGHT IT. It used
+             to assert "C*Q* D*E K" -> "CQ DE K", i.e. dropped at the door. That
+             dropped the WORD BOUNDARY with the symbol, so "CQ*DE*W1AW" reached
+             the screen as "CQDEW1AW" - reported by the operator as several words
+             welded into one row of letters, and reproduced on a host probe
+             before anything was changed.
+
+             '*' is now HELD like a space, so its position survives, and the
+             SAME short/long run verdict decides it: a short run prints verbatim
+             (exactly what the QMX's own LCD shows, which is the consistency the
+             operator asked for), a long run is still noise and goes.
+             CW_SQUELCH_RUN is the bound that keeps the 23.6% off the screen -
+             at most 4 consecutive can ever be printed. */
+          { "short run keeps its place",   "C*Q* D*E K",            "C*Q* D*E K" },
+          { "* IS the word boundary",      "CQ*DE*W1AW",            "CQ*DE*W1AW" },
+          { "spaced, position kept",       "CQ * DE W1AW",          "CQ * DE W1AW" },
+          { "honest inside a callsign",    "W1*AW",                 "W1*AW"       },
           { "a line of nothing but them",  "**********",            ""            },
+          { "long run still dropped",      "CQ ****** DE W1AW",     "CQ DE W1AW"  },
           { "they count toward a run",     "T*T*E*T*T*T CQ",        "CQ"          },
+          /* ⚠ AND THIS ONE IS NOT "CQ". I wrote it expecting the leading run to
+             be suppressed, borrowing the long-run rule's "not at the very
+             start, where it would just indent the first word" - but that rule
+             is about a SPACE stand-in, which carries no information. These are
+             real characters the radio would print, and a line that opens with
+             the decoder having lost its footing is worth knowing. The code was
+             right and the expectation was mine. */
+          { "leading run is shown too",    "*** CQ",                "*** CQ"      },
         };
         for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
             cw_squelch_t st;

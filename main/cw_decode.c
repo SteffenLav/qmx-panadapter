@@ -65,9 +65,20 @@ int cw_decode_parse_tb(const char *resp, char *out, size_t out_sz, int *tx_pendi
  * "the line fills with rubbish" actually consisted of. E and T together were
  * only 8%, so the first version of this squelch was filtering the wrong thing.
  *
- * So it is dropped outright rather than held for a run verdict. There is no
- * reading of "the decoder could not tell what that was" that is worth a column,
- * and unlike E or T it can never be real text. */
+ * ⭐ 2026-11-02: IT IS NO LONGER DROPPED OUTRIGHT, and the reason the first
+ * version gave - "there is no reading of 'the decoder could not tell what that
+ * was' that is worth a column" - was wrong about what the column carries. It
+ * carries the GAP. Dropping the symbol silently also dropped the word boundary,
+ * so "CQ*DE*W1AW" reached the screen as "CQDEW1AW": measured on the host probe,
+ * and reported by the operator as "several words get truncated into one long row
+ * of letters". Welding two words into a plausible-looking one is worse than
+ * admitting a character was lost.
+ *
+ * So it now goes through the SAME run verdict as E and T: a short run prints one
+ * '*' (the radio's own notation - what the operator already reads on the QMX
+ * LCD), a long run is still dropped as noise. The 23.6% measured below was
+ * overwhelmingly long runs on a dead band, so collapsing a short run to a single
+ * character does not bring the flood back. */
 static int is_unresolved(char c) { return c == '*'; }
 
 /* E and T are the two SHORTEST Morse symbols - one dit, one dah - so a random
@@ -85,13 +96,13 @@ int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
     /* Unresolved symbols never reach the screen. They also COUNT toward the run,
      * so "T*T*E*T" is recognised as one stretch of the decoder struggling
      * rather than as text interrupted by noise. */
-    if (is_unresolved(c)) {
-        st->run++;
-        return 0;
-    }
-
-    if (c == ' ' || is_noise_char(c)) {
-        if (is_noise_char(c)) st->run++;
+    /* '*' is HELD, exactly like a space or an E/T, rather than thrown away at
+     * the door. Holding it is what keeps its POSITION: the first version of
+     * this fix appended one '*' after the pending buffer had been released, so
+     * it landed against the settling character - "CQ  *DE" instead of the
+     * radio's "CQ * DE". Pending it needs no position bookkeeping at all. */
+    if (is_unresolved(c) || c == ' ' || is_noise_char(c)) {
+        if (is_unresolved(c) || is_noise_char(c)) st->run++;
         if (st->n_pend < CW_SQUELCH_HOLD) st->pend[st->n_pend++] = c;
         return 0;
     }
@@ -100,6 +111,13 @@ int cw_squelch_push(cw_squelch_t *st, char c, char *out, size_t out_sz)
     size_t n = 0;
     if (st->run < CW_SQUELCH_RUN) {
         // Short run - this was real text with some E/T in it. Release it.
+        /* Released verbatim, '*' included and in the place it arrived - which
+         * is what makes the Tab5 and the web read the same as the radio's own
+         * LCD. CW_SQUELCH_RUN bounds it: at most 4 consecutive unresolved
+         * symbols can ever reach the screen, because the 5th calls the run
+         * noise and the branch below drops the lot. That is the bound which
+         * keeps the measured 23.6% off the screen while still admitting that a
+         * character was lost. */
         for (int i = 0; i < st->n_pend && n < out_sz - 1; i++) out[n++] = st->pend[i];
     } else {
         // A long run was the decoder chewing on noise, so it goes. But if the
