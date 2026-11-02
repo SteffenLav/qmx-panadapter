@@ -29,6 +29,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include "panic_hook.h"   // T138: mark the cache-off stretches
 
 static const char *TAG      = "adif";
 static const char *FILE_PATH = "/spiffs/qso.adi";
@@ -353,6 +354,10 @@ void adif_log_init(void)
     // asked for and the deleted pages can still cover it. A too-large request
     // reports a scary error and does nothing, which is what the diag log's own
     // 128 KB request was doing until 2026-10-12 (see DIAG_GC_REQUEST).
+    /* T138: gc scans the partition and check repairs it, both with the cache
+     * off, and this pair is the longest such stretch the firmware runs at all.
+     * At mount, so a crumb naming it would point at boot rather than runtime. */
+    panic_hook_crumb_enter("spiffs:mount-gc+check");
     esp_err_t gc = esp_spiffs_gc("storage", 65536);
     if (gc != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS gc: %s (continuing anyway)", esp_err_to_name(gc));
@@ -361,6 +366,7 @@ void adif_log_init(void)
     if (chk != ESP_OK) {
         ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
     }
+    panic_hook_crumb_exit();
 
     // Check free space and warn if low (< 64 KB).
     size_t total = 0, used = 0;
@@ -1016,8 +1022,10 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
         // gc before check - see adif_log_init(): a full partition cannot
         // write a repair, so check() first is a no-op on exactly the
         // condition that brought us here.
+        panic_hook_crumb_enter("spiffs:batchdel-gc");
         esp_spiffs_gc("storage", 65536);
         esp_spiffs_check("storage");
+        panic_hook_crumb_exit();
         out = fopen(TMP_PATH, "w");
     }
     if (!out) {
@@ -1123,8 +1131,10 @@ bool adif_log_delete_record(int idx)
         esp_spiffs_info("storage", &t0, &u0);
         // gc BEFORE check - see adif_log_init(). A repair is a write, and
         // ENOSPC is precisely the state in which it cannot land.
+        panic_hook_crumb_enter("spiffs:delrec-gc");
         esp_err_t gc  = esp_spiffs_gc("storage", 65536);
         esp_err_t chk = esp_spiffs_check("storage");
+        panic_hook_crumb_exit();
         esp_spiffs_info("storage", &t1, &u1);
         ESP_LOGW(TAG, "delete record #%d: %s ENOSPC on open - check=%s gc=%s, "
                       "used %zuKB/%zuKB -> %zuKB/%zuKB, retrying once",

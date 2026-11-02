@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "psram_task.h"
+#include "panic_hook.h"   // T138: mark the cache-off stretches
 
 static const char *TAG = "settings";
 
@@ -892,7 +893,15 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap->lotw_ituz);
         if (dirty_test(&dirty_local, DIRTY_LOTW_UPLOADED)) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap->lotw_uploaded_n);
 
+        /* T138: an NVS commit is a flash write with the cache off, and this
+         * one fires within 100 ms of any changed setting - so it is the stretch
+         * a TOUCH can put on the bus, which is the shape Michael KZ4LY's crash
+         * report has ("it crashed when I touched the Tab5"). Marked, not
+         * accused: a crumb here at the next boot is evidence, the hypothesis
+         * on its own was not. */
+        panic_hook_crumb_enter("nvs:settings-commit");
         esp_err_t err = nvs_commit(s_nvs);
+        panic_hook_crumb_exit();
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "nvs_commit failed: 0x%x", err);
         } else {

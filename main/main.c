@@ -200,6 +200,14 @@ void app_main(void)
     // thing needed. No-op on a clean boot.
     panic_hook_report_previous();
 
+    /* T138: and the other record, which covers the reset the one above cannot
+     * see. A hardware-watchdog reset never runs the panic handler, so it
+     * leaves no crash record - Michael KZ4LY's v1.23.1 reset came back as
+     * reset_reason=other-watchdog with nothing else at all. This one is
+     * written by the code ENTERING a cache-off stretch, not by a handler, so
+     * it survives a reset that gives the CPU no turn. No-op on a clean boot. */
+    panic_hook_report_previous_crumb();
+
     // Apply any pending selective NVS reset requested from the web UI before a
     // reboot. Must run before nvs_flash_init()/settings_init() open handles on
     // the partitions we may be about to erase. No-op on a normal boot.

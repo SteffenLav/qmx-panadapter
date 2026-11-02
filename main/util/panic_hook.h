@@ -52,6 +52,52 @@ void panic_hook_report_previous(void);
 // Distinct from esp_reset_reason() == ESP_RST_PANIC, which is ambiguous here.
 bool panic_hook_previous_was_crash(void);
 
+/* ---- T138: the breadcrumb for a reset the panic handler never sees ---------
+ *
+ * THE PROBLEM, and it is the one the record above cannot cover. Michael
+ * KZ4LY's v1.23.1 crash came back as reset_reason=other-watchdog
+ * (ESP_RST_WDT) after a 99-minute clean run, with no panic, no backtrace and
+ * no crash record at all. On the P4 that reason is not a generic "watchdog":
+ * esp_system/port/soc/esp32p4/reset_reason.c maps a task-WDT or int-WDT reset
+ * that goes THROUGH the panic handler to RESET_REASON_CORE_SW plus a stored
+ * hint, which reads back as "task-watchdog" or "interrupt-watchdog".
+ * ESP_RST_WDT is the fall-through for the hardware watchdogs with NO hint
+ * written - the panic handler never ran.
+ *
+ * So __wrap_esp_panic_handler() never ran either, and the #117 record was
+ * empty. Its absence is not a fault in it; it is the same evidence as the
+ * reset reason. Both say the CPU never got a turn.
+ *
+ * The documented mechanism for that on this board is in main/net/ota_update.c:
+ * a stretch with the cache or interrupts off for longer than INT_WDT stage 1
+ * can tolerate, so stage 2 resets the chip in hardware.
+ *
+ * WHAT THIS DOES: the code about to enter such a stretch says so BEFORE it
+ * starts, into RTC no-init RAM, and clears it on the way out. Nothing is
+ * written by a handler, because no handler gets to run. If a crumb is still
+ * there at the next boot, the reset happened INSIDE that stretch and the next
+ * boot names it.
+ *
+ * ⚠ Three limitations, all deliberate:
+ *  - RTC RAM does not survive a full power cycle, same trade as the record
+ *    above. A watchdog reset is warm, which is the case this is for.
+ *  - The OUTERMOST entrant owns the crumb, so with two unrelated stretches
+ *    genuinely overlapping it names the first, not necessarily the one that
+ *    hung. A depth counter stops an inner exit from clearing it early.
+ *  - A site that is not marked cannot be reported. This is evidence about
+ *    the sites it is put on, and silence means "not one of these", never
+ *    "not a cache-off stretch". */
+void panic_hook_crumb_enter(const char *site);
+void panic_hook_crumb_exit(void);
+
+// Report a crumb the PREVIOUS boot left behind, and consume it so it is
+// reported exactly once. Call it beside panic_hook_report_previous(); the two
+// answer different questions and are almost never both present.
+void panic_hook_report_previous_crumb(void);
+
+// True if the previous boot reset inside a marked stretch.
+bool panic_hook_previous_left_crumb(void);
+
 #ifdef __cplusplus
 }
 #endif

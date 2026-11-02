@@ -14,6 +14,7 @@
 #include "psram_task.h"
 #include "esp_app_desc.h"
 #include "esp_spiffs.h"   // esp_spiffs_gc() after a rotation
+#include "panic_hook.h"   // T138: mark the cache-off stretches
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -389,7 +390,15 @@ static void diag_persist_task(void *arg)
              * a file that was open and present. Measure the byte, not the
              * word. */
             errno = 0;
-            if (fwrite(buf, 1, got, f) != got) {
+            /* T138: a SPIFFS write disables the cache for the duration, which
+             * is the stretch main/net/ota_update.c records taking the hardware
+             * watchdog. Marked so a reset inside it names itself at the next
+             * boot - nothing else can, because that reset never runs the panic
+             * handler. */
+            panic_hook_crumb_enter("spiffs:diag-write");
+            size_t wrote_n = fwrite(buf, 1, got, f);
+            panic_hook_crumb_exit();
+            if (wrote_n != got) {
                 // A failed write leaves the stream's ERROR FLAG SET, and every
                 // later fwrite on that handle then fails too - so without the
                 // clearerr() below "retry next tick" retries forever and never
@@ -469,9 +478,16 @@ static void diag_persist_task(void *arg)
                      * reclaims a deleted generation's blocks; check() repairs
                      * consistency and belongs at mount, where adif_log_init()
                      * already runs it with room to work. */
+                    /* T138: the LONGEST cache-off stretch in this file - an
+                     * unlink of a whole generation, a rename, then a garbage
+                     * collect over the partition. If the hardware watchdog
+                     * ever takes the board here, this is the name that will
+                     * come back. */
+                    panic_hook_crumb_enter("spiffs:rotate-full");
                     remove(DIAG_FLASH_PATH_0);
                     rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
                     esp_spiffs_gc("storage", DIAG_GC_REQUEST);
+                    panic_hook_crumb_exit();
                     f = fopen(DIAG_FLASH_PATH, "w");
                     bytes = 0;
                     fail_streak = 0;
@@ -493,6 +509,7 @@ static void diag_persist_task(void *arg)
             wrote = true;
             if (bytes >= DIAG_FLASH_MAX) {              // rotate: keep one generation
                 fclose(f);
+                panic_hook_crumb_enter("spiffs:rotate-cap");
                 remove(DIAG_FLASH_PATH_0);
                 rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
                 /* Collect the generation we just dropped. SPIFFS only garbage-
@@ -503,6 +520,7 @@ static void diag_persist_task(void *arg)
                  * measured early rotations were. Right after a rename is the
                  * cheap moment: whole blocks have just become free. */
                 esp_spiffs_gc("storage", DIAG_GC_REQUEST);
+                panic_hook_crumb_exit();
                 f = fopen(DIAG_FLASH_PATH, "w");
                 /* This rotation was SILENT until 2026-10-12, which is why the
                  * capture could only count the ENOSPC ones. Saying which of

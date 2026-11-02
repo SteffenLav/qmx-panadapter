@@ -344,6 +344,21 @@ add_custom_command(
     VERBATIM
 )
 
+# Refuse to build a T138 breadcrumb that is not balanced by its exit.
+#
+# panic_hook_crumb_enter() stamps RTC no-init RAM and the exit clears it. A
+# crumb still there at the next boot MEANS "the reset happened inside that
+# stretch", so a missing exit does not fail quietly - it makes the instrument
+# report a cache-off reset on every healthy boot, and its depth counter then
+# stops every later crumb from being recorded too. This project has already
+# lost a session to an instrument that returned confident wrong numbers.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_crumbs.py"
+    COMMENT "Checking T138 breadcrumbs are balanced"
+    VERBATIM
+)
+
 # Refuse to build a drawer whose section ids are not unique and in range.
 #
 # s_drawer_sections[] / _y[] / _h[] in ui.c are indexed BY the DRAWER_SEC_* id,
