@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <unistd.h>     // fsync
 #include <sys/stat.h>
+#include <dirent.h>     // opendir/readdir - history-folder pruning
+#include <time.h>       // gmtime_r/strftime - history filenames
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,7 +42,7 @@ static const char *TAG = "sd_arch";
 #define SD_MOUNT_POINT   "/sdcard"
 #define SD_DIR           "/sdcard/qmx-panadapter"
 #define SD_LOG_PATH      "/sdcard/qmx-panadapter/qmx-log.txt"
-#define SD_LOG_PATH_1    "/sdcard/qmx-panadapter/qmx-log.1.txt"
+#define SD_HISTORY_DIR   "/sdcard/qmx-panadapter/history"
 #define SD_ADIF_PATH     "/sdcard/qmx-panadapter/qso.adi"
 #define SD_ADIF_PREV     "/sdcard/qmx-panadapter/qso.prev.adi"
 #define SD_CONFIG_PATH   "/sdcard/qmx-panadapter/qmx-config.txt"
@@ -526,7 +528,49 @@ static void mirror_cw(void)
                  was_paused ? " (stream was already paused)" : "");
 }
 
-// Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
+// Keep at most this much SD space free before history starts giving way -
+// below this, the OLDEST history file is deleted. "Nearly indefinite", per
+// KZ4LY's 2026-11-02 request, not literally indefinite: the card we already
+// recommend (32 GB) holds many thousands of 5 MB generations before this
+// ever fires in practice.
+#define SD_HISTORY_LOW_SPACE_BYTES (50ULL * 1024 * 1024)
+
+// esp_vfs_fat_info() is EXPENSIVE - measured 10 s on a 31 GB card, see
+// sd_space_report_once() above. Only call it from rotate_diag_log(), which
+// fires once per 5 MB of diagnostic log (hours to days of uptime), never
+// from a hot path.
+static void maybe_prune_history(void)
+{
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &freeb) != ESP_OK) return;
+    if (freeb >= SD_HISTORY_LOW_SPACE_BYTES) return;
+
+    DIR *d = opendir(SD_HISTORY_DIR);
+    if (!d) return;
+    char oldest[256] = {0};   // d_name can be up to 255 chars + NUL
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        // Filenames are "diag-YYYYMMDD-HHMMSS-N.txt" - zero-padded and
+        // lexically sortable, so the smallest name IS the oldest file. No
+        // stat() needed, which matters: this can run on a card already short
+        // on space, where every extra FatFs call costs more.
+        if (!oldest[0] || strcmp(de->d_name, oldest) < 0)
+            snprintf(oldest, sizeof(oldest), "%s", de->d_name);
+    }
+    closedir(d);
+    if (!oldest[0]) return;   // nothing to prune
+    char path[256 + sizeof(SD_HISTORY_DIR) + 1];
+    snprintf(path, sizeof(path), "%s/%s", SD_HISTORY_DIR, oldest);
+    ESP_LOGW(TAG, "SD low on space (%llu KB free) - deleting oldest history file %s",
+             (unsigned long long)(freeb / 1024), oldest);
+    remove(path);
+}
+
+// Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB into
+// history/ instead of discarding - KZ4LY, 2026-11-02: "is it possible to
+// keep nearly indefinite logs on it?" The 2-generation rotate-and-delete this
+// replaced is at git history if a reason ever turns up to go back to it.
 // Returns false on a write error (possible card removal).
 /* ⛔ THE 5 MB ROTATION WAS UNREACHABLE ON EVERY WiFi UNIT, AND THAT IS HOW THE
  * CARD FILLS UP (2026-09-22, chasing Dennis WN4FLA's "SD not mounted").
@@ -541,10 +585,13 @@ static void mirror_cw(void)
  *    grows without limit for the entire life of the card. The bench's own copy,
  *    pulled 2026-09-20, is 5,368,581 B - already past SD_LOG_MAX_BYTES.
  *
- *  - ⭐ The rotate is what FREES space (remove() of the previous
- *    qmx-log.1.txt), and it was gated behind a SUCCESSFUL write. On a card with
- *    no room left, the write is exactly the thing that cannot happen, so the
- *    one action that would recover the card was unreachable by construction.
+ *  - ⭐ The rotate is what FREES space (the move into history/, formerly a
+ *    remove() of the previous qmx-log.1.txt), and it was gated behind a
+ *    SUCCESSFUL write. On a card with no room left, the write is exactly the
+ *    thing that cannot happen, so the one action that would recover the card
+ *    was unreachable by construction. The rename below is still cheap on a
+ *    full card (a FAT directory-entry update, not a copy); maybe_prune_history()
+ *    is what actually frees bytes now, and only when space is genuinely low.
  *
  * Both write paths and the mount now go through this, and the size is checked
  * BEFORE writing as well as after. See sd_archive_task()'s unmount path for
@@ -554,18 +601,31 @@ static void rotate_diag_log(void)
 {
     const bool was_open = (s_log_file != NULL);
     if (s_log_file) { fflush(s_log_file); fclose(s_log_file); s_log_file = NULL; }
-    // remove() FIRST - this is the call that actually returns space to the
-    // volume. rename() alone frees nothing.
-    remove(SD_LOG_PATH_1);
-    if (rename(SD_LOG_PATH, SD_LOG_PATH_1) != 0)
-        ESP_LOGW(TAG, "rotate: rename %s failed: %s", SD_LOG_PATH, strerror(errno));
+
+    struct tm tmv;
+    time_t now = time(NULL);
+    gmtime_r(&now, &tmv);
+    // Trailing sequence number, not just the timestamp: if the clock has not
+    // synced yet (boot-time rotate, no SNTP/GPS), every rotation this boot
+    // would otherwise collide on the same "19700101-000000" name and silently
+    // overwrite - the one failure mode this file exists to avoid.
+    static uint32_t s_history_seq;
+    char dest[112];
+    snprintf(dest, sizeof(dest),
+             SD_HISTORY_DIR "/diag-%04d%02d%02d-%02d%02d%02d-%u.txt",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (unsigned)++s_history_seq);
+    if (rename(SD_LOG_PATH, dest) != 0)
+        ESP_LOGW(TAG, "rotate: move %s to %s failed: %s", SD_LOG_PATH, dest, strerror(errno));
+    else
+        ESP_LOGW(TAG, "rotated diag log to %s", dest);
+    maybe_prune_history();
     s_log_bytes = 0;
     if (was_open) {
         s_log_file = fopen(SD_LOG_PATH, "ab");
         if (!s_log_file)
             ESP_LOGW(TAG, "rotate: reopen %s failed: %s", SD_LOG_PATH, strerror(errno));
     }
-    ESP_LOGW(TAG, "rotated diag log on SD - previous qmx-log.1.txt deleted");
 }
 
 static bool mirror_diag(void)
@@ -1125,6 +1185,7 @@ static bool try_mount(void)
              (int)(pre_p - post_p));
 
     ensure_dir(SD_DIR);
+    ensure_dir(SD_HISTORY_DIR);   // rotate_diag_log()'s destination, must exist before it fires
 
     // Open (append) the diag log. s_diag_cursor is NOT reset here: on the
     // first mount of the boot it's still 0, so read_from() (clamping to the
