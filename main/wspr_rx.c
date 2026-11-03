@@ -2772,6 +2772,31 @@ static void wspr_rx_task(void *arg)
          * taken before the first sample and cannot be overtaken by a retune. */
         const uint32_t cap_dial_hz = wspr_rx_cycle_dial_hz();
 
+        /* ⛔ REALLOCATED HERE, NOT KEPT FOR THE WHOLE SESSION. `cap` (5.76 MB)
+         * is only touched between this capture and the float->int16
+         * conversion right after dsp_ft8_capture_finish() below - idle for
+         * the rest of the cycle (candidate search + per-candidate decode,
+         * 12-45+ s measured). It is freed right after that conversion and
+         * reallocated here, so it is never resident at the same time as
+         * wspr_find_candidates()'s ~2.3 MB scratch or build_stage1()'s
+         * ~1.44 MB (T150) - same "lend it back" pattern already proven for
+         * those two tonight, just a bigger buffer and a once-per-cycle
+         * frequency. Costs one alloc per cycle instead of one for the whole
+         * session; failing to get it is not fatal, the existing skip-cycle
+         * path below already covers a failed capture_begin. */
+        if (!cap) cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!cap) {
+            ESP_LOGW(TAG, "cycle %lld: could not get the capture buffer back "
+                          "(%u KB free, largest %u KB) - skipping this cycle",
+                     (long long)cycle_utc,
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                     (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+            set_status("out of memory - no capture");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+
         const bool wf_live = wf_begin();
         esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
         if (err != ESP_OK) {
@@ -2898,6 +2923,11 @@ static void wspr_rx_task(void *arg)
          * its 120 s the slots really did alternate and the pointer changed
          * every time, so the address check looked sufficient. It never was. */
         wspr_decode_capture_changed();
+
+        /* Give the 5.76 MB float buffer back now - see the note at its
+         * reallocation above. Nothing below this point touches `cap`. */
+        free(cap);
+        cap = NULL;
 
         /* The rows were drawn live as the capture filled; this only recomputes
          * the floor from the finished window and repaints against it. No FFTs,
