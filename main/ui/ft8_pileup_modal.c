@@ -116,9 +116,12 @@ static void row_work_cb(lv_event_t *e)
     // as heard when they called us - the message we're answering. Field Day
     // mode keeps the grid TX1 path (the FD class+section exchange is sent at
     // the report step by the QSO machine, same as a decode-list pounce).
-    qmx_settings_t qs;
-    settings_load_all(&qs);
-    bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+    /* ⛔ THE NARROW ACCESSOR, NOT settings_load_all(). This callback runs on
+     * taskLVGL - row_work_cb() is an LVGL touch handler - and qmx_settings_t
+     * is 3888 bytes. Randy N4OPI's v1.24.1 crash clicking a pileup entry to
+     * work them (2026-11-03) is this exact class, the same one already fixed
+     * once this release in ft8_screen_view.c's row_activate_ex(). */
+    bool fd_mode = settings_get_fd_mode_active();
     char rpt[8];
     const char *extra = NULL;
     if (!fd_mode) {

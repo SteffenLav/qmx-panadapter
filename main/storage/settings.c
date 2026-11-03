@@ -2210,6 +2210,19 @@ void settings_set_ft8_filters(const ft8_filters_t *f)
     mark_dirty(DIRTY_FT8_FILT);
 }
 
+// Narrow accessor: ft8_qso_build_manual_reply() reads this on taskLVGL (it's
+// called directly from both ft8_screen_view.c's row touch handler and
+// ft8_pileup_modal.c's), where a full qmx_settings_t is the stack-overflow
+// class fixed elsewhere in this release.
+bool settings_get_ft8_skip_tx1(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.ft8_filters.skip_tx1;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 void settings_set_kbd_bindings(const kbd_bindings_t *b)
 {
     if (!s_ready || !b) return;
@@ -4076,6 +4089,22 @@ bool settings_get_field_day_en(void)
     if (!s_ready) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool v = s_pending.field_day_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+// Narrow accessor for the `field_day_en && fd_class[0] && fd_section[0]`
+// check that five call sites repeated, each behind its own full
+// settings_load_all() (3888 B). Two of them - ft8_qso_build_manual_reply()
+// and ft8_pileup_modal.c's row_work_cb() - run on taskLVGL from a touch
+// callback; row_work_cb() is the crash Randy N4OPI hit on v1.24.1
+// clicking a pileup entry to work them (2026-11-03), the same class as the
+// CQ-row fix already shipped in this release, just a second instance of it.
+bool settings_get_fd_mode_active(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.field_day_en && s_pending.fd_class[0] && s_pending.fd_section[0];
     xSemaphoreGive(s_mutex);
     return v;
 }

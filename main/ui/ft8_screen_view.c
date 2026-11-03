@@ -1817,9 +1817,7 @@ static void web_reply_drain(void)
             web_result_set("%s is no longer in the decode list", call);
             return;
         }
-        qmx_settings_t qs;
-        settings_load_all(&qs);
-        bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+        bool fd_mode = settings_get_fd_mode_active();   // narrow - see its own comment
         char rpt[8];
         const char *extra = NULL;
         if (!fd_mode) {

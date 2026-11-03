@@ -1094,6 +1094,7 @@ void settings_set_onboarded(bool v);
 
 // FT8 CQ-run reply include/exclude filters (debounced flush).
 void settings_set_ft8_filters(const ft8_filters_t *f);
+bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read on taskLVGL
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
 // RX audio output: enable demodulated audio on the Tab5 speaker/headphone
@@ -1354,6 +1355,7 @@ void settings_set_field_day_en(bool v);
    put a whole qmx_settings_t on taskLVGL's stack - see ft8_screen_view.c's CQ
    button label refresh. */
 bool settings_get_field_day_en(void);
+bool settings_get_fd_mode_active(void);   // narrow: field_day_en && fd_class[0] && fd_section[0]
 // Activation session. type: 0 none, then one of the programmes in k_act[]
 // (settings.c) - 1 POTA, 2 SOTA, 3 WWFF, 4 IOTA, 5 GMA, 6 WCA, 7 WWBOTA.
 // ⛔ Those ids are persisted in NVS: append to the table, never renumber.
