@@ -966,7 +966,18 @@ static bool partner_busy_with(const char *call, char *with, size_t with_sz)
         if (strcmp(tok1, s_my_call) == 0) break;   // addressed to US - engage
         // Signing off with a third party: the frequency is about to be free, so
         // don't hold on this - the next slot will show a CQ or a reply to us.
-        if (strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0) {
+        //
+        // ⛔ RRR BELONGS HERE TOO (Gyula HA3HZ, 2026-11-03): "RRR and RR73 do
+        // not handle the process at the same level. While it waits for 73 in
+        // the case of RRR, it releases the call for RR73." Correct - this
+        // list had only 73/RR73, so a third party whose last word was RRR
+        // (common; not every station sends a separate 73) still read as busy
+        // here, holding a manual pounce on an operator who was actually
+        // free. partner_answer_this_slot() below already treats RRR, RR73
+        // and 73 as the same "they heard us, it's over" signal - this check
+        // was the one place that disagreed with it.
+        if (strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0 ||
+            strcmp(rest, "RRR") == 0) {
             /* INSTRUMENT (Gyula HA3HZ, 2026-09-24): "even after receiving an
              * RR73, I often see it continue to wait rather than calling
              * again." This is the branch that is supposed to end the wait, so
