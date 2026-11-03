@@ -1392,12 +1392,11 @@ static void wpm_backspace_cb(lv_event_t *e)
     wpm_disp_refresh();
 }
 
-static void wpm_ok_cb(lv_event_t *e) { (void)e; wpm_popup_apply(); }
-static void wpm_cancel_cb(lv_event_t *e) { (void)e; wpm_popup_close(); }
+static void wpm_tick_cb(lv_event_t *e) { (void)e; wpm_popup_apply(); }
 
 static void wpm_popup_backdrop_cb(lv_event_t *e)
 {
-    if (lv_event_get_target(e) == lv_event_get_user_data(e)) wpm_popup_close();
+    if (lv_event_get_target(e) == lv_event_get_user_data(e)) wpm_popup_apply();
 }
 
 /* One small helper so all nine digit/backspace/OK/Cancel keys share exactly
@@ -1437,7 +1436,7 @@ static void wpm_popup_open(void)
         // Box, digit grid and Cancel/OK sized from the same numbers the
         // macro editor already uses (56 px key height, 8 px gap) - a 3-wide
         // keypad plus a bottom row, not a copy of that window's own layout.
-        int box_w = 266, box_h = 366;
+        int box_w = 266, box_h = 412;
         lv_obj_t *box = lv_obj_create(s_wpm_panel);
         lv_obj_set_size(box, box_w, box_h);
         lv_obj_align(box, LV_ALIGN_CENTER, 0, 0);
@@ -1455,29 +1454,31 @@ static void wpm_popup_open(void)
         lv_obj_set_style_text_font(s_wpm_disp, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_align(s_wpm_disp, LV_TEXT_ALIGN_CENTER, 0);
 
-        static const char *const DIGIT_ROWS[4][3] = {
-            { "1", "2", "3" }, { "4", "5", "6" }, { "7", "8", "9" }, { NULL, "0", NULL }
+        // Row 4 is tick / 0 / backspace - no separate Cancel/OK row. A tap
+        // outside the pad (the backdrop) applies the entered value too, so
+        // the tick is a shortcut for that, not the only way to confirm.
+        static const char *const DIGIT_ROWS[3][3] = {
+            { "1", "2", "3" }, { "4", "5", "6" }, { "7", "8", "9" }
         };
         int cell = 74, gap = 10, grid_top = 62;
-        for (int r = 0; r < 4; r++) {
+        for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
                 const char *t = DIGIT_ROWS[r][c];
-                if (!t) continue;
                 lv_obj_t *k = wpm_key_make(box, c * (cell + gap), grid_top + r * (cell + gap),
                                            cell, cell, t, 0x2a2f37, UI_COLOR_MODE_CW_TEXT);
                 lv_obj_add_event_cb(k, wpm_digit_cb, LV_EVENT_CLICKED, (void *)(intptr_t)t[0]);
             }
         }
-        int bksp_y = grid_top + 3 * (cell + gap);
-        lv_obj_t *bksp = wpm_key_make(box, 0, bksp_y, cell, cell, LV_SYMBOL_BACKSPACE,
+        int row4_y = grid_top + 3 * (cell + gap);
+        lv_obj_t *tick = wpm_key_make(box, 0, row4_y, cell, cell, LV_SYMBOL_OK,
+                                      0x2e8b3a, 0xffffff);
+        lv_obj_add_event_cb(tick, wpm_tick_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *zero = wpm_key_make(box, cell + gap, row4_y, cell, cell, "0",
+                                      0x2a2f37, UI_COLOR_MODE_CW_TEXT);
+        lv_obj_add_event_cb(zero, wpm_digit_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'0');
+        lv_obj_t *bksp = wpm_key_make(box, (cell + gap) * 2, row4_y, cell, cell, LV_SYMBOL_BACKSPACE,
                                       0x2a2f37, 0xffffff);
         lv_obj_add_event_cb(bksp, wpm_backspace_cb, LV_EVENT_CLICKED, NULL);
-
-        int btn_y = bksp_y + cell + gap;
-        lv_obj_t *cancel = wpm_key_make(box, 0, btn_y, cell, 56, "Cancel", 0x962020, 0xffffff);
-        lv_obj_add_event_cb(cancel, wpm_cancel_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *ok = wpm_key_make(box, (cell + gap) * 2, btn_y, cell, 56, "OK", 0x2e8b3a, 0xffffff);
-        lv_obj_add_event_cb(ok, wpm_ok_cb, LV_EVENT_CLICKED, NULL);
     }
 
     int cur = cat_get_keyer_wpm();

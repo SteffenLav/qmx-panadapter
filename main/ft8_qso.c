@@ -3634,8 +3634,17 @@ static void ft8_qso_advance_body(int64_t slot_sec)
         s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
 
         bool ok;
-        if (got_rr73 || got_73) {
-            ESP_LOGI(TAG, "WAIT_RPT: %s sent RR73/73 directly", target);
+        // ⛔ BARE "RRR" BELONGS HERE TOO (Gyula HA3HZ + Randy N4OPI, 2026-11-03):
+        // scan_for_response() only recognises RR73/73 as a direct ack - a bare
+        // RRR (no report ever sent/expected) fell into the generic report
+        // bucket below and got treated as a signal report, so we replied with
+        // R<our-measurement> and sat in WAIT_RR73 waiting for an RR73/73/RRR
+        // that was never coming back (they'd already said it). The station
+        // just re-CQs and we wait out the full timeout. Same fix family as
+        // WAIT_RR73's got_rrr and WAIT_ROGER's is_roger_token("RRR") - RRR
+        // ends the exchange exactly like RR73/73 everywhere else.
+        if (got_rr73 || got_73 || strcmp(report, "RRR") == 0) {
+            ESP_LOGI(TAG, "WAIT_RPT: %s sent RR73/73/RRR directly", target);
             ok = send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73",
                            FT8_QSO_WAIT_DONE);
             if (ok) ft8_status_set("QSO %s: sending 73", target);
