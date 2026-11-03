@@ -34,10 +34,23 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 
+/* ⭐ PSRAM ADDED 2026-11-03. Deliberately left out until now: PSRAM was
+ * assumed abundant (26 MB) while internal RAM was "THE constraint" - see the
+ * header comment above. WSPR's recurring "no decodes" bug (three occurrences
+ * since 2026-09-19, the last T150) is PSRAM contention the ledger never
+ * named, because nothing ever asked it to. Same non-perturbing shape as the
+ * other two pools, and the same bounded call sites as always (app_main's
+ * phase marks + the 8 settling marks) - never periodic, so the extra
+ * heap_caps_get_largest_free_block(SPIRAM) walk (slower than internal's,
+ * more blocks over 26 MB) costs nothing it wasn't already paying for the
+ * other two pools at the same one-shot points. */
 #define MEM_LEDGER(stage)                                                     \
-    ESP_LOGI("memledger", "%-26s dma=%6u B (lblk %5u)  int=%6u B (lblk %5u)", \
+    ESP_LOGI("memledger", "%-26s dma=%6u B (lblk %5u)  int=%6u B (lblk %5u)  " \
+             "psram=%8u B (lblk %8u)",                                       \
              (stage),                                                         \
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),               \
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),      \
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),          \
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL))
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL), \
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),            \
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM))
