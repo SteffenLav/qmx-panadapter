@@ -1399,9 +1399,18 @@ static void wpm_popup_open(void)
         lv_obj_set_style_text_font(s_wpm_ta, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_align(s_wpm_ta, LV_TEXT_ALIGN_CENTER, 0);
 
+        /* ⛔ MUST BE SIZED EXPLICITLY. lv_keyboard_create() defaults to
+         * LV_PCT(100) x LV_PCT(50), auto-docked to the bottom of its
+         * parent - which on this screen meant a keyboard spanning the
+         * full 1280 px width and half the display height, covering the
+         * spectrum, the decode ticker and the memory buttons underneath.
+         * Steffen OZ1LAV, 2026-11-03: "Oh no....." (screenshot). A small
+         * keyboard under the entry box, not a full-screen one. */
         s_wpm_kb = lv_keyboard_create(s_wpm_panel);
         lv_keyboard_set_mode(s_wpm_kb, LV_KEYBOARD_MODE_NUMBER);
         lv_keyboard_set_textarea(s_wpm_kb, s_wpm_ta);
+        lv_obj_set_size(s_wpm_kb, 420, 280);
+        lv_obj_align(s_wpm_kb, LV_ALIGN_CENTER, 0, 100);
         lv_obj_add_event_cb(s_wpm_kb, wpm_kb_event_cb, LV_EVENT_ALL, NULL);
     }
 
