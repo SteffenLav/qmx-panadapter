@@ -1,6 +1,6 @@
 # CW *(beta)*
 
-The CW page is the third screen in the carousel: swipe left from the Panadapter to reach FT8, and left again for CW. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships disabled - see [the README](../../README.md#cw) for how to turn it on.
+The CW page is the third screen in the carousel: swipe left from the Panadapter to reach FT8, and left again for CW. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships **disabled** - turn it on with `cw_page_enabled = yes` in a config file, or `{"action":"cw_enable","on":true}` over the API.
 
 !!! warning "There is no abort for a message in progress"
     `KY` has no abort in the QMX's CAT manual. Tested on the bench: neither sending `RX;` nor bouncing the mode away from CW and back stops an in-flight send - both were tried and both simply had no effect, the keyer ran to completion either way. Once you tap a memory, it sends to the end. Keying the radio itself **is** confirmed working, off air, by the operator.
