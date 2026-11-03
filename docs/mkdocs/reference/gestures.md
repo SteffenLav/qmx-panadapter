@@ -13,7 +13,7 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8 or WSPR |
+| Swipe → | **Left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8, WSPR or CW (CW only when enabled - see [CW](../guide/cw.md)) |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 
@@ -54,18 +54,32 @@ hearing. Mute is instant and is not remembered across a reboot.
 
 ## Spectrum / Waterfall
 
+Works the same way on the **Panadapter** page and on the **CW** page (2026-11-03) -
+both show the live spectrum/waterfall, and these gestures were extended to CW
+to match. On the CW page, the left pane (macro buttons, WPM/Park/NEXT, the
+set toggle) is excluded: a touch that starts there is never read as a
+spectrum gesture.
+
 | Gesture | Effect |
 |---|---|
 | **Tap** | Tune to that frequency |
 | **Drag (1 finger)** | Pan left/right. The passband marker **dims to about a third while you drag** rather than disappearing, so you keep something to aim at, and returns to full when you let go. It does this in every mode |
 | **Hold ~250 ms, then drag** | Precise tune: a cyan cursor appears and snaps grid-to-grid as you move, and the radio follows when you lift. The hold is what separates it from a pan - a quick drag pans, a held drag tunes |
-| **Pinch (2 fingers)** | Zoom in/out |
-| **Right-drag** (BLE mouse) | **Pan the window** without moving the dial — the same gesture as the browser, and the same direction: drag right to bring lower frequencies into view. The picture slides under the pointer while the button is down and the pan is applied when you let go. Left-drag is unchanged |
+| **Pinch (2 fingers)** | Zoom in/out **and pan**, together - the midpoint between your two fingers drives the pan while the spread between them drives the zoom. Move both fingers with roughly steady spacing for a near-pure pan; let the spacing change and it zooms too |
+| **Three-finger hold** | Toggle **Simulation Mode** on/off - FT8's own simulator on the Panadapter page, CW's on the CW page |
+| **Right-drag** (BLE mouse) | **Pan the window** without moving the dial — the same gesture as the browser, and the same direction: drag right to bring lower frequencies into view. The picture slides under the pointer while the button is down and the pan is applied when you let go. Left-drag is unchanged. Works on the CW page too |
 | **Wheel** (BLE mouse) | Tune in steps, using your **Tune snap** setting — as in the browser |
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 
 Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, 250 Hz in USB/LSB, 500 Hz in the digital modes, 1 kHz in AM.
+
+!!! note "Two-finger pan is live, not buttery"
+    Unlike the one-finger drag (a local preview, settled on release), the
+    pinch gesture recomputes the real spectrum on every tick because zoom
+    cannot be faked locally. On this hardware a new frame can take
+    200-800 ms to render, so a fast two-finger drag can look like it jumps
+    rather than slides. It is correct, just not smooth yet.
 
 ## Band-Plan Strip (Panadapter)
 
@@ -78,6 +92,28 @@ The thin coloured strip just above the bottom status bar shows where you are wit
 | **Touch just above the strip** | Counts as the strip — about 8 mm of the waterfall above it is a grab area, so the handle is catchable first time |
 | **Drag from the bottom bar** (sideways) | Same band scrub, grabbed on/under the slider handle *anywhere along the bottom status bar* — a taller, easier target |
 | **Swipe ↑** from the bottom bar | Still opens the memory picker (vertical = memory, sideways = band-plan — the two share the row) |
+
+## CW Memory Buttons (CW page)
+
+| Gesture | Effect |
+|---|---|
+| **Tap** | Send that macro |
+| **Press and drag up/down** | Re-pick which button will fire, without lifting - the highlighted one is a preview, not a commitment |
+| **Hold 800 ms** | Open the editor for all six macros in the current set |
+| **Tap the General/Contest toggle** | Switch macro sets (bottom of the panel) |
+
+See [CW](../guide/cw.md#memory-messages) for the macro-set editor and what each set is for.
+
+## Web Radio
+
+| Gesture | Effect |
+|---|---|
+| **Tap** a station in the list | Play it |
+| **Long-press** a memory slot | Store whatever is currently playing |
+| **Tap** a memory slot | Play the saved station |
+| **Tap outside** the modal | Close it - playback keeps running in the background |
+
+See [Web Radio](../guide/webradio.md) for the directory search and genre filter.
 
 ## Display Sleep
 

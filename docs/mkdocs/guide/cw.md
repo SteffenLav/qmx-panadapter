@@ -1,9 +1,9 @@
-# CW
+# CW *(beta)*
 
-The CW page is the third screen in the carousel: swipe left from the Panadapter to reach FT8, and left again for CW. The spectrum and waterfall keep running behind it, so you still see the band while you operate.
+The CW page is the third screen in the carousel: swipe left from the Panadapter to reach FT8, and left again for CW. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships disabled - see [the README](../../README.md#cw) for how to turn it on.
 
-!!! warning "Transmit is not yet hardware-verified"
-    Everything on this page has been developed and tested against the built-in simulator. Keying the radio over CAT has **not** been confirmed on real hardware yet. Treat CW transmit as untested until this note disappears from the documentation.
+!!! warning "There is no abort for a message in progress"
+    `KY` has no abort in the QMX's CAT manual. Tested on the bench: neither sending `RX;` nor bouncing the mode away from CW and back stops an in-flight send - both were tried and both simply had no effect, the keyer ran to completion either way. Once you tap a memory, it sends to the end. Keying the radio itself **is** confirmed working, off air, by the operator.
 
 The page is built for one-handed, gloved, field operation — the kind of CW you do standing at a picnic table with a paddle you have not touched in a month.
 
@@ -21,6 +21,7 @@ The page is built for one-handed, gloved, field operation — the kind of CW you
 | **NEXT** | The one-tap QSO ladder — see [Running a QSO](#running-a-qso). |
 | **Six memory buttons** | Your keyer messages. |
 | **Status line** | What the radio is doing: receiving, keying, or how many characters are left to send. |
+| **General / Contest toggle** (bottom of the panel) | Switches between two named sets of six macros — see [Macro sets](#macro-sets). Placed at the very bottom, separated from the memory buttons by the status line, so it cannot be mis-hit while working the macros above it. |
 
 **Right of the pane:** the live spectrum and waterfall, the **decode ticker** along the bottom, the **copilot hint** line just above it, and the **station card** when a callsign has been heard.
 
@@ -53,10 +54,27 @@ Six slots, each with macros expanded when you send:
 
 - **Tap** a memory to send it. The button lights **light grey** while your finger is down so you can see which one will fire.
 - **Drag up or down** without lifting to move to a different button — useful because the buttons are narrow and a fingertip covers more than one. Lift on the one you want.
-- **Hold for two seconds** and the editor opens immediately, with your finger still down. The hold timer restarts whenever you slide to a different button, so taking your time to aim never opens the editor by accident.
+- **Hold for 800 ms** and the editor opens immediately, with your finger still down. The hold timer restarts whenever you slide to a different button, so taking your time to aim never opens the editor by accident.
 - An **empty slot** opens the editor when tapped.
 
 The editor shows all six messages at once, so you can set up a whole activation in one visit.
+
+---
+
+## Macro sets
+
+The toggle at the bottom of the panel switches between two independent sets of
+six macros, each with its own editor:
+
+- **General** — everyday CQ/exchange messages. The default macros use `599`
+  for the signal report.
+- **Contest** — the same six slots, with `5NN` in place of `599`. Whichever
+  signal report you actually sent is scanned from the text at send time, so
+  the log always records what went out, not a hard-coded assumption.
+
+Edit either set by holding a memory button as above — the editor's title
+names which set you are editing, and a toggle tap elsewhere mid-edit cannot
+redirect where Save writes to.
 
 ---
 
@@ -189,7 +207,7 @@ The logged contact records mode CW, the report you sent, and the report you rece
 
 ## Practice mode (no radio needed)
 
-**Settings → CW Simulation Mode** turns the page into a practice bench. A red border around the screen shows it is active, and **the radio is never keyed** while it is on.
+**Settings → CW Simulation Mode** (or a three-finger hold on this page) turns it into a practice bench. A red border around the screen shows it is active, and **the radio is never keyed** while it is on — the status line says "Simulated:" rather than "Keying:" so a glance always tells you which is happening.
 
 The simulated band behaves like a real one:
 
@@ -204,8 +222,19 @@ Turning simulation off clears the ticker, the hint, the station card and the lad
 
 ---
 
+## Gestures
+
+The spectrum and waterfall behind the pane take the same touch gestures as the
+Panadapter page: pinch with two fingers to zoom and pan together (pan comes
+from how far the midpoint between your fingers moves, so a drag with roughly
+steady finger spacing pans without zooming much), and a one-finger swipe to
+pan without retuning. A three-finger hold toggles **CW Simulation Mode** on
+or off, the same gesture FT8 uses for its own simulator.
+
+---
+
 ## Known limitations
 
-- **Transmit is unverified on hardware** (see the warning at the top).
-- There is **no abort button** for a message being sent. Adding one has to wait until it is known what actually cancels a transmission on the radio.
+- **No abort for a message in progress** (see the warning at the top) — both
+  tested candidates (`RX;`, a mode bounce) were tried and neither works.
 - **Zero-beat tuning aid** and **speed matching** are designed but not yet built; both need real signals to develop against.

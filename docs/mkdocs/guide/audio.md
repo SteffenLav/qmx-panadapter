@@ -1,6 +1,6 @@
-# Audio Features — Tab5 Real-Time Decoding (Beta)
+# Audio Features — Tab5 Real-Time Decoding
 
-**Audio decoding is a BETA feature.** These implementations are first-generation and subject to further development. Real-world feedback shapes the roadmap.
+Turns the radio's own I/Q into sound on the Tab5 itself, with no extra hardware: binaural CW, panoramic CW split, and AM demodulation. The line-in (3.5 mm jack) path is still beta - see the warning below.
 
 ## Getting audio — start here if you hear nothing
 
@@ -367,7 +367,7 @@ all far quicker than the ear resolves; **Release** is the audible one.
 
 A peak limiter sits after the automatic gain, so a loud station cannot arrive at full scale and startle you in headphones. It holds the peaks down and leaves the average level alone, which means raising **AGC Ceiling** to hear weak stations does not make the strong ones painful.
 
-This is the part of the beta I most want reports on: which mode, roughly how strong the signal was, and whether more ceiling fixed it.
+This is the part I most want reports on: which mode, roughly how strong the signal was, and whether more ceiling fixed it.
 
 ## Where the receive signal comes from
 
@@ -449,7 +449,7 @@ Notes on what this costs and what it does not:
 
 ## Feedback
 
-This feature is **beta and in active development.** Your feedback shapes the next iteration:
+This feature is still under active development. Your feedback shapes the next iteration:
 - Does panoramic CW work in the field?
 - What bandwidth do you typically use?
 - What other audio features would you like to see?

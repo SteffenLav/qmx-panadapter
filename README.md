@@ -63,7 +63,7 @@ the live trace has dropped back into the noise *(Samuel W7STF)*.
 
 ### Hear the band
 
-**Audio, and binaural CW** *(beta)* — The I/Q the radio already sends is turned into sound
+**Audio, and binaural CW** — The I/Q the radio already sends is turned into sound
 on the device. The **panoramic CW split** places two stations on different frequencies to
 the left and right of the stereo image instead of letting them land on top of each other,
 with **pan width**, **pan blend** and **overlap** adjustable live while you listen. This
@@ -74,9 +74,7 @@ two stations calling together stop being a jumble. Best at **300 Hz bandwidth an
 **below 200 Hz there is little separation to be had**, because the signals then share too
 much of the audio passband for any amount of panning to pull them apart. Audio competes
 for resources, so open **Audio Settings** from the settings drawer, where it is switched
-on and off. This is a first implementation and is
-**beta**, with the same features planned for the web interface — sending only the I/Q to
-the PC and doing the work there. See [Audio](docs/mkdocs/guide/audio.md).
+on and off. See [Audio](docs/mkdocs/guide/audio.md).
 
 **CW peak filter** — A narrow audio peak on the CW pitch, 250, 150 or 100 Hz wide at −3 dB,
 in the Tab5's own audio after the mode filter and **before the AGC**, so the automatic gain
@@ -360,7 +358,9 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Quick Guide](#quick-guide) — get on air in 10 minutes
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
-- [Audio](#audio) — binaural CW and panoramic split (beta)
+- [Audio](#audio) — binaural CW and panoramic split
+- [CW](#cw) — the MODE: CW page, decode ticker, keyer macros (beta)
+- [Web Radio](#web-radio) — an internet radio player on the Tab5, for when the bands are quiet
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
 - [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
 - [Web UI](#web-ui) — browser panadapter and remote control
@@ -600,7 +600,7 @@ Switch it off under **Settings → Radio & display → Still spectrum**. At ×1 
 
 ## Audio
 
-*(beta)* The I/Q the radio already sends can be turned into sound on the Tab5
+The I/Q the radio already sends can be turned into sound on the Tab5
 itself, with no extra hardware: **binaural CW**, which places two stations at
 different points across the stereo image so your ears separate them the way
 they separate voices in a room, and a **panoramic CW split** that pans the two
@@ -622,13 +622,16 @@ Full chapter: [tab5.lav.dk/guide/audio](https://tab5.lav.dk/guide/audio/)
 
 ---
 
-## CW
+## CW *(beta)*
 
-A CW page with the radio's own decoder on screen: a **decode ticker** that
-squelches a quiet band's endless lone `T`s, a **copilot hint line** that says
-what the copy *meant* ("W1AW is calling CQ — tap the card to answer"), memory
-messages, and a station card that tells you whether you have worked them
-before.
+A dedicated MODE: CW page with the radio's own decoder on screen: a **decode
+ticker** that squelches a quiet band's endless lone `T`s, a **copilot hint
+line** that says what the copy *meant* ("W1AW is calling CQ — tap the card to
+answer"), two named sets of six keyer macros (**General** and **Contest**, with
+a toggle at the bottom of the panel to switch between them), and a station
+card that tells you whether you have worked them before. It is there to be
+tried and reported on, not to be relied on for a contest yet — in particular,
+`KY` has no abort: once a macro starts sending, it runs to completion.
 
 It also sets out the one thing that catches everybody: **the Tab5 and the radio
 produce separate audio**, and only the radio's can carry your keying sidetone.
@@ -640,6 +643,22 @@ The page ships **disabled**. Turn it on with `cw_page_enabled = yes` in a config
 file, or `{"action":"cw_enable","on":true}` over the API.
 
 Full chapter: [tab5.lav.dk/guide/cw](https://tab5.lav.dk/guide/cw/)
+
+---
+
+## Web Radio
+
+An internet radio player on the Tab5, for when the bands are quiet — new in
+this release. Opens from **Web Radio** in the settings drawer. Browses the
+[radio-browser.info](https://www.radio-browser.info) directory with a text
+search and a genre filter that compose together, shows the station's ICY
+title as it changes track to track, and keeps **six memory slots**: tap plays
+a saved station, long-press stores whatever is currently playing. Closing the
+player does not stop it — playback is a background task, so you can go back
+to the panadapter and keep listening. Decoding runs on the Tab5 itself; the
+radio and its I/Q are untouched.
+
+Full chapter: [tab5.lav.dk/guide/webradio](https://tab5.lav.dk/guide/webradio/)
 
 ---
 
@@ -916,9 +935,9 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Touch + drag (hold ~250 ms first) | Spectrum / waterfall | Cyan cursor snaps grid-to-grid; tunes on release |
 | Fast one-finger horizontal swipe | Spectrum / waterfall, any zoom | Pan/"stroll" the view; retunes to the new centre on release |
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
-| Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
-| Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
-| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the five pages directly |
+| Pinch (two fingers) | Spectrum / waterfall, Panadapter and CW pages | Zoom ×1.0–×24.0 **and** pan together — the midpoint between your fingers drives the pan, the spread drives the zoom |
+| Three-finger hold | Spectrum, any page with a simulator | Toggle Simulation Mode on/off (FT8's, or CW's on the CW page) |
+| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the pages directly (CW only when enabled) |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |

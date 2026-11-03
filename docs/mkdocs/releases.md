@@ -4,20 +4,31 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.23.1** - 2026-10-31
+**v1.24.0** - 2026-11-03
+
+**A MODE: CW page, as a beta, and an internet radio player for when the bands are quiet. Audio and binaural CW graduate out of beta. Two-finger pinch now pans while it zooms, on both the Panadapter and the CW page.**
+
+- **MODE: CW, as a beta.** A dedicated CW page: the radio's own decode ticker with squelch for a quiet band's endless lone `T`s, a copilot hint line that says what the copy *meant*, a station card, and two named macro sets - **General** and **Contest** - switched by a toggle at the bottom of the panel, placed there and away from the memory buttons on purpose so it cannot be mis-hit while working them. Keying the radio over CAT is confirmed working, off air. **There is no abort for a message in progress** - both `RX;` and a mode bounce were tried on the bench and neither stops an in-flight send, so a macro runs to completion once started. The page ships disabled; turn it on with `cw_page_enabled = yes` or `{"action":"cw_enable","on":true}`.
+- **Web Radio.** An internet radio player on the Tab5 - search and genre filter over the [radio-browser.info](https://www.radio-browser.info) directory, six memory slots (tap plays, long-press stores), the station's live ICY title, and playback that keeps running in the background after you close the player. Decoded on the Tab5; the QMX and its I/Q are untouched.
+- **Audio, and binaural CW, are no longer a beta.** First shipped in v1.16.0; tried, reported on, and settled.
+- **Two-finger pinch now pans while it zooms**, on the Panadapter and the CW page. It always computed a pan from how far the midpoint between your fingers moved, but handed it to the same function a zoom-preset button uses - which recentres on the passband and threw the pinch's own pan away every time. Fixed: the pinch gesture now keeps the pan it computed. (Known rough edge: the pan is live, not a local preview like one-finger drag, so a fast two-finger drag can look like it jumps on this hardware rather than glides - correct, just not smooth yet.)
+- **Pinch-zoom and one-finger pan now work on the CW page too** - previously restricted to the Panadapter page from before the CW page existed. The CW page's own macro buttons are excluded from the gesture so a press-and-hold there cannot wake the spectrum underneath.
+- **Three-finger hold toggles CW's own Simulation Mode**, the same gesture FT8 already used for its simulator.
+- **A genuinely real trailing letter on a quiet band is no longer lost.** The CW decoder's noise squelch could hold a real `E` or `T` forever if nothing settled it before the band went quiet - "`CQ TTTTTTTT DE`" rendered "`CQ D`". A time-based flush now releases it after a short wait with nothing new arriving.
+- **The diagnostic log on the SD card now keeps its history, instead of deleting it** *(Michael K Johnson KZ4LY)*. It used to rotate at 5 MB and throw away the previous generation, about 10 MB total regardless of card size. It now moves into a `history/` folder on rotation and is only pruned, oldest first, once the card's free space drops under 50 MB.
+- **A manual FT8 pounce now gives up on a busy target immediately**, the same as the robot already did *(Gyula HA3HZ)*. It used to wait roughly 7.5 minutes before moving on; nobody had actually decided an attentive operator should wait that long for a station it can see is mid-exchange with someone else.
+
+Audio graduating out of beta does not include the 3.5 mm line-in path, which is still a declared beta - nothing has been decoded through it yet. The alternate JS8 speed added in v1.23.0 remains default-off and unproven on air.
+
+## Previous Releases
+
+### v1.23.1 - 2026-10-31
 
 **Five controls the Tab5 had and the browser did not: zero-beat, CW keyer speed, RIT park, output power and SSB auto-tune. A finished QSO no longer claims the other station never answered. And a boot where WiFi fails to start can no longer take the device down.**
 
-- **Zero-beat from the browser** *(Ralph DL1HR)*. The Tab5 does it with a long press on the BW label, which a browser cannot offer, so it is a **Tune** button in the top bar. One button covers both cases because the device decides: in CW it zero-beats the carrier, in USB or LSB it snaps to the far station's own filter edge. Receive-only, one press, one move - it never runs by itself and it cannot transmit.
-- **CW keyer speed, one click away, in CW only** *(Ralph DL1HR)*. It was in the browser already but only inside the Settings panel - "too complicate to quickly act when someone calls me", which is exactly when it is wanted. There is now a **Keyer** button in the top bar whenever the radio is in CW. The speed is sent and read back, so the figure is what the QMX accepted, and **0** is a real setting: Straight Key mode, the quick way to key down for a tune-up.
-- **Park a RIT offset and put it back** *(Roy KI0ER)*. Clearing RIT throws the offset away, which is a different intention from standing it down for a turn. The browser now has its own Park / Restore button, visible only when there is something to park or restore, and it shares the Tab5's one parked value.
-- **Transmit power per band, from the browser.** The levels offered are the ones your own Calibrate Power sweep measured on that band, so there is nothing to type - a figure the PA never produced is refused by name rather than rounded to a neighbour. While transmitting, or while WSPR owns the PA, the target is stored and the page says so.
-- **A finished QSO no longer says the other station never answered** *(Randy N4OPI)*. "QSO complete" and "*call* has not acknowledged" could sit on screen together for five minutes. The device still watches for a few minutes in case your final was missed - that is worth keeping - but nothing ended the watch when the other station plainly had heard you. Their RR73, 73 or RRR now closes it, and a closing 73 of your own starts no watch at all. Silence still does not end it: a station that goes quiet and then repeats the report is the case the watch exists for.
-- **A diagnostic could abort the device on a boot where WiFi failed to start.** With no network stack the heap watchdog's ten-second socket check does not fail, it aborts - which looks like a single unexplained restart about sixteen seconds after power-on. Seen once here. Running with WiFi switched off was never affected.
+- Zero-beat from the browser, CW keyer speed from the top bar in CW, park/restore a RIT offset, transmit power per band from the browser, a finished QSO no longer stuck saying the other station never answered, and a WiFi-start failure that could abort the device on boot is fixed.
 
-Audio and binaural CW remain a **declared beta**, and the alternate JS8 speed added in v1.23.0 is still default-off and unproven on air.
-
-## Previous Releases
+Audio and binaural CW were a **declared beta** at this release; see above.
 
 ### v1.23.0 - 2026-10-30
 
@@ -1206,8 +1217,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 ### Next up (post-v1.0.0)
 
-1. **CW page** — canned-message CW TX memories, then decoded-CW display
-2. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
+1. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
 ### Future Additions
 
