@@ -158,14 +158,15 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.24.0 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
+**v1.24.1 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, a MODE: CW page, an internet
 radio player, and the radio's own menus on the screen.** The panadapter, FT8/FT4 receive and
 transmit, WSPR, ADIF logging and all four logbook uploads — QRZ, eQSL, ARRL LoTW and your own
 Cloudlog or Wavelog — are stable and in daily use. **Audio and binaural CW are no longer a
-beta.** **JS8 Normal** and the new **CW page** are — see below. In **v1.24.0**: the CW page
-(decode ticker, copilot hints, General/Contest macro sets), Web Radio, and two-finger pinch
-now pans while it zooms, on the Panadapter and the CW page alike.
+beta.** **JS8 Normal** and the new **CW page** are — see below. **v1.24.1 is a one-fix patch**
+on top of v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5. In v1.24.0: the
+CW page (decode ticker, copilot hints, General/Contest macro sets), Web Radio, and two-finger
+pinch now pans while it zooms, on the Panadapter and the CW page alike.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -335,7 +336,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.24.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.24.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

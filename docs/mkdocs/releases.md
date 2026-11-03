@@ -4,7 +4,15 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.24.0** - 2026-11-03
+**v1.24.1** - 2026-11-03
+
+**A one-fix patch on v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5.**
+
+- **Fixed a reboot when answering a CQ caller on FT8** *(Randy N4OPI, Rick Trommer W5NR)*. Tapping a station calling CQ could crash the Tab5 with a stack overflow; replying to CQ was the one path affected. Auto Answer CQ and calling CQ yourself were never affected.
+
+## Previous Releases
+
+### v1.24.0 - 2026-11-03
 
 **A MODE: CW page, as a beta, and an internet radio player for when the bands are quiet. Audio and binaural CW graduate out of beta. Two-finger pinch now pans while it zooms, on both the Panadapter and the CW page.**
 
@@ -19,8 +27,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A manual FT8 pounce now gives up on a busy target immediately**, the same as the robot already did *(Gyula HA3HZ)*. It used to wait roughly 7.5 minutes before moving on; nobody had actually decided an attentive operator should wait that long for a station it can see is mid-exchange with someone else.
 
 Audio graduating out of beta does not include the 3.5 mm line-in path, which is still a declared beta - nothing has been decoded through it yet. The alternate JS8 speed added in v1.23.0 remains default-off and unproven on air.
-
-## Previous Releases
 
 ### v1.23.1 - 2026-10-31
 
@@ -1228,7 +1234,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.24.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.24.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
