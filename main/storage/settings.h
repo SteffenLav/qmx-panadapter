@@ -1262,6 +1262,7 @@ void settings_set_spur_mode(uint8_t v);
 // boundary and a hand-tapped reply can fire in its own slot at a decodable DT.
 void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
+bool settings_get_greylist_en(void);    // narrow: row_activate_ex() runs on taskLVGL's small stack
 void settings_set_tx_band_guard_off(bool v);
 bool settings_get_tx_band_guard_off(void);
 void settings_set_pskreporter_en(bool v);

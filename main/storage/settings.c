@@ -3778,6 +3778,19 @@ void settings_set_tx_band_guard_off(bool v)
     mark_dirty(DIRTY_TXBAND_OFF);
 }
 
+// Narrow accessor: row_activate_ex() (ft8_screen_view.c) reads this on the
+// CQ-row touch callback, on taskLVGL's small stack. qmx_settings_t is 3888
+// bytes (see the note above settings_load_all()) - a local that size there
+// is what crashed N4OPI and W5NR tapping a CQ caller, 2026-11-03.
+bool settings_get_greylist_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.greylist_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 /* ⚠ Deliberately FAILS SAFE: with settings not ready the guard is ON, because
  * the alternative is transmitting unchecked during the one window where
  * nothing is known. Same reasoning as the 167 setters that return early on

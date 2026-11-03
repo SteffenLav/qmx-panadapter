@@ -718,13 +718,16 @@ static void row_activate_ex(int idx, bool direct)
     // the TX modal (the auto pickers skip it; a manual pounce needs the
     // clear first, which is one tap away here).
     {
-        qmx_settings_t gq;
-        settings_load_all(&gq);
+        /* ⛔ THE NARROW ACCESSOR, NOT settings_load_all(). This runs on
+         * taskLVGL from the row touch callback, and qmx_settings_t is 3888
+         * bytes - a local that size here is the stack protection fault
+         * N4OPI and W5NR hit tapping a CQ caller in v1.24.0, 2026-11-03. */
+        bool greylist_en = settings_get_greylist_en();
         /* ft8_greylist_skipped_by_hand() is deliberately ungated: without it
          * a station skipped while "Allow grey-listing" is off would have no
          * way back - the clear lives behind this modal. */
         if (ft8_greylist_skipped_by_hand(call) ||
-            (gq.greylist_en && ft8_greylist_contains(call))) {
+            (greylist_en && ft8_greylist_contains(call))) {
             grey_modal_show(call);
             return;
         }
