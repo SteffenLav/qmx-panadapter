@@ -1476,44 +1476,23 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(hdr, 14, 6);
 
     // Pane order (operator, 2026-08-02): header, then the SETTINGS (WPM,
-    // park), then the ACTIONS (NEXT, memories), status at the bottom.
+    // park), then the ACTIONS (NEXT, memories), status, then the macro set
+    // toggle at the very bottom.
     //
     // Macro set toggle (decided 2026-11-02, see
-    // memory/project_cw_macro_set_selector_decided.md): "a toggle at the TOP
-    // of the left panel", so it goes here, between the header and WPM -
-    // everything below shifts down by SET_ROW_SHIFT. 30 px row + 4 px gap =
-    // 34, same tight spacing already used between WPM/Park/NEXT (4-6 px) -
-    // chosen to leave the status line's existing two-line wrap room intact;
-    // operator confirmed on the glass 2026-11-02 that the slack is fine.
-#define SET_ROW_Y      58
-#define SET_ROW_H      30
-#define SET_ROW_SHIFT  34
-    {
-        int halfw = (PANE_W - 30) / 2;   // 10 margin each side, 10 gap between
-        s_btn_set_a = make_pane_btn(s_pane, 10, SET_ROW_Y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
-        lv_obj_add_event_cb(s_btn_set_a, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
-        // "POTA" renamed to "General" 2026-11-02 (operator): the set is not
-        // POTA-specific - M2's default text just happens to say "CQ POTA",
-        // which the operator can still edit - and POTA is one of several
-        // activation programmes (SOTA, IOTA, WWFF...), so the label should
-        // not single one out.
-        s_lbl_set_a = lv_label_create(s_btn_set_a);
-        lv_label_set_text(s_lbl_set_a, "General");
-        lv_obj_set_style_text_color(s_lbl_set_a, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_text_font(s_lbl_set_a, &lv_font_montserrat_20, 0);
-        lv_obj_center(s_lbl_set_a);
-
-        s_btn_set_b = make_pane_btn(s_pane, 10 + halfw + 10, SET_ROW_Y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
-        lv_obj_add_event_cb(s_btn_set_b, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
-        s_lbl_set_b = lv_label_create(s_btn_set_b);
-        lv_label_set_text(s_lbl_set_b, "Contest");
-        lv_obj_set_style_text_color(s_lbl_set_b, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_text_font(s_lbl_set_b, &lv_font_montserrat_20, 0);
-        lv_obj_center(s_lbl_set_b);
-    }
+    // memory/project_cw_macro_set_selector_decided.md): originally placed at
+    // the TOP, between the header and WPM. Moved to the BOTTOM 2026-11-03
+    // (operator): "clearance space above them and then comes all the
+    // macros" - a toggle sitting right above six buttons that fire a
+    // transmission risked a mis-hit landing on the wrong macro SET instead
+    // of a wrong macro. Now it is the last thing in the pane, anchored to
+    // MID_H (see toggle_y below) with an 8 px gap below the status line's
+    // fixed height - the pane has no more slack than that; verify on the
+    // glass same as the top placement needed.
+#define SET_ROW_H    30
 
     // WPM stepper row.
-    lv_obj_t *bm = make_pane_btn(s_pane, 10, 58 + SET_ROW_SHIFT, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_t *bm = make_pane_btn(s_pane, 10, 58, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lm = lv_label_create(bm);
     lv_label_set_text(lm, "-");
@@ -1531,9 +1510,9 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
     lv_obj_set_width(s_lbl_wpm, (PANE_W - 80) - 80);
     lv_obj_set_style_text_align(s_lbl_wpm, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_lbl_wpm, 80, 67 + SET_ROW_SHIFT);   // 58 + (48 - ~29 line height) / 2
+    lv_obj_set_pos(s_lbl_wpm, 80, 67);   // 58 + (48 - ~29 line height) / 2
 
-    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58 + SET_ROW_SHIFT, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lp = lv_label_create(bp);
     lv_label_set_text(lp, "+");
@@ -1542,7 +1521,7 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_center(lp);
 
     // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110 + SET_ROW_SHIFT, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
     lv_label_set_text(s_lbl_park, "Park: --");
@@ -1552,7 +1531,7 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // ESM NEXT button (Tier 2): green like every commit button; the body
     // label always states what a tap will key.
-    s_btn_next = make_pane_btn(s_pane, 10, 158 + SET_ROW_SHIFT, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
+    s_btn_next = make_pane_btn(s_pane, 10, 158, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
     lv_obj_add_event_cb(s_btn_next, next_pressed_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_btn_next, next_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_next_hdr = lv_label_create(s_btn_next);
@@ -1570,7 +1549,7 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // Six memory buttons, single-line previews (long-press shows the full
     // text in the editor; the NEXT button carries the full ladder text).
-    int y = 232 + SET_ROW_SHIFT;
+    int y = 232;
     for (int i = 0; i < N_CW_MEM; i++) {
         s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, MEM_BG_IDLE, 0x555555);
         // Press = preview, drag = re-pick, release = fire, hold = edit. Acting
@@ -1592,14 +1571,50 @@ void cw_screen_view_init(lv_obj_t *parent)
     }
     y += 6;
 
-    // Status line.
+    // Status line. Fixed height (2 lines of montserrat_20, line_height 22 ->
+    // 44 px) rather than letting LONG_WRAP grow it: the toggle row below is
+    // anchored to the pane's bottom edge, so this must never be able to push
+    // into it - a message that somehow ran past 2 lines clips instead of
+    // overlapping the toggle.
     s_lbl_status = lv_label_create(s_pane);
     lv_label_set_text(s_lbl_status, "");
     lv_label_set_long_mode(s_lbl_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_status, PANE_W - 20);
+    lv_obj_set_height(s_lbl_status, 44);
     lv_obj_set_pos(s_lbl_status, 10, y + 4);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_20, 0);
+
+    // Macro set toggle (General/Contest) - moved to the very bottom of the
+    // pane 2026-11-03, see the note above the WPM row for why. Anchored to
+    // MID_H so it always sits flush with the pane's bottom edge regardless
+    // of future changes above it. With the status line's fixed 44 px height
+    // this leaves an 8 px gap above the toggle - the pane's entire remaining
+    // slack; the macro buttons themselves end 56 px further up still.
+    {
+        int toggle_y = MID_H - SET_ROW_H;
+        int halfw = (PANE_W - 30) / 2;   // 10 margin each side, 10 gap between
+        s_btn_set_a = make_pane_btn(s_pane, 10, toggle_y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
+        lv_obj_add_event_cb(s_btn_set_a, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)0);
+        // "POTA" renamed to "General" 2026-11-02 (operator): the set is not
+        // POTA-specific - M2's default text just happens to say "CQ POTA",
+        // which the operator can still edit - and POTA is one of several
+        // activation programmes (SOTA, IOTA, WWFF...), so the label should
+        // not single one out.
+        s_lbl_set_a = lv_label_create(s_btn_set_a);
+        lv_label_set_text(s_lbl_set_a, "General");
+        lv_obj_set_style_text_color(s_lbl_set_a, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(s_lbl_set_a, &lv_font_montserrat_20, 0);
+        lv_obj_center(s_lbl_set_a);
+
+        s_btn_set_b = make_pane_btn(s_pane, 10 + halfw + 10, toggle_y, halfw, SET_ROW_H, 0x2a2f37, 0x555555);
+        lv_obj_add_event_cb(s_btn_set_b, set_toggle_cb, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+        s_lbl_set_b = lv_label_create(s_btn_set_b);
+        lv_label_set_text(s_lbl_set_b, "Contest");
+        lv_obj_set_style_text_color(s_lbl_set_b, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(s_lbl_set_b, &lv_font_montserrat_20, 0);
+        lv_obj_center(s_lbl_set_b);
+    }
 
     // Decode ticker across the bottom, to the right of the pane, ending
     // above the band-plan strip so the strip stays visible and draggable.
