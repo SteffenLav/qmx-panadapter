@@ -109,8 +109,6 @@ static lv_obj_t *s_btn_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_wpm   = NULL;
 static lv_obj_t *s_wpm_panel = NULL;   /* numeric entry popup - built lazily */
-static lv_obj_t *s_wpm_ta    = NULL;
-static lv_obj_t *s_wpm_kb    = NULL;
 static lv_obj_t *s_lbl_park  = NULL;
 static lv_obj_t *s_lbl_status = NULL;
 static lv_timer_t *s_timer   = NULL;
@@ -1337,9 +1335,30 @@ static void wpm_plus_cb(lv_event_t *e)  { (void)e; wpm_step(+1); }
 /* ⭐ DIRECT NUMERIC WPM ENTRY (Michael KZ4LY, 2026-11-03): "going all the way
  * to 0 to let my tuner work, and then click a lot of times to get back to a
  * reasonable speed, is inconvenient." Tap the WPM label (now clickable) for
- * a small popup: a 2-digit textarea and LVGL's own number-mode keyboard,
- * clamped to CW_WPM_MIN..CW_WPM_MAX on confirm. Built lazily, same as the
- * macro editor panel - first tap pays the alloc, never freed after. */
+ * a small popup, clamped to CW_WPM_MIN..CW_WPM_MAX on confirm.
+ *
+ * ⛔ NOT lv_keyboard(), AFTER TRYING IT. LVGL's own keyboard widget defaults
+ * to LV_PCT(100) x LV_PCT(50) docked to the bottom of its parent, and even
+ * explicitly resized it still carries LVGL's stock theme - flat grey keys,
+ * default font, nothing like the rest of this page. Steffen OZ1LAV,
+ * 2026-11-03, after seeing it sized correctly but still wrong: "it is
+ * totally off in style, colour, font size - like EVERYTHING is off...
+ * compare it to the macro edit window, the on-screen keyb i designed."
+ *
+ * So this is hand-built from the same lv_btn recipe as the macro editor's
+ * own buttons right above (0x2a2f37 fill, UI_COLOR_BORDER, radius 8,
+ * montserrat_28, CW-blue digits) - no LVGL stock widget, no theme
+ * mismatch possible. A plain char buffer backs the display instead of a
+ * textarea, since nothing here needs text-input focus/cursor machinery for
+ * two digits. */
+static char s_wpm_buf[3] = {0};   /* up to 2 digits + NUL */
+static lv_obj_t *s_wpm_disp = NULL;
+
+static void wpm_disp_refresh(void)
+{
+    if (s_wpm_disp) lv_label_set_text(s_wpm_disp, s_wpm_buf[0] ? s_wpm_buf : "--");
+}
+
 static void wpm_popup_close(void)
 {
     if (s_wpm_panel) lv_obj_add_flag(s_wpm_panel, LV_OBJ_FLAG_HIDDEN);
@@ -1347,8 +1366,7 @@ static void wpm_popup_close(void)
 
 static void wpm_popup_apply(void)
 {
-    if (!s_wpm_ta) return;
-    int v = atoi(lv_textarea_get_text(s_wpm_ta));
+    int v = s_wpm_buf[0] ? atoi(s_wpm_buf) : 0;
     if (v < CW_WPM_MIN) v = CW_WPM_MIN;
     if (v > CW_WPM_MAX) v = CW_WPM_MAX;
     cat_request_keyer_wpm((uint8_t)v);
@@ -1356,16 +1374,51 @@ static void wpm_popup_apply(void)
     wpm_popup_close();
 }
 
-static void wpm_kb_event_cb(lv_event_t *e)
+static void wpm_digit_cb(lv_event_t *e)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_READY) wpm_popup_apply();      // Enter/checkmark
-    else if (code == LV_EVENT_CANCEL) wpm_popup_close(); // the keyboard's own close glyph
+    size_t len = strlen(s_wpm_buf);
+    if (len >= 2) return;   // CW_WPM_MAX is two digits - a third can never be valid
+    char d = (char)(intptr_t)lv_event_get_user_data(e);
+    s_wpm_buf[len] = d;
+    s_wpm_buf[len + 1] = '\0';
+    wpm_disp_refresh();
 }
+
+static void wpm_backspace_cb(lv_event_t *e)
+{
+    (void)e;
+    size_t len = strlen(s_wpm_buf);
+    if (len > 0) s_wpm_buf[len - 1] = '\0';
+    wpm_disp_refresh();
+}
+
+static void wpm_ok_cb(lv_event_t *e) { (void)e; wpm_popup_apply(); }
+static void wpm_cancel_cb(lv_event_t *e) { (void)e; wpm_popup_close(); }
 
 static void wpm_popup_backdrop_cb(lv_event_t *e)
 {
     if (lv_event_get_target(e) == lv_event_get_user_data(e)) wpm_popup_close();
+}
+
+/* One small helper so all nine digit/backspace/OK/Cancel keys share exactly
+ * the macro editor's own button recipe - same colours, same font, same
+ * radius, by construction rather than by copying numbers into four places. */
+static lv_obj_t *wpm_key_make(lv_obj_t *parent, int x, int y, int w, int h,
+                              const char *txt, uint32_t bg, uint32_t fg)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_t *lbl = lv_label_create(b);
+    lv_label_set_text(lbl, txt);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(lbl);
+    return b;
 }
 
 static void wpm_popup_open(void)
@@ -1381,49 +1434,59 @@ static void wpm_popup_open(void)
         lv_obj_clear_flag(s_wpm_panel, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(s_wpm_panel, wpm_popup_backdrop_cb, LV_EVENT_CLICKED, s_wpm_panel);
 
+        // Box, digit grid and Cancel/OK sized from the same numbers the
+        // macro editor already uses (56 px key height, 8 px gap) - a 3-wide
+        // keypad plus a bottom row, not a copy of that window's own layout.
+        int box_w = 266, box_h = 366;
         lv_obj_t *box = lv_obj_create(s_wpm_panel);
-        lv_obj_set_size(box, 220, 90);
-        lv_obj_align(box, LV_ALIGN_CENTER, 0, -120);
-        lv_obj_set_style_bg_color(box, lv_color_hex(0x1c2128), 0);
-        lv_obj_set_style_border_color(box, lv_color_hex(0x555555), 0);
+        lv_obj_set_size(box, box_w, box_h);
+        lv_obj_align(box, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
         lv_obj_set_style_border_width(box, 2, 0);
         lv_obj_set_style_radius(box, 10, 0);
+        lv_obj_set_style_pad_all(box, 12, 0);
         lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
-        s_wpm_ta = lv_textarea_create(box);
-        lv_obj_set_size(s_wpm_ta, 180, 60);
-        lv_obj_center(s_wpm_ta);
-        lv_textarea_set_one_line(s_wpm_ta, true);
-        lv_textarea_set_max_length(s_wpm_ta, 2);
-        lv_textarea_set_text_selection(s_wpm_ta, true);
-        lv_obj_set_style_text_font(s_wpm_ta, &lv_font_montserrat_32, 0);
-        lv_obj_set_style_text_align(s_wpm_ta, LV_TEXT_ALIGN_CENTER, 0);
+        s_wpm_disp = lv_label_create(box);
+        lv_obj_set_size(s_wpm_disp, box_w - 24, 50);
+        lv_obj_set_pos(s_wpm_disp, 0, 0);
+        lv_obj_set_style_text_color(s_wpm_disp, lv_color_hex(0xFFA040), 0);  // the page's own WPM-label colour
+        lv_obj_set_style_text_font(s_wpm_disp, &lv_font_montserrat_32, 0);
+        lv_obj_set_style_text_align(s_wpm_disp, LV_TEXT_ALIGN_CENTER, 0);
 
-        /* ⛔ MUST BE SIZED EXPLICITLY. lv_keyboard_create() defaults to
-         * LV_PCT(100) x LV_PCT(50), auto-docked to the bottom of its
-         * parent - which on this screen meant a keyboard spanning the
-         * full 1280 px width and half the display height, covering the
-         * spectrum, the decode ticker and the memory buttons underneath.
-         * Steffen OZ1LAV, 2026-11-03: "Oh no....." (screenshot). A small
-         * keyboard under the entry box, not a full-screen one. */
-        s_wpm_kb = lv_keyboard_create(s_wpm_panel);
-        lv_keyboard_set_mode(s_wpm_kb, LV_KEYBOARD_MODE_NUMBER);
-        lv_keyboard_set_textarea(s_wpm_kb, s_wpm_ta);
-        lv_obj_set_size(s_wpm_kb, 420, 280);
-        lv_obj_align(s_wpm_kb, LV_ALIGN_CENTER, 0, 100);
-        lv_obj_add_event_cb(s_wpm_kb, wpm_kb_event_cb, LV_EVENT_ALL, NULL);
+        static const char *const DIGIT_ROWS[4][3] = {
+            { "1", "2", "3" }, { "4", "5", "6" }, { "7", "8", "9" }, { NULL, "0", NULL }
+        };
+        int cell = 74, gap = 10, grid_top = 62;
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 3; c++) {
+                const char *t = DIGIT_ROWS[r][c];
+                if (!t) continue;
+                lv_obj_t *k = wpm_key_make(box, c * (cell + gap), grid_top + r * (cell + gap),
+                                           cell, cell, t, 0x2a2f37, UI_COLOR_MODE_CW_TEXT);
+                lv_obj_add_event_cb(k, wpm_digit_cb, LV_EVENT_CLICKED, (void *)(intptr_t)t[0]);
+            }
+        }
+        int bksp_y = grid_top + 3 * (cell + gap);
+        lv_obj_t *bksp = wpm_key_make(box, 0, bksp_y, cell, cell, LV_SYMBOL_BACKSPACE,
+                                      0x2a2f37, 0xffffff);
+        lv_obj_add_event_cb(bksp, wpm_backspace_cb, LV_EVENT_CLICKED, NULL);
+
+        int btn_y = bksp_y + cell + gap;
+        lv_obj_t *cancel = wpm_key_make(box, 0, btn_y, cell, 56, "Cancel", 0x962020, 0xffffff);
+        lv_obj_add_event_cb(cancel, wpm_cancel_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *ok = wpm_key_make(box, (cell + gap) * 2, btn_y, cell, 56, "OK", 0x2e8b3a, 0xffffff);
+        lv_obj_add_event_cb(ok, wpm_ok_cb, LV_EVENT_CLICKED, NULL);
     }
 
     int cur = cat_get_keyer_wpm();
     if (cur <= 0) cur = CW_WPM_FALLBACK;
-    char buf[12];
-    snprintf(buf, sizeof(buf), "%d", cur);
-    lv_textarea_set_text(s_wpm_ta, buf);
-    /* Select-all on open so typing a new speed replaces it outright, rather
-     * than appending after the old one (CW_WPM_MAX is two digits, so a
-     * three-digit result would just clamp silently - select-all avoids ever
-     * reaching for that clamp in the common case). */
-    lv_textarea_set_cursor_pos(s_wpm_ta, LV_TEXTAREA_CURSOR_LAST);
+    char curbuf[12];
+    snprintf(curbuf, sizeof(curbuf), "%d", cur);
+    strncpy(s_wpm_buf, curbuf, sizeof(s_wpm_buf) - 1);   // CW_WPM_MAX is two digits; a wider readback just truncates display, never crashes
+    s_wpm_buf[sizeof(s_wpm_buf) - 1] = '\0';
+    wpm_disp_refresh();
 
     lv_obj_clear_flag(s_wpm_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_wpm_panel);
