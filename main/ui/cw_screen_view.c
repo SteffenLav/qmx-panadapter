@@ -108,6 +108,9 @@ static lv_obj_t *s_lbl_set_b = NULL;
 static lv_obj_t *s_btn_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_wpm   = NULL;
+static lv_obj_t *s_wpm_panel = NULL;   /* numeric entry popup - built lazily */
+static lv_obj_t *s_wpm_ta    = NULL;
+static lv_obj_t *s_wpm_kb    = NULL;
 static lv_obj_t *s_lbl_park  = NULL;
 static lv_obj_t *s_lbl_status = NULL;
 static lv_timer_t *s_timer   = NULL;
@@ -1331,6 +1334,94 @@ static void wpm_step(int delta)
 static void wpm_minus_cb(lv_event_t *e) { (void)e; wpm_step(-1); }
 static void wpm_plus_cb(lv_event_t *e)  { (void)e; wpm_step(+1); }
 
+/* ⭐ DIRECT NUMERIC WPM ENTRY (Michael KZ4LY, 2026-11-03): "going all the way
+ * to 0 to let my tuner work, and then click a lot of times to get back to a
+ * reasonable speed, is inconvenient." Tap the WPM label (now clickable) for
+ * a small popup: a 2-digit textarea and LVGL's own number-mode keyboard,
+ * clamped to CW_WPM_MIN..CW_WPM_MAX on confirm. Built lazily, same as the
+ * macro editor panel - first tap pays the alloc, never freed after. */
+static void wpm_popup_close(void)
+{
+    if (s_wpm_panel) lv_obj_add_flag(s_wpm_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void wpm_popup_apply(void)
+{
+    if (!s_wpm_ta) return;
+    int v = atoi(lv_textarea_get_text(s_wpm_ta));
+    if (v < CW_WPM_MIN) v = CW_WPM_MIN;
+    if (v > CW_WPM_MAX) v = CW_WPM_MAX;
+    cat_request_keyer_wpm((uint8_t)v);
+    if (s_lbl_wpm) lv_label_set_text_fmt(s_lbl_wpm, "%d WPM", v);
+    wpm_popup_close();
+}
+
+static void wpm_kb_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY) wpm_popup_apply();      // Enter/checkmark
+    else if (code == LV_EVENT_CANCEL) wpm_popup_close(); // the keyboard's own close glyph
+}
+
+static void wpm_popup_backdrop_cb(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == lv_event_get_user_data(e)) wpm_popup_close();
+}
+
+static void wpm_popup_open(void)
+{
+    if (!s_wpm_panel) {
+        s_wpm_panel = lv_obj_create(lv_scr_act());
+        lv_obj_set_size(s_wpm_panel, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_style_bg_color(s_wpm_panel, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_wpm_panel, LV_OPA_60, 0);
+        lv_obj_set_style_border_width(s_wpm_panel, 0, 0);
+        lv_obj_set_style_radius(s_wpm_panel, 0, 0);
+        lv_obj_set_style_pad_all(s_wpm_panel, 0, 0);
+        lv_obj_clear_flag(s_wpm_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(s_wpm_panel, wpm_popup_backdrop_cb, LV_EVENT_CLICKED, s_wpm_panel);
+
+        lv_obj_t *box = lv_obj_create(s_wpm_panel);
+        lv_obj_set_size(box, 220, 90);
+        lv_obj_align(box, LV_ALIGN_CENTER, 0, -120);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x1c2128), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_style_radius(box, 10, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+        s_wpm_ta = lv_textarea_create(box);
+        lv_obj_set_size(s_wpm_ta, 180, 60);
+        lv_obj_center(s_wpm_ta);
+        lv_textarea_set_one_line(s_wpm_ta, true);
+        lv_textarea_set_max_length(s_wpm_ta, 2);
+        lv_textarea_set_text_selection(s_wpm_ta, true);
+        lv_obj_set_style_text_font(s_wpm_ta, &lv_font_montserrat_32, 0);
+        lv_obj_set_style_text_align(s_wpm_ta, LV_TEXT_ALIGN_CENTER, 0);
+
+        s_wpm_kb = lv_keyboard_create(s_wpm_panel);
+        lv_keyboard_set_mode(s_wpm_kb, LV_KEYBOARD_MODE_NUMBER);
+        lv_keyboard_set_textarea(s_wpm_kb, s_wpm_ta);
+        lv_obj_add_event_cb(s_wpm_kb, wpm_kb_event_cb, LV_EVENT_ALL, NULL);
+    }
+
+    int cur = cat_get_keyer_wpm();
+    if (cur <= 0) cur = CW_WPM_FALLBACK;
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d", cur);
+    lv_textarea_set_text(s_wpm_ta, buf);
+    /* Select-all on open so typing a new speed replaces it outright, rather
+     * than appending after the old one (CW_WPM_MAX is two digits, so a
+     * three-digit result would just clamp silently - select-all avoids ever
+     * reaching for that clamp in the common case). */
+    lv_textarea_set_cursor_pos(s_wpm_ta, LV_TEXTAREA_CURSOR_LAST);
+
+    lv_obj_clear_flag(s_wpm_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_wpm_panel);
+}
+
+static void wpm_label_clicked_cb(lv_event_t *e) { (void)e; wpm_popup_open(); }
+
 /* Set a ticker label only if the text actually differs - see the call sites.
  * lv_label_set_text() always copies and invalidates, so an unchanged row costs
  * a repaint for nothing. */
@@ -1552,6 +1643,9 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_width(s_lbl_wpm, (PANE_W - 80) - 80);
     lv_obj_set_style_text_align(s_lbl_wpm, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(s_lbl_wpm, 80, 67);   // 58 + (48 - ~29 line height) / 2
+    // Tap the number itself for direct numeric entry - see wpm_popup_open().
+    lv_obj_add_flag(s_lbl_wpm, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_lbl_wpm, wpm_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
