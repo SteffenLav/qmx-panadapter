@@ -163,9 +163,11 @@ operating position in any browser, a WSPR propagation beacon, a MODE: CW page, a
 radio player, and the radio's own menus on the screen.** The panadapter, FT8/FT4 receive and
 transmit, WSPR, ADIF logging and all four logbook uploads — QRZ, eQSL, ARRL LoTW and your own
 Cloudlog or Wavelog — are stable and in daily use. **Audio and binaural CW are no longer a
-beta.** **JS8 Normal** and the new **CW page** are — see below. **v1.24.1 is a one-fix patch**
-on top of v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5. In v1.24.0: the
-CW page (decode ticker, copilot hints, General/Contest macro sets), Web Radio, and two-finger
+beta.** **JS8 Normal** and the new **CW page** are — see below. **v1.24.1 is a two-fix patch**
+on top of v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5, and a manual
+pounce held on a busy station that had actually signed off with RRR rather than RR73/73 -
+both fixed. In v1.24.0: the CW page (decode ticker, copilot hints, General/Contest macro
+sets), Web Radio, and two-finger
 pinch now pans while it zooms, on the Panadapter and the CW page alike.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"

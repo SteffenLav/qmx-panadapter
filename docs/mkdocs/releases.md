@@ -6,9 +6,10 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.24.1** - 2026-11-03
 
-**A one-fix patch on v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5.**
+**A two-fix patch on v1.24.0: an FT8 CQ-answer reboot, and a manual pounce that held on a station that had actually signed off.**
 
 - **Fixed a reboot when answering a CQ caller on FT8** *(Randy N4OPI, Rick Trommer W5NR)*. Tapping a station calling CQ could crash the Tab5 with a stack overflow; replying to CQ was the one path affected. Auto Answer CQ and calling CQ yourself were never affected.
+- **A manual pounce now lets go of a busy target that signed off with RRR, not only RR73 or 73** *(Gyula HA3HZ)*. Many stations close a QSO with a bare RRR and no separate 73; that was read as still busy, so a target who was actually free kept holding your pounce.
 
 ## Previous Releases
 
