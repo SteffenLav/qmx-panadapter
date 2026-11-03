@@ -421,24 +421,20 @@ typedef struct {
     uint8_t  cw_msg_set;       // which set is active/edited: 0 = General, 1 = Contest (default 0)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
     bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
-    /* MASTER SWITCH FOR THE CW PAGE, and the reason it can ship on main at
-     * all. The page is in development: it keys the radio over CAT KY and has
-     * NO WAY TO ABORT a message once sent, so a release that offered it to
-     * everyone would be offering an unfinished transmit path.
+    /* MASTER SWITCH FOR THE CW PAGE. It keys the radio over CAT KY and still
+     * has NO WAY TO ABORT a message once sent (tested on the bench: neither
+     * RX; nor a mode bounce stops one) - that has not changed.
      *
-     * DEFAULT OFF, and unlike wspr_en that is by design rather than by
-     * caution - this is the branch contract written into the firmware instead
-     * of into a merge discipline. When the page is finished the default
-     * flips; nothing else has to change.
+     * DEFAULT ON from v1.24.0 (operator, same release): the CW page ships as
+     * the release's own beta rather than hidden behind a config line nobody
+     * would find. "Beta" is carried everywhere the page is documented
+     * BECAUSE the abort gap is still open, not instead of saying so.
      *
-     * ⚠ Off hides the DOOR, not the cost. The page's .bss is linked in
-     * either way, exactly as wspr_en's note says. Never reason from "the flag
-     * is off" to "it costs nothing".
+     * ⚠ Off still does not mean "costs nothing" - the page's .bss is linked
+     * in either way, exactly as wspr_en's note says.
      *
-     * Deliberately has no drawer control, for the same reason wspr_en has
-     * none: a page still being built should be reachable by someone who went
-     * looking for it, not offered in a list of settings. Turned on with
-     * /api/cmd {"action":"cw_enable","on":true}, or cw_page_enabled = yes in
+     * Still no drawer control to switch it back off - turn it off with
+     * /api/cmd {"action":"cw_enable","on":false}, or cw_page_enabled = no in
      * an imported config file. */
     bool     cw_page_en;
     // FT8 Fox/Hound (DXpedition) mode - the HOUND side only. Fox is impossible on

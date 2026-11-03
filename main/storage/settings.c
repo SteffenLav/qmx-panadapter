@@ -1089,10 +1089,11 @@ static void load_from_nvs(qmx_settings_t *out)
      * nothing is running. Both want an operator decision, not a default. */
     out->cw_park[0] = '\0';
     out->cw_sim_en = false;
-    /* OFF until the CW page is finished - see the note on the field. The
-     * page keys the radio and cannot abort a message in flight, so it is
-     * not something to hand a user who did not ask for it. */
-    out->cw_page_en = false;
+    /* ON from v1.24.0 (operator): ships as the release's beta, not hidden
+     * behind a config line nobody would find. It still has no abort for a
+     * message in flight - see cw_screen_view.c's header - and "beta" is
+     * carried everywhere the page is documented for exactly that reason. */
+    out->cw_page_en = true;
     out->hound_mode   = 0;   // off: Hound changes TX behaviour, so it is opt-in
     out->cq_listen_every = 0;
     out->onboarded = false;

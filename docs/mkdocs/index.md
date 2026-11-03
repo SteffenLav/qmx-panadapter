@@ -42,7 +42,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   mode by design. See [Audio](guide/audio.md).
 - **MODE: CW page** *(beta)* — the radio's own decode ticker with noise squelch, a
   copilot hint line, a station card, and two named macro sets (**General**/**Contest**)
-  switched by a toggle at the bottom of the panel. Ships disabled. See [CW](guide/cw.md).
+  switched by a toggle at the bottom of the panel. See [CW](guide/cw.md).
 - **Web Radio** — an internet radio player on the Tab5: search and genre filter over the
   radio-browser.info directory, six memory slots, playback that keeps running after you
   close the player. See [Web Radio](guide/webradio.md).

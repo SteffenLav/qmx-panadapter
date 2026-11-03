@@ -639,8 +639,9 @@ The Tab5's playback path is about 100 ms deep, which is longer than a dot at
 20 WPM, so the tone would arrive after the element that made it. The chapter
 says which path does what, and what the two honest headphone arrangements are.
 
-The page ships **disabled**. Turn it on with `cw_page_enabled = yes` in a config
-file, or `{"action":"cw_enable","on":true}` over the API.
+The page ships **on** - it is this release's own beta. Turn it off with
+`cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}`
+over the API, if you would rather not have it yet.
 
 Full chapter: [tab5.lav.dk/guide/cw](https://tab5.lav.dk/guide/cw/)
 
@@ -937,7 +938,7 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall, Panadapter and CW pages | Zoom ×1.0–×24.0 **and** pan together — the midpoint between your fingers drives the pan, the spread drives the zoom |
 | Three-finger hold | Spectrum, any page with a simulator | Toggle Simulation Mode on/off (FT8's, or CW's on the CW page) |
-| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the pages directly (CW only when enabled) |
+| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the pages directly, including CW |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |

@@ -178,17 +178,20 @@ Detailed sections moved to memory for session speed:
 - [Release process](../../../memory/project_release_process.md)
 - [Internal RAM audit](../../../memory/project_internal_ram_bss_audit.md) — where the 445 KB goes, what may and may NOT move to PSRAM
 
-## CW page is ON MAIN now, DARK - `cw_page_en` defaults OFF
+## CW page is ON MAIN, and `cw_page_en` defaults ON from v1.24.0
 
 Merged 2026-11-02 (fast-forward, 104 commits). `feat/cw-page` is gone; do
 not recreate it - CW work is ordinary main work from here.
 
-⭐ **It ships disabled and that is deliberate.** The gate is firmware, not
-branch discipline, on four surfaces: the drawer hides `MODE: CW` and
-re-centres the stack, `set_screen "cw"` answers 403, boot restore falls
-through to the Panadapter, and `ui_set_base_mode()` refuses. Turn it on with
-`{"action":"cw_enable","on":true}` or `cw_page_enabled = yes` in a config
-file. ⛔ Unlike `wspr_en`, **asking for the page does NOT enable it**.
+⭐ **It ships ON as v1.24.0's own beta** (operator, 2026-11-03: "I want it
+turned on NOW and it just carries the beta status" - re-cut same version,
+see memory for the full exchange). The gate is still firmware, same four
+surfaces as before, just flipped: the drawer shows `MODE: CW`, `set_screen
+"cw"` works, boot restore honours a saved CW page, `ui_set_base_mode()`
+allows it. Turn it OFF with `{"action":"cw_enable","on":false}` or
+`cw_page_enabled = no` in a config file. The no-abort gap (`KY` cannot be
+cancelled - see memory/project_cw_ky_abort_rx_does_not_work.md) is why it is
+still "beta" everywhere it's documented, not why it is off.
 
 ⚠ **Why it stays dark: `KY` has no abort.** The CAT manual documents none in
 TS480-compat-OFF mode, so a sent message runs to the end of the radio's
