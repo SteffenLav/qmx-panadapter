@@ -1663,6 +1663,12 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             ESP_LOGI(TAG, "cands(%d): %s", ncand, cl);
         }
     }
+    /* Release the ~2.3 MB candidate-search FFT scratch before the decode
+     * loop below needs room for build_stage1()'s ~1.44 MB - see the
+     * function's own comment in wspr_decode.c. Costs one re-alloc on the
+     * NEXT cycle's wspr_find_candidates() call, same "once per cycle, not
+     * once per candidate" cost class the 2026-09-19 caching fix established. */
+    wspr_find_candidates_release_scratch();
     found_in_pass = 0;
     tried_this_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {

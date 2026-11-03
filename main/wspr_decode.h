@@ -81,6 +81,11 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
                           double f_hi_hz, wspr_freq_candidate_t *out,
                           int max_out);
 
+// Call once per cycle, right after reading the candidate list and before the
+// per-candidate decode loop - frees this ~2.3 MB scratch so build_stage1()'s
+// ~1.44 MB can have the room instead. See the function's own comment.
+void wspr_find_candidates_release_scratch(void);
+
 typedef struct {
     int ok; /* 1 if this cleared all three plausibility checks */
     char callsign[7];
