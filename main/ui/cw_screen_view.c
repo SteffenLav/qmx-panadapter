@@ -238,6 +238,8 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
     *missing = NULL;
     char tgt[16];
     char park[16];
+    char ser[8];   // {SERIAL} - declared here, not inside its branch: val points into it
+                    // after the branch's own block has closed (same as tgt/park above).
     cw_qso_get_target(tgt, sizeof(tgt));
     for (const char *p = in; *p && o + 1 < out_sz; ) {
         const char *val = NULL;
@@ -267,6 +269,17 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
              * (a sequential counter), not this one, and not built yet. */
             val = settings_get_cw_rst_cut_nines() ? "5NN" : "599";
             p += 5;
+        } else if (strncasecmp(p, "{SERIAL}", 8) == 0) {
+            /* Contest serial, N1MM/keyer convention: a plain counter that
+             * advances when it actually keys the radio (send_cw_text()), not
+             * when a QSO is logged - the CW page has no ADIF logging yet.
+             * Preview here (the 500 ms ticker, the macro-edit "sends:" line)
+             * reads the CURRENT value without advancing it - only the real
+             * send does that, via settings_cw_serial_advance(). Cut 0->T
+             * only, per Michael KZ4LY's ask - no other digit is cut. */
+            snprintf(ser, sizeof(ser), "%03u", settings_get_cw_serial_next());
+            for (char *c = ser; *c; c++) if (*c == '0') *c = 'T';
+            val = ser; p += 8;
         }
         if (val) {
             while (*val && o + 1 < out_sz) out[o++] = (char)toupper((unsigned char)*val++);
@@ -993,6 +1006,16 @@ static void park_edit_open(void)
     lv_obj_move_foreground(s_park_modal);
 }
 
+// strcasestr is not in newlib's default profile here, and this is the only
+// caller in this file - same six-line local as cw_qso.c's strcasestr_portable.
+static bool has_token_ci(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (const char *p = hay; *p; p++)
+        if (strncasecmp(p, needle, n) == 0) return true;
+    return false;
+}
+
 // ---- sending ----------------------------------------------------------------
 // The ONE path every CW transmission takes (memory buttons and the ESM NEXT
 // button): macro expansion, the simulation-mode interlock (sim never reaches
@@ -1023,6 +1046,12 @@ static bool send_cw_text(const char *raw)
     } else {
         if (!cat_is_ready()) { ui_toast("No QMX connected"); return false; }
         cat_request_cw_send(exp);
+        // {SERIAL} advances only on a real send that actually keys the radio -
+        // never on sim (a phantom QSO must not burn a real contest number) and
+        // never on the 500 ms preview tick (that only ever reads the current
+        // value - see expand_macros()). Checked on the RAW text, before
+        // expansion erased the token.
+        if (has_token_ci(raw, "{SERIAL}")) settings_cw_serial_advance();
     }
     cw_qso_note_sent(exp);
     ESP_LOGI(TAG, "CW send: '%s'%s", exp, cw_sim ? " [SIM]" : "");

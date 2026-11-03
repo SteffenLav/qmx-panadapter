@@ -421,6 +421,7 @@ typedef struct {
     uint8_t  cw_msg_set;       // which set is active/edited: 0 = General, 1 = Contest (default 0)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
     bool     cw_rst_cut_nines; // {RST} macro expands "5NN" (both 9s cut) instead of "599" when true (default false)
+    uint16_t cw_serial_next;  // {SERIAL} macro - next contest serial to send, 1-based (default 1)
     bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
     /* MASTER SWITCH FOR THE CW PAGE. It keys the radio over CAT KY and still
      * has NO WAY TO ABORT a message once sent (tested on the bench: neither
@@ -1069,6 +1070,14 @@ void settings_set_cw_msg_set(uint8_t set);                        // 0 = General
 void settings_set_cw_park(const char *park);
 void settings_set_cw_rst_cut_nines(bool v);
 bool settings_get_cw_rst_cut_nines(void);     // narrow: {RST} macro expansion, read on taskLVGL
+
+// {SERIAL} macro - a plain send-time counter (N1MM/keyer convention: it
+// advances when a message carrying {SERIAL} actually keys the radio, not
+// when a QSO is logged - the CW page has no ADIF logging yet). All three are
+// narrow: read/written from send_cw_text() and expand_macros() on taskLVGL.
+void     settings_set_cw_serial_next(uint16_t v);   // manual correction (e.g. after a repeat)
+uint16_t settings_get_cw_serial_next(void);         // current value, does NOT advance
+uint16_t settings_cw_serial_advance(void);           // returns the value just sent, THEN increments
 
 // The park reference alone, narrow - the CW page resolves {PARK} from its
 // 500 ms tick and cannot afford a qmx_settings_t local there. Writes "" when
