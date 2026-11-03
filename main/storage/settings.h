@@ -420,6 +420,7 @@ typedef struct {
     char     cw_msg_b[6][44];  // 6 CW macros, SET B "Contest" - same slots, same ladder indices
     uint8_t  cw_msg_set;       // which set is active/edited: 0 = General, 1 = Contest (default 0)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
+    bool     cw_rst_cut_nines; // {RST} macro expands "5NN" (both 9s cut) instead of "599" when true (default false)
     bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
     /* MASTER SWITCH FOR THE CW PAGE. It keys the radio over CAT KY and still
      * has NO WAY TO ABORT a message once sent (tested on the bench: neither
@@ -1066,6 +1067,8 @@ void settings_set_cw_msg(uint8_t idx, const char *text);          // set A ("Gen
 void settings_set_cw_msg_for_set(uint8_t set, uint8_t idx, const char *text);  // explicit set, used by the CW editor
 void settings_set_cw_msg_set(uint8_t set);                        // 0 = General, 1 = Contest
 void settings_set_cw_park(const char *park);
+void settings_set_cw_rst_cut_nines(bool v);
+bool settings_get_cw_rst_cut_nines(void);     // narrow: {RST} macro expansion, read on taskLVGL
 
 // The park reference alone, narrow - the CW page resolves {PARK} from its
 // 500 ms tick and cannot afford a qmx_settings_t local there. Writes "" when

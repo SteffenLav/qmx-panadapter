@@ -226,8 +226,13 @@ static bool park_resolve(char *out, size_t out_sz, const char **prog)
 static bool expand_macros(const char *in, char *out, size_t out_sz,
                           const char **missing)
 {
-    qmx_settings_t s;
-    settings_load_all(&s);
+    /* ⛔ THE NARROW ACCESSOR, NOT settings_load_all() - this function was
+     * breaking the very rule stated in the comment above it: called from
+     * refresh_mem_labels()'s 500 ms tick and refresh_next_label(), a full
+     * qmx_settings_t (3888 B) was landing on taskLVGL's stack twice a
+     * second. Only my_callsign was ever read from it. */
+    char my_call[16];
+    settings_get_my_callsign(my_call, sizeof(my_call));
     size_t o = 0;
     *missing = NULL;
     char tgt[16];
@@ -236,8 +241,8 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
     for (const char *p = in; *p && o + 1 < out_sz; ) {
         const char *val = NULL;
         if (strncasecmp(p, "{MYCALL}", 8) == 0) {
-            if (!s.my_callsign[0]) { *missing = "callsign (Identity)"; return false; }
-            val = s.my_callsign; p += 8;
+            if (!my_call[0]) { *missing = "callsign (Identity)"; return false; }
+            val = my_call; p += 8;
         } else if (strncasecmp(p, "{PARK}", 6) == 0) {
             /* The activation's reference if one is running, else cw_park -
              * see park_resolve(). The hint names BOTH ways to set it, because
@@ -251,6 +256,16 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
         } else if (strncasecmp(p, "{CALL}", 6) == 0) {
             if (!tgt[0]) { *missing = "station (tap the card)"; return false; }
             val = tgt; p += 6;
+        } else if (strncasecmp(p, "{RST}", 5) == 0) {
+            /* Pro-forma 599 - never a real measurement, it's a fixed report
+             * macro, the same way WSJT-X/N1MM treat a contest exchange.
+             * {RST}'s own button long-press toggles the cut (settings
+             * cw_rst_cut_nines): "5NN" when on, plain "599" when off.
+             * Michael KZ4LY, 2026-11-03: "why waste dahs on a pro-forma
+             * RST?" - cut 0->T for a serial number is a DIFFERENT macro
+             * (a sequential counter), not this one, and not built yet. */
+            val = settings_get_cw_rst_cut_nines() ? "5NN" : "599";
+            p += 5;
         }
         if (val) {
             while (*val && o + 1 < out_sz) out[o++] = (char)toupper((unsigned char)*val++);
@@ -414,7 +429,7 @@ static void edit_kb_event_cb(lv_event_t *e)
  * lv_keyboard_get_textarea() reads back NULL once the keyboard is hidden, and
  * the buttons have to work with it down. */
 static lv_obj_t *s_edit_focus = NULL;
-static lv_obj_t *s_edit_macro_lbl[3];   /* the three button labels */
+static lv_obj_t *s_edit_macro_lbl[4];   /* the four button labels */
 static lv_obj_t *s_edit_sends = NULL;   /* the live "sends:" line */
 static lv_obj_t *s_edit_panel = NULL;   /* the window itself - it resizes */
 static lv_obj_t *s_edit_list  = NULL;   /* the six fields, scrollable */
@@ -422,7 +437,7 @@ static lv_obj_t *s_edit_list  = NULL;   /* the six fields, scrollable */
 /* What each button PASTES - always the token, never the value. The label
  * shows the value; the memory must keep the macro or it would freeze at
  * whatever was current when it was written. */
-static const char *const EDIT_MACROS[3] = { "{MYCALL}", "{PARK}", "{CALL}" };
+static const char *const EDIT_MACROS[4] = { "{MYCALL}", "{PARK}", "{CALL}", "{RST}" };
 
 /* What each button SAYS. The value once it is known, the plain name until
  * then - operator, 2026-11-01: "My call should only say My call until I have
@@ -453,6 +468,12 @@ static void edit_macro_labels_refresh(void)
         cw_qso_get_target(tgt, sizeof(tgt));
         lv_label_set_text(s_edit_macro_lbl[2], tgt[0] ? tgt : "Their call");
     }
+    /* Shows what {RST} currently expands to, so the cut setting (toggled by
+     * long-pressing THIS button - see rst_btn_cb()) is visible without
+     * opening a separate menu. */
+    if (s_edit_macro_lbl[3])
+        lv_label_set_text(s_edit_macro_lbl[3],
+                          settings_get_cw_rst_cut_nines() ? "5NN" : "599");
 }
 
 /* ⭐ WHAT THIS MEMORY WILL ACTUALLY KEY, under the field being edited. The
@@ -520,6 +541,20 @@ static void edit_macro_cb(lv_event_t *e)
         edit_layout(true);
         lv_obj_scroll_to_view(s_edit_focus, LV_ANIM_OFF);
     }
+    edit_sends_refresh();
+}
+
+/* Long-press on the {RST} button ONLY - toggles between "599" and "5NN"
+ * (settings cw_rst_cut_nines). Mirrors this page's established tap/hold
+ * language (memory buttons: tap sends, hold edits) rather than opening a
+ * separate settings screen for one bool. Refreshes both the button's own
+ * label and the live "sends:" preview, since an already-pasted {RST} token
+ * re-expands to the new value immediately. */
+static void rst_btn_long_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_set_cw_rst_cut_nines(!settings_get_cw_rst_cut_nines());
+    edit_macro_labels_refresh();
     edit_sends_refresh();
 }
 
@@ -618,7 +653,7 @@ static void edit_build(void)
      * necessary". Group all five left instead and the row measures 928, so
      * the window is 240 px narrower with nothing lost.
      * Height and placement belong to edit_layout(); this is just a start. */
-    lv_obj_set_size(panel, 980, 648);
+    lv_obj_set_size(panel, 1090, 648);
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 36);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
@@ -637,15 +672,18 @@ static void edit_build(void)
      * line so CW memories sat alone on the top line". */
     lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    /* THE SECOND ROW, all five buttons in one left-aligned group of 928:
+    /* THE SECOND ROW, now six buttons (2026-11-03 adds {RST}):
      *
-     *   0   My call 170 | 182 My park 170 | 364 Their call 200  -> 564
-     *   612 Cancel  160 | 788 Save    160                       -> 948
+     *   0   My call 170 | 182 My park 170 | 364 Their call 200 | 584 RST 100 -> 684
+     *   724 Cancel  150 | 894 Save    150                                   -> 1044
      *
-     * The 48 px between "Their call" and Cancel is the only gap in the row -
-     * enough that a thumb reaching for a macro cannot land on Save, and the
-     * two are red and green besides. Nothing is pinned to the right edge any
-     * more, which is what used to set the window's width.
+     * RST sits right after the three original macros with a smaller 20 px
+     * gap (it reads as part of the same group, not a fourth category); the
+     * original 48 px gap before Cancel/Save is unchanged and still the only
+     * wide gap in the row, so a thumb reaching for a macro still cannot
+     * land on Save. Cancel/Save narrowed 160->150 and the panel widened
+     * 980->1090 to fit RST without re-flowing anything else - "widen, don't
+     * shrink the font" (the macro button font is untouched).
      *
      * Fixed widths, not content-sized: the labels swap between a name and a
      * callsign as settings change, and a row that re-flows every time a
@@ -659,9 +697,9 @@ static void edit_build(void)
      * wide, and it outlived that. "Their call" takes 200 rather than 180 at
      * the larger size so a 9-character callsign still fits inside it. */
     {
-        static const int MX[3] = { 0, 182, 364 };
-        static const int MW[3] = { 170, 170, 200 };
-        for (int i = 0; i < 3; i++) {
+        static const int MX[4] = { 0, 182, 364, 584 };
+        static const int MW[4] = { 170, 170, 200, 100 };
+        for (int i = 0; i < 4; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, MW[i], 56);
             lv_obj_align(b, LV_ALIGN_TOP_LEFT, MX[i], 72);
@@ -671,6 +709,9 @@ static void edit_build(void)
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_add_event_cb(b, edit_macro_cb, LV_EVENT_CLICKED,
                                 (void *)EDIT_MACROS[i]);
+            /* RST alone also toggles 599/5NN on a hold - see its own comment. */
+            if (i == 3)
+                lv_obj_add_event_cb(b, rst_btn_long_cb, LV_EVENT_LONG_PRESSED, NULL);
             s_edit_macro_lbl[i] = lv_label_create(b);
             /* Text comes from edit_macro_labels_refresh() on every open. */
             lv_label_set_text(s_edit_macro_lbl[i], "");
@@ -684,8 +725,8 @@ static void edit_build(void)
     }
 
     lv_obj_t *btn_cancel = lv_btn_create(panel);
-    lv_obj_set_size(btn_cancel, 160, 56);
-    lv_obj_align(btn_cancel, LV_ALIGN_TOP_LEFT, 612, 72);
+    lv_obj_set_size(btn_cancel, 150, 56);
+    lv_obj_align(btn_cancel, LV_ALIGN_TOP_LEFT, 724, 72);
     lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(btn_cancel, 8, 0);
     lv_obj_add_event_cb(btn_cancel, edit_cancel_cb, LV_EVENT_CLICKED, NULL);
@@ -696,8 +737,8 @@ static void edit_build(void)
     lv_obj_center(lc);
 
     lv_obj_t *btn_save = lv_btn_create(panel);
-    lv_obj_set_size(btn_save, 160, 56);
-    lv_obj_align(btn_save, LV_ALIGN_TOP_LEFT, 788, 72);
+    lv_obj_set_size(btn_save, 150, 56);
+    lv_obj_align(btn_save, LV_ALIGN_TOP_LEFT, 894, 72);
     lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_radius(btn_save, 8, 0);
     lv_obj_add_event_cb(btn_save, edit_save_cb, LV_EVENT_CLICKED, NULL);

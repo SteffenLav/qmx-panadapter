@@ -75,6 +75,7 @@ static const char *TAG = "settings";
 #define KEY_CW_MSG_B   "cw_msgb"   // + digit 0..5 appended at use sites (set B, "Contest")
 #define KEY_CW_MSG_SET "cw_mset"   // which set is active: 0 = General, 1 = Contest
 #define KEY_CW_PARK    "cw_park"
+#define KEY_CW_RST_CUT "cw_rst_cut"
 #define KEY_CW_SIM     "cw_sim"
 #define KEY_CW_PAGE_EN "cw_page_en"
 #define KEY_HOUND_MODE "hound_md"
@@ -511,7 +512,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_PAGE_EN      153  /* master switch for the CW page - default OFF */
 #define DIRTY_CW_MSG_B        155  /* all 6 slots of macro set B "Contest", ONE bit - only
                                        5 free when this was added, unlike cw_msg's six (67..72) */
-#define DIRTY_CW_MSG_SET      156  /* active macro set toggle: 0 = General, 1 = Contest */
+#define DIRTY_CW_MSG_SET      156
+#define DIRTY_CW_RST_CUT      157  /* active macro set toggle: 0 = General, 1 = Contest */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -735,6 +737,7 @@ static void flush_task(void *arg)
         }
         if (dirty_test(&dirty_local, DIRTY_CW_MSG_SET)) nvs_set_u8(s_nvs, KEY_CW_MSG_SET, snap->cw_msg_set);
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap->cw_park);
+        if (dirty_test(&dirty_local, DIRTY_CW_RST_CUT)) nvs_set_u8(s_nvs, KEY_CW_RST_CUT, snap->cw_rst_cut_nines ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_PAGE_EN)) nvs_set_u8(s_nvs, KEY_CW_PAGE_EN, snap->cw_page_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap->hound_mode);
@@ -1088,6 +1091,7 @@ static void load_from_nvs(qmx_settings_t *out)
      * the word from the running activation has the same refusal problem when
      * nothing is running. Both want an operator decision, not a default. */
     out->cw_park[0] = '\0';
+    out->cw_rst_cut_nines = false;
     out->cw_sim_en = false;
     /* ON from v1.24.0 (operator): ships as the release's beta, not hidden
      * behind a config line nobody would find. It still has no abort for a
@@ -1311,6 +1315,7 @@ static void load_from_nvs(qmx_settings_t *out)
     }
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_MSG_SET, &v8) == ESP_OK) out->cw_msg_set = v8 > 1 ? 0 : v8; }
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
+    if (nvs_get_u8(s_nvs, KEY_CW_RST_CUT, &u8v) == ESP_OK) out->cw_rst_cut_nines = (u8v != 0);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_PAGE_EN, &v8) == ESP_OK) out->cw_page_en = v8 != 0; }
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
@@ -2058,6 +2063,25 @@ void settings_set_cw_park(const char *park)
     strcpy(s_pending.cw_park, buf);
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_PARK);
+}
+
+void settings_set_cw_rst_cut_nines(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_rst_cut_nines == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_rst_cut_nines = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_RST_CUT);
+}
+
+bool settings_get_cw_rst_cut_nines(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.cw_rst_cut_nines;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_cw_sim_en(bool v)
