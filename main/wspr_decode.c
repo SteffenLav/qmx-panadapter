@@ -10,12 +10,23 @@
  * follow this precedent without the same justification. */
 #if defined(ESP_PLATFORM)
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 static int64_t wspr_now_us(void) { return esp_timer_get_time(); }
+/* The FFT/stage1/stage2 scratch below is hundreds of KB to ~1.3 MB - plain
+ * malloc() leaves it to CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL's threshold
+ * heuristic, same ambiguity the rest of this codebase never accepts for
+ * anything this size (see CLAUDE.md's "audit every malloc under ~16 KB").
+ * Explicit PSRAM here, consistent with everywhere else; free() still works
+ * on it, IDF's allocator tracks the owning pool. */
+static void *wspr_big_alloc(size_t n) {
+    return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
 #else
 #include <time.h>
 static int64_t wspr_now_us(void) {
     return (int64_t)((double)clock() * (1000000.0 / (double)CLOCKS_PER_SEC));
 }
+static void *wspr_big_alloc(size_t n) { return malloc(n); }
 #endif
 
 #include "fft/kiss_fftr.h" /* ft8_lib's component INCLUDE_DIRS is its own root
@@ -148,9 +159,9 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
         free(cfg); free(in); free(spec); free(mag);
         cfg = NULL; in = NULL; spec = NULL; mag = NULL; cached_nfft = 0;
         cfg  = kiss_fftr_alloc(nfft, 0, NULL, NULL);
-        in   = (kiss_fft_scalar *)malloc((size_t)nfft * sizeof(kiss_fft_scalar));
-        spec = (kiss_fft_cpx *)malloc((size_t)nbins * sizeof(kiss_fft_cpx));
-        mag  = (float *)malloc((size_t)nbins * sizeof(float));
+        in   = (kiss_fft_scalar *)wspr_big_alloc((size_t)nfft * sizeof(kiss_fft_scalar));
+        spec = (kiss_fft_cpx *)wspr_big_alloc((size_t)nbins * sizeof(kiss_fft_cpx));
+        mag  = (float *)wspr_big_alloc((size_t)nbins * sizeof(float));
         if (!cfg || !in || !spec || !mag) {
             free(cfg); free(in); free(spec); free(mag);
             cfg = NULL; in = NULL; spec = NULL; mag = NULL;
@@ -479,8 +490,8 @@ static int build_stage1(const int16_t *samples, long n)
 
     const long out_n = n / S1_DECIM;
     if (out_n <= 0) return 0;
-    s_s1i = (float *)malloc((size_t)out_n * sizeof(float));
-    s_s1q = (float *)malloc((size_t)out_n * sizeof(float));
+    s_s1i = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
+    s_s1q = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
     if (!s_s1i || !s_s1q) { wspr_decode_capture_changed(); return 0; }
 
     build_lpf();
@@ -552,8 +563,8 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
 
     const long out_n = s_s1n / S2_DECIM;
     if (out_n <= 0) return 0;
-    bb->i = (float *)malloc((size_t)out_n * sizeof(float));
-    bb->q = (float *)malloc((size_t)out_n * sizeof(float));
+    bb->i = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
+    bb->q = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
     if (!bb->i || !bb->q) { free_baseband(bb); return 0; }
     bb->n = out_n;
 
