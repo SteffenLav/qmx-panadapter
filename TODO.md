@@ -10,6 +10,23 @@
 
 ---
 
+## ▶▶▶ THE WORK QUEUE, 2026-11-03 — READ THIS FIRST
+
+From the v1.24.1 groups.io feedback (Gyula HA3HZ, Michael K Johnson KZ4LY).
+Not reconciled against the code yet - just logged so nothing is lost.
+
+| ID | Item | Who |
+|---|---|---|
+| T143 | **CW macro buttons cannot be edited.** Enabler for most of the rest of this batch: a "long CQ" vs "normal CQ" choice, `CQ POTA DE <call>` without the extra "CQ", `{CALL}`/`{RST}` placeholders with a cut-numbers option (9->N always for a park, 0->T in a contest serial), and NEXT defaulting to a CQ macro. One cut-off button already proves the need - its full text can't be seen without an edit mode | Michael KZ4LY |
+| T144 | **QSK has no PTT-release delay.** Receive comes back the instant a CW signal ends, which chatters a relay behind a power amp. Wants a configurable hang time | Gyula HA3HZ |
+| T145 | **Send a CW macro word-by-word, so it can be cancelled between words.** Workaround for the known no-abort gap (see CLAUDE.md "CW page is ON MAIN" - `RX;` and a mode bounce don't stop an in-flight send); word boundaries would at least give a cut-in point | Michael KZ4LY |
+| T146 | **WPM has no direct numeric entry**, only +/-. Going to 0 for the tuner and back is a long way to click | Michael KZ4LY |
+| T147 | **Dedicated on-screen CW controls** (filter bandwidth, TX offset) near the WPM control, instead of buried in the settings drawer - wants them changeable mid-QSO. Relates to T139's CW monitor level work (already built, not flashed) - same idea, on-screen placement rather than drawer | Michael KZ4LY |
+| T148 | Web help screen has no link to the full manual | Michael KZ4LY |
+| T149 | ⚠ **DECISION OWED BY THE OPERATOR.** v1.24.0 changed a busy CQ target from "hold + countdown, then move on" to "abandon immediately" for a MANUAL pounce (previously only the robot abandoned immediately). Gyula HA3HZ: the old hold-and-retry behaviour was right except for its RRR bug (fixed in v1.24.1) - wants the countdown back. Keep abandon-immediately, or restore the hold for manual pounces only? | Gyula HA3HZ |
+
+---
+
 ## ▶▶ THE WORK QUEUE, 2026-10-17 — READ THIS FIRST
 
 Everything picked up between 2026-10-14 and 2026-10-17 that is neither built
