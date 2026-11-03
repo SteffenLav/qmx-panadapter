@@ -444,6 +444,7 @@ static void build_lpf(void)
  * The pointer/length check is only a backstop for a different buffer. */
 static float               *s_s1i, *s_s1q;
 static long                 s_s1n;
+static long                 s_s1_cap;   /* allocated capacity, grow-only - see below */
 static const int16_t       *s_s1_src;
 static long                 s_s1_srcn;
 static uint32_t             s_s1_sig;
@@ -475,11 +476,25 @@ static uint32_t capture_signature(const int16_t *x, long n)
     return h;
 }
 
+/* ⛔ INVALIDATES THE CACHE, DOES NOT FREE THE BUFFERS. It used to free them,
+ * which forced the ~700 KB s_s1i/s_s1q pair through a fresh PSRAM
+ * malloc/free every single capture and subtraction pass. Gyula HA3HZ,
+ * 2026-11-03: WSPR stopped decoding for the rest of a session once PSRAM
+ * fragmented enough that the request could never again find one contiguous
+ * 720000 B block, even with >4 MB free overall. build_stage1() below now
+ * keeps the allocation and only grows it (s_s1_cap), so steady state is
+ * zero alloc/free churn for this buffer instead of one pair per cycle. */
 void wspr_decode_capture_changed(void)
+{
+    s_s1n = 0; s_s1_src = NULL; s_s1_srcn = 0; s_s1_sig = 0;
+}
+
+void wspr_decode_free_scratch(void)
 {
     free(s_s1i); free(s_s1q);
     s_s1i = s_s1q = NULL;
-    s_s1n = 0; s_s1_src = NULL; s_s1_srcn = 0; s_s1_sig = 0;
+    s_s1_cap = 0;
+    wspr_decode_capture_changed();
 }
 
 static int build_stage1(const int16_t *samples, long n)
@@ -490,9 +505,16 @@ static int build_stage1(const int16_t *samples, long n)
 
     const long out_n = n / S1_DECIM;
     if (out_n <= 0) return 0;
-    s_s1i = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
-    s_s1q = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
-    if (!s_s1i || !s_s1q) { wspr_decode_capture_changed(); return 0; }
+    if (out_n > s_s1_cap) {
+        free(s_s1i); free(s_s1q);
+        s_s1i = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
+        s_s1q = (float *)wspr_big_alloc((size_t)out_n * sizeof(float));
+        if (!s_s1i || !s_s1q) {
+            free(s_s1i); free(s_s1q); s_s1i = s_s1q = NULL; s_s1_cap = 0;
+            return 0;
+        }
+        s_s1_cap = out_n;
+    }
 
     build_lpf();
 

@@ -1910,6 +1910,7 @@ static void wspr_dec_task(void *arg)
         s_pcm_busy[job.slot] = false;
     }
     set_dec_status("%s", "");
+    wspr_decode_free_scratch();   /* real teardown - see its own comment */
     ESP_LOGI(TAG, "decode task stopped");
     s_dec_exited = true;
     psram_task_park();

@@ -164,6 +164,12 @@ typedef struct {
  */
 void wspr_decode_capture_changed(void);
 
+// Actually frees the stage-1 scratch (~700 KB x2, grow-only, kept across
+// captures by wspr_decode_capture_changed() above). Call once, when the WSPR
+// decode task really exits - not per capture, or the PSRAM churn this exists
+// to avoid just comes back.
+void wspr_decode_free_scratch(void);
+
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                             wspr_decode_result_t *result);
 
