@@ -2374,19 +2374,12 @@ static void recompute_zoom_pan(void)
     dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
 }
 
-void ui_set_zoom(float zoom, int pan_bins)
+/* Shared tail of ui_set_zoom()/ui_set_zoom_pan() - everything except the
+ * decision of whether pan_bins survives or gets overwritten by a passband
+ * recentre. Splitting it out is what lets the pinch gesture keep the pan ITS
+ * OWN midpoint tracking computed, below. */
+static void ui_set_zoom_apply(float zoom, int pan_bins)
 {
-    if (zoom < 1.0f)  zoom = 1.0f;
-    if (zoom > 24.0f) zoom = 24.0f;
-    // Above x1, center the passband (not the VFO) on screen: pan to the
-    // passband's center-frequency bin offset from the VFO.
-    if (zoom > 1.0f) {
-        int32_t pb_low_hz, pb_high_hz;
-        compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-        int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
-        float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
-        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
-    }
     s_zoom_factor     = zoom;
     s_pan_offset_bins = pan_bins;
     sv_sync_pan_from_bins();
@@ -2404,6 +2397,38 @@ void ui_set_zoom(float zoom, int pan_bins)
             lv_label_set_text(s_zoom_label, b);
         }
     }
+}
+
+void ui_set_zoom(float zoom, int pan_bins)
+{
+    if (zoom < 1.0f)  zoom = 1.0f;
+    if (zoom > 24.0f) zoom = 24.0f;
+    // Above x1, center the passband (not the VFO) on screen: pan to the
+    // passband's center-frequency bin offset from the VFO.
+    if (zoom > 1.0f) {
+        int32_t pb_low_hz, pb_high_hz;
+        compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+        int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
+        float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
+        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+    }
+    ui_set_zoom_apply(zoom, pan_bins);
+}
+
+/* 2026-11-03: the two-finger pinch gesture computes its OWN pan from how far
+ * the midpoint has moved (pan_delta_bins below), and used to hand it to
+ * ui_set_zoom() like everyone else - which, above x1, THROWS AWAY ANY pan_bins
+ * it is given and recentres on the passband instead. That recentre is right
+ * for every other caller (a button picking a zoom level has no pan opinion of
+ * its own) and wrong for exactly this one, which does: the result was a pinch
+ * that could zoom but never, visibly, pan - "not on the CW page... and not on
+ * the Panadapter page either" (operator). This is the same clamp-and-apply
+ * tail with that one recentre skipped. */
+static void ui_set_zoom_pan(float zoom, int pan_bins)
+{
+    if (zoom < 1.0f)  zoom = 1.0f;
+    if (zoom > 24.0f) zoom = 24.0f;
+    ui_set_zoom_apply(zoom, pan_bins);
 }
 
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
@@ -2978,6 +3003,17 @@ static lv_obj_t *s_bp_knob       = NULL;  // bordered box framing the marker so 
 // the top of pinch_poll_cb, so a touch that starts on the band-plan strip
 // never reaches the spectrum gesture code at all.
 static bool      s_touch_on_bandplan   = false;
+/* Same contract as s_touch_on_bandplan, for the CW page's left pane
+ * (WPM/Park/NEXT/macros/toggle, x < CW_PANE_W). pinch_poll_cb reads the raw
+ * panel with no idea which LVGL object is under a touch, so once CW mode
+ * is allowed to pan/pinch the spectrum (2026-11-03), a touch that starts on
+ * one of those buttons would otherwise ALSO be read as a spectrum gesture -
+ * the same class of bug the band-plan strip and the drawer already hit.
+ * Latched for the whole touch session in pinch_poll_cb itself (there is no
+ * single LVGL object to hang a PRESSED handler on - the pane is many
+ * buttons), not re-evaluated every poll, so a drag that starts on a macro
+ * button and strays sideways mid-hold still cannot wake the spectrum. */
+static bool      s_touch_on_cw_pane    = false;
 static bool      s_bp_dragging         = false;
 /* Where the visible-span window will BE once the drag is committed. Held for
  * the duration of the drag so update_bandplan_strip() draws the box at its
@@ -8446,6 +8482,13 @@ static void stroll_apply_offset(int off);
 
 static bool mouse_over_spectrum(lv_coord_t x, lv_coord_t y)
 {
+    // The canvases stay DISPLAY_H_RES wide on every page (see ui_spec_x0()'s
+    // own comment) - on the CW page the left CW_PANE_W of that width is the
+    // macro pane drawn ON TOP of them, which point_in_obj() cannot see since
+    // it only checks the canvas's own geometry, not z-order. Without this a
+    // right-drag started on a macro button would pan the spectrum underneath
+    // it instead of doing nothing.
+    if (x < ui_spec_x0()) return false;
     return point_in_obj(s_spec_canvas, x, y) ||
            point_in_obj(s_wf_canvas,   x, y) ||
            point_in_obj(s_waterfall_obj, x, y);
@@ -8476,11 +8519,13 @@ static bool mouse_pan_tick(void)
 
     if (!s_mouse_pan_active) {
         if (!right_down) return false;
-        /* Start only on the spectrum, only on the panadapter, and only when
-         * there is a window to move - with the still view off the spectrum
-         * follows the dial and a pan has no meaning. Same three conditions the
-         * API's set_pan refuses on. */
-        if (ui_mode_get() != UI_MODE_PANADAPTER) return false;
+        /* Start only on the spectrum, only on the panadapter OR the CW page
+         * (both show the live spectrum - CW's left pane is excluded by
+         * mouse_over_spectrum()'s own x0 check), and only when there is a
+         * window to move - with the still view off the spectrum follows the
+         * dial and a pan has no meaning. Same three conditions the API's
+         * set_pan refuses on. */
+        if (ui_mode_get() != UI_MODE_PANADAPTER && ui_mode_get() != UI_MODE_CW) return false;
         if (!mouse_over_spectrum(lx, ly))        return false;
         if (!ui_pan_is_available())              return false;
         s_mouse_pan_active   = true;
@@ -9377,8 +9422,32 @@ static void pinch_poll_cb(lv_timer_t *t)
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
 
+    // CW page: a touch that starts on the left pane (macro buttons, toggle,
+    // WPM/Park/NEXT - x < CW_PANE_W) must never be read as a spectrum
+    // gesture once CW is allowed to pan/pinch below - same contract as
+    // s_touch_on_bandplan, latched for the whole session rather than
+    // re-checked every poll, so a drag that strays sideways mid-hold still
+    // cannot wake the spectrum.
+    {
+        static uint8_t s_prev_npts = 0;
+        if (npts > 0 && s_prev_npts == 0) {
+            int first_x = (int)s_tp->data.coords[0].y;   // landscape x = panel y
+            s_touch_on_cw_pane = (ui_mode_get() == UI_MODE_CW) && (first_x < CW_PANE_W);
+        } else if (npts == 0) {
+            s_touch_on_cw_pane = false;
+        }
+        s_prev_npts = npts;
+    }
+    if (s_touch_on_cw_pane) {
+        stroll_cancel();
+        s_pinch_active = false;
+        return;
+    }
+
     /* ⭐ THREE FINGERS HELD -> SIMULATION MODE ON/OFF, on the FT8 page in any
-     * sub-mode (FT8, FT4 and JS8 share one sim_mode_en).
+     * sub-mode (FT8, FT4 and JS8 share one sim_mode_en), and on the CW page
+     * (its own cw_sim_en - SEPARATE flag, separate phantom-QSO engine,
+     * operator 2026-11-03: "should also work on the CW page").
      *
      * Operator, 2026-10-31: "It takes a lot of resources and the scrolling
      * down in the drawer is REALY slow". The toggle is near the bottom of a
@@ -9410,7 +9479,8 @@ static void pinch_poll_cb(lv_timer_t *t)
         const uint64_t  HOLD_US      = 1200000; /* a deliberate press, not a rest */
         uint64_t now_us = esp_timer_get_time();
 
-        if (npts >= 3 && ui_mode_get() == UI_MODE_FT8) {
+        ui_mode_t m_3f = ui_mode_get();
+        if (npts >= 3 && (m_3f == UI_MODE_FT8 || m_3f == UI_MODE_CW)) {
             if (!s_3f_lock) {
                 s_3f_lock    = true;
                 s_3f_down_us = now_us;
@@ -9425,12 +9495,21 @@ static void pinch_poll_cb(lv_timer_t *t)
                 s_3f_fired = true;
                 /* ⛔ THE NARROW ACCESSOR. settings_load_all() puts 3636 bytes on
                  * taskLVGL's stack and this runs on it every 50 ms. */
-                bool want = !settings_get_sim_mode_en();
-                settings_set_sim_mode_en(want);
-                ui_toast(want ? "Simulation ON - the radio is not keyed"
-                              : "Simulation off");
-                ESP_LOGI(TAG, "three-finger hold: simulation %s",
-                         want ? "ON (radio not keyed)" : "off");
+                if (m_3f == UI_MODE_CW) {
+                    bool want = !settings_get_cw_sim_en();
+                    settings_set_cw_sim_en(want);
+                    ui_toast(want ? "Simulation ON - the radio is not keyed"
+                                  : "Simulation off");
+                    ESP_LOGI(TAG, "three-finger hold: CW simulation %s",
+                             want ? "ON (radio not keyed)" : "off");
+                } else {
+                    bool want = !settings_get_sim_mode_en();
+                    settings_set_sim_mode_en(want);
+                    ui_toast(want ? "Simulation ON - the radio is not keyed"
+                                  : "Simulation off");
+                    ESP_LOGI(TAG, "three-finger hold: simulation %s",
+                             want ? "ON (radio not keyed)" : "off");
+                }
             }
         }
 
@@ -9525,12 +9604,15 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
     }
 
-    // Everything below is SPECTRUM pan/zoom/tune, and the spectrum exists on
-    // the panadapter page only. This function reads the raw panel on every
-    // page, so on FT8 or WSPR a horizontal swipe used to start a pan of the
-    // hidden spectrum and put its tooltip over the page (and a two-finger
-    // pinch zoomed it). The sleep double-tap above stays global on purpose.
-    if (ui_mode_get() != UI_MODE_PANADAPTER) {
+    // Everything below is SPECTRUM pan/zoom/tune. The spectrum is LIVE on
+    // the panadapter AND the CW page (cw_screen_view.c's own header: "the
+    // panadapter spectrum/waterfall stay LIVE underneath") - CW was added
+    // 2026-11-03, having been left out when this exclusion was written
+    // because the CW page did not exist yet. FT8 and WSPR hide the
+    // spectrum entirely, so a horizontal swipe there must still not start a
+    // pan of it (and a two-finger pinch must not zoom it) - the sleep
+    // double-tap above stays global on purpose regardless of mode.
+    if (ui_mode_get() != UI_MODE_PANADAPTER && ui_mode_get() != UI_MODE_CW) {
         stroll_cancel();
         s_pinch_active = false;
         return;
@@ -9809,7 +9891,7 @@ static void pinch_poll_cb(lv_timer_t *t)
     int max_pan = (N - window_bins) / 2;
     if (new_pan < -max_pan) new_pan = -max_pan;
     if (new_pan >  max_pan) new_pan =  max_pan;
-    ui_set_zoom(new_zoom, new_pan);
+    ui_set_zoom_pan(new_zoom, new_pan);
     // Live-update the band-plan visible-span block as the pinch tracks -
     // ui_set_zoom() doesn't touch it itself (most of its other callers
     // already refresh the strip via ui_update_frequency right after), but
