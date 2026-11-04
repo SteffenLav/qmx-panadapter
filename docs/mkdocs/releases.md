@@ -4,14 +4,33 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.24.1** - 2026-11-03
+**v1.24.2** - 2026-11-04
+
+**WSPR decoding dead after a visit to FT8 is fixed for good. Two new CW page controls: a TX offset shortcut and Semi QSK break-in delay. A pileup crash and an RRR bug fixed. Plus a one-frame screen flash, found and fixed the same night it was introduced.**
+
+A note before the list: this release adds more small controls to the CW page than any single release should, really. I'm aware the app is edging toward being a Swiss-army knife, and I don't want that to become the norm — a simple, easy-to-understand UI matters more to me than a complete feature checklist. Expect me to start saying no to requests, and to occasionally retire something, so the app stays something one person can maintain and everyone can still find their way around.
+
+- **WSPR could stop decoding entirely after a visit to the FT8 page, for the rest of the session** *(Gyula HA3HZ and others, a recurring report)*. Not a timing race as first suspected: FT8's memory pool and WSPR's own capture buffers were landing side by side in PSRAM, so when FT8 later freed its pool the memory couldn't join back into one contiguous block big enough for WSPR's candidate search. Total free memory looked fine; the layout was just permanently split. WSPR now waits for FT8 to fully release its memory before claiming any of its own, closing the gap for good. Verified live: switching FT8 -> WSPR now decodes candidates every single cycle.
+- **CW TX offset, from the CW page itself.** A new button beside Park opens a popup to shift your transmit frequency away from zero-beat on the station you're calling, without touching the dial — previously only reachable through the settings drawer. See [TX offset](guide/cw.md#tx-offset) in the guide.
+- **Semi QSK — the radio's CW break-in delay — is now exposed in the settings drawer** *(Michael K Johnson KZ4LY, Gyula HA3HZ)*. Six modes (Off/Auto/Contest/three Custom units) plus a 0-999 delay value, read from and written straight to the radio. Useful if you run an amplifier or relay that needs the receiver quiet for the whole transmission. See [Semi QSK](guide/settings.md#radio) in the guide.
+- **Tap the WPM number for direct numeric entry**, instead of stepping one WPM at a time with +/-.
+- **Fixed a crash from clicking into an FT8 pileup** — a manual reply built from a pileup row could overflow the stack; now shares the same safe path as every other manual reply.
+- **Fixed WAIT_RPT reading a bare RRR as a signal report instead of a direct acknowledgement** *(Gyula HA3HZ, Randy N4OPI)*. A station that had already said RRR and would not repeat itself was left sitting in the wrong wait state until timeout.
+- **A new `{SERIAL}` macro** for a send-time contest serial number, and an `{RST}` placeholder for a signal report.
+- **The help screen links to the full online manual**, not only the on-device pages.
+- **A one-frame cyan screen flash, introduced earlier the same evening while chasing the WSPR fix above, was found and fixed before it shipped.** A boot-time memory diagnostic was doing a full PSRAM heap scan with interrupts off — the exact pattern a resolved hardware investigation months ago had already ruled out everywhere else in this codebase. Caught on the same bench, same night.
+- **esp_hosted's SDIO driver now survives a failed memory allocation instead of crashing the device** — closes one specific crash site found during a 14-hour WSPR soak test. The underlying memory pressure that led to it is still being tracked down; this stops that one crash from taking the radio down while that continues.
+- **A full SD card can now recover on its own**: history pruning used to run only on a log-size trigger, so a card that was already full before that triggered could never free space. It now prunes directly on a full-card write failure too.
+- **Downloading or uploading a file in the SD browser now mutes the Tab5 speaker for the duration**, the same protection the diagnostic log mirror already had, so the file transfer can't glitch the audio.
+
+## Previous Releases
+
+### v1.24.1 - 2026-11-03
 
 **A two-fix patch on v1.24.0: an FT8 CQ-answer reboot, and a manual pounce that held on a station that had actually signed off.**
 
 - **Fixed a reboot when answering a CQ caller on FT8** *(Randy N4OPI, Rick Trommer W5NR)*. Tapping a station calling CQ could crash the Tab5 with a stack overflow; replying to CQ was the one path affected. Auto Answer CQ and calling CQ yourself were never affected.
 - **A manual pounce now lets go of a busy target that signed off with RRR, not only RR73 or 73** *(Gyula HA3HZ)*. Many stations close a QSO with a bare RRR and no separate 73; that was read as still busy, so a target who was actually free kept holding your pounce.
-
-## Previous Releases
 
 ### v1.24.0 - 2026-11-03
 
@@ -1235,7 +1254,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.24.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.24.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

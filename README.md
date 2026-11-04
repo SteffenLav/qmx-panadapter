@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.24.1.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.24.1 is a two-fix patch** on v1.24.0: tapping an FT8 CQ caller to answer could reboot the Tab5, and a manual pounce held on a busy station that had actually signed off with RRR rather than RR73/73 - both fixed. v1.24.0 added a **MODE: CW page** (beta) and an internet **Web Radio** player.
+> **Release — v1.24.2.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.24.2 fixes WSPR decoding dying after a visit to the FT8 page**, adds a **CW TX offset shortcut** and **Semi QSK break-in delay** to the CW page, and fixes an FT8 pileup crash, an RRR handling bug, and a one-frame screen flash - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.24.0 added a **MODE: CW page** (beta) and an internet **Web Radio** player.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.24.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.24.2.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -638,6 +638,13 @@ produce separate audio**, and only the radio's can carry your keying sidetone.
 The Tab5's playback path is about 100 ms deep, which is longer than a dot at
 20 WPM, so the tone would arrive after the element that made it. The chapter
 says which path does what, and what the two honest headphone arrangements are.
+
+**New in v1.24.2:** tap the WPM number for direct numeric entry; a **TX
+offset** button beside Park, so you can shift your transmit frequency off
+zero-beat without a trip to the drawer; and **Semi QSK**, the radio's CW
+break-in delay, exposed in the settings drawer (six modes, a 0-999 delay
+value) for anyone running an amplifier or relay that needs the receiver
+quiet for the whole transmission.
 
 The page ships **on** - it is this release's own beta. Turn it off with
 `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}`

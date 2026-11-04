@@ -16,8 +16,9 @@ The page is built for one-handed, gloved, field operation — the kind of CW you
 | Control | What it does |
 |---|---|
 | **MODE: CW** | Header. The page forces the radio into CW mode whenever you enter it. |
-| **WPM** with `-` / `+` | Keyer speed, read back from the radio so the number always matches what the QMX itself thinks. |
+| **WPM** with `-` / `+` | Keyer speed, read back from the radio so the number always matches what the QMX itself thinks. **Tap the number itself** *(v1.24.2)* for a numeric keypad instead of stepping one WPM at a time. |
 | **Park** | Your POTA park reference, used by the `{PARK}` macro. Tap to edit. |
+| **TX offset** *(v1.24.2)* | Opens the CW transmit offset popup — see [TX offset](#tx-offset) below. |
 | **NEXT** | The one-tap QSO ladder — see [Running a QSO](#running-a-qso). |
 | **Six memory buttons** | Your keyer messages. |
 | **Status line** | What the radio is doing: receiving, keying, or how many characters are left to send. |
@@ -37,6 +38,27 @@ The CW page only lets you operate the CW portion of the band. That is deliberate
 - The band-plan strip below the spectrum shows only the CW segment, and the filter is set to **300 Hz** on entry.
 
 The segment boundaries come from the band plan for your region, which you can set in **Settings → Band-plan region**.
+
+---
+
+## TX offset
+
+*(v1.24.2)* Tap the **TX offset** button, beside Park, to open a popup with four nudge buttons (`-50`, `-10`, `+10`, `+50` Hz) and the current value.
+
+This shifts where you **transmit** relative to where you are **listening** — without moving your dial. It exists so you can avoid zero-beating the exact frequency of the station you are calling: many operators prefer to be heard a little off to the side of a pileup rather than dead on top of it. The radio achieves this with its own split (VFO A/B) mechanism under the hood; you do not need to think about VFOs, only about the offset in Hz.
+
+- **Clear** resets the offset to zero (transmit where you listen — "zero-beat"). This is a different thing from the **long-press on the top bar's BW indicator**, which retunes your *receive* dial onto a signal's peak — the two happen to share the word "zero-beat" in amateur radio but do opposite jobs: one moves your RX frequency onto a signal, the other clears a TX/RX offset back to none.
+- Range is ±300 Hz, in 10 Hz steps from the nudge buttons.
+- The setting is stored on the Tab5 and survives a reboot; it has no effect outside CW/CW-R.
+- This same control also exists in the settings drawer (**Settings → Radio → CW TX offset**) if you prefer a slider.
+
+## Filter bandwidth
+
+The top bar's **BW: ---** indicator is live in CW mode as well as FT8/SSB/AM: tap it for the same filter-width popup you use everywhere else, showing only the widths your radio's own **CW → Choose filters** menu has enabled. There is no separate bandwidth control on the CW page itself — the top bar one already works here, and reaches the radio's real hardware filter.
+
+## Break-in delay (Semi QSK)
+
+*(v1.24.2)* How long the receiver stays muted after you stop keying — useful if you run an amplifier or relay that needs the receiver quiet for the whole transmission rather than switching between every dit and dah. This lives in the settings drawer, not on the CW page itself: see [Semi QSK](settings.md#radio) under Settings → Radio for the full set of modes and the delay control.
 
 ---
 

@@ -58,6 +58,44 @@ blanks the spectrum for about half a second. If your firmware does not report th
 setting over CAT the row says so and points you at the radio's **CW > Sidetone volume**
 menu instead of offering a slider with an invented scale.
 
+**Semi QSK** *(v1.24.2)* — the radio's CW break-in behaviour: how long the
+receiver stays muted after you stop keying, before it switches back to
+listening. Shown in Panadapter and CW modes only, directly under CW monitor
+level.
+
+The dropdown offers six modes, read from and written straight to the radio's
+own configuration memory (nothing is stored on the Tab5):
+
+| Mode | What it does |
+|---|---|
+| **OFF** | Full QSK: receive comes back as soon as each element's RF envelope has shaped down. You hear the band between every dit and dah — your own sidetone mixed in with whatever else is on frequency. |
+| **Auto** | The radio picks a sensible delay on its own. |
+| **Contest** | A longer, fixed delay, matched to the inter-word spacing contest logging software expects. |
+| **Custom dits** | You set the delay as a number of whole dit lengths (below). |
+| **Custom decidits** | You set the delay in tenths of a dit length — a value of 75 means 7.5 dit lengths. Finer resolution than whole dits. |
+| **Custom ms** | You set the delay directly in milliseconds, independent of keying speed. |
+
+Picking **Semi QSK** (any mode other than OFF) keeps the receiver muted for
+the whole transmission rather than chattering open and shut between
+elements — the point of the feature: a relay or amplifier behind the radio
+switches once per transmission instead of once per dit, and you are not
+distracted by band noise between your own dits and dahs.
+
+**Delay**, the slider underneath, sets the **Custom Semi QSK** value used by
+the three Custom modes — 0 to 999, in whatever unit the mode above says
+(dits, tenths of a dit, or milliseconds). It is stored and shown regardless
+of which mode is selected, but only read by the radio for a Custom one; the
+note under the slider says so.
+
+Because dits and decidits scale with your keyer speed, the actual mute time
+they produce changes if you change WPM. **Custom ms** is the only one of the
+three that stays fixed across a speed change.
+
+⚠ **There is no front-panel number for this in the QMX's own Semi QSK menu
+display** — the radio just shows the mode name. If you want to know the
+delay a Custom mode is actually using in milliseconds, read it from this row
+rather than the radio's own screen.
+
 **QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
 (the QMX default is 54). ⚠ **Measured 2026-10-27: changing it does not move the
 spectrum or the audio** — 54 dB out shifted the noise floor 0.06 dB. The radio
