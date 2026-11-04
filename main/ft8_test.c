@@ -2599,6 +2599,29 @@ static void task_park_and_reap(void)
     for (;;) vTaskDelay(portMAX_DELAY);   /* never return, even if resumed */
 }
 
+static void reap_pending_tasks(void);   /* fwd - public wrapper sits right above it */
+
+/* ⭐ Steffen, 2026-11-04: switching FT8 -> WSPR left FT8's own parked decode-
+ * worker(s) un-reaped - this file's reap_pending_tasks() was only ever called
+ * from FT8's OWN teardown/respawn sites, never from another mode's startup,
+ * the same gap #279 already fixed once for psram_task.c's generic tasks (see
+ * wspr_rx.c's own psram_task_reap() call). Measured on bench1: PSRAM free
+ * stepped 10.7 MB -> ~2.3-2.9 MB within the boot that ran an FT8 sim session,
+ * and WSPR's candidate search (needs ~2.3 MB) then failed every single cycle
+ * ("NO MEMORY for the candidate search") - a silent, total, no-? wedge,
+ * indistinguishable from T152/T150's PSRAM-pressure class but with a known,
+ * one-shot cause this time: a mode switch, not an hours-long soak.
+ *
+ * Safe for the same reason WSPR's own reap is safe (see its comment): FT8's
+ * stop path already joins its decode worker via xTaskNotifyWait() before the
+ * screen-switch handler moves on to start the next mode, so by the time
+ * wspr_rx_start() runs, any FT8 worker from the visit just left is provably
+ * parked, not merely assumed to be. */
+void ft8_test_reap_parked_tasks(void)
+{
+    reap_pending_tasks();
+}
+
 /* Safe from any ordinary task context. Never call this from a parked task. */
 static void reap_pending_tasks(void)
 {

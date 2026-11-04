@@ -25,6 +25,16 @@ void ft8_self_test(void);
 // replacement, leaving the FT8 view up with nothing running behind it.
 bool ft8_task_is_alive(void);
 
+// Reaps any of THIS file's own parked decode-worker tasks left over from the
+// visit just ended, freeing their PSRAM stacks. Normally called lazily at
+// ft8_task's own next spawn (see ft8_task_start()'s comment on why there, not
+// at exit); other modes that need the PSRAM back right away - wspr_rx_start(),
+// for one - call this too, for the same reason wspr_rx reaps ITS OWN parked
+// tasks on every fresh entry. Safe only once the caller can show the FT8
+// worker is provably parked, not merely assumed to be (e.g. the screen-switch
+// handler that stops ft8_task joins its worker before starting the next mode).
+void ft8_test_reap_parked_tasks(void);
+
 // One-shot ARRL Field Day message encode/decode round-trip check (pure bit
 // math, no audio/radio involved). Logs PASS/FAIL per case at boot so a bad
 // flash is caught immediately rather than discovered live on the air.

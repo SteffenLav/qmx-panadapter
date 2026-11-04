@@ -3142,6 +3142,12 @@ bool wspr_rx_start(void)
      * the LVGL task and last time's tasks are provably parked. */
     int reaped = psram_task_reap();
     if (reaped) ESP_LOGI(TAG, "reaped %d parked task(s) from the last visit", reaped);
+    /* And FT8's own, if the previous screen was FT8 rather than WSPR itself -
+     * see ft8_test_reap_parked_tasks()'s own comment (2026-11-04, measured on
+     * bench1: an FT8 sim session left WSPR unable to decode at all afterward,
+     * every cycle, "NO MEMORY for the candidate search"). Same PSRAM pool,
+     * different parking list; psram_task_reap() above only knows about its own. */
+    ft8_test_reap_parked_tasks();
 
     /* ⛔ CORE 1, NOT tskNO_AFFINITY - AND THAT ONE WORD WAS #376.
      *
