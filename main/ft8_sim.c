@@ -72,6 +72,20 @@ typedef struct {
                            // in ft8_qso.c, which cannot otherwise be reached
                            // from the bench - every OTHER phantom hears its own
                            // closing exchange correctly and goes quiet.
+    bool        replies_bare_rrr;  // skips the normal report exchange and answers
+                           // our FIRST message (the grid) with a bare "RRR"
+                           // instead of their report - Gyula HA3HZ + Randy
+                           // N4OPI, 2026-11-03 (msg #182312, groups.io
+                           // #182318/#182319): "I believe the way previous
+                           // versions handled responses... should treat RR73
+                           // and RRR as equivalent... it is very rare to see a
+                           // 73 follow an RRR, as operators often simply
+                           // forget to include it." Exercises WAIT_RPT's bare-
+                           // RRR branch in ft8_qso.c (fixed 2026-11-03: used to
+                           // be read as a signal report and restart the
+                           // exchange instead of closing it) from a state no
+                           // other phantom reaches, since every other one
+                           // answers a grid with a proper report first.
     bool        worked;    // completed a QSO with us this sim session - stops
                            // answering our CQ (still CQs itself, so pounce and
                            // the worked-before filter stay testable). Cleared
@@ -159,7 +173,9 @@ static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
                             * picks VK3ABC while its terse answer is still its
                             * last_text. That makes the R-report entry reachable on
                             * the bench with no radio. */
-    { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false },        // Japan (DX)
+    { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false, .replies_bare_rrr = true },
+                           // Japan (DX) - skips the report exchange, answers our
+                           // grid with a bare RRR (see the field's own comment).
     { "G0ABC",  "IO91", "1D", "DX",  2500.0f, .deaf = true }, // England (DX) - DEAF:
                            // CQs but never hears you; pounces at it time out.
                            // Practice target for the grey-list feature.
@@ -563,6 +579,13 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
         snprintf(extra, sizeof(extra), "RR73");
     } else if (sent_extra[0] == '+' || sent_extra[0] == '-') {
         snprintf(extra, sizeof(extra), "R-09");
+    } else if (ph->replies_bare_rrr) {
+        // FIXTURE: skips the report exchange entirely - their first reply to
+        // our grid is a bare "RRR", not a report. See the field's own comment
+        // for the field reports this models. A courtesy close, same as the
+        // real RR73 branch above: sent once, not repeated.
+        snprintf(extra, sizeof(extra), "RRR");
+        repeats = 1;
     } else {
         // Grid TX1 (or anything unrecognized): their report of our signal.
         fmt_report(-9, extra, sizeof(extra));
