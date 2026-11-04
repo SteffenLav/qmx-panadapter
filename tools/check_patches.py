@@ -99,6 +99,13 @@ PATCHES = [
      "momentarily exhausted under load - observed at ~97 minutes of uptime "
      "with WiFi + MQTT self-spotting running"),
 
+    ("apply_esp_hosted_sdio_copypayload_tolerant.ps1", "repo",
+     "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
+     "QMX_PANADAPTER_SDIO_COPYPAYLOAD_TOLERANT",
+     "sdio_process_rx_task() abort()s the device when _h_malloc() fails for a "
+     "WiFi/BT RX packet's payload copy - observed on bench1 after a 14+ hour "
+     "WSPR soak, at the tail of a PSRAM/internal-RAM pressure cascade (T152)"),
+
     ("apply_esp_hosted_sdio_write_avail_tolerant.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",
      "QMX_SDIO_WRITE_AVAIL_TOLERANT",
