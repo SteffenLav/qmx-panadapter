@@ -1134,7 +1134,11 @@ void settings_set_cw_peak_hz(uint16_t hz);
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
 void settings_set_qmx_vol_db(uint8_t db);
-/* CW transmit offset in Hz, -1000..+1000, 0 = off. Applied only in CW mode. */
+/* CW transmit offset in Hz, -1000..+1000, 0 = off. Applied only in CW mode.
+ * Every caller clamps to +/-300 before writing (Roy KI0ER's real-world figure
+ * was 200-250 Hz) - shared here so a second UI entry point cannot drift from
+ * ui.c's drawer control by restating its own copy of the number. */
+#define CW_TX_OFFSET_MAX_HZ 300
 void settings_set_cw_tx_offset_hz(int16_t hz);
 /* Scalar read of the same value. Exists so cat.c's poll task can check it every
  * 50 ms WITHOUT putting a ~500-byte qmx_settings_t on its 4 KB stack - the same

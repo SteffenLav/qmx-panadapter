@@ -358,6 +358,29 @@ static volatile int      s_sidetone_abs = -1;              /* -1 unknown, 0 rel,
  * documents the default (70) and no range, so there is nothing to hard-code
  * that would not be an invention. */
 static volatile uint16_t s_sidetone_vol_max = 0;
+/* T144 (Michael KZ4LY / Gyula HA3HZ): Semi QSK mode + its paired delay.
+ * MM path and list discovered LIVE on bench1 2026-11-04 via the cat_raw dev
+ * endpoint - not guessed: MMCW|CW Keyer|Semi QSK (type 5 List, list type
+ * 18) and MMCW|CW Keyer|Custom Semi QSK (type 3 Number, 0-999). ML18;
+ * answered "OFF|Auto|Contest|Custom dits|Custom decidits|Custom ms",
+ * matching the 1_04_001 manual's own wording exactly, so CW_QSK_MODES
+ * below is hardcoded rather than re-discovered every boot - same choice
+ * the WSPR/SSB/CW bandwidth lists elsewhere in this project already make
+ * for a firmware-fixed list. A write of "Auto" was read back as "Auto" on
+ * the bench and took effect with no MU; needed (unlike sidetone/PA
+ * voltage/CW profile) - send it anyway; relying on this radio's "MM
+ * Effect" setting staying Instant on every unit would be the same bet
+ * that cost a whole session on the PA-voltage guard.
+ * CW_QSK_MODE_COUNT lives in cat.h - shared with callers that build a
+ * selector from cat_cw_qsk_modes(). */
+static const char *const s_qsk_modes[CW_QSK_MODE_COUNT] = {
+    "OFF", "Auto", "Contest", "Custom dits", "Custom decidits", "Custom ms",
+};
+static char              s_pending_qsk_mode[20] = "";  /* "" = nothing pending */
+static volatile int      s_pending_qsk_delay     = -1;  /* -1 = nothing pending */
+static volatile bool     s_qsk_query_pending     = false;
+static char              s_qsk_mode[20]          = "";  /* "" = never read */
+static volatile int      s_qsk_delay             = -1;  /* -1 = never read */
 /* +1 encoded for the same reason as the AF gain above: 0 has to mean
  * "nothing pending" while a genuine request of 0 WPM (straight key)
  * still goes through. */
@@ -1954,8 +1977,113 @@ static void sidetone_read(void)
     }
 }
 
-/* Defined further down, beside the link-up sequence that also uses it. */
+/* Defined further down, beside the link-up sequence that also uses it -
+ * needed here too, by qsk_apply_pending() below. */
 static bool iq_mode_handshake(int max_attempts);
+
+#define MM_QSK_MODE  "MMCW|CW Keyer|Semi QSK"
+#define MM_QSK_DELAY "MMCW|CW Keyer|Custom Semi QSK"
+
+/* T144: read both halves. The mode answer is a full word ("OFF", "Auto",
+ * "Custom dits"...), unlike sidetone abs/rel's single-letter match - matched
+ * against the known list exactly, case-sensitively, since that is what the
+ * radio was measured to answer with and an unrecognised reply is worth
+ * seeing rather than silently coercing to the nearest guess. */
+static void qsk_read(void)
+{
+    s_mm_resp_len = 0;
+    const char *qm = MM_QSK_MODE ";";
+    if (cat_tx(qm, strlen(qm), 200) == ESP_OK && mm_answer_wait(30)) {
+        const char *v = s_mm_resp + 2;
+        bool matched = false;
+        for (int i = 0; i < CW_QSK_MODE_COUNT; i++) {
+            if (strcmp(v, s_qsk_modes[i]) == 0) {
+                strncpy(s_qsk_mode, v, sizeof(s_qsk_mode) - 1);
+                s_qsk_mode[sizeof(s_qsk_mode) - 1] = '\0';
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) ESP_LOGW(TAG, "Semi QSK answered '%s', not one of the known modes", v);
+    }
+    vTaskDelay(pdMS_TO_TICKS(40));
+
+    s_mm_resp_len = 0;
+    const char *qd = MM_QSK_DELAY ";";
+    if (cat_tx(qd, strlen(qd), 200) == ESP_OK && mm_answer_wait(30)) {
+        int v = atoi(s_mm_resp + 2);
+        if (v >= 0 && v <= 999) s_qsk_delay = v;
+    }
+}
+
+/* T144 drain, on the poll task - same shape as sidetone_apply_pending():
+ * both halves in one pass, one MU; reload, then read back and say whether
+ * it actually landed. Returns true if it used the pipe this cycle. */
+static bool qsk_apply_pending(void)
+{
+    char mode_rq[sizeof(s_pending_qsk_mode)];
+    strncpy(mode_rq, s_pending_qsk_mode, sizeof(mode_rq) - 1);
+    mode_rq[sizeof(mode_rq) - 1] = '\0';
+    int delay_rq = s_pending_qsk_delay;
+    if (!mode_rq[0] && delay_rq < 0) return false;
+    s_pending_qsk_mode[0] = '\0';   /* claim both before the slow part */
+    s_pending_qsk_delay   = -1;
+
+    char cmd[56];
+    if (mode_rq[0]) {
+        int n = snprintf(cmd, sizeof(cmd), MM_QSK_MODE "=%s;", mode_rq);
+        if (n > 0) cat_tx(cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+    if (delay_rq >= 0) {
+        int n = snprintf(cmd, sizeof(cmd), MM_QSK_DELAY "=%d;", delay_rq);
+        if (n > 0) cat_tx(cmd, (size_t)n, 200);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    /* Measured NOT strictly needed for Semi QSK on bench1 (readback matched
+     * with no MU; sent) - sent anyway rather than betting every unit's "MM
+     * Effect" setting stays Instant, which is exactly the assumption that
+     * cost a session on the PA-voltage guard (see its own comment above). */
+    cat_tx("MU;", 3, 200);
+    vTaskDelay(pdMS_TO_TICKS(250));
+    iq_mode_handshake(4);
+
+    qsk_read();
+
+    bool mode_ok  = !mode_rq[0] || strcmp(s_qsk_mode, mode_rq) == 0;
+    bool delay_ok = delay_rq < 0 || s_qsk_delay == delay_rq;
+    if (mode_ok && delay_ok) {
+        ESP_LOGI(TAG, "Semi QSK: radio now reports %s, delay %d ms",
+                 s_qsk_mode[0] ? s_qsk_mode : "(unknown)", s_qsk_delay);
+    } else {
+        ESP_LOGW(TAG, "Semi QSK: only PARTLY applied - asked %s / %d ms, radio "
+                      "reports %s / %d ms. Try again; if it repeats, set it on "
+                      "the radio's own CW menu.",
+                 mode_rq[0] ? mode_rq : "(unchanged)", delay_rq,
+                 s_qsk_mode[0] ? s_qsk_mode : "(unknown)", s_qsk_delay);
+    }
+    return true;
+}
+
+void cat_request_cw_qsk_mode(const char *mode)
+{
+    if (!mode) return;
+    strncpy(s_pending_qsk_mode, mode, sizeof(s_pending_qsk_mode) - 1);
+    s_pending_qsk_mode[sizeof(s_pending_qsk_mode) - 1] = '\0';
+}
+
+void cat_request_cw_qsk_delay(int ms)
+{
+    if (ms < 0) ms = 0;
+    if (ms > 999) ms = 999;
+    s_pending_qsk_delay = ms;
+}
+
+void cat_query_cw_qsk(void) { s_qsk_query_pending = true; }
+const char *cat_get_cw_qsk_mode(void) { return s_qsk_mode; }
+int cat_get_cw_qsk_delay(void) { return s_qsk_delay; }
+const char *const *cat_cw_qsk_modes(void) { return s_qsk_modes; }
 
 bool cat_apply_cw_profile(uint16_t centre_hz, uint8_t mask)
 {
@@ -2716,6 +2844,19 @@ static void poll_task(void *arg)
          * profile it goes ahead of the routine maintainers and nothing else
          * should be half-done around it. */
         if (sidetone_apply_pending()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        /* T144: same lazy-once-per-open discovery as sidetone above - no
+         * range to discover first (the list is fixed), so just read both
+         * halves straight away. */
+        if (s_qsk_query_pending) {
+            s_qsk_query_pending = false;
+            qsk_read();
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (qsk_apply_pending()) {
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }

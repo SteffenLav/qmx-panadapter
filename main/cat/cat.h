@@ -539,6 +539,39 @@ int cat_get_sidetone_absolute(void);
  * zero" - see the block above. */
 uint16_t cat_sidetone_vol_max(void);
 
+/* ---- T144: Semi QSK (break-in delay) ------------------------------------
+ *
+ * Michael KZ4LY / Gyula HA3HZ: receive comes back the instant a CW signal
+ * ends, which chatters a relay behind a power amp - they want a configurable
+ * hang time. The radio already has this (operation manual 1_04_001 S5.10):
+ * "Semi QSK" picks Auto/Contest/a custom unit, and "Custom Semi QSK" is the
+ * delay value when a custom mode is picked. MM path and list discovered
+ * LIVE (not guessed) on bench1 2026-11-04 via the cat_raw dev endpoint -
+ * see cat.c's own comment at CW_QSK_MODE_COUNT for the measurement. */
+#define CW_QSK_MODE_COUNT 6
+
+/* One of the strings cat_cw_qsk_modes() returns, exactly - "OFF", "Auto",
+ * "Contest", "Custom dits", "Custom decidits" or "Custom ms". */
+void cat_request_cw_qsk_mode(const char *mode);
+
+/* 0..999 ms. Only meaningful when the mode is one of the three Custom
+ * variants - the radio stores it regardless, this does not enforce that. */
+void cat_request_cw_qsk_delay(int ms);
+
+/* Ask the radio for both; same lazy-per-surface-open pattern as
+ * cat_query_sidetone(). */
+void cat_query_cw_qsk(void);
+
+/* "" until the radio has answered at least once this session. */
+const char *cat_get_cw_qsk_mode(void);
+
+/* 0..999, or -1 if never read. */
+int cat_get_cw_qsk_delay(void);
+
+/* The fixed CW_QSK_MODE_COUNT-entry list, radio-measured, for building a
+ * dropdown/selector. Never NULL. */
+const char *const *cat_cw_qsk_modes(void);
+
 /* ---- CW keyer speed (KS), in words per minute --------------------------
  *
  * Asked for by Ralph Hellmig on the group, 2026-10-10: there was no way to

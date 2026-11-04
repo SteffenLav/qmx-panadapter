@@ -1524,6 +1524,152 @@ static void wpm_popup_open(void)
 
 static void wpm_label_clicked_cb(lv_event_t *e) { (void)e; wpm_popup_open(); }
 
+/* T147 (Michael KZ4LY): CW TX offset, on the CW page instead of only in the
+ * settings drawer. Same apply as drawer_cwtxoff_nudge_cb (ui.c) - load,
+ * clamp to CW_TX_OFFSET_MAX_HZ (settings.h - shared, not restated), store.
+ * Nothing is written to the radio here: cat.c's poll task notices the
+ * setting change on its own next cycle and engages/clears split, which is
+ * also what keeps it correct when the frequency later moves - see
+ * cw_split_maintain()'s own comment. This page does not own a slider, only
+ * the same four nudge buttons the drawer already proved sufficient
+ * precision for (Michael: "I'm almost always within +/-100Hz in
+ * practice"). */
+static lv_obj_t *s_txoff_panel = NULL;
+static lv_obj_t *s_txoff_disp  = NULL;
+
+static void txoff_refresh(void)
+{
+    if (!s_txoff_disp) return;
+    int hz = (int)settings_get_cw_tx_offset_hz();
+    if (hz == 0) lv_label_set_text(s_txoff_disp, "TX offset: off");
+    else {
+        char b[32];
+        snprintf(b, sizeof(b), "TX offset: %+d Hz", hz);
+        lv_label_set_text(s_txoff_disp, b);
+    }
+}
+
+static void txoff_nudge_cb(lv_event_t *e)
+{
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    int hz = (int)settings_get_cw_tx_offset_hz() + delta;
+    if (hz >  CW_TX_OFFSET_MAX_HZ) hz =  CW_TX_OFFSET_MAX_HZ;
+    if (hz < -CW_TX_OFFSET_MAX_HZ) hz = -CW_TX_OFFSET_MAX_HZ;
+    settings_set_cw_tx_offset_hz((int16_t)hz);
+    txoff_refresh();
+}
+
+static void txoff_popup_close(void)
+{
+    if (s_txoff_panel) lv_obj_add_flag(s_txoff_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void txoff_backdrop_cb(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == lv_event_get_user_data(e)) txoff_popup_close();
+}
+
+static void txoff_done_cb(lv_event_t *e) { (void)e; txoff_popup_close(); }
+
+/* Same shape as wpm_key_make, but with its own font: that helper's 28pt is
+ * sized for its 74px WPM digit grid, and this popup's buttons are bigger
+ * (operator: double the whole window, "including all in it"). A shared
+ * helper with a font baked in would have left the text small in a bigger
+ * button, missing the actual ask. */
+static lv_obj_t *txoff_key_make(lv_obj_t *parent, int x, int y, int w, int h,
+                                const char *txt, uint32_t bg, uint32_t fg)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_t *lbl = lv_label_create(b);
+    lv_label_set_text(lbl, txt);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_48, 0);
+    lv_obj_center(lbl);
+    return b;
+}
+
+static void txoff_zero_cb(lv_event_t *e)
+{
+    (void)e;
+    settings_set_cw_tx_offset_hz(0);
+    txoff_refresh();
+}
+
+static void txoff_popup_open(void)
+{
+    if (!s_txoff_panel) {
+        s_txoff_panel = lv_obj_create(lv_scr_act());
+        lv_obj_set_size(s_txoff_panel, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_style_bg_color(s_txoff_panel, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_txoff_panel, LV_OPA_60, 0);
+        lv_obj_set_style_border_width(s_txoff_panel, 0, 0);
+        lv_obj_set_style_radius(s_txoff_panel, 0, 0);
+        lv_obj_set_style_pad_all(s_txoff_panel, 0, 0);
+        lv_obj_clear_flag(s_txoff_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(s_txoff_panel, txoff_backdrop_cb, LV_EVENT_CLICKED, s_txoff_panel);
+
+        /* Doubled in both dimensions (operator, on the first version: "like
+         * 1/15 of the screen area... speaking of finger touch area"). Every
+         * number below is exactly 2x what it was, including the fonts - a
+         * bigger box with the same small text would have missed the point. */
+        int box_w = 600, box_h = 460;
+        lv_obj_t *box = lv_obj_create(s_txoff_panel);
+        lv_obj_set_size(box, box_w, box_h);
+        lv_obj_align(box, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_style_radius(box, 10, 0);
+        lv_obj_set_style_pad_all(box, 24, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+
+        s_txoff_disp = lv_label_create(box);
+        lv_obj_set_size(s_txoff_disp, box_w - 48, 80);
+        lv_obj_set_pos(s_txoff_disp, 0, 0);
+        lv_obj_set_style_text_color(s_txoff_disp, lv_color_hex(0xFFA040), 0);
+        lv_obj_set_style_text_font(s_txoff_disp, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_align(s_txoff_disp, LV_TEXT_ALIGN_CENTER, 0);
+
+        /* Same four steps as the drawer - Roy KI0ER's 60 Hz is +50 then +10. */
+        static const struct { const char *txt; int delta; } nudge[] = {
+            { "-50", -50 }, { "-10", -10 }, { "+10", +10 }, { "+50", +50 },
+        };
+        int cell = 124, gap = 16;
+        for (int i = 0; i < 4; i++) {
+            lv_obj_t *k = txoff_key_make(box, i * (cell + gap), 112, cell, cell,
+                                        nudge[i].txt, 0x2a2f37, 0xffffff);
+            lv_obj_add_event_cb(k, txoff_nudge_cb, LV_EVENT_CLICKED,
+                                (void *)(intptr_t)nudge[i].delta);
+        }
+
+        /* "Clear", not "Zero-beat" - that word already names a DIFFERENT
+         * gesture (long-press BW retunes the RX dial onto a signal's peak,
+         * ui_cw_tune_to_peak() in ui.c). This button only resets the TX
+         * offset to 0; reusing the term would read as the same feature when
+         * it is not (operator, same session: "isn't that already available
+         * as a long-press on BW... ha ha" - it looked that way on purpose,
+         * by accident, until renamed). */
+        lv_obj_t *zero = txoff_key_make(box, 0, 112 + cell + gap, (box_w - 48 - gap) / 2, 104,
+                                       "Clear", 0x2a2f37, UI_COLOR_MODE_CW_TEXT);
+        lv_obj_add_event_cb(zero, txoff_zero_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *done = txoff_key_make(box, (box_w - 48 - gap) / 2 + gap, 112 + cell + gap,
+                                       (box_w - 48 - gap) / 2, 104, LV_SYMBOL_OK,
+                                       0x2e8b3a, 0xffffff);
+        lv_obj_add_event_cb(done, txoff_done_cb, LV_EVENT_CLICKED, NULL);
+    }
+    txoff_refresh();
+    lv_obj_clear_flag(s_txoff_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_txoff_panel);
+}
+
+static void txoff_btn_clicked_cb(lv_event_t *e) { (void)e; txoff_popup_open(); }
+
 /* Set a ticker label only if the text actually differs - see the call sites.
  * lv_label_set_text() always copies and invalidates, so an unchanged row costs
  * a repaint for nothing. */
@@ -1757,14 +1903,41 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(lp, &lv_font_montserrat_28, 0);
     lv_obj_center(lp);
 
-    // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
+    // Park button, narrowed (T147) to make room for a TX offset shortcut
+    // beside it - previously reachable only through the settings drawer.
+    // Same row, same height, nothing else on the page moves.
+    //
+    // ⛔ THERE IS NO BANDWIDTH SHORTCUT HERE, ON PURPOSE. A first version
+    // added one, and it turned out to be a bare wrapper around the exact
+    // popup the top bar's "BW: ---" label already opens in CW mode -
+    // Steffen, on the glass: "What is the difference between your new BW
+    // button and the already active BW button on the top bar? They seem to
+    // open the same dropdown." They do; it added a second way to reach
+    // something already one tap away and nothing else. Removed rather than
+    // kept "for discoverability" - a page is not the place to pad with
+    // shortcuts to things that already work.
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110, 150, 44, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
     lv_label_set_text(s_lbl_park, "Park: --");
     lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
     lv_obj_center(s_lbl_park);
+
+    // CW TX offset shortcut (T147). Opens this page's own small popup
+    // above - see txoff_popup_open()'s comment. 140x44 (~12x3.8mm): the
+    // first version was a 44x44 icon button, measured by the operator
+    // against his own fingertip at ~8mm diameter - "damn small". Width is
+    // the fix available without reflowing the row below; the page's other
+    // secondary controls (Park, the memory buttons) are the same 44 px
+    // tall and have drawn no such complaint, so height was not the problem.
+    lv_obj_t *btxo = make_pane_btn(s_pane, 170, 110, 140, 44, 0x1c2128, 0x555555);
+    lv_obj_add_event_cb(btxo, txoff_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ltxo = lv_label_create(btxo);
+    lv_label_set_text(ltxo, "TX offset");
+    lv_obj_set_style_text_color(ltxo, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(ltxo, &lv_font_montserrat_22, 0);
+    lv_obj_center(ltxo);
 
     // ESM NEXT button (Tier 2): green like every commit button; the body
     // label always states what a tap will key.

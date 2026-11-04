@@ -2915,7 +2915,8 @@ static int  s_screen_swipe_start_x  = -1;
 // 10 Hz steps was 2.4 px per step ("had to roll my finger on the display"),
 // where 600 Hz is about 8 px. The +/-10 and +/-50 buttons cover exact placement
 // - Roy's 60 Hz is +50 then +10.
-#define CW_TX_OFFSET_MAX_HZ  300
+// CW_TX_OFFSET_MAX_HZ now lives in settings.h (T147) - cw_screen_view.c's new
+// CW-page shortcut needs the same clamp and must not restate the number.
 
 // Left-edge swipe (drag right) toggles Panadapter <-> FT8 mode, and
 // bottom-edge swipe (drag up) opens the memory-channel modal. These use
@@ -3649,7 +3650,8 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * is an amusement that plays while the panadapter runs, so it lives in
  * its own group and is visible everywhere. */
 #define DRAWER_SEC_WEBRADIO   54
-#define N_DRAWER_SECTIONS     56   /* ids 0..55; 12 is free, 55 is CWSIM */
+#define DRAWER_SEC_CWQSK      56  // T144: Semi QSK mode + delay
+#define N_DRAWER_SECTIONS     57   /* ids 0..56; 24 retired (no section built), 56 is CWQSK (T144) */
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3711,6 +3713,10 @@ static const drawer_item_t GRP_RADIO[] = {
      * Basic, because setting the monitor level is ordinary CW operating, not
      * setup. */
     { DRAWER_SEC_CWMON, "CW monitor level", true },
+    /* T144: directly under the monitor level - both are "how the radio
+     * behaves while I'm sending", read together. Basic, like CWMON: this is
+     * ordinary CW operating (QSK hang time), not one-time setup. */
+    { DRAWER_SEC_CWQSK, "Semi QSK (break-in delay)", true },
     /* Above CW centre (operator, 2026-09-07). It was filed under Spectrum with
      * the drawing controls, but it is not one: it trims the 12 kHz IF offset so
      * a signal lands where the dial says it is, which is the same conversation
@@ -4099,7 +4105,8 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * there: the sidetone exists in CW/CW-R, and both decode pages force the
      * radio to DiGi on entry, so there would be nothing to monitor. */
     if (id == DRAWER_SEC_BPREGION || id == DRAWER_SEC_CW ||
-        id == DRAWER_SEC_CWPROF || id == DRAWER_SEC_CWMON) return !ft8 && !wspr;
+        id == DRAWER_SEC_CWPROF || id == DRAWER_SEC_CWMON ||
+        id == DRAWER_SEC_CWQSK) return !ft8 && !wspr;
     /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
      * and band hopping mean nothing on a panadapter. */
     if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
@@ -4128,6 +4135,11 @@ static lv_obj_t *s_lbl_cw_mon     = NULL;
 static lv_obj_t *s_check_cw_mon_abs = NULL;
 static lv_obj_t *s_lbl_cw_mon_abs   = NULL;
 static lv_obj_t *s_lbl_cw_mon_note  = NULL;
+static lv_obj_t *s_lbl_qsk        = NULL;
+static lv_obj_t *s_dropdown_qsk   = NULL;
+static lv_obj_t *s_lbl_qsk_delay  = NULL;
+static lv_obj_t *s_lbl_qsk_note   = NULL;
+static lv_obj_t *s_slider_qsk_delay = NULL;
 static lv_obj_t *s_lbl_pause_btn  = NULL;
 /* Flat mode does not use the dB range AT ALL - it draws dB above the measured
  * noise floor over a fixed 30 dB window, with gridlines hardcoded {10,20,30}.
@@ -4464,6 +4476,10 @@ static void drawer_refresh_qmx_rf(void);
 static void drawer_slider_cw_mon_cb(lv_event_t *e);
 static void drawer_check_cw_mon_abs_cb(lv_event_t *e);
 static void drawer_refresh_cw_mon(void);
+static void drawer_dropdown_qsk_cb(lv_event_t *e);
+static void drawer_slider_qsk_delay_cb(lv_event_t *e);
+static void drawer_refresh_qsk(void);
+static void paint_qsk_delay_note(void);
 static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
@@ -16493,6 +16509,93 @@ static void drawer_build(void)
         y += 190;
     }
 
+    /* T144 (Michael KZ4LY / Gyula HA3HZ): Semi QSK break-in delay, directly
+     * under the monitor level it keeps company with. Unlike CWMON this list
+     * is FIXED (radio-measured, not range-discovered), so unlike that
+     * section there is no "hidden until known" problem - the dropdown is
+     * built and shown immediately with its six real options; only the
+     * SELECTED entry and the delay value wait on the radio, same as RF gain
+     * waits on its number. See gain_resolve_cb's s_qsk_unresolved branch. */
+    {
+        /* 234: label y=10 (34 tall) + dropdown y=44 h=50 (ends 94) + delay
+         * label y=100 (34 tall, ends 134) + slider y=134 h=30 (ends 164) +
+         * note y=170, WRAPPING TO TWO LINES at this width (measured the
+         * same way CWMON's own note was: montserrat_20 at 24 px/line, see
+         * that section's header comment), ending 170+48=218, +16 margin to
+         * match CWMON's own spare. The first version used 200 and the
+         * second line of this very note got drawn OVER by the next
+         * section's header - exactly the overlap CWMON's header comment
+         * already warned this file about once.
+         * ⛔ THE FIRST VERSION PUT "Delay: 999 ms (Custom modes only)" in ONE
+         * 28pt label - 488 px available (DRAWER_W-32), that string measures
+         * ~560 px at this font. Split exactly like CWMON: a short value at
+         * 28pt that always fits, a separate wrapped NOTE at 20pt for the
+         * explanation - same "measure pixels, not characters" lesson that
+         * section's own header comment already names. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWQSK, y, 234);
+        s_lbl_qsk = lv_label_create(sec);
+        lv_label_set_text(s_lbl_qsk, "Semi QSK");
+        lv_obj_set_style_text_color(s_lbl_qsk, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_qsk, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_qsk, LV_ALIGN_TOP_LEFT, 0, 10);
+
+        s_dropdown_qsk = lv_dropdown_create(sec);
+        {
+            const char *const *modes = cat_cw_qsk_modes();
+            char opts[96];
+            int off = 0;
+            for (int i = 0; i < CW_QSK_MODE_COUNT && off < (int)sizeof(opts) - 1; i++) {
+                off += snprintf(opts + off, sizeof(opts) - off, "%s%s",
+                                i ? "\n" : "", modes[i]);
+            }
+            lv_dropdown_set_options(s_dropdown_qsk, opts);
+        }
+        lv_obj_set_size(s_dropdown_qsk, DRAWER_W - 32, 50);   // width corrected to content size below, with every other drawer dropdown
+        lv_obj_align(s_dropdown_qsk, LV_ALIGN_TOP_LEFT, 0, 44);
+        lv_obj_set_style_text_font(s_dropdown_qsk, &lv_font_montserrat_28, 0);   // matches s_dropdown_cwpeak, not a smaller one of my own invention
+        /* ⛔ THE CLOSED BOX AND THE OPEN LIST ARE SEPARATE STYLE TARGETS.
+         * Setting the font on `dd` only sized the closed "OFF" box - the
+         * popup list (lv_dropdown_get_list()) is its own child object with
+         * its own style context and stayed at the theme default, which is
+         * exactly what the operator saw: the box looked right, the open
+         * list did not change size at all. */
+        {
+            lv_obj_t *list = lv_dropdown_get_list(s_dropdown_qsk);
+            lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+            /* The theme caps a dropdown list's height well under what six
+             * rows need at 28pt, so it scrolled instead of showing every
+             * option (operator, on the glass). All six fit on screen with
+             * room to spare, so just raise the ceiling rather than leave it
+             * scrollable - no value here is ever picked by scrolling past
+             * a hidden one. */
+            lv_obj_set_style_max_height(list, 400, 0);
+        }
+        lv_obj_add_event_cb(s_dropdown_qsk, drawer_dropdown_qsk_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        s_lbl_qsk_delay = lv_label_create(sec);
+        lv_label_set_text(s_lbl_qsk_delay, "Delay: reading...");
+        lv_obj_set_style_text_color(s_lbl_qsk_delay, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_qsk_delay, &lv_font_montserrat_28, 0);   // matches the QMX volume/RF gain value-label convention, not a smaller one of my own invention
+        lv_obj_align(s_lbl_qsk_delay, LV_ALIGN_TOP_LEFT, 0, 100);
+
+        s_slider_qsk_delay = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_qsk_delay, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_qsk_delay, 0, 999);   // radio's own limit, S5.10
+        lv_slider_set_value(s_slider_qsk_delay, 0, LV_ANIM_OFF);
+        lv_obj_align(s_slider_qsk_delay, LV_ALIGN_TOP_LEFT, 0, 134);
+        lv_obj_add_event_cb(s_slider_qsk_delay, drawer_slider_qsk_delay_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_slider_qsk_delay, drawer_slider_qsk_delay_cb, LV_EVENT_RELEASED, NULL);
+
+        s_lbl_qsk_note = lv_label_create(sec);
+        lv_label_set_long_mode(s_lbl_qsk_note, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_lbl_qsk_note, DRAWER_W - 32);
+        lv_label_set_text(s_lbl_qsk_note, "Used only when the mode above is a Custom one");
+        lv_obj_set_style_text_font(s_lbl_qsk_note, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(s_lbl_qsk_note, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_align(s_lbl_qsk_note, LV_ALIGN_TOP_LEFT, 0, 170);
+        y += 234;   // MUST match drawer_section()'s own height above
+    }
+
     // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.
     //
     // WORDING, reworded 2026-08-11 after Samuel called the original "not too helpful,
@@ -18557,7 +18660,7 @@ static void drawer_build(void)
     //    dark drawer), applied to the closed box AND the option list
     lv_obj_t *drawer_dropdowns[] = {
         s_dropdown_sleep, s_dropdown_bpregion, s_dropdown_cmap, s_dropdown_wf_window,
-        s_dropdown_wf_speed, s_dropdown_peak, s_dropdown_cwpeak,
+        s_dropdown_wf_speed, s_dropdown_peak, s_dropdown_cwpeak, s_dropdown_qsk,
     };
     for (size_t i = 0; i < sizeof(drawer_dropdowns) / sizeof(drawer_dropdowns[0]); i++) {
         lv_obj_t *dd = drawer_dropdowns[i];
@@ -18604,6 +18707,7 @@ static void drawer_build(void)
            mid-drag. The per-section lv_obj_set_size(..., 30) is NOT the
            height that ships; this loop is. */
         s_slider_keyer,
+        s_slider_qsk_delay,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
@@ -18724,6 +18828,7 @@ static void drawer_open(void)
     drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
     drawer_refresh_cw_mon();    // T139: and the CW monitor, which he may have set on the radio
+    drawer_refresh_qsk();       // T144: and Semi QSK, same reason
     gain_resolve_start();       // ...and repaint whichever of those answers late
     // A Bluetooth restart can be owed from an earlier visit to the drawer, or
     // from the web settings page, so the offer is re-tested on every open
@@ -19486,6 +19591,62 @@ static void drawer_check_cw_mon_abs_cb(lv_event_t *e)
     ESP_LOGI(TAG, "CW monitor -> %s", want ? "Absolute" : "Relative");
 }
 
+/* T144. Short value at 28pt (always fits), explanation in the separate
+ * wrapped note below - see the section build's own comment for why this is
+ * two labels and not one. */
+static void paint_qsk_delay_note(void)
+{
+    if (!s_lbl_qsk_delay) return;
+    int d = cat_get_cw_qsk_delay();
+    char b[32];
+    if (d < 0) snprintf(b, sizeof(b), "Delay: reading...");
+    else       snprintf(b, sizeof(b), "Delay: %d ms", d);
+    lv_label_set_text(s_lbl_qsk_delay, b);
+}
+
+static void drawer_dropdown_qsk_cb(lv_event_t *e)
+{
+    uint32_t idx = lv_dropdown_get_selected(lv_event_get_target(e));
+    const char *const *modes = cat_cw_qsk_modes();
+    if (idx >= CW_QSK_MODE_COUNT) return;
+    if (strcmp(cat_get_cw_qsk_mode(), modes[idx]) == 0) return;
+    cat_request_cw_qsk_mode(modes[idx]);
+    ESP_LOGI(TAG, "Semi QSK -> %s", modes[idx]);
+}
+
+static void drawer_slider_qsk_delay_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    if (s_lbl_qsk_delay) {
+        char b[48];
+        snprintf(b, sizeof(b), "Delay: %d ms", v);
+        lv_label_set_text(s_lbl_qsk_delay, b);
+    }
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+    if (v == cat_get_cw_qsk_delay()) return;
+    cat_request_cw_qsk_delay(v);
+    ESP_LOGI(TAG, "Semi QSK delay -> %d ms (radio EEPROM)", v);
+}
+
+static void drawer_refresh_qsk(void)
+{
+    if (!s_dropdown_qsk) return;
+    const char *mode = cat_get_cw_qsk_mode();
+    if (mode[0]) {
+        const char *const *modes = cat_cw_qsk_modes();
+        for (int i = 0; i < CW_QSK_MODE_COUNT; i++) {
+            if (strcmp(mode, modes[i]) == 0) {
+                lv_dropdown_set_selected(s_dropdown_qsk, (uint32_t)i);
+                break;
+            }
+        }
+    }
+    int d = cat_get_cw_qsk_delay();
+    if (d >= 0 && s_slider_qsk_delay) lv_slider_set_value(s_slider_qsk_delay, d, LV_ANIM_OFF);
+    paint_qsk_delay_note();
+    cat_query_cw_qsk();   // ask again for next time the drawer opens
+}
+
 static void drawer_refresh_cw_mon(void)
 {
     if (!s_lbl_cw_mon) return;
@@ -19521,6 +19682,10 @@ static bool s_af_unresolved = false;
  * Same fault to avoid: the first open after boot is before CAT link-up, so the
  * row would say "reading..." for the whole session on one lost query. */
 static bool s_mon_unresolved = false;
+/* T144: same bargain as s_mon_unresolved, but simpler - the dropdown's six
+ * options are fixed and never wait on the radio, only which one is
+ * SELECTED and the delay number do. */
+static bool s_qsk_unresolved = false;
 
 static void gain_resolve_stop(void)
 {
@@ -19567,7 +19732,12 @@ static void gain_resolve_cb(lv_timer_t *t)
                                                    : "CW monitor: radio not connected");
         /* !live: cw_mon_apply_range() has already written the right words. */
     }
-    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
+    if (s_qsk_unresolved) {
+        const char *mode = cat_get_cw_qsk_mode();
+        int d = cat_get_cw_qsk_delay();
+        if (mode[0] && d >= 0) { drawer_refresh_qsk(); s_qsk_unresolved = false; }
+    }
+    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved && !s_qsk_unresolved) {
         gain_resolve_stop();
         return;
     }
@@ -19586,6 +19756,8 @@ static void gain_resolve_cb(lv_timer_t *t)
             lv_label_set_text(s_lbl_cw_mon, cat_sidetone_vol_max()
                 ? "CW monitor: no answer from radio"
                 : "CW monitor: not offered over CAT - set it in the radio's CW menu");
+        if (s_qsk_unresolved && s_lbl_qsk_delay)
+            lv_label_set_text(s_lbl_qsk_delay, "Delay: no answer from radio");
         gain_resolve_stop();
         return;
     }
@@ -19595,6 +19767,7 @@ static void gain_resolve_cb(lv_timer_t *t)
         if (s_rf_unresolved) cat_query_rf_gain();
         if (s_af_unresolved) cat_query_af_gain();
         if (s_mon_unresolved) cat_query_sidetone();
+        if (s_qsk_unresolved) cat_query_cw_qsk();
     }
 }
 
@@ -19607,8 +19780,10 @@ static void gain_resolve_start(void)
      * question about the radio and not about the widget. */
     s_mon_unresolved = (s_slider_cw_mon != NULL) &&
                        (cat_get_sidetone_vol() < 0 || cat_sidetone_vol_max() == 0);
+    s_qsk_unresolved = (s_dropdown_qsk != NULL) &&
+                      (!cat_get_cw_qsk_mode()[0] || cat_get_cw_qsk_delay() < 0);
     s_gain_resolve_ticks = 0;
-    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved) {
+    if (!s_rf_unresolved && !s_af_unresolved && !s_mon_unresolved && !s_qsk_unresolved) {
         gain_resolve_stop(); return;
     }
     if (!s_gain_resolve_timer) {
