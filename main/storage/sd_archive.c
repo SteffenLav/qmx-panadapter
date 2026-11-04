@@ -1080,6 +1080,50 @@ static void sd_fail_diag(const char *where, int err)
     /* Recorded for the post-boot give-up, which must apply to ESP_ERR_NO_MEM
      * and nothing else - see the branch that reads it. */
     if (where && strcmp(where, "mount") == 0) s_last_mount_err = (esp_err_t)err;
+
+    /* ⛔ MUST RUN BEFORE THE n++ THROTTLE BELOW, NOT AFTER. maybe_prune_history()
+     * was only ever reached from rotate_diag_log(), which only fires once the
+     * CURRENT log generation crosses 5 MB - a condition about log-file size,
+     * not about the card. A card that is already full (accumulated history
+     * from before this pruning existed, or anything else eating space
+     * mid-generation) fails every write forever: the one thing that frees
+     * space never ran, because it was gated behind the write succeeding.
+     * Gyula HA3HZ, 2026-11-03 (qmx-diag-20261103-1021/1212, msg #182312):
+     * "the SD card was full of files, I had previously formatted the SD
+     * card to fix this" - he had to do by hand what the firmware should
+     * have recovered from itself. Same structural bug the big comment above
+     * rotate_diag_log() already fixed for the OLD 2-generation rotate; the
+     * Nov 2 "nearly indefinite" history replaced that rotate but inherited
+     * the same gate.
+     *
+     * A persistently-full card generates far more than SD_FAIL_DIAG_MAX (8)
+     * failures in a session - every retried write is another one - so if
+     * this sat below the throttle it would prune 8 times and then silently
+     * stop, exactly when recovery needs it most. ENOSPC only: every other
+     * failure here (DMA/heap exhaustion, a pulled card, a desynced SPI bus)
+     * has nothing to do with free space, and esp_vfs_fat_info() inside
+     * maybe_prune_history() is expensive (10 s measured on a 31 GB card) -
+     * paying that on every unrelated failure would make things worse, not
+     * better.
+     *
+     * COOLDOWN, separate from the n++ throttle above: a full card retries
+     * every few seconds (mirror_diag_slow()'s cadence, the burst path's
+     * same-chunk retry), and maybe_prune_history()'s own 10 s cost would
+     * otherwise stack call after call - stalling the SD task, and with it
+     * the WS-pause writers wait on, far worse than the fullness it is
+     * trying to cure. One prune attempt per PRUNE_COOLDOWN_US is still one
+     * file (several MB at 5 MB/generation) freed every cooldown window,
+     * which recovers a chronically full card in minutes, not seconds. */
+    if (err == ENOSPC) {
+        #define SD_PRUNE_COOLDOWN_US (15LL * 1000 * 1000)
+        static int64_t s_last_prune_us = 0;
+        int64_t now = esp_timer_get_time();
+        if (now - s_last_prune_us >= SD_PRUNE_COOLDOWN_US) {
+            s_last_prune_us = now;
+            maybe_prune_history();
+        }
+    }
+
     if (n++ >= SD_FAIL_DIAG_MAX) return;
     sd_space_report_once();
     ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
