@@ -3,6 +3,8 @@
 #include "dsp.h"                    // dsp_set_transfer_quiet
 #include "storage/sd_archive.h"     // sd_archive_is_mounted / _lock / _unlock
 #include "storage/sd_io_buf.h"      // sd_io_buf_alloc - DMA-aligned transfer buffer
+#include "audio/rx_audio.h"         // rx_audio_set_muted - see fb_audio_pause_begin()
+#include "ui.h"                      // ui_toast - safe off the LVGL thread, see its own comment
 
 #include "esp_log.h"
 #include "cJSON.h"
@@ -144,6 +146,37 @@ static void rm_rf(const char *path)
 // Handlers
 // ---------------------------------------------------------------------------
 
+/* Steffen, 2026-11-04 (Gyula HA3HZ's SD card reading as "inaccessible" while
+ * he was testing, msg #182312): download/upload already pause the WS stream
+ * and the DSP transfer-quiet flag for exactly this reason (SD-during-WiFi
+ * discipline, see their own comments) - RX audio was the one thing in that
+ * bracket nobody had protected. A transfer long enough to matter can stall
+ * the audio pipeline the same way the diag mirror does (see
+ * sd_archive.c's rx_audio_any_listener() gate on that path); muting instead
+ * of pausing capture is enough, because the gap only needs to be inaudible,
+ * not avoided.
+ *
+ * Tab5 SPEAKER only, on purpose: rx_audio_set_muted() is the codec's output
+ * gate, not web audio, so a browser listening to RX audio over the web
+ * keeps hearing it uninterrupted - only someone at the radio itself notices
+ * anything, and that's who the toast is for. Returns whether THIS call
+ * muted it, so the matching _end() only un-mutes what it mutes: an
+ * operator who had already muted by hand keeps that choice. */
+static bool fb_audio_pause_begin(void)
+{
+    if (!rx_audio_is_enabled() || rx_audio_is_muted()) return false;
+    rx_audio_set_muted(true);
+    ui_toast("Pausing Tab5 audio for SD access");
+    return true;
+}
+
+static void fb_audio_pause_end(bool was_muted_here)
+{
+    if (!was_muted_here) return;
+    rx_audio_set_muted(false);
+    ui_toast("Audio resumed");
+}
+
 static esp_err_t page_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -216,6 +249,7 @@ static esp_err_t download_handler(httpd_req_t *req)
     // This transfer gets the WiFi TX path to itself (SD-during-WiFi discipline).
     webserver_ws_set_paused(true);
     dsp_set_transfer_quiet(true);
+    bool audio_muted_here = fb_audio_pause_begin();
 
     const char *name = strrchr(rel, '/');
     name = name ? name + 1 : rel;
@@ -280,6 +314,7 @@ static esp_err_t download_handler(httpd_req_t *req)
     }
 
     sd_io_buf_free(buf);
+    fb_audio_pause_end(audio_muted_here);
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
     sd_archive_unlock();
@@ -298,6 +333,7 @@ static esp_err_t upload_handler(httpd_req_t *req)
 
     webserver_ws_set_paused(true);
     dsp_set_transfer_quiet(true);
+    bool audio_muted_here = fb_audio_pause_begin();
 
     FILE *f = fopen(fs, "w");
     esp_err_t err = ESP_OK;
@@ -330,6 +366,7 @@ static esp_err_t upload_handler(httpd_req_t *req)
     }
 
     sd_io_buf_free(buf);
+    fb_audio_pause_end(audio_muted_here);
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
     sd_archive_unlock();
