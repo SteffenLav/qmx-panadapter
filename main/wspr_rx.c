@@ -2396,7 +2396,36 @@ static void wspr_rx_task(void *arg)
      * Retrying is the right fix rather than reaching into FT8's teardown -
      * CLAUDE.md puts the double-spawn and worker-join crashes squarely in that
      * lifecycle, which is not somewhere to make a casual change. The memory
-     * genuinely does arrive; this just waits for it, and says so. */
+     * genuinely does arrive; this just waits for it, and says so.
+     *
+     * ⛔⛔ RETRYING ON FAILURE IS NOT ENOUGH - MEASURED 2026-11-04. If FT8 still
+     * has enough free PSRAM alongside its own live pool (it usually does - FT8's
+     * pool is ~9 MB against ~20 MB total), the FIRST attempt below just
+     * succeeds, immediately, while FT8's pool is still resident. WSPR's 8.4 MB
+     * then lands carved out of whatever is left NEXT TO that pool. Seconds
+     * later FT8 actually exits and frees its ~9 MB, but it cannot coalesce with
+     * anything on the other side of WSPR's new block - the heap ends up split,
+     * total free correct (2875 KB) but largest contiguous block under the
+     * candidate search's 2.3 MB requirement (2048 KB), FOREVER, because nothing
+     * afterwards frees or reallocates that region to compact it. Capture on
+     * bench1: every single cycle failed "NO MEMORY for the candidate search"
+     * from boot to a 59-minute check, unchanging. A cold boot straight to WSPR
+     * (no FT8 first) decoded its first cycle (cands(20)) with the same build.
+     *
+     * So: if the previous page was FT8 and it is still alive, wait for it to
+     * finish BEFORE the first allocation attempt, not only after one fails.
+     * This does not touch FT8's teardown - ft8_task_is_alive() is a read-only
+     * poll, already used below for the same purpose. Bounded by the same
+     * ceiling as the retry loop, so a worst case adds at most that many seconds
+     * to a page switch, once. */
+    if (ft8_task_is_alive()) {
+        ESP_LOGW(TAG, "FT8 is still alive on entry - waiting for its teardown "
+                      "before claiming memory, so WSPR's buffers don't end up "
+                      "carved out next to FT8's still-live pool");
+        set_status("waiting for FT8 to release memory");
+        for (int w = 0; w < WSPR_ALLOC_MAX_WAIT_TRIES && ft8_task_is_alive(); w++)
+            vTaskDelay(pdMS_TO_TICKS(WSPR_ALLOC_WAIT_MS));
+    }
     float *cap = NULL;
     bool   pcm_ok = false;
     int    charged = 0;      /* iterations with nothing visibly holding it */
