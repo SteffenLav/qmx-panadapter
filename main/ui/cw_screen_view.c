@@ -128,6 +128,15 @@ static lv_obj_t *s_card_call  = NULL;
 static lv_obj_t *s_card_info  = NULL;
 static lv_obj_t *s_card_hint  = NULL;
 
+// Manual callsign entry: tapping the card while nothing is heard or adopted
+// opens this (Gyula HA3HZ, groups.io 2026-11-06 - no way to key in a call you
+// already know, only capture-from-air or tap-to-adopt a heard one). Built on
+// the park-reference editor's exact pattern (same styled lv_keyboard, same
+// modal/panel recipe) - see park_build() below.
+static lv_obj_t *s_callentry_modal = NULL;
+static lv_obj_t *s_callentry_ta    = NULL;
+static lv_obj_t *s_callentry_kb    = NULL;
+
 // ---- decode ring (written from the CDC RX context, read by the timer) ------
 /* ⭐ THE SECOND MODEL IS GONE (2026-11-02). This file used to keep its own
  * 512-byte ring, its own squelch instance and its own spinlock, fed by
@@ -1267,6 +1276,128 @@ static void next_clicked_cb(lv_event_t *e)
     refresh_next_label();
 }
 
+// ---- manual callsign entry ---------------------------------------------------
+static void refresh_card(void);   // fwd - defined below, card redraw after adopt
+static void callentry_close(void)
+{
+    if (s_callentry_modal) lv_obj_add_flag(s_callentry_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void callentry_save_cb(lv_event_t *e)
+{
+    (void)e;
+    char buf[16] = {0};
+    const char *raw = s_callentry_ta ? lv_textarea_get_text(s_callentry_ta) : NULL;
+    if (raw) snprintf(buf, sizeof(buf), "%s", raw);
+    for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
+    callentry_close();
+    if (!buf[0]) return;   // Cancel-by-emptying: nothing typed, adopt nothing
+    cw_qso_adopt(buf);
+    ESP_LOGI(TAG, "manual target entered: %s", buf);
+    refresh_card();
+    refresh_next_label();
+}
+
+static void callentry_cancel_cb(lv_event_t *e) { (void)e; callentry_close(); }
+
+static void callentry_kb_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
+        lv_obj_add_flag(s_callentry_kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void callentry_ta_focused_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_callentry_kb) return;
+    lv_keyboard_set_textarea(s_callentry_kb, s_callentry_ta);
+    lv_obj_clear_flag(s_callentry_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_callentry_kb);
+}
+
+static void callentry_build(void)
+{
+    if (s_callentry_modal) return;
+    lv_obj_t *scr = lv_screen_active();
+
+    s_callentry_modal = lv_obj_create(scr);
+    lv_obj_set_size(s_callentry_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_callentry_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_callentry_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_callentry_modal, UI_OPA_MODAL_SCRIM, 0);
+    lv_obj_set_style_border_width(s_callentry_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_callentry_modal, 0, 0);
+    lv_obj_clear_flag(s_callentry_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_callentry_modal, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *panel = lv_obj_create(s_callentry_modal);
+    lv_obj_set_size(panel, 700, 150);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_pad_all(panel, 16, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(panel);
+    lv_label_set_text(title, "Work this station");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_callentry_ta = lv_textarea_create(panel);
+    lv_obj_set_size(s_callentry_ta, 320, 56);
+    lv_obj_align(s_callentry_ta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_textarea_set_one_line(s_callentry_ta, true);
+    lv_textarea_set_max_length(s_callentry_ta, 12);
+    lv_textarea_set_placeholder_text(s_callentry_ta, "K4XYZ");
+    lv_obj_set_style_text_font(s_callentry_ta, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_callentry_ta);
+    lv_obj_add_event_cb(s_callentry_ta, callentry_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+
+    lv_obj_t *btn_cancel = lv_btn_create(panel);
+    lv_obj_set_size(btn_cancel, 150, 56);
+    lv_obj_align(btn_cancel, LV_ALIGN_BOTTOM_RIGHT, -166, 0);
+    lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_radius(btn_cancel, 8, 0);
+    lv_obj_add_event_cb(btn_cancel, callentry_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lc = lv_label_create(btn_cancel);
+    lv_label_set_text(lc, "Cancel");
+    lv_obj_set_style_text_color(lc, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lc, &lv_font_montserrat_24, 0);
+    lv_obj_center(lc);
+
+    lv_obj_t *btn_save = lv_btn_create(panel);
+    lv_obj_set_size(btn_save, 150, 56);
+    lv_obj_align(btn_save, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_radius(btn_save, 8, 0);
+    lv_obj_add_event_cb(btn_save, callentry_save_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ls = lv_label_create(btn_save);
+    lv_label_set_text(ls, "Work");
+    lv_obj_set_style_text_color(ls, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(ls, &lv_font_montserrat_24, 0);
+    lv_obj_center(ls);
+    ui_kbd_set_buttons(btn_save, btn_cancel);
+
+    s_callentry_kb = lv_keyboard_create(s_callentry_modal);
+    style_edit_keyboard(s_callentry_kb);
+    lv_obj_add_event_cb(s_callentry_kb, callentry_kb_event_cb, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(s_callentry_kb, callentry_kb_event_cb, LV_EVENT_CANCEL, NULL);
+}
+
+static void callentry_open(void)
+{
+    callentry_build();
+    lv_textarea_set_text(s_callentry_ta, "");
+    lv_obj_remove_state(s_callentry_ta, LV_STATE_FOCUSED);
+    lv_obj_add_flag(s_callentry_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_callentry_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_callentry_modal);
+}
+
 // ---- station card -----------------------------------------------------------
 static void card_clicked_cb(lv_event_t *e)
 {
@@ -1281,6 +1412,8 @@ static void card_clicked_cb(lv_event_t *e)
         ui_toast(msg);
     } else if (cw_qso_get_heard(heard, sizeof(heard), &age) && heard[0]) {
         cw_qso_adopt(heard);
+    } else {
+        callentry_open();   // nothing heard yet - let the operator type one in
     }
     refresh_next_label();
 }
@@ -1299,7 +1432,14 @@ static void refresh_card(void)
 
     const char *call = tgt[0] ? tgt : (have_heard && age < 120) ? heard : NULL;
     if (!call) {
-        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+        // Nothing heard: still show the card as a tappable "enter a call"
+        // prompt, rather than hiding it - that hidden state is what left
+        // Gyula HA3HZ with no way to find the manual-entry path at all.
+        lv_label_set_text(s_card_call, "");
+        lv_label_set_text(s_card_info, "");
+        lv_label_set_text(s_card_hint, "tap to enter a callsign");
+        lv_obj_set_style_border_color(s_card, lv_color_hex(0x555555), 0);
+        lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     lv_label_set_text(s_card_call, call);

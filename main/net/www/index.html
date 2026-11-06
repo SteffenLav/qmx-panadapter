@@ -8397,6 +8397,20 @@ async function tick() {
         fpsEl.classList.remove("bad");
         ft8OptsRefreshBadge();   // fresh count each time this screen comes up
       }
+      /* ⛔ LEAVING FT8/WSPR LEFT THE CHIP SAYING SO FOREVER. Nothing else ever
+         writes fpsEl except this block (FT8/WSPR text, above) and the spectrum
+         WS onmessage handler's own fps counter - which only runs once a frame
+         actually arrives. A CW or Panadapter entry has its own frames inbound
+         (WS is unpaused on the Tab5 the same tick), but the chip sat on
+         whichever protocol-mode text was last painted until the first of those
+         frames both arrived AND got all the way through onmessage - one
+         dropped/delayed frame and it reads "FT8 mode" with CW plainly running
+         underneath it (Randy N4OPI, groups.io 2026-11-06, screenshot showing
+         CW frequency/BW/ticker live under a frozen "FT8 mode" chip). Clear it
+         on the way out instead of waiting on that race. */
+      if (!isFt8 && !isWspr && (wasScreen === "ft8" || wasScreen === "wspr")) {
+        fpsEl.textContent = "connecting";
+      }
     }
 
     /* The heading the Tab5 shows on this screen, in the same words. Repainted
