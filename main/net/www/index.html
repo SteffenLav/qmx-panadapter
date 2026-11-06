@@ -1425,17 +1425,19 @@
     </div></div>
 
   <!-- T159 (Ralph DL1HR): CW page TX controls, for remote operation. The decode
-       side (#cw-line, above) already worked - this is the missing TX half:
-       send a macro or free text. Editing the six macros stays Tab5-only for
-       now; the buttons show whatever is currently configured there, raw
-       placeholders and all, same as the Tab5's own unexpanded button face. -->
+       side (#cw-line, above) already worked - this was the missing TX half:
+       send a macro or free text, and (added on request) edit the six macros
+       and switch which of the two sets (General/Contest) is active - the same
+       things the Tab5's own long-press editor and set toggle do. -->
   <div id="cw-tx-wrap" style="display:none; width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
     <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:8px;">
       <strong style="color:#ffa040">CW send</strong>
-      <span id="cw-tx-set" style="color:var(--dim); font-size:13px;"></span>
+      <button id="cw-tx-set" type="button"
+              title="Switch which of the two macro sets is active - the same toggle the Tab5 has"
+              style="font-size:13px; padding:2px 8px;"></button>
       <span id="cw-tx-last" style="color:var(--dim); font-size:13px; margin-left:auto;"></span>
     </div>
-    <div id="cw-tx-macros" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:10px;"></div>
+    <div id="cw-tx-macros" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; margin-bottom:10px;"></div>
     <div style="display:flex; gap:8px;">
       <input id="cw-tx-input" type="text" maxlength="80" placeholder="Free text - {MYCALL} {PARK} {CALL} {RST} {SERIAL} work here too"
              style="flex:1; min-width:0;">
@@ -10085,7 +10087,7 @@ function updateCwTx(s) {
   if ((s.screen || "panadapter") !== "cw" || !ctx) return;
 
   const setLbl = document.getElementById("cw-tx-set");
-  if (setLbl) setLbl.textContent = ctx.set_b ? "Contest set" : "General set";
+  if (setLbl) setLbl.textContent = (ctx.set_b ? "Contest set" : "General set") + " ⇄";
 
   const lastLbl = document.getElementById("cw-tx-last");
   if (lastLbl && ctx.last_sent !== lastCwLastSent) {
@@ -10106,15 +10108,62 @@ function updateCwTx(s) {
   const box = document.getElementById("cw-tx-macros");
   if (!box) return;
   box.innerHTML = "";
-  macros.forEach((raw) => {
+  macros.forEach((raw, idx) => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "4px";
+
     const btn = document.createElement("button");
     btn.textContent = raw && raw.length ? raw : "(empty)";
     btn.disabled = !raw || !raw.length;
     btn.title = "Send this macro now - through the QMX's own keyer";
+    btn.style.flex = "1";
+    btn.style.minWidth = "0";
+    btn.style.overflow = "hidden";
+    btn.style.textOverflow = "ellipsis";
+    btn.style.whiteSpace = "nowrap";
     btn.addEventListener("click", () => sendCwText(raw));
-    box.appendChild(btn);
+    row.appendChild(btn);
+
+    // Edit, added on request (Ralph DL1HR/Steffen, 2026-11-06). A plain
+    // prompt() rather than a custom modal: this is an occasional,
+    // auxiliary action next to the six buttons that matter for actually
+    // operating - not worth a dialog of its own for v1.
+    const edit = document.createElement("button");
+    edit.textContent = "✎";   // pencil
+    edit.title = "Edit this macro";
+    edit.style.flex = "0 0 auto";
+    edit.addEventListener("click", () => {
+      const next = window.prompt("Macro " + (idx + 1) +
+        " ({MYCALL} {PARK} {CALL} {RST} {SERIAL} work here too):", raw || "");
+      if (next === null || next === raw) return;   // cancelled or unchanged
+      sendCmd({ action: "cw_macro_edit", idx: idx, text: next });
+      /* No optimistic paint - the save goes to the radio's own settings
+         store, and the next poll's macros array is the only thing that
+         knows it landed (same reasoning as rit_park above). */
+    });
+    row.appendChild(edit);
+
+    box.appendChild(row);
   });
 }
+
+(function wireCwSetToggle() {
+  const btn = document.getElementById("cw-tx-set");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const wantB = !lastCwSetB;
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cw_msg_set: wantB ? 1 : 0 })
+    });
+    /* Force the next poll to rebuild the six buttons even if the macro TEXT
+       in the new set happens to match the old one slot-for-slot (unlikely,
+       but the cheap guard is just clearing lastCwSetB). */
+    lastCwSetB = null;
+  });
+})();
 
 (function wireCwSend() {
   const btn   = document.getElementById("cw-tx-send-btn");

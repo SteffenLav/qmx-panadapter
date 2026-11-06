@@ -2355,6 +2355,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_OK;
         }
         cw_screen_view_request_send(txt);
+    } else if (action && strcmp(action, "cw_macro_edit") == 0) {
+        /* T159 follow-up (Ralph DL1HR): edit one of the six macros from the
+         * browser. A plain settings write - not deferred to the LVGL task like
+         * cw_send above, because settings_set_cw_msg_for_set() only touches
+         * the settings store (mutex-protected, any task), never LVGL objects.
+         * Writes the slot of whichever set is CURRENTLY ACTIVE
+         * (qmx_settings_t.cw_msg_set) - same set the six web buttons are
+         * already showing, so there is no separate "which set" to get wrong. */
+        cJSON *ji = cJSON_GetObjectItem(root, "idx");
+        const char *mtxt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (!cJSON_IsNumber(ji) || ji->valueint < 0 || ji->valueint > 5 || !mtxt) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"need idx 0-5 and text\"}");
+            return ESP_OK;
+        }
+        qmx_settings_t mcws;
+        settings_load_all(&mcws);
+        settings_set_cw_msg_for_set(mcws.cw_msg_set, (uint8_t)ji->valueint, mtxt);
     } else if (action && strcmp(action, "js8_text_cancel") == 0) {
         /* ⛔ Reachable while transmitting, on purpose. A run holds the
          * frequency for up to three minutes and the operator must be able to
@@ -7407,6 +7426,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
     BOOLTOP("greylist_en",       settings_set_greylist_en);
+    /* T159 follow-up (Ralph DL1HR): which CW macro set is active - 0 General,
+     * 1 Contest. Same field the Tab5's own toggle writes; the web CW page
+     * needs it to switch which six buttons it is showing/editing. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_msg_set")))
+        settings_set_cw_msg_set((uint8_t)(it->valueint != 0));
     BOOLTOP("tx_band_guard_off", settings_set_tx_band_guard_off);
     BOOLTOP("qmx_gps",           settings_set_qmx_gps);
     // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool
