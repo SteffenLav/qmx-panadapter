@@ -40,17 +40,18 @@ void ft8_greylist_skip_now(const char *call);
 // ft8_greylist_skip_now().
 bool ft8_greylist_skipped_by_hand(const char *call);
 
-// Remove one station (the operator's "Clear from grey-list" action) /
-// wipe the whole list.
+// Remove one station (the operator's "Clear from grey-list" action).
 void ft8_greylist_clear(const char *call);
-void ft8_greylist_clear_all(void);
 
-// Snapshot the calls currently being skipped (fail count at the limit), for the
-// web viewer. Returns the number written to out[0..max).
+// Snapshot the calls currently AUTO-listed (fail count at the limit, NOT hand
+// skipped), for the web viewer. Returns the number written to out[0..max).
+// Excludes forced/hand-skip entries - see ft8_greylist_get_all()'s own
+// comment in the .c file for the 2026-11-06 fix (Randy N4OPI).
 int ft8_greylist_get_all(char out[][12], int max);
+void ft8_greylist_clear_auto(void);
 
 /* The stations the OPERATOR skipped by hand, newest first, and a Clear for
- * just those - Randy N4OPI asked for both. Separate from get_all()/clear_all()
+ * just those - Randy N4OPI asked for both. Separate from get_all()/clear_auto()
  * on purpose: a timeout entry means "cannot hear me", a skip means "I decided
  * against this one", and one button must not silently do both. */
 int  ft8_greylist_get_skipped(char out[][12], int max);

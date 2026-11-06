@@ -2839,17 +2839,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
     } else if (action && strcmp(action, "tune_stop") == 0) {
         web_tune_stop(true);
     } else if (action && strcmp(action, "greylist_clear") == 0) {
-        // Un-skip everyone - band conditions change, and a station that timed
-        // out an hour ago may be perfectly workable now.
+        // Un-list the AUTO-timeout entries - band conditions change, and a
+        // station the software set aside an hour ago may be perfectly
+        // workable now.
         //
-        // ⭐ An optional "call" clears just that one. Added with the Skip
-        // button (T43): skipping is now a deliberate operator action, so
-        // undoing one of three hand-skipped stations should not cost the other
-        // two. The Tab5 has had a per-call clear since the grey-list existed
-        // (grey_modal_show); the browser only had clear-all.
+        // ⛔ 2026-11-06 (Randy N4OPI): the no-call branch used to be
+        // ft8_greylist_clear_all(), which wiped hand skips too - "if I click
+        // clear for the Grey listed line, it also clears the Skipped by you
+        // line". Now scoped to clear_auto(), the inverse of skip_clear's
+        // clear_skipped(), matching what ft8_greylist_get_all() now actually
+        // shows on this line (see that function's comment).
+        //
+        // An optional "call" still clears just that one station, from EITHER
+        // list - added with the Skip button (T43), unaffected by this fix.
         const char *gcall = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         if (gcall && gcall[0]) ft8_greylist_clear(gcall);
-        else                   ft8_greylist_clear_all();
+        else                   ft8_greylist_clear_auto();
     } else if (action && strcmp(action, "mute") == 0) {
         /* Instant speaker mute (Samuel W7STF). {"action":"mute","on":true},
          * or omit "on" to toggle - a single button needs one call, not two.

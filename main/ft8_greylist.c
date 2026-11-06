@@ -147,15 +147,6 @@ void ft8_greylist_clear(const char *call)
     ESP_LOGI(TAG, "%s cleared from grey-list", call);
 }
 
-void ft8_greylist_clear_all(void)
-{
-    if (!s_lock) return;
-    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_count = 0;
-    if (s_lock) xSemaphoreGive(s_lock);
-    ESP_LOGI(TAG, "grey-list cleared");
-}
-
 // Snapshot the listed calls for the web UI's viewer - the toggle existed there
 // with no way to see WHO was being skipped, which made "why is it ignoring that
 // station?" undiagnosable from another room. Returns entries actually LISTED
@@ -209,6 +200,19 @@ void ft8_greylist_clear_skipped(void)
     ESP_LOGI(TAG, "operator cleared the skip list (%d entries remain)", w);
 }
 
+/* ⛔⛔ BUG FOUND 2026-11-06 (Randy N4OPI): this used to return every entry
+ * with fails >= GREY_FAIL_LIMIT, with NO check of `forced` - but
+ * ft8_greylist_skip_now() sets fails STRAIGHT TO the limit on a hand skip
+ * (see its own comment), so every station the operator skipped by hand also
+ * passed this filter. The web viewer's own comment, right next to where this
+ * is called (webserver.c, building "greylist"), already says the intent:
+ * "showing him entries he never made ... would be a different feature
+ * wearing the same label" - the code just never implemented it. The result
+ * was the two lines on the web page ALWAYS showing the same calls for hours,
+ * because nothing had reached the limit any other way, and "Grey-listed
+ * (skipped by auto pickers)" read as a confusing mirror of "Skipped by you".
+ * Now excludes `forced`, so this is genuinely auto-listed-only, matching
+ * the label and the already-documented intent. */
 int ft8_greylist_get_all(char out[][12], int max)
 {
     ensure_lock();
@@ -216,11 +220,32 @@ int ft8_greylist_get_all(char out[][12], int max)
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
     int n = 0;
     for (int i = 0; i < s_count && n < max; i++) {
-        if (s_tbl[i].fails >= GREY_FAIL_LIMIT) {
+        if (s_tbl[i].fails >= GREY_FAIL_LIMIT && !s_tbl[i].forced) {
             snprintf(out[n], 12, "%.11s", s_tbl[i].call);
             n++;
         }
     }
     if (s_lock) xSemaphoreGive(s_lock);
     return n;
+}
+
+/* Drop every AUTO (timeout) entry, leaving hand skips alone - the inverse of
+ * ft8_greylist_clear_skipped(), and the scoped clear the web "Grey-listed"
+ * line needs now that get_all() above is auto-only: before this existed, its
+ * Clear button went through greylist_clear_all() and wiped hand skips too -
+ * the same "also clears Skipped by you" Randy N4OPI reported. */
+void ft8_greylist_clear_auto(void)
+{
+    ensure_lock();
+    if (!s_lock) return;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    int w = 0;
+    for (int i = 0; i < s_count; i++) {
+        if (!s_tbl[i].forced) continue;      /* drop it (auto/timeout entry) */
+        if (w != i) s_tbl[w] = s_tbl[i];
+        w++;
+    }
+    s_count = w;
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "auto grey-list cleared (%d hand-skip entries remain)", w);
 }
