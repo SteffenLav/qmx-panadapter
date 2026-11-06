@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 // Who is hearing OUR OWN WSPR transmissions - see ui/spot_map_view.c's MAP
-// tab (third self-spotting source alongside net/rbn.c's CW and
+// tab (third self-spotting source alongside net/spots.c's CW and
 // net/pskr_self.c's Digi). Unlike those two, WSPR has no live push feed to
 // subscribe to (no RBN-style socket, no MQTT broker) - wsprnet.org's own
 // upload path is one-way (net/wsprnet.c only ever POSTs), so the only way to

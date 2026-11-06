@@ -17396,7 +17396,9 @@ static void drawer_build(void)
 
         // RBN: CW skimmers, the only source with its own colour (green) -
         // see spots_lane.c. Same weight and indent as the others: a SOURCE,
-        // not a sub-option of any of them (operator, 2026-08-09).
+        // not a sub-option of any of them (operator, 2026-08-09). Via
+        // spothole.app since 2026-11-06 (net/spots.c), not its own telnet
+        // connection any more - see net/spots.h for why.
         lv_obj_t *rbn_lbl = lv_label_create(sec);
         lv_label_set_text(rbn_lbl, "CW spots");
         lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(SPOTS_COL_RBN), 0);
@@ -17407,7 +17409,8 @@ static void drawer_build(void)
 
         // DX cluster: the only source carrying PHONE spots - RBN is skimmers
         // and no SSB skimmer exists. Same weight and indent as the others: a
-        // SOURCE, not a sub-option of either.
+        // SOURCE, not a sub-option of either. Via spothole.app since
+        // 2026-11-06, same as RBN above - no second telnet connection any more.
         lv_obj_t *dxc_lbl = lv_label_create(sec);
         lv_label_set_text(dxc_lbl, "Phone spots");
         lv_obj_set_style_text_color(dxc_lbl, lv_color_hex(SPOTS_COL_POTA), 0);

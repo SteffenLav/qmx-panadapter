@@ -12,7 +12,7 @@
 // first "all spots" version on hardware): this does NOT show other stations'
 // activity (that is what net/spots.c's spot lane is for). It shows who is
 // hearing OUR OWN signal, on the three networks that can answer that:
-//   - RBN (net/rbn.c): reports our own CQ back to us via net/rbn.c's self-spot
+//   - RBN (net/spots.c): reports our own CQ back to us via net/spots.c's self-spot
 //     capture, exactly like any other station's, the moment a skimmer copies
 //     it - CW/RTTY only.
 //   - PSK Reporter (net/pskr_self.c): a LIVE MQTT subscription, filtered
@@ -32,7 +32,7 @@
 #include "ui_theme.h"
 #include "ui.h"                 // ui_help_overlay_changed(), ui_open_user_manual()
 #include "help_triage.h"        // help_triage_open() - the settings drawer's "Need guidance?"
-#include "net/rbn.h"
+#include "net/spots.h"          // rbn_self_spot_t, rbn_self_spots_get/_clear() - moved here 2026-11-06
 #include "net/pskr_self.h"
 #include "net/wspr_self.h"
 #include "net/band_conditions.h"
@@ -181,13 +181,13 @@ static bool s_show_digi = true;
 static bool s_show_wspr = true;
 
 // Own QTH + one entry per station that reported hearing us. Rebuilt from
-// net/rbn.c + net/pskr_self.c + net/wspr_self.c each refresh - each of those
+// net/spots.c + net/pskr_self.c + net/wspr_self.c each refresh - each of those
 // is its own ring buffer of the last 100 finds (RBN_SELF_MAX / PSKR_SELF_MAX
 // / WSPR_SELF_MAX), so there is no reason to hold a second cache here; this
 // just needs room for all three combined.
 #define SELF_SPOT_MAX 300
 
-// Three independent sources - see net/rbn.c (CW), net/pskr_self.c (Digi,
+// Three independent sources - see net/spots.c (CW), net/pskr_self.c (Digi,
 // live MQTT) and net/wspr_self.c (WSPR, periodic wsprnet.org query, no live
 // feed exists for it). Kept as a small enum rather than a second bool
 // bolted next to is_digi - a third source needs a third state, not two
@@ -440,7 +440,7 @@ static int gather_self_spots(self_spot_t *out, int max)
     int rn = rbn_self_spots_get(rbn, 100);
     for (int i = 0; i < rn && n < max; i++) {
         self_spot_t *o = &out[n++];
-        // %.15s, not %s: rbn_self_spot_t.skimmer is char[16] (net/rbn.h) but
+        // %.15s, not %s: rbn_self_spot_t.skimmer is char[16] (net/spots.h) but
         // GCC's format-truncation checker loses that bound across the
         // accessor call and assumes an unbounded string - stating the real
         // width keeps -Werror=format-truncation happy, same pattern as
@@ -2339,7 +2339,7 @@ static lv_obj_t *add_filter_checkbox(lv_obj_t *parent, const char *label, uint32
     return row;
 }
 
-// Empties all three ring buffers immediately - net/rbn.c, net/pskr_self.c and
+// Empties all three ring buffers immediately - net/spots.c, net/pskr_self.c and
 // net/wspr_self.c keep receiving new self-spots afterward as normal, nothing
 // here touches the RBN session, the MQTT subscription, or the wsprnet poll.
 static void flush_btn_cb(lv_event_t *e)

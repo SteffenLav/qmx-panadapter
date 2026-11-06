@@ -462,7 +462,7 @@ typedef struct {
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
     char     eqsl_pswd[32];   // eQSL.cc password
     // QRZ.com Callbook (XML) lookup credentials, for net/qrz_coords.c's
-    // real-station-position lookup (net/rbn.c's self-spot skimmers, on the
+    // real-station-position lookup (net/spots.c's self-spot skimmers, on the
     // spot map). Deliberately separate from qrz_api_key above: that one is
     // the unrelated Logbook/QSO-sync API key, this is username+password for
     // the XML Callsign Lookup service.
@@ -653,9 +653,8 @@ typedef struct {
     bool     tx_band_guard_off;
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
     bool     spots_en;        // draw live POTA (later RBN) spots on the spectrum (default true)
-    bool     rbn_en;          // add the RBN telnet feed as a second spot source (default FALSE:
-                              // a continuous firehose on this board's most fragile subsystem,
-                              // so it is opt-in - see net/rbn.h)
+    bool     rbn_en;          // add RBN (CW skimmer) spots as a second source, via spothole.app
+                              // polling (default FALSE - a global firehose, see net/spots.h)
     // The spot map (ui/spot_map_view.c) and the three self-spot feeds behind
     // it: PSK Reporter over MQTT, wsprnet polling, and hamqsl band conditions,
     // plus the QRZ callbook lookups that place an RBN skimmer on the map.

@@ -8,11 +8,22 @@
 // radio.
 //
 // Source-agnostic by design. POTA (api.pota.app, a plain JSON GET) is the
-// first source; RBN is intended as a second one feeding the SAME store, so
-// the display layer never has to know where a spot came from - and a
-// misbehaving source can be dropped without losing the feature. SOTA arrives
-// the same way, from spothole.app (see spots.c), and DX cluster spots from
-// net/dxcluster.c.
+// first source; the display layer never has to know where a spot came from,
+// so a misbehaving source can be dropped without losing the feature.
+//
+// ⭐ 2026-11-06: RBN and the DX cluster moved OFF their own persistent telnet
+// sockets (the old net/rbn.c and net/dxcluster.c, now deleted) and onto
+// periodic HTTP polls of spothole.app, same as SOTA already did - one fewer
+// class of fragile long-lived connection on this board's WiFi link, and one
+// server (politely polled, see spots.c) instead of three. Both still publish
+// into this same store under their own spot_source_t; nothing downstream of
+// spots_get()/spots_get_in_range() changed. The one capability lost: RBN's
+// telnet feed carried a per-spot dB SNR, which spothole's API does not expose
+// at all (no field for it, anywhere) - every RBN/cluster spot through here
+// now has no usable signal strength. If that turns out to matter more than
+// expected, net/rbn.c's telnet client is still in git history to bring back
+// for self-spotting alone (see spot_t.rbn_confirmed's old comment and
+// rbn_self_spot_t below) while leaving the general lane on spothole.
 //
 // Threading: one background fetch task (PSRAM stack, low priority) owns the
 // network side and publishes into a mutex-protected store. The UI reads a
@@ -176,6 +187,37 @@ bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
 /* Forget it - the operator has logged this contact, so the next one starts
  * from an empty field rather than re-offering a station already in the log. */
 void spots_clear_pick(void);
+
+/* ---- RBN self-spotting (ui/spot_map_view.c) ----------------------------
+ *
+ * Moved here from the deleted net/rbn.c 2026-11-06 - same names, same
+ * contract, so spot_map_view.c needed only an #include change. Originally
+ * "the SAME feed also tells us who is HEARING us" (the live telnet stream
+ * spotted our own CQ like any other station's); now a second, separate
+ * spothole.app query (?dx_call_includes=<our call>, source=RBN), fetched by
+ * the same task as the general RBN/cluster lane. Gated on the SAME rbn_en
+ * toggle the lane uses - the operator asking for RBN is asking to be seen by
+ * it too, not two separate switches for one feed.
+ *
+ * ⛔ NO SNR HERE ANY MORE - spothole's API has no dB field, full stop (see
+ * spots.h's own header comment). Every entry's snr_db is 0, not a real
+ * measurement; the SelfSpotter map's SNR column will read 0 for all of them.
+ */
+typedef struct {
+    char     skimmer[16];   // the station that heard us
+    uint32_t freq_hz;
+    int      snr_db;        // always 0 now - spothole has no SNR field (see above)
+    int64_t  heard_unix;
+    float    lat, lon;
+    bool     has_pos;
+} rbn_self_spot_t;
+
+// Copies up to max entries, in no particular order. Returns the count copied.
+int rbn_self_spots_get(rbn_self_spot_t *out, int max);
+
+// Manual Flush (ui/spot_map_view.c's sidebar button). New self-spots keep
+// arriving afterward as normal.
+void rbn_self_spots_clear(void);
 
 /* ---- scheduled events (T116) ------------------------------------------
  *

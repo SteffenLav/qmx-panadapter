@@ -1,6 +1,7 @@
-// Live spots store + the two HTTP fetchers: POTA (api.pota.app) and SOTA
-// (spothole.app). See spots.h for the contract, and net/rbn.c + net/dxcluster.c
-// for the two socket-based sources that publish into the same store.
+// Live spots store + every HTTP fetcher that feeds it: POTA (api.pota.app)
+// directly, and SOTA, RBN and the DX cluster all via spothole.app - see
+// spots.h's 2026-11-06 comment for why the latter two moved here from their
+// own telnet clients (net/rbn.c, net/dxcluster.c, both now deleted).
 //
 // Sizing, measured against the live API 2026-08-04: 94 spots in 39.6 KB, mixed
 // SSB/CW/FT8. So one fetch is a ~40 KB body - trivial to parse, but far too
@@ -21,6 +22,9 @@
 #include "wifi.h"             // wifi_is_connected
 #include "storage/settings.h"
 #include "util/psram_task.h"
+#include "ui/ui.h"            // ui_get_band_str() - RBN/cluster band filter
+#include "net/qrz_coords.h"   // self-spot position fallback when spothole has none
+#include "util/geo_coords.h"  // self-spot position fallback, country centroid
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -88,12 +92,50 @@ static const char *TAG = "spots";
 // on screen and age out on their own; nothing is shown to the operator.
 #define SOTA_BACKOFF_MAX_S 900
 
+// RBN + DX cluster, moved here 2026-11-06 from their own telnet clients
+// (net/rbn.c, net/dxcluster.c - both deleted). ONE query serves both: spothole
+// already splits a spot's `source` field into "RBN" or "Cluster" for us, so
+// one fetch and two spots_publish() calls replaces two sockets.
+//
+//   band=<current band only>  RBN especially is a global firehose - the old
+//                             telnet client kept only the currently-tuned
+//                             band for the same reason (its refresh_band()).
+//                             Omitted when the band is unknown ("---"),
+//                             failing open exactly as that code did.
+//   dedupe=true               latest report per callsign - the old client's
+//                             "keep the strongest SNR" tie-break is gone with
+//                             the SNR field itself (see spots.h).
+//   max_age=900               RBN's old RBN_TTL_S was 600 (10 min); widened
+//                             slightly since this is now a periodic poll, not
+//                             a continuous feed re-spotting every couple of
+//                             minutes on its own.
+#define RBN_CLUSTER_PERIOD_S      60
+#define RBN_CLUSTER_BACKOFF_MAX_S 900
+#define RBN_CLUSTER_MAX_AGE_S     900
+#define RBN_CLUSTER_LIMIT         80
+
+// Self-spotting (ui/spot_map_view.c) - "who hears my own CQ", independent of
+// the band filter above (operator wants to know regardless of what the
+// panadapter is currently showing - same reasoning the old rbn.c's
+// handle_line() gave). A second, small query: dx_call_includes narrows
+// server-side, then an EXACT strcasecmp below never trusts the substring
+// match alone - the same discipline spots_activation_for_call() uses for the
+// same reason (a loose match can misattribute who heard whom).
+#define RBN_SELF_PERIOD_S      60
+#define RBN_SELF_BACKOFF_MAX_S 900
+#define RBN_SELF_MAX_AGE_S     600
+#define RBN_SELF_LIMIT         20
+#define RBN_SELF_MAX           100   // deduplicated skimmers held
+#define RBN_SELF_TTL_S         (24 * 3600)   // matches the old rbn.c's cap
+
 static spot_t           *s_store;              // PSRAM, SPOTS_MAX entries
 static spot_t           *s_scratch;            // PSRAM, parse target (see parse_pota)
 static int               s_count;
 static SemaphoreHandle_t s_lock;
 static int64_t           s_last_ok_us;
 static volatile bool     s_refresh_req;
+static rbn_self_spot_t  *s_self;               // PSRAM, RBN_SELF_MAX entries
+static int               s_self_n;
 static volatile uint32_t s_version;
 
 // ---- store -----------------------------------------------------------------
@@ -655,6 +697,182 @@ static bool fetch_sota(void)
     return true;
 }
 
+// Shared by the RBN/cluster lane and the self-spot query below: pull every
+// record whose `source` field matches `want_source` (spothole's own
+// classification - see spots.h's 2026-11-06 comment for why a cluster spot
+// carrying a POTA/SOTA/WWFF reference never reaches here at all, it comes
+// back tagged with THAT programme's source instead and is already covered by
+// fetch_pota()/fetch_sota()). Same field shapes as parse_sota() (freq in Hz,
+// mode/mode_type, dx_call, time) - kept separate from it rather than shared,
+// since SOTA's own position/reference handling does not apply here and
+// duplicating ~15 lines is cheaper than risking the already-verified SOTA
+// path in a refactor.
+static int collect_spothole_source(cJSON *root, const char *want_source,
+                                   spot_source_t src_enum, spot_t *out, int max)
+{
+    int n = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, root) {
+        if (n >= max) break;
+        const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(it, "source"));
+        if (!src || strcasecmp(src, want_source) != 0) continue;
+
+        const cJSON *jf = cJSON_GetObjectItem(it, "freq");
+        double hz = 0;
+        if (cJSON_IsNumber(jf))      hz = jf->valuedouble;
+        else if (cJSON_IsString(jf)) hz = atof(jf->valuestring);
+        if (hz < 1000000.0 || hz > 60000000.0) continue;   // not HF/6m
+
+        spot_t sp = {0};
+        sp.freq_hz = (uint32_t)hz;
+        sp.source  = src_enum;
+
+        const cJSON *jc = cJSON_GetObjectItem(it, "dx_call");
+        if (cJSON_IsString(jc)) snprintf(sp.call, sizeof(sp.call), "%s", jc->valuestring);
+        if (!sp.call[0]) continue;
+
+        const cJSON *jq = cJSON_GetObjectItem(it, "qrt");
+        if (cJSON_IsBool(jq) && cJSON_IsTrue(jq)) continue;
+
+        const cJSON *jm  = cJSON_GetObjectItem(it, "mode");
+        const cJSON *jmt = cJSON_GetObjectItem(it, "mode_type");
+        sp.mode = mode_from_str(cJSON_IsString(jm) ? jm->valuestring : NULL);
+        if (sp.mode == SPOT_MODE_OTHER && cJSON_IsString(jmt))
+            sp.mode = mode_from_str(jmt->valuestring);
+
+        const cJSON *jt = cJSON_GetObjectItem(it, "time");
+        if (cJSON_IsNumber(jt)) sp.heard_unix = (int64_t)jt->valuedouble;
+
+        out[n++] = sp;
+    }
+    return n;
+}
+
+// RBN + DX cluster, one fetch, two publishes - see the constants' comment.
+// want_rbn/want_cluster let the caller skip publishing a source whose
+// checkbox is off without skipping the OTHER one's fetch, same as the old
+// two-client setup let one run without the other.
+static bool fetch_rbn_cluster(bool want_rbn, bool want_cluster)
+{
+    const char *band = ui_get_band_str();
+    char url[192];
+    if (band && band[0] && strcmp(band, "---") != 0)
+        snprintf(url, sizeof(url),
+                 "%s/spots?source=RBN,Cluster&band=%s&dedupe=true&max_age=%d&limit=%d",
+                 SPOTHOLE_BASE, band, RBN_CLUSTER_MAX_AGE_S, RBN_CLUSTER_LIMIT);
+    else
+        // Band unknown - fail OPEN (no band filter) rather than fetch nothing,
+        // same call the old rbn.c's refresh_band() made.
+        snprintf(url, sizeof(url),
+                 "%s/spots?source=RBN,Cluster&dedupe=true&max_age=%d&limit=%d",
+                 SPOTHOLE_BASE, RBN_CLUSTER_MAX_AGE_S, RBN_CLUSTER_LIMIT);
+
+    char *buf = NULL;
+    int len = http_get_json(url, &buf);
+    if (len < 0) return false;
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!cJSON_IsArray(root)) {
+        if (root) cJSON_Delete(root);
+        ESP_LOGW(TAG, "RBN/cluster: unparseable JSON");
+        return false;
+    }
+
+    // s_scratch is reused between the two calls: spots_publish() copies its
+    // contents into the store before returning, so it is free again the
+    // instant each call comes back - same pattern as the old rbn.c reusing
+    // one publish-staging buffer for one source, just twice here.
+    int nr = want_rbn     ? collect_spothole_source(root, "RBN",     SPOT_SRC_RBN,     s_scratch, SPOTS_MAX) : 0;
+    spots_publish(SPOT_SRC_RBN, s_scratch, nr);
+    int nc = want_cluster ? collect_spothole_source(root, "Cluster", SPOT_SRC_CLUSTER, s_scratch, SPOTS_MAX) : 0;
+    spots_publish(SPOT_SRC_CLUSTER, s_scratch, nc);
+
+    cJSON_Delete(root);
+    s_last_ok_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "RBN/cluster: %d RBN, %d cluster spots (%u bytes, band=%s)",
+             nr, nc, (unsigned)len, (band && band[0]) ? band : "all");
+    return true;
+}
+
+// Self-spotting: "who hears my own CQ" - see spots.h. dx_call_includes narrows
+// server-side; the exact strcasecmp below is what actually decides a record
+// is really us, the same two-step discipline spots_activation_for_call() uses
+// (a server-side substring match is a filter, never the final word on an
+// exact identity).
+//
+// note_self_spot() itself lives further down, beside rbn_self_spots_get()/
+// _clear() (the public API it backs) - forward-declared here the same way
+// fetch_sched()/sched_take_request() are below, rather than moved.
+static void note_self_spot(const char *skimmer, uint32_t freq_hz,
+                           float lat, float lon, bool has_pos, int64_t now);
+
+static bool fetch_rbn_self(void)
+{
+    char my_call[16] = {0};
+    settings_get_my_callsign(my_call, sizeof(my_call));
+    if (!my_call[0]) return true;   // nothing to ask for - not a fetch failure
+
+    char url[224];
+    snprintf(url, sizeof(url),
+             "%s/spots?source=RBN&dx_call_includes=%s&dedupe=true&max_age=%d&limit=%d",
+             SPOTHOLE_BASE, my_call, RBN_SELF_MAX_AGE_S, RBN_SELF_LIMIT);
+
+    char *buf = NULL;
+    int len = http_get_json(url, &buf);
+    if (len < 0) return false;
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!cJSON_IsArray(root)) {
+        if (root) cJSON_Delete(root);
+        ESP_LOGW(TAG, "RBN self-spot: unparseable JSON");
+        return false;
+    }
+
+    int64_t now = (int64_t)time(NULL);
+    int found = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, root) {
+        const cJSON *jdx = cJSON_GetObjectItem(it, "dx_call");
+        const char  *dx  = cJSON_IsString(jdx) ? jdx->valuestring : NULL;
+        if (!dx || strcasecmp(dx, my_call) != 0) continue;   // the exact check
+
+        const cJSON *jde = cJSON_GetObjectItem(it, "de_call");
+        const char  *de  = cJSON_IsString(jde) ? jde->valuestring : NULL;
+        if (!de || !de[0]) continue;   // no skimmer identity, nothing to show
+
+        const cJSON *jf = cJSON_GetObjectItem(it, "freq");
+        double hz = cJSON_IsNumber(jf) ? jf->valuedouble : 0;
+        if (hz < 1000000.0 || hz > 60000000.0) continue;
+
+        // Prefer spothole's own de_latitude/de_longitude - it already did the
+        // QRZ/HamQTH/DXCC-centroid work server-side (de_location_source), so
+        // asking our own qrz_coords/geo_coords again would just repeat it.
+        // Fall back to them only when spothole gives nothing, same backstop
+        // order the old rbn.c used.
+        const cJSON *jlat = cJSON_GetObjectItem(it, "de_latitude");
+        const cJSON *jlon = cJSON_GetObjectItem(it, "de_longitude");
+        float lat = 0, lon = 0;
+        bool has_pos = false;
+        if (cJSON_IsNumber(jlat) && cJSON_IsNumber(jlon)) {
+            lat = (float)jlat->valuedouble;
+            lon = (float)jlon->valuedouble;
+            has_pos = true;
+        } else {
+            bool have_qrz = qrz_coords_lookup_cached(de, &lat, &lon);
+            has_pos = have_qrz || geo_coords_for_call(de, &lat, &lon);
+        }
+
+        note_self_spot(de, (uint32_t)hz, lat, lon, has_pos, now);
+        found++;
+    }
+    cJSON_Delete(root);
+    s_last_ok_us = esp_timer_get_time();
+    if (found) ESP_LOGI(TAG, "RBN self-spot: %d report(s) for %s", found, my_call);
+    return true;
+}
+
 // One task, two sources, each with its own cadence: POTA every minute, SOTA
 // every two with a quiet backoff. Both are due-time driven rather than "sleep
 // the shorter period and count", so adding a third source is a due time and not
@@ -670,10 +888,15 @@ static void spots_task(void *arg)
     (void)arg;
     int64_t next_pota_us = 0;                        // 0 = due now
     int64_t next_sota_us = 0;
+    int64_t next_rbncl_us = 0;
+    int64_t next_rbnself_us = 0;
     int     sota_backoff_s = 0;                      // 0 = last attempt was fine
-    // Start as if both were on, so a boot with a source switched off clears its
+    int     rbncl_backoff_s = 0;
+    int     rbnself_backoff_s = 0;
+    // Start as if all were on, so a boot with a source switched off clears its
     // (empty) slice exactly once and then leaves the store alone.
     bool    was_pota_en = true, was_sota_en = true;
+    bool    was_rbn_en = true, was_cluster_en = true;
 
     for (;;) {
         // 500 ms granularity so a refresh request (band change, source just
@@ -682,8 +905,8 @@ static void spots_task(void *arg)
         bool forced = s_refresh_req;
         if (forced) {
             s_refresh_req = false;
-            next_pota_us = next_sota_us = 0;
-            sota_backoff_s = 0;                      // an explicit ask resets the backoff
+            next_pota_us = next_sota_us = next_rbncl_us = next_rbnself_us = 0;
+            sota_backoff_s = rbncl_backoff_s = rbnself_backoff_s = 0;  // an explicit ask resets every backoff
         }
 
         qmx_settings_t s;
@@ -693,17 +916,26 @@ static void spots_task(void *arg)
         // Clear a source's slice when it is switched off. Merely stopping the
         // fetch leaves its spots in the store to age out over SPOT_STALE_S (30
         // minutes), so unticking POTA kept showing POTA spots - which looks
-        // exactly like the checkbox not working. RBN and the DX cluster already
-        // do this on their own disable paths.
+        // exactly like the checkbox not working.
         //
         // ON THE EDGE ONLY. spots_publish() bumps the store version, which is
         // what the lane repaints on, and this loop now ticks at 2 Hz - clearing
         // unconditionally rebuilt every label twice a second for as long as a
         // source was switched off.
-        if (was_pota_en && !s.spots_en) spots_publish(SPOT_SRC_POTA, NULL, 0);
-        if (was_sota_en && !s.sota_en)  spots_publish(SPOT_SRC_SOTA, NULL, 0);
-        was_pota_en = s.spots_en;
-        was_sota_en = s.sota_en;
+        //
+        // ⚠ Self-spots are DELIBERATELY NOT cleared here, same as the old
+        // rbn.c: that ring buffer is a 24 h record of who has heard you, not a
+        // live picture of the band, and toggling the lane off mid-session must
+        // not erase it (the operator's only way to clear it is the explicit
+        // Flush button, rbn_self_spots_clear()).
+        if (was_pota_en    && !s.spots_en)   spots_publish(SPOT_SRC_POTA,    NULL, 0);
+        if (was_sota_en    && !s.sota_en)    spots_publish(SPOT_SRC_SOTA,    NULL, 0);
+        if (was_rbn_en     && !s.rbn_en)     spots_publish(SPOT_SRC_RBN,     NULL, 0);
+        if (was_cluster_en && !s.cluster_en) spots_publish(SPOT_SRC_CLUSTER, NULL, 0);
+        was_pota_en    = s.spots_en;
+        was_sota_en    = s.sota_en;
+        was_rbn_en     = s.rbn_en;
+        was_cluster_en = s.cluster_en;
 
         if (!wifi_is_connected()) continue;
 
@@ -745,6 +977,38 @@ static void spots_task(void *arg)
             next_sota_us = esp_timer_get_time() +
                            (int64_t)(ok ? SOTA_PERIOD_S : sota_backoff_s) * 1000000;
         }
+
+        // RBN + DX cluster lane (2026-11-06, replacing net/rbn.c + net/dxcluster.c).
+        // One fetch serves both toggles; due whenever EITHER is on, same
+        // reasoning fetch_rbn_cluster()'s want_rbn/want_cluster split gives.
+        if ((s.rbn_en || s.cluster_en) && now >= next_rbncl_us &&
+            !net_quiet_active() && !bg_feed_gate_active()) {
+            bool ok = fetch_rbn_cluster(s.rbn_en, s.cluster_en);
+            if (ok) {
+                rbncl_backoff_s = 0;
+            } else {
+                rbncl_backoff_s = rbncl_backoff_s ? rbncl_backoff_s * 2 : RBN_CLUSTER_PERIOD_S;
+                if (rbncl_backoff_s > RBN_CLUSTER_BACKOFF_MAX_S) rbncl_backoff_s = RBN_CLUSTER_BACKOFF_MAX_S;
+                ESP_LOGW(TAG, "RBN/cluster: spothole unreachable - next try in %d s", rbncl_backoff_s);
+            }
+            next_rbncl_us = esp_timer_get_time() +
+                            (int64_t)(ok ? RBN_CLUSTER_PERIOD_S : rbncl_backoff_s) * 1000000;
+        }
+
+        // Self-spotting rides on rbn_en alone, same as the old rbn.c (the
+        // self-spot check only ever ran inside RBN's own live session).
+        if (s.rbn_en && now >= next_rbnself_us && !net_quiet_active() && !bg_feed_gate_active()) {
+            bool ok = fetch_rbn_self();
+            if (ok) {
+                rbnself_backoff_s = 0;
+            } else {
+                rbnself_backoff_s = rbnself_backoff_s ? rbnself_backoff_s * 2 : RBN_SELF_PERIOD_S;
+                if (rbnself_backoff_s > RBN_SELF_BACKOFF_MAX_S) rbnself_backoff_s = RBN_SELF_BACKOFF_MAX_S;
+                ESP_LOGW(TAG, "RBN self-spot: spothole unreachable - next try in %d s", rbnself_backoff_s);
+            }
+            next_rbnself_us = esp_timer_get_time() +
+                              (int64_t)(ok ? RBN_SELF_PERIOD_S : rbnself_backoff_s) * 1000000;
+        }
     }
 }
 
@@ -753,12 +1017,13 @@ void spots_init(void)
     if (s_store) return;
     s_store   = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_scratch = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_self    = heap_caps_calloc(RBN_SELF_MAX, sizeof(rbn_self_spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_lock    = xSemaphoreCreateMutex();
-    if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
+    if (!s_store || !s_scratch || !s_self || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
     // 6144 -> 9216: two qmx_settings_t locals in this file, generous not
     // incremental - see sd_archive.c's comment for why.
     psram_task_create(spots_task, "spots", 11264, NULL, 2, tskNO_AFFINITY);
-    ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
+    ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA, RBN, cluster - all via spothole.app/api except POTA)");
 }
 
 /* ---- the spot the operator last chose to work - see spots.h ----------- */
@@ -800,6 +1065,69 @@ bool spots_last_pick(char *call_out, size_t call_sz, uint8_t *mode_out,
     if (call_out && call_sz) snprintf(call_out, call_sz, "%s", s_pick_call);
     if (mode_out) *mode_out = s_pick_mode;
     return true;
+}
+
+/* ---- RBN self-spotting - see spots.h for the contract and the 2026-11-06
+ * move off net/rbn.c's telnet feed. Writer is fetch_rbn_self() below, on the
+ * spots task; no mutex around s_self/s_self_n, same reasoning the old rbn.c
+ * gave - there is exactly one writer, which only ever appends or evicts under
+ * its own call, so a reader racing it sees at worst one stale/missing entry
+ * for a tick, never torn memory (s_self is a fixed PSRAM array, s_self_n a
+ * plain int). */
+static void note_self_spot(const char *skimmer, uint32_t freq_hz,
+                           float lat, float lon, bool has_pos, int64_t now)
+{
+    if (!s_self) return;
+    for (int i = 0; i < s_self_n; i++) {
+        if (strcmp(s_self[i].skimmer, skimmer) == 0) {
+            s_self[i].heard_unix = now;
+            s_self[i].freq_hz    = freq_hz;
+            if (has_pos && !s_self[i].has_pos) {
+                s_self[i].lat = lat; s_self[i].lon = lon; s_self[i].has_pos = true;
+            }
+            return;
+        }
+    }
+    int slot;
+    if (s_self_n < RBN_SELF_MAX) {
+        slot = s_self_n++;
+    } else {
+        slot = 0;
+        for (int i = 1; i < RBN_SELF_MAX; i++)
+            if (s_self[i].heard_unix < s_self[slot].heard_unix) slot = i;
+    }
+    snprintf(s_self[slot].skimmer, sizeof(s_self[slot].skimmer), "%s", skimmer);
+    s_self[slot].freq_hz    = freq_hz;
+    s_self[slot].snr_db     = 0;      // spothole has no SNR field - see spots.h
+    s_self[slot].heard_unix = now;
+    s_self[slot].lat        = lat;
+    s_self[slot].lon        = lon;
+    s_self[slot].has_pos    = has_pos;
+    ESP_LOGI(TAG, "self-spotted by %s on %lu Hz%s", skimmer, (unsigned long)freq_hz,
+             has_pos ? "" : " [NO POSITION]");
+}
+
+static void expire_self(int64_t now)
+{
+    if (!s_self) return;
+    int keep = 0;
+    for (int i = 0; i < s_self_n; i++)
+        if (now - s_self[i].heard_unix <= RBN_SELF_TTL_S) s_self[keep++] = s_self[i];
+    s_self_n = keep;
+}
+
+int rbn_self_spots_get(rbn_self_spot_t *out, int max)
+{
+    if (!out || max <= 0 || !s_self) return 0;
+    expire_self((int64_t)time(NULL));
+    int n = s_self_n < max ? s_self_n : max;
+    memcpy(out, s_self, (size_t)n * sizeof(rbn_self_spot_t));
+    return n;
+}
+
+void rbn_self_spots_clear(void)
+{
+    s_self_n = 0;
 }
 
 /* ==========================================================================

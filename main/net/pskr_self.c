@@ -37,7 +37,7 @@ static const char *BROKER_URI = "mqtt://mqtt.pskreporter.info:1883";
 // than a resource limit - oldest evicted first) plus a manual Flush
 // (pskr_self_clear()) so the map can be started fresh on demand.
 #define PSKR_SELF_MAX 100
-#define PSKR_SELF_TTL_S (24 * 3600)   // same as net/rbn.c's RBN_SELF_TTL_S - see the reason there
+#define PSKR_SELF_TTL_S (24 * 3600)   // same as net/spots.c's RBN_SELF_TTL_S - see the reason there
 
 static EXT_RAM_BSS_ATTR pskr_self_spot_t s_store[PSKR_SELF_MAX];
 static int              s_count;
@@ -57,7 +57,7 @@ static void store_expire(int64_t now)
     s_count = keep;
 }
 
-// Same dedupe-by-reporter shape as net/rbn.c's note_self_spot().
+// Same dedupe-by-reporter shape as net/spots.c's note_self_spot().
 static void store_add(const pskr_self_spot_t *in)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);

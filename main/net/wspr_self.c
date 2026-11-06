@@ -59,7 +59,7 @@ static const char *TAG = "wspr_self";
 #define QUERY_LIMIT     30      // rows requested - plenty for "who's hearing me right now"
 #define POLL_INTERVAL_S 180     // WSPR cycles are 2 min; this trails by half a cycle so a
                                  // just-uploaded report has landed in wsprnet's DB by the time we ask
-#define WSPR_SELF_TTL_S (24 * 3600)   // same as net/rbn.c's RBN_SELF_TTL_S - see the reason there
+#define WSPR_SELF_TTL_S (24 * 3600)   // same as net/spots.c's RBN_SELF_TTL_S - see the reason there
 
 static EXT_RAM_BSS_ATTR wspr_self_spot_t s_store[WSPR_SELF_MAX];
 static int               s_count;
@@ -75,7 +75,7 @@ static void store_expire(int64_t now)
     s_count = keep;
 }
 
-// Same dedupe-by-reporter shape as net/rbn.c's note_self_spot() / net/pskr_self.c's store_add().
+// Same dedupe-by-reporter shape as net/spots.c's note_self_spot() / net/pskr_self.c's store_add().
 static void store_add(const wspr_self_spot_t *in)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);

@@ -148,8 +148,6 @@ idf_component_register(
         "bt_hid_mouse.c"
         "hid_report_map.c"
         "hid_keycode.c"
-        "net/rbn.c"
-        "net/dxcluster.c"
         "net/qrz_coords.c"
         "net/pskr_self.c"
         "net/wspr_self.c"

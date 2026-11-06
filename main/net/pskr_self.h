@@ -24,7 +24,7 @@
 // else - band and mode included, since a CW/RTTY-only skimmer network
 // equivalent does not exist for Digi modes and we want all of them.
 //
-// See net/rbn.c's self-spot capture for the CW equivalent (RBN has no
+// See net/spots.c's self-spot capture for the CW equivalent (RBN has no
 // server-side filtering at all, so that one taps the existing full feed
 // instead of opening a second connection).
 

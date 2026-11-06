@@ -5579,7 +5579,7 @@ static const httpd_uri_t uri_eqsl_creds = {
 // POST /api/qrz_lookup_creds — JSON body {"user":"...","pass":"..."}. QRZ's
 // Callsign Lookup (XML) service has no API-key scheme, unlike the Logbook
 // upload above (qrz_key_handler) — username+password only, exchanged for a
-// session key by net/qrz_coords.c. Used to place net/rbn.c's self-spot
+// session key by net/qrz_coords.c. Used to place net/spots.c's self-spot
 // skimmers (who is hearing us on CW) at a real station position on the spot
 // map instead of a country centroid.
 static esp_err_t qrz_lookup_creds_handler(httpd_req_t *req)
