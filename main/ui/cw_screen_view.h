@@ -30,3 +30,17 @@ void cw_screen_feed_decoded(const char *s, int n);
 // ladder. Called on a simulation-mode toggle so a phantom QSO leaves nothing
 // on screen. LVGL thread only.
 void cw_screen_clear_decode(void);
+
+// Web-interface request to send CW text - a macro (with its {MYCALL}/{PARK}/
+// {RST}/{SERIAL} placeholders still in it, expanded on the LVGL thread same as
+// a Tab5 tap) or free text. Only records the request - same deferral pattern
+// as ft8_screen_view_request_freetext(): this runs on the HTTP task, and
+// send_cw_text() (expansion, the sim interlock, the CAT hand-off) belongs to
+// the LVGL thread. Drained by the page's own 500 ms timer, so it only takes
+// effect while the Tab5 is actually showing the CW page (T159, Ralph DL1HR).
+void cw_screen_view_request_send(const char *raw_text);
+
+// The last text actually sent (expanded, real or sim), for the web status
+// poll to echo back - same string the Tab5's own "Keying:" line shows.
+// Empty until the first send this session.
+const char *cw_screen_view_last_sent(void);

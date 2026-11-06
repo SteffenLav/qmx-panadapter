@@ -246,6 +246,13 @@ static lv_obj_t *s_mini_cells_o[MINI_SLOTS_MAX];
 static uint8_t   s_mini_prev_e[MINI_SLOTS_MAX];
 static uint8_t   s_mini_prev_o[MINI_SLOTS_MAX];
 static int       s_mini_n_slots = 0;
+// "No RX while TX'ing" overlay: one label per row, shown only while that row is
+// grey FOR THE REASON OF OUR OWN TRANSMIT, not at FT8 start or on a dead band
+// (see the gate in mini_paint) - Don WB0LQW asked what the grey strip meant.
+static lv_obj_t *s_mini_note_e  = NULL;
+static lv_obj_t *s_mini_note_o  = NULL;
+static bool      s_mini_note_shown_e = false;
+static bool      s_mini_note_shown_o = false;
 static void mini_paint(void);
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
@@ -2872,6 +2879,24 @@ static void mini_paint(void)
         bool row_stale  = (last_rx <= 0) ||
                           ((now_utc - last_rx) > (int64_t)STALE_WINDOWS * slot_s * 2);
 
+        // "No RX while TX'ing" note: only when THIS row is the window we are
+        // actually using (parity locked AND it matches, not the "could be
+        // either" case mine_here also covers) and a QSO or TX is genuinely
+        // running - never at FT8 start or on a dead band, where row_stale is
+        // true for an unrelated reason (Don WB0LQW asked what the grey meant).
+        bool our_tx_window = parity_known && (row_even == our_even);
+        bool qso_or_tx_active = (ft8_qso_get_state() != FT8_QSO_IDLE) ||
+                                (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE);
+        bool show_tx_note = row_stale && our_tx_window && qso_or_tx_active &&
+                             n_stations > 0;
+        lv_obj_t *notebox = row_even ? s_mini_note_e : s_mini_note_o;
+        bool     *shown   = row_even ? &s_mini_note_shown_e : &s_mini_note_shown_o;
+        if (notebox && show_tx_note != *shown) {
+            if (show_tx_note) lv_obj_clear_flag(notebox, LV_OBJ_FLAG_HIDDEN);
+            else              lv_obj_add_flag(notebox, LV_OBJ_FLAG_HIDDEN);
+            *shown = show_tx_note;
+        }
+
         for (int i = 0; i < n_slots; i++) {
             if (!cells[i]) continue;
             uint8_t cls;
@@ -5159,6 +5184,27 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_clear_flag(tag, LV_OBJ_FLAG_CLICKABLE);
             lv_label_set_text(tag, row ? "O" : "E");
             lv_obj_center(tag);
+
+            // "No RX while TX'ing" overlay, on top of the cells (created after
+            // them, so it paints last) - hidden until mini_paint() has a reason
+            // to show it. Boxed and centred the same way the E/O tag is, so a
+            // 14 px font sits mid-row instead of hanging off its top edge.
+            lv_obj_t *notebox = lv_obj_create(s_mini_strip);
+            lv_obj_set_size(notebox, cells_w, row_h);
+            lv_obj_set_pos(notebox, 0, y);
+            lv_obj_set_style_bg_opa(notebox, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(notebox, 0, 0);
+            lv_obj_set_style_pad_all(notebox, 0, 0);
+            lv_obj_clear_flag(notebox, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(notebox, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(notebox, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_t *note = lv_label_create(notebox);
+            lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(note, lv_color_hex(0xcccccc), 0);
+            lv_obj_clear_flag(note, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_text(note, "No RX while TX'ing");
+            lv_obj_center(note);
+            if (row) s_mini_note_o = notebox; else s_mini_note_e = notebox;
         }
     }
 

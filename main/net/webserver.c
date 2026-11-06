@@ -25,6 +25,7 @@
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ui/gps_status_view.h" // the dev "gps_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
+#include "cw_screen_view.h"   // cw_screen_view_request_send, cw_screen_view_last_sent
 #include "ui_mode.h"          // ui_mode_get (CW page reports screen:"cw")
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "js8_submode.h"   // the submode table and the one refusal rule
@@ -790,6 +791,28 @@ static esp_err_t status_handler(httpd_req_t *req)
                 cJSON_AddNumberToObject(c, "cols", cw_decode_cols());
                 cJSON_AddItemToObject(root, "cw", c);
             }
+        }
+    }
+
+    /* T159 (Ralph DL1HR): the CW page itself, for remote operation - distinct
+     * from the "cw" decode object above, which is gated on the RADIO's mode
+     * and sent regardless of which Tab5 screen is up. This one is gated on
+     * the Tab5 screen, because macros and a send box only mean anything there.
+     * Macro TEXT is sent raw, placeholders and all ({MYCALL} etc.) - the
+     * browser shows exactly what the Tab5's own un-expanded button face would,
+     * and cw_screen_view.c expands it at send time either way. Editing the six
+     * macros remains Tab5-only for now; see T159's TODO row. */
+    if (ui_mode_get() == UI_MODE_CW) {
+        qmx_settings_t cws;
+        settings_load_all(&cws);
+        cJSON *ctx = cJSON_AddObjectToObject(root, "cw_tx");
+        if (ctx) {
+            cJSON *macros = cJSON_AddArrayToObject(ctx, "macros");
+            for (int i = 0; i < 6; i++)
+                cJSON_AddItemToArray(macros, cJSON_CreateString(
+                    cws.cw_msg_set ? cws.cw_msg_b[i] : cws.cw_msg[i]));
+            cJSON_AddBoolToObject(ctx, "set_b", cws.cw_msg_set != 0);
+            cJSON_AddStringToObject(ctx, "last_sent", cw_screen_view_last_sent());
         }
     }
 
@@ -2316,6 +2339,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_OK;
         }
         ft8_screen_view_request_freetext(txt);
+    } else if (action && strcmp(action, "cw_send") == 0) {
+        /* T159 (Ralph DL1HR): send CW text from the browser - a macro (with its
+         * placeholders still in it) or free text. Deferred to the LVGL task for
+         * the same reason as js8_text above: expansion, the sim interlock and
+         * the CAT hand-off all belong to cw_screen_view.c's single send path,
+         * none of it safe to run on this task. Only takes effect while the
+         * Tab5 is actually on the CW page (its own 500 ms timer drains the
+         * request) - switch it there first with set_screen. */
+        const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (!txt || !txt[0]) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"no text\"}");
+            return ESP_OK;
+        }
+        cw_screen_view_request_send(txt);
     } else if (action && strcmp(action, "js8_text_cancel") == 0) {
         /* ⛔ Reachable while transmitting, on purpose. A run holds the
          * frequency for up to three minutes and the operator must be able to

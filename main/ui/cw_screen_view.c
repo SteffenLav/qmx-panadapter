@@ -1016,6 +1016,26 @@ static bool has_token_ci(const char *hay, const char *needle)
     return false;
 }
 
+// Last text actually sent (expanded), and the web-interface pending-send
+// slot - see cw_screen_view_request_send()'s header comment for the deferral
+// reason. Both touched from the HTTP task (write the pending slot, read
+// s_last_sent for the status poll) and the LVGL thread (tick_cb drains the
+// slot, send_cw_text() writes s_last_sent) - a single char buffer written
+// whole by snprintf and read whole by the status poll needs no lock here,
+// the same argument ft8_screen_view's pending-flag fields already rely on.
+static char s_last_sent[CW_SEND_MAX + 1] = "";
+static char s_web_send_pending[CW_SEND_MAX + 1] = "";
+static bool s_web_send_has_pending = false;
+
+const char *cw_screen_view_last_sent(void) { return s_last_sent; }
+
+void cw_screen_view_request_send(const char *raw_text)
+{
+    if (!raw_text) return;
+    snprintf(s_web_send_pending, sizeof(s_web_send_pending), "%s", raw_text);
+    s_web_send_has_pending = true;
+}
+
 // ---- sending ----------------------------------------------------------------
 // The ONE path every CW transmission takes (memory buttons and the ESM NEXT
 // button): macro expansion, the simulation-mode interlock (sim never reaches
@@ -1055,6 +1075,7 @@ static bool send_cw_text(const char *raw)
     }
     cw_qso_note_sent(exp);
     ESP_LOGI(TAG, "CW send: '%s'%s", exp, cw_sim ? " [SIM]" : "");
+    snprintf(s_last_sent, sizeof(s_last_sent), "%s", exp);
     if (s_lbl_status) {
         // T142: "Keying:" in red claims the radio is transmitting. A sim send
         // never reaches CAT (see above) - the bezel already warns the whole
@@ -1687,6 +1708,13 @@ static void tick_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_shown) return;
+
+    // Web-requested send, drained here rather than acted on directly by the
+    // HTTP task - see cw_screen_view_request_send()'s header comment.
+    if (s_web_send_has_pending) {
+        s_web_send_has_pending = false;
+        send_cw_text(s_web_send_pending);
+    }
 
     /* Draw cw_decode.c's grid - the same one the panadapter and the browser
      * draw. Three disjoint layers per row; see where the labels are declared.

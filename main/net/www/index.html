@@ -1424,6 +1424,30 @@
       <div id="dec-skipped" style="margin-top:4px; font-size:13px; color:var(--dim);"></div>
     </div></div>
 
+  <!-- T159 (Ralph DL1HR): CW page TX controls, for remote operation. The decode
+       side (#cw-line, above) already worked - this is the missing TX half:
+       send a macro or free text. Editing the six macros stays Tab5-only for
+       now; the buttons show whatever is currently configured there, raw
+       placeholders and all, same as the Tab5's own unexpanded button face. -->
+  <div id="cw-tx-wrap" style="display:none; width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
+    <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:8px;">
+      <strong style="color:#ffa040">CW send</strong>
+      <span id="cw-tx-set" style="color:var(--dim); font-size:13px;"></span>
+      <span id="cw-tx-last" style="color:var(--dim); font-size:13px; margin-left:auto;"></span>
+    </div>
+    <div id="cw-tx-macros" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:10px;"></div>
+    <div style="display:flex; gap:8px;">
+      <input id="cw-tx-input" type="text" maxlength="80" placeholder="Free text - {MYCALL} {PARK} {CALL} {RST} {SERIAL} work here too"
+             style="flex:1; min-width:0;">
+      <button id="cw-tx-send-btn" title="Key this text now, through the QMX's own keyer - same as a Tab5 tap">Send</button>
+    </div>
+    <!-- T145 is still open: nothing here can interrupt a send once it starts,
+         same gap the Tab5 itself has (CLAUDE.md, "CW page is ON MAIN"). A long
+         macro run is just as uninterruptible from the browser as from the
+         glass - not worse, but not better either. -->
+    <div style="color:var(--dim); font-size:12px; margin-top:6px;">No abort once sent - same as the Tab5 (long messages run to the end).</div>
+  </div>
+
   <!-- =====================================================================
        WSPR spots
 
@@ -2200,6 +2224,9 @@ let lastPanBins    = 0;
 let lastZoomDecim  = 1;  // zoom-FFT decimation factor from WS frame header byte[1]
 let lastBands      = [];   // [{name, center_hz}]
 let lastScreen     = "panadapter";  // "panadapter" | "ft8" - which screen the Tab5 is showing
+let lastCwMacros   = null;   // 6 raw macro strings, last seen - rebuild buttons only on change
+let lastCwSetB     = null;
+let lastCwLastSent = null;
 let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
@@ -8191,6 +8218,7 @@ async function tick() {
       } }
     lastMode       = s.mode        || "USB";
     updateKeyerPill();   // CW-only, so it has to follow the mode it reads
+    updateCwTx(s);       // CW page TX panel - absent from s.cw_tx when not on that screen
     /* ⚠ THIS REPAINTS, IT DOES NOT RE-READ. The ladder and the current target
        are fetched by refreshOutPwr(), which runs on a band change and after
        our own write - not every poll, because it reads the band's whole
@@ -8261,6 +8289,11 @@ async function tick() {
       lastScreen = screen;
       const isFt8  = (screen === "ft8");
       const isWspr = (screen === "wspr");
+      const isCw   = (screen === "cw");
+      {
+        const cwTx = document.getElementById("cw-tx-wrap");
+        if (cwTx) cwTx.style.display = isCw ? "" : "none";
+      }
       /* The spectrum and waterfall belong to the panadapter and to nothing
          else: neither decode page produces them, so both hide for FT8 and for
          WSPR alike. One rule for the page - show what the Tab5 is showing. */
@@ -10034,6 +10067,69 @@ function openKeyer() {
   buildKeyerDropdown();
   toggleDropdown("keyer");
 }
+
+/* T159 (Ralph DL1HR): CW page TX panel. s.cw_tx is only present while the
+   Tab5 is on the CW screen (webserver.c's own gate) - absent means "nothing
+   to show", not "six empty macros", so the panel's visibility already
+   follows the screen-change block above and this only fills it in. */
+function sendCwText(text) {
+  if (!text) return;
+  sendCmd({ action: "cw_send", text: text });
+}
+
+function updateCwTx(s) {
+  const ctx = s.cw_tx;
+  // Checked on s.screen directly, not on the wrap's own display style: the
+  // screen-change block that sets that style runs LATER in this same poll
+  // handler, so reading it back here would lag the switch by one tick.
+  if ((s.screen || "panadapter") !== "cw" || !ctx) return;
+
+  const setLbl = document.getElementById("cw-tx-set");
+  if (setLbl) setLbl.textContent = ctx.set_b ? "Contest set" : "General set";
+
+  const lastLbl = document.getElementById("cw-tx-last");
+  if (lastLbl && ctx.last_sent !== lastCwLastSent) {
+    lastCwLastSent = ctx.last_sent;
+    lastLbl.textContent = ctx.last_sent ? ("sent: " + ctx.last_sent) : "";
+  }
+
+  // Rebuild the six buttons only when the text or the active set actually
+  // changed - the poll runs at 1 Hz and a macro edit on the Tab5 is rare.
+  const macros = Array.isArray(ctx.macros) ? ctx.macros : [];
+  const changed = ctx.set_b !== lastCwSetB ||
+                  !lastCwMacros || macros.length !== lastCwMacros.length ||
+                  macros.some((m, i) => m !== lastCwMacros[i]);
+  if (!changed) return;
+  lastCwSetB   = ctx.set_b;
+  lastCwMacros = macros.slice();
+
+  const box = document.getElementById("cw-tx-macros");
+  if (!box) return;
+  box.innerHTML = "";
+  macros.forEach((raw) => {
+    const btn = document.createElement("button");
+    btn.textContent = raw && raw.length ? raw : "(empty)";
+    btn.disabled = !raw || !raw.length;
+    btn.title = "Send this macro now - through the QMX's own keyer";
+    btn.addEventListener("click", () => sendCwText(raw));
+    box.appendChild(btn);
+  });
+}
+
+(function wireCwSend() {
+  const btn   = document.getElementById("cw-tx-send-btn");
+  const input = document.getElementById("cw-tx-input");
+  if (!btn || !input) return;
+  const go = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    sendCwText(text);
+    /* Kept, not cleared - a near-identical resend (a cut number corrected, a
+       report added) is the common case, and retyping it punishes that. */
+  };
+  btn.addEventListener("click", go);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+})();
 
 function updateOutPwrPill() {
   const pill = document.getElementById("pill-outpwr");
