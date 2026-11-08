@@ -816,24 +816,12 @@
   #ft8-actions select:hover,
   #wspr-actions button:hover:not(:disabled),
   #wspr-actions select:hover { background: var(--accent); color: #000; }
-  /* The WSPR page owns the dial, so the top bar's Band/Mode/BW/Zoom are inert
-     while it is up - the same rule the Tab5 has always had, and what
-     guide/wspr.md has always said. pointer-events:none is the part that
-     matters: these pills LOOKED inactive to John W5JSS and still fired,
-     because nothing stopped the click. Freq is deliberately NOT in this set.
-
-     ⛔ KEEP THIS RULE ON ITS OWN. In v1.19.0 it was pasted INTO the hover
-     selector list above, so every FT8 action button got pointer-events:none
-     THE MOMENT IT WAS HOVERED. That makes the button stop being the hover
-     target, :hover drops, pointer-events comes back, :hover re-applies - the
-     border flickers at paint rate and a click only lands if it happens to
-     fall in an "auto" frame. Randy N4OPI and Ryan KK6DZB both reported it
-     within a day of the release. */
-  .pill.dial-locked {
-    opacity: .45;
-    pointer-events: none;
-    cursor: default;
-  }
+  /* Band/Mode/BW/Zoom/Tune on the WSPR and FT8/JS8 pages are hidden outright
+     (style.display, in the screen-change handler below), not greyed - see
+     that handler for why. This used to be a `.pill.dial-locked` grey+inert
+     class (removed 2026-11-07); the v1.19.0 pointer-events flicker bug this
+     comment used to warn about (Randy N4OPI, Ryan KK6DZB) cannot recur now
+     that nothing applies pointer-events:none to a hover target. */
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
   /* A JS8 conversation line that names me, and the row it sits on - js8Poll(). */
   .js8-me     { background: var(--accent); color: #000; border-radius: 3px; }
@@ -8301,37 +8289,43 @@ async function tick() {
          else: neither decode page produces them, so both hide for FT8 and for
          WSPR alike. One rule for the page - show what the Tab5 is showing. */
       const noPan = isFt8 || isWspr;
-      /* Band/Mode/BW/Zoom belong to the panadapter's idea of the radio; on
-         the WSPR page that page owns the dial. Disabled rather than merely
-         dimmed - the firmware refuses these four with a reason now, and a
-         control that is offered and then refused is worse than one that is
-         plainly unavailable. Freq stays live on purpose, so a beacon off the
-         standard dial frequency can still be chased. */
-      ["band", "mode", "bw", "zoom"].forEach((id) => {
+      /* Band/Mode/BW/Zoom/Tune belong to the panadapter's idea of the radio;
+         on the WSPR page that page owns the dial, and Zoom/Tune have nothing
+         to act on either - spec-wrap/wf-wrap are hidden on this same screen
+         a few lines below, so there is no spectrum to zoom and no signal for
+         Tune to find.
+         ⛔ HIDDEN, NOT GREYED (operator, 2026-11-07: Randy N4OPI asked what
+         Zoom/Tune even do on a decode page - a dimmed control still invites
+         the question the Tab5 never gets, because the Tab5 doesn't offer the
+         gesture outside the panadapter screen at all). Greying with
+         `dial-locked` was the old rule; this is the web matching the Tab5's
+         own behaviour instead of inventing a softer refusal. */
+      ["band", "mode", "bw", "zoom", "zerobeat"].forEach((id) => {
         const pill = document.getElementById("pill-" + id);
-        if (!pill) return;
-        pill.classList.toggle("dial-locked", isWspr);
-        pill.title = isWspr
-          ? "The WSPR page owns the dial - use its own band button, or leave the page"
-          : "";
+        if (pill) pill.style.display = isWspr ? "none" : "";
       });
-      /* ⛔ ON THE DIGI SCREEN THESE FOUR ARE NOT HIDDEN BECAUSE THEY ARE
-         UNTIDY - THEY DO NOT WORK. The FT8/FT4/JS8 engine owns the dial, the
-         firmware refuses band, mode and bandwidth while it is running, and the
-         pane carries its own Band... preset list for the only band change that
+      /* ⛔ ON THE DIGI SCREEN THESE ARE NOT HIDDEN BECAUSE THEY ARE UNTIDY -
+         THEY DO NOT WORK. The FT8/FT4/JS8 engine owns the dial, the firmware
+         refuses band, mode and bandwidth while it is running, and the pane
+         carries its own Band... preset list for the only band change that
          makes sense here. RIT is radio state that the slot timing does not
          follow at all. Offering a control and then refusing it is worse than
-         not offering it - the same judgement the WSPR page already made, taken
-         one step further because here there is nothing to grey out FOR.
+         not offering it - the same judgement the WSPR page already made.
 
          Operator, 2026-10-15: "band, mode, bw, rit ... not allowed to change
          and is irrelevant for JS8".
 
-         ⭐ ZOOM, FREQ AND F STAY. Zoom and F belong to the view, not the
-         radio, and the frequency readout is how an off-standard JS8 or FT8
-         frequency is seen and set - which is why freq was already kept out of
-         the WSPR dial-lock set above. Operator's list, unchanged. */
-      ["band", "mode", "bw", "rit"].forEach((id) => {
+         ⛔ ZOOM AND TUNE JOINED THIS LIST 2026-11-07, having been kept on the
+         strength of a rule ("Zoom is a view control") that stopped being true
+         once spec-wrap/wf-wrap started hiding on this screen too - by then
+         there was no spectrum left for Zoom to act on, and Tune's SSB
+         estimator still arms on USB (the radio mode FT8/JS8 run in) with
+         nothing to stop it retuning the dial out from under the decoder.
+         Randy N4OPI asked what they did; the honest answer was "nothing you
+         can see, and one of them could move your dial." FREQ AND F STAY -
+         Freq is how an off-standard JS8/FT8 frequency is seen and set, and F
+         was already removed below for having nothing to flatten. */
+      ["band", "mode", "bw", "rit", "zoom", "zerobeat"].forEach((id) => {
         const pill = document.getElementById("pill-" + id);
         if (pill) pill.style.display = isFt8 ? "none" : "";
       });
