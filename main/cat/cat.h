@@ -539,6 +539,27 @@ int cat_get_sidetone_absolute(void);
  * zero" - see the block above. */
 uint16_t cat_sidetone_vol_max(void);
 
+/* ---- CW-page sidetone auto-management (operator ask, 2026-11-09) --------
+ *
+ * New/average users leave the Tab5's own "QMX volume" slider low (they do
+ * not need the radio's analogue RX audio - the Tab5 shows everything), and
+ * do not know that drags the sidetone to near-silent with it. That IS
+ * Relative mode as documented, not a bug - but it is confusing them.
+ *
+ * The CW page (ui.c, ui_set_base_mode) forces Absolute on entry ONLY when it
+ * finds the radio in confirmed Relative, then mirrors "QMX volume" into
+ * Sidetone volume itself while the page is up, and restores Relative on
+ * leaving - so a standalone QMX is never left needing to be "repaired".
+ * If the radio is ALREADY Absolute, this is someone's own deliberate choice
+ * (Michael KZ4LY's binaural T139 setup) and is never touched. */
+void cat_sidetone_set_automirror(bool on);
+bool cat_sidetone_automirror_active(void);
+
+/* Feed the current/just-requested AF gain (same 0.25 dB units as
+ * cat_request_af_gain) through the mirror. No-op when automirror is off or
+ * the sidetone range has not been discovered yet. */
+void cat_sidetone_mirror_from_af_gain(uint16_t ag);
+
 /* ---- T144: Semi QSK (break-in delay) ------------------------------------
  *
  * Michael KZ4LY / Gyula HA3HZ: receive comes back the instant a CW signal

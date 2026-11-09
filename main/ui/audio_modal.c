@@ -265,6 +265,11 @@ static void af_cb(lv_event_t *e)
      * what its LCD shows. Deferred to the poll task inside cat.c - a direct
      * write here races the FA/MD/FW poll and comes back "?;". */
     cat_request_af_gain((uint16_t)(db * 4));
+    // Sidetone mirror (if the CW page has it armed) commits on RELEASE only,
+    // same rule as RF gain below - it is the expensive MM/MU; write, and AG
+    // itself fires on every drag tick.
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED)
+        cat_sidetone_mirror_from_af_gain((uint16_t)(db * 4));
     if (s_lbl_af) {
         char b[48];
         snprintf(b, sizeof(b), "Radio AF gain  %d dB", db);

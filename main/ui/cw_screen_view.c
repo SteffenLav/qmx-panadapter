@@ -128,6 +128,10 @@ static lv_obj_t *s_card_call  = NULL;
 static lv_obj_t *s_card_info  = NULL;
 static lv_obj_t *s_card_hint  = NULL;
 
+// Small always-present manual call-entry button, independent of the card's
+// own visibility (operator ask, 2026-11-09) - see its build site for why.
+static lv_obj_t *s_call_entry_btn = NULL;
+
 // Manual callsign entry: tapping the card while nothing is heard or adopted
 // opens this (Gyula HA3HZ, groups.io 2026-11-06 - no way to key in a call you
 // already know, only capture-from-air or tap-to-adopt a heard one). Built on
@@ -1398,6 +1402,16 @@ static void callentry_open(void)
     lv_obj_move_foreground(s_callentry_modal);
 }
 
+// Always-present affordance (operator ask, 2026-11-09): the station card
+// itself used to BE the "tap to enter a callsign" prompt whenever nothing
+// was heard, which put a permanent box in the way during ordinary
+// CQ/browsing - most sessions never need it. This small icon stays up
+// instead, and works regardless of card state - including a populated card,
+// which fixes a second gap: before this, a wrongly auto-adopted call had no
+// way to be corrected (tapping a populated card only drops the QSO, see
+// card_clicked_cb).
+static void call_entry_btn_clicked_cb(lv_event_t *e) { (void)e; callentry_open(); }
+
 // ---- station card -----------------------------------------------------------
 static void card_clicked_cb(lv_event_t *e)
 {
@@ -1432,14 +1446,16 @@ static void refresh_card(void)
 
     const char *call = tgt[0] ? tgt : (have_heard && age < 120) ? heard : NULL;
     if (!call) {
-        // Nothing heard: still show the card as a tappable "enter a call"
-        // prompt, rather than hiding it - that hidden state is what left
-        // Gyula HA3HZ with no way to find the manual-entry path at all.
+        // Nothing heard: hide the card - it is dead real estate during
+        // ordinary CQ/browsing, which is most of the time. The permanent
+        // "tap to enter a callsign" prompt this used to show solved Gyula
+        // HA3HZ's gap but put a box in the way for everyone else; the small
+        // always-present icon button (built alongside the card, below) is
+        // the manual-entry path now, independent of whether this card shows.
         lv_label_set_text(s_card_call, "");
         lv_label_set_text(s_card_info, "");
-        lv_label_set_text(s_card_hint, "tap to enter a callsign");
-        lv_obj_set_style_border_color(s_card, lv_color_hex(0x555555), 0);
-        lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_card_hint, "");
+        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
         return;
     }
     lv_label_set_text(s_card_call, call);
@@ -2304,6 +2320,28 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_width(s_card_hint, 310);
     lv_label_set_long_mode(s_card_hint, LV_LABEL_LONG_DOT);
     lv_obj_align(s_card_hint, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    // Manual call-entry icon, directly above the card's right edge - same
+    // column, so it reads as belonging to the card without depending on the
+    // card being shown. Parented to s_container (not s_card): it must stay
+    // up when the card is hidden, which is the normal CQ/browsing state.
+    // 44x44 - the project's own measured touch-target minimum.
+    s_call_entry_btn = lv_obj_create(s_container);
+    lv_obj_set_size(s_call_entry_btn, 44, 44);
+    lv_obj_set_pos(s_call_entry_btn, MID_W - 370 + 330 - 44,
+                   MID_H - TICKER_H - BANDPLAN_H - 132 - 50);
+    lv_obj_set_style_bg_color(s_call_entry_btn, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(s_call_entry_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_call_entry_btn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_call_entry_btn, 2, 0);
+    lv_obj_set_style_radius(s_call_entry_btn, 8, 0);
+    lv_obj_clear_flag(s_call_entry_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(s_call_entry_btn, call_entry_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ce_icon = lv_label_create(s_call_entry_btn);
+    lv_label_set_text(ce_icon, LV_SYMBOL_EDIT);
+    lv_obj_set_style_text_color(ce_icon, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(ce_icon, &lv_font_montserrat_24, 0);
+    lv_obj_center(ce_icon);
 
     ESP_LOGI(TAG, "CW screen built");
 }

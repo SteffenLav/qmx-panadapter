@@ -683,6 +683,30 @@ int cat_get_sidetone_vol(void)      { return s_sidetone_vol; }
 int cat_get_sidetone_absolute(void) { return s_sidetone_abs; }
 uint16_t cat_sidetone_vol_max(void) { return s_sidetone_vol_max; }
 
+/* ---- CW-page sidetone auto-management - see cat.h for the why ----------- */
+static volatile bool s_sidetone_automirror = false;
+
+void cat_sidetone_set_automirror(bool on) { s_sidetone_automirror = on; }
+bool cat_sidetone_automirror_active(void) { return s_sidetone_automirror; }
+
+void cat_sidetone_mirror_from_af_gain(uint16_t ag)
+{
+    if (!s_sidetone_automirror) return;
+    uint16_t top = s_sidetone_vol_max;
+    if (!top) return;   // range not discovered - same guard as cat_request_sidetone_vol()
+    uint32_t db = ag / 4;
+    if (db > CAT_AF_GAIN_DB_MAX) db = CAT_AF_GAIN_DB_MAX;
+    /* 15% floor: the point of this feature is that the sidetone must never go
+     * silent, which plain Relative does not guarantee (it has no floor at
+     * all) - so this is a deliberate improvement over Relative, not a copy
+     * of it. The rest of the range is a straight line in dB, same unit the
+     * QMX volume slider already uses. */
+    uint16_t floor = (uint16_t)((uint32_t)top * 3 / 20);
+    uint16_t span  = (uint16_t)(top - floor);
+    uint16_t target = (uint16_t)(floor + (uint32_t)span * db / CAT_AF_GAIN_DB_MAX);
+    cat_request_sidetone_vol(target);
+}
+
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
 bool cat_qmx_gps_source_known(void)    { return s_qmx_gps_source_known; }

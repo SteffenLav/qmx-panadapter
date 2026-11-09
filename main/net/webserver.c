@@ -7502,6 +7502,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         // AG is in 0.25 dB steps - the slider's own conversion. Sending dB here
         // would set the radio to a quarter of what the browser asked for.
         cat_request_af_gain((uint16_t)(db * 4));
+        cat_sidetone_mirror_from_af_gain((uint16_t)(db * 4));
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_tx_offset_hz")))
         settings_set_cw_tx_offset_hz((int16_t)it->valuedouble);   // clamps internally

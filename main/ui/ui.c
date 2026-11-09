@@ -2745,6 +2745,13 @@ static ui_mode_snapshot_t s_pan_snapshot = {0};
 static ui_mode_snapshot_t s_ft8_snapshot = {0};
 static ui_mode_snapshot_t s_cw_snapshot  = {0};   // CW page (v1.4): sticky freq, mode always "CW"
 
+// True only while THIS code is the one holding the radio in Absolute for the
+// CW-page sidetone auto-management (see cat.h). Set on a CW entry that found
+// confirmed Relative; cleared (and Relative restored) on the matching exit.
+// Left false - and the radio left alone - when it was already Absolute, which
+// is someone's own deliberate choice (Michael KZ4LY's binaural T139 setup).
+static bool s_cw_sidetone_managing = false;
+
 // CAT writes share a 200 ms TX rate-limiter; restoring freq+mode+bw
 // back-to-back would drop all but the first. Stagger them on a 250 ms
 // repeating timer (see memory_modal.c's recall_mode_timer_cb for the
@@ -16349,6 +16356,7 @@ static void drawer_build(void)
         lv_slider_set_value(s_slider_qmx_vol, vcfg.qmx_vol_db, LV_ANIM_OFF);
         lv_obj_align(s_slider_qmx_vol, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_add_event_cb(s_slider_qmx_vol, drawer_slider_qmx_vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_slider_qmx_vol, drawer_slider_qmx_vol_cb, LV_EVENT_RELEASED, NULL);
 
         /* ⭐ T139's SECOND HALF, and it is a labelling fault not a code one.
          * Michael KZ4LY could not tell that this row is the radio's own main
@@ -19361,6 +19369,11 @@ static void drawer_slider_qmx_vol_cb(lv_event_t *e)
     int db = (int)lv_slider_get_value(lv_event_get_target(e));
     settings_set_qmx_vol_db((uint8_t)db);
     cat_request_af_gain((uint16_t)(db * 4));
+    // Sidetone mirror (CW page auto-management) commits on RELEASE only - it
+    // is the expensive MM/MU; write, and this callback itself fires on every
+    // drag tick for the cheap AG write above.
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED)
+        cat_sidetone_mirror_from_af_gain((uint16_t)(db * 4));
     if (s_lbl_qmx_vol) {
         char b[32];
         snprintf(b, sizeof(b), "QMX volume: %d dB", db);
@@ -20833,6 +20846,14 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         strncpy(s_cw_snapshot.mode, "CW", sizeof(s_cw_snapshot.mode) - 1);
         s_cw_snapshot.mode[sizeof(s_cw_snapshot.mode) - 1] = '\0';
         cw_screen_view_hide();
+        // Hand the radio back to Relative - but only if WE are the one who
+        // moved it away from Relative on entry. Never fires for an operator's
+        // own deliberate Absolute (that was never ours to touch).
+        if (s_cw_sidetone_managing) {
+            cat_sidetone_set_automirror(false);
+            cat_request_sidetone_absolute(false);
+            s_cw_sidetone_managing = false;
+        }
     } else if (cur == UI_MODE_WSPR) {
         wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
         wspr_screen_view_hide();
@@ -20908,6 +20929,30 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // optimistically for the no-QMX case.
         cat_request_cw_passband(CW_DEFAULT_BW_HZ);
         ui_update_passband_width(CW_DEFAULT_BW_HZ);
+        // Sidetone auto-management (operator ask, 2026-11-09): the radio
+        // ships "Sidetone abs/rel" = Relative, which drags the CW monitor
+        // down to near-silent with this very slider - confusing new/average
+        // users who do not know the two are linked. Force Absolute and start
+        // mirroring QMX volume into Sidetone volume ourselves, ONLY when we
+        // find the radio in CONFIRMED Relative - never when it is already
+        // Absolute (that is Michael KZ4LY's own deliberate T139 choice for
+        // his binaural setup, and must not be touched), and never while
+        // unknown (query it instead, so the NEXT entry can decide correctly
+        // rather than guessing now). Restored to Relative on leaving the
+        // page - see the stand-down block above - so a standalone QMX is
+        // never left needing to be "repaired".
+        {
+            int abs_rel = cat_get_sidetone_absolute();
+            if (abs_rel == 0) {
+                cat_request_sidetone_absolute(true);
+                cat_sidetone_set_automirror(true);
+                s_cw_sidetone_managing = true;
+                int ag = cat_get_af_gain();
+                if (ag >= 0) cat_sidetone_mirror_from_af_gain((uint16_t)ag);
+            } else if (abs_rel < 0) {
+                cat_query_sidetone();
+            }
+        }
         // ...and honour the band plan: an entry frequency outside the band's
         // CW segment (inherited from a phone/digi tune) moves into it.
         {
