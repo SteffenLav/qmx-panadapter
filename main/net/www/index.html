@@ -11565,8 +11565,21 @@ function drawBandplan(previewHz) {
   // control instead of an absolute one (#216, mirrors ui.c's OOB branch).
   if (!lastBandplan) { drawBandplanOob(ctx, W, H, dpr); return; }
 
-  const bp      = lastBandplan;
-  const bandLo  = bp.lo, bandHi = bp.hi;
+  const bp = lastBandplan;
+  /* CW page: CW + Digi only, re-spanned across the full strip width - mirrors
+     ui.c's cw_digi[] branch (update_bandplan_strip). CW is legal inside the
+     digital sub-band but digital modes are not legal inside the CW one, so
+     CW-only was denying the operator spectrum he is allowed to use; Phone is
+     left out because the page clamps every tune into CW/Digi
+     (cw_bandplan_clamp_hz), so drawing it advertised a destination the page
+     refuses the moment you tap it (operator, 2026-11-09). Re-deriving lo/hi
+     from the filtered segments - not bp.lo/bp.hi - is what stretches CW+Digi
+     to fill the width instead of leaving Phone's share blank. */
+  const segs = (lastScreen === "cw")
+    ? bp.segs.filter(s => s.l === "CW" || s.l === "Digi")
+    : bp.segs;
+  const bandLo = segs.length ? segs[0].lo : bp.lo;
+  const bandHi = segs.length ? segs[segs.length - 1].hi : bp.hi;
   const span    = Math.max(1, bandHi - bandLo);
   /* previewCenter is a WINDOW centre during a drag, not a dial - the dial only
      moves when the radio cannot reach that window. See bpSolveView. */
@@ -11579,12 +11592,6 @@ function drawBandplan(previewHz) {
   const fadeA = bpFadeAlpha();   // 0 while dragging, ramping back to 1 after
   ctx.textBaseline = "middle";
   ctx.textAlign    = "center";
-  /* CW page: CW segments only. Digi/Phone are not reachable here - the Tab5
-     itself clamps every tune on this page into the CW segment
-     (cw_bandplan_clamp_hz in ui.c) - so drawing them full-width beside CW
-     advertised a destination the page refuses the moment you tap it
-     (operator, 2026-11-09). */
-  const segs = (lastScreen === "cw") ? bp.segs.filter(s => s.l === "CW") : bp.segs;
   segs.forEach(seg => {
     const x0 = Math.round((seg.lo - bandLo) / span * W);
     const x1 = Math.round((seg.hi - bandLo) / span * W);
