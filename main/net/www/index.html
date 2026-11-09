@@ -11549,6 +11549,32 @@ function bpSolveView(wantCenterHz) {
   return { dial: d, center: d + pan };
 }
 
+/* CW page: CW + Digi segments only, re-spanned across the full strip width -
+   mirrors ui.c's cw_digi[] branch (update_bandplan_strip). CW is legal inside
+   the digital sub-band but digital modes are not legal inside the CW one, so
+   CW-only was denying the operator spectrum he is allowed to use; Phone is
+   left out because the page clamps every tune into CW/Digi
+   (cw_bandplan_clamp_hz), so drawing it advertised a destination the page
+   refuses the moment you tap it (operator, 2026-11-09).
+
+   ⛔ drawBandplan() and the drag handler below MUST use the SAME lo/hi - the
+   drag handler used to divide by the full bp.lo/bp.hi span while the strip
+   was drawn (and its knob positioned) across this narrower CW+Digi span, so
+   a pointer px meant a different Hz to each: the knob moved faster than the
+   pointer, and clamping to the full band let it drag past the strip's own
+   edges (operator, 2026-11-09). One pair of functions, used everywhere. */
+function bpEffectiveSegs(bp) {
+  return (lastScreen === "cw")
+    ? bp.segs.filter(s => s.l === "CW" || s.l === "Digi")
+    : bp.segs;
+}
+function bpEffectiveRange(bp) {
+  const segs = bpEffectiveSegs(bp);
+  return segs.length
+    ? { lo: segs[0].lo, hi: segs[segs.length - 1].hi }
+    : { lo: bp.lo, hi: bp.hi };
+}
+
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
   if (!canvas) return;
@@ -11566,20 +11592,8 @@ function drawBandplan(previewHz) {
   if (!lastBandplan) { drawBandplanOob(ctx, W, H, dpr); return; }
 
   const bp = lastBandplan;
-  /* CW page: CW + Digi only, re-spanned across the full strip width - mirrors
-     ui.c's cw_digi[] branch (update_bandplan_strip). CW is legal inside the
-     digital sub-band but digital modes are not legal inside the CW one, so
-     CW-only was denying the operator spectrum he is allowed to use; Phone is
-     left out because the page clamps every tune into CW/Digi
-     (cw_bandplan_clamp_hz), so drawing it advertised a destination the page
-     refuses the moment you tap it (operator, 2026-11-09). Re-deriving lo/hi
-     from the filtered segments - not bp.lo/bp.hi - is what stretches CW+Digi
-     to fill the width instead of leaving Phone's share blank. */
-  const segs = (lastScreen === "cw")
-    ? bp.segs.filter(s => s.l === "CW" || s.l === "Digi")
-    : bp.segs;
-  const bandLo = segs.length ? segs[0].lo : bp.lo;
-  const bandHi = segs.length ? segs[segs.length - 1].hi : bp.hi;
+  const segs = bpEffectiveSegs(bp);
+  const { lo: bandLo, hi: bandHi } = bpEffectiveRange(bp);
   const span    = Math.max(1, bandHi - bandLo);
   /* previewCenter is a WINDOW centre during a drag, not a dial - the dial only
      moves when the radio cannot reach that window. See bpSolveView. */
@@ -11726,7 +11740,8 @@ function drawBandplanOob(ctx, W, H, dpr) {
 
   function clamp(hz) {
     hz = Math.round(hz / 1000) * 1000;
-    return Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, hz));
+    const r = bpEffectiveRange(lastBandplan);
+    return Math.max(r.lo, Math.min(r.hi, hz));
   }
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -11783,9 +11798,10 @@ function drawBandplanOob(ctx, W, H, dpr) {
       return;
     }
 
-    const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rectW;
-    targetCenter = Math.max(lastBandplan.lo,
-                     Math.min(lastBandplan.hi, startCenter + dx * hzPerPx));
+    const r = bpEffectiveRange(lastBandplan);
+    const hzPerPx = (r.hi - r.lo) / rectW;
+    targetCenter = Math.max(r.lo,
+                     Math.min(r.hi, startCenter + dx * hzPerPx));
     drawBandplan(targetCenter);
     /* Usually unchanged - a drag inside the radio's reach moves the window and
        leaves the dial alone, which is the point of the gesture. */
@@ -11846,8 +11862,9 @@ function drawBandplanOob(ctx, W, H, dpr) {
       commitCenter(targetCenter);
     } else {
       const rect = canvas.getBoundingClientRect();
-      const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rect.width;
-      commit(clamp(lastBandplan.lo + (startX - rect.left) * hzPerPx));
+      const r = bpEffectiveRange(lastBandplan);
+      const hzPerPx = (r.hi - r.lo) / rect.width;
+      commit(clamp(r.lo + (startX - rect.left) * hzPerPx));
     }
     bpDragging = false;
   });
