@@ -1452,9 +1452,15 @@ static void refresh_card(void)
         snprintf(worked, sizeof(worked), "worked before - new band");
     else
         snprintf(worked, sizeof(worked), "new station");
-    char rst[4], park[12];
+    char rst[4], park[12], serial[8];
     cw_qso_get_rst_rcvd(rst, sizeof(rst));
+    cw_qso_get_serial_rcvd(serial, sizeof(serial));
     bool have_park = cw_qso_get_heard_park(park, sizeof(park));
+    // RST and a received contest serial are shown together - a serial with
+    // no RST next to it cannot happen (cw_qso.c only ever captures one right
+    // after the other), so gating on rst[0] alone is enough for both.
+    char rst_disp[12];
+    snprintf(rst_disp, sizeof(rst_disp), "%s%s%s", rst, serial[0] ? " " : "", serial);
     // ASCII separators only - a middle dot is outside the compiled montserrat
     // glyph range and renders as a tofu box (hardware-observed 2026-08-02).
     // The park reference earns its place on the second line when there is
@@ -1463,10 +1469,10 @@ static void refresh_card(void)
         lv_label_set_text_fmt(s_card_info, "%s\npark %s%s%s",
                               country ? country : "?", park,
                               (tgt[0] && rst[0]) ? " - rcvd " : "",
-                              (tgt[0] && rst[0]) ? rst : "");
+                              (tgt[0] && rst[0]) ? rst_disp : "");
     else if (tgt[0] && rst[0])
         lv_label_set_text_fmt(s_card_info, "%s\n%s - rcvd %s",
-                              country ? country : "?", worked, rst);
+                              country ? country : "?", worked, rst_disp);
     else
         lv_label_set_text_fmt(s_card_info, "%s\n%s",
                               country ? country : "?", worked);

@@ -232,6 +232,7 @@ char *config_io_export(size_t *out_len)
     APP("# keyer memories 1-6; {MYCALL}, {PARK} and {CALL} expand at send time\n");
     for (int i = 0; i < 6; i++) APP("%d = %s\n", i + 1, c.cw_msg[i]);
     APP("park = %s\n", c.cw_park);
+    APP("contest = %s\n", c.cw_contest_name);  // CONTEST_ID on every CW QSO logged while set
 
     APP("\n[ft8_filters]\n");
     APP("include1_on = %s\n", yn(c.ft8_filters.incl_en[0]));
@@ -586,6 +587,8 @@ int config_io_import(char *text)
         case SEC_CW:
             if (!strcasecmp(key, "park")) {
                 settings_set_cw_park(val); applied++;
+            } else if (!strcasecmp(key, "contest")) {
+                settings_set_cw_contest_name(val); applied++;
             } else {
                 int idx = atoi(key) - 1;        // "1".."6"
                 if (idx >= 0 && idx <= 5) { settings_set_cw_msg((uint8_t)idx, val); applied++; }

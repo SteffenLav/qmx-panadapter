@@ -26,6 +26,12 @@ typedef struct {
     // settings inside adif_log_record(), so no caller can forget it.
     const char *their_sig;        // "POTA" / "SOTA"
     const char *their_sig_info;   // their reference, e.g. "DL-0123"
+    // General contest exchange (any contest OTHER than ARRL Field Day, which
+    // has its own dedicated class/section fields above and writes its own
+    // CONTEST_ID - see adif_log_record()). NULL/empty for an ordinary QSO.
+    const char *contest_name;     // CONTEST_ID, operator-set free text, e.g. "CQ WW CW"
+    const char *stx_string;       // our sent exchange (e.g. a contest serial)
+    const char *srx_string;       // their received exchange
 } adif_qso_t;
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.

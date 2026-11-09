@@ -515,6 +515,13 @@ void adif_log_record(const adif_qso_t *qso)
         write_field(f, "ARRL_SECT",   qso->their_arrl_section);
         if (qso->my_arrl_section && qso->my_arrl_section[0])
             write_field(f, "MY_ARRL_SECT", qso->my_arrl_section);
+    } else if (qso->contest_name && qso->contest_name[0]) {
+        // Any other contest: the name is free text the operator set (settings
+        // cw_contest_name), not an enumeration this firmware validates - same
+        // as WSJT-X/N1MM, which also just write whatever the operator typed.
+        write_field(f, "CONTEST_ID", qso->contest_name);
+        if (qso->stx_string && qso->stx_string[0]) write_field(f, "STX_STRING", qso->stx_string);
+        if (qso->srx_string && qso->srx_string[0]) write_field(f, "SRX_STRING", qso->srx_string);
     }
 
     // Activation fields. MY_SIG/MY_SIG_INFO say what WE were activating and are

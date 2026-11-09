@@ -1423,6 +1423,9 @@
       <button id="cw-tx-set" type="button"
               title="Switch which of the two macro sets is active - the same toggle the Tab5 has"
               style="font-size:13px; padding:2px 8px;"></button>
+      <button id="cw-tx-contest" type="button"
+              title="Set the contest name/ID written onto every CW QSO logged while it is set (ADIF CONTEST_ID). Empty = not running a contest."
+              style="font-size:13px; padding:2px 8px;"></button>
       <span id="cw-tx-last" style="color:var(--dim); font-size:13px; margin-left:auto;"></span>
     </div>
     <div id="cw-tx-macros" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; margin-bottom:10px;"></div>
@@ -2217,6 +2220,7 @@ let lastScreen     = "panadapter";  // "panadapter" | "ft8" - which screen the T
 let lastCwMacros   = null;   // 6 raw macro strings, last seen - rebuild buttons only on change
 let lastCwSetB     = null;
 let lastCwLastSent = null;
+let lastCwContestName = null;
 let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
@@ -10098,6 +10102,12 @@ function updateCwTx(s) {
   const setLbl = document.getElementById("cw-tx-set");
   if (setLbl) setLbl.textContent = (ctx.set_b ? "Contest set" : "General set") + " ⇄";
 
+  const contestBtn = document.getElementById("cw-tx-contest");
+  if (contestBtn) {
+    lastCwContestName = ctx.contest_name || "";
+    contestBtn.textContent = lastCwContestName ? ("Contest: " + lastCwContestName) : "Set contest…";
+  }
+
   const lastLbl = document.getElementById("cw-tx-last");
   if (lastLbl && ctx.last_sent !== lastCwLastSent) {
     lastCwLastSent = ctx.last_sent;
@@ -10171,6 +10181,24 @@ function updateCwTx(s) {
        in the new set happens to match the old one slot-for-slot (unlikely,
        but the cheap guard is just clearing lastCwSetB). */
     lastCwSetB = null;
+  });
+})();
+
+(function wireCwContest() {
+  const btn = document.getElementById("cw-tx-contest");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    const next = window.prompt(
+      "Contest name/ID, written onto every CW QSO logged while this is set " +
+      "(ADIF CONTEST_ID - e.g. \"CQ WW CW\", \"ARRL SS CW\"). Empty = not running a contest:",
+      lastCwContestName || "");
+    if (next === null || next === lastCwContestName) return;   // cancelled or unchanged
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cw_contest_name: next })
+    });
+    lastCwContestName = null;   // force the next poll to repaint the button
   });
 })();
 

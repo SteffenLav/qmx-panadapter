@@ -56,6 +56,9 @@ static int64_t        s_heard_us;
 static char           s_rst_rcvd[4];
 static char           s_rst_sent[4] = "599";  // see cw_qso_note_sent() - T142-adjacent fix,
                                                // was a hard-coded literal at the TU log site
+static char           s_serial_rcvd[8];       // contest exchange, decoded side - see is_serial_like()
+static char           s_serial_sent[8];       // contest exchange, read back from what was keyed
+static bool           s_awaiting_serial;      // feed context: last token was an RST, next may be a serial
 static int64_t        s_cq_sent_us;           // our last CQ went out
 static int64_t        s_addressed_us;         // our own call last decoded
 static bool           s_pending_auto_adopt;   // set by feed(), consumed on the LVGL tick
@@ -160,12 +163,52 @@ static bool is_rst(const char *t, char out[4])
     return true;
 }
 
+// A contest serial, as actually keyed or decoded: digits plus the two cut
+// substitutes this firmware's own {SERIAL} macro uses (0->T) or a station on
+// the other end might (9->N too) - see cw_screen_view.c's expand_macros().
+// 1..5 chars so "001".."65535" (and their cut forms) all fit; nothing else a
+// real exchange sends is built only from this alphabet - sign-off/service
+// words (BK, TU, 73, EE, AGN, PSE) all carry at least one other letter, and
+// callsigns need one per is_plausible_call(). Length only, no range check:
+// unlike is_rst() this has no fixed shape to validate.
+static bool is_serial_like(const char *t)
+{
+    size_t n = strlen(t);
+    if (n < 1 || n > 5) return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = t[i];
+        if (!((c >= '0' && c <= '9') || c == 'T' || c == 'N')) return false;
+    }
+    return true;
+}
+
 // Runs inside the spinlock, feed context. No LVGL, no blocking calls.
 static void process_token_locked(const char *tok, int64_t now)
 {
     if (strcmp(tok, "DE") == 0) { s_prev_was_de = true; return; }
     bool was_de = s_prev_was_de;
     s_prev_was_de = false;
+
+    // The token right after a captured RST may be the contest exchange - one
+    // chance only, same transmission position every contest macro uses
+    // ("5NN {SERIAL}"). Checked before everything else so it cannot also be
+    // reclassified as a callsign/hint below.
+    if (s_awaiting_serial) {
+        s_awaiting_serial = false;
+        // A genuine serial is also often RST-shaped ("599" is a valid serial
+        // AND a valid RST), so this cannot be settled in general - but the
+        // single most common false positive is cheap to catch: an operator
+        // saying the SAME report twice for copy redundancy ("599 599",
+        // "5NN 5NN"), which is a repeat, not an exchange. Skip it.
+        char maybe_rst[4];
+        bool repeats_rst = is_rst(tok, maybe_rst) && strcmp(maybe_rst, s_rst_rcvd) == 0;
+        if (!repeats_rst && is_serial_like(tok)) {
+            copy_small(s_serial_rcvd, sizeof(s_serial_rcvd), tok);
+            return;
+        }
+        // Not serial-shaped (e.g. "BK") - fall through, let it be classified
+        // normally below.
+    }
 
     // Copilot hints for the non-callsign tokens. Ordered weakest-first so a
     // stronger signal later in the same transmission overwrites: hearing
@@ -209,7 +252,10 @@ static void process_token_locked(const char *tok, int64_t now)
         // one before adopting is exactly when a beginner needs telling what
         // it was. Only STORE it for the log once a target is being worked.
         set_hint_locked(CW_HINT_REPORT, rst, now);
-        if (s_state != CW_ESM_CQ && s_target[0]) memcpy(s_rst_rcvd, rst, sizeof(rst));
+        if (s_state != CW_ESM_CQ && s_target[0]) {
+            memcpy(s_rst_rcvd, rst, sizeof(rst));
+            s_awaiting_serial = true;   // next token might be the exchange's serial
+        }
         return;
     }
 
@@ -474,6 +520,16 @@ void cw_qso_feed(const char *s, int n)
 
 void cw_qso_init(void) { /* statics zero-init; nothing else */ }
 
+// Bounded copy usable inside the spinlock (strncpy trips
+// -Werror=stringop-truncation here, and snprintf is heavy for a critical
+// section).
+static void copy_locked(char *out, size_t out_sz, const char *src)
+{
+    size_t i = 0;
+    for (; src[i] && i + 1 < out_sz; i++) out[i] = src[i];
+    out[i] = '\0';
+}
+
 void cw_qso_set_my_call(const char *call)
 {
     portENTER_CRITICAL(&s_mux);
@@ -497,16 +553,29 @@ void cw_qso_note_sent(const char *text)
     // for an RST-shaped token and remember it; cw_qso_on_next_sent() logs
     // this instead of a literal. 88 covers the 80-char KY buffer plus margin;
     // strtok_r needs a mutable copy, so this cannot alias `text`.
+    // The contest serial, if one was keyed, is read back the same way: the
+    // token immediately after the RST, exactly where every contest macro
+    // ("{CALL} 5NN {SERIAL} BK") puts it. One scan finds both.
     char buf[88];
     snprintf(buf, sizeof(buf), "%s", text);
     char *save = NULL;
+    bool want_serial = false;
     for (char *tok = strtok_r(buf, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+        if (want_serial) {
+            want_serial = false;
+            if (is_serial_like(tok)) {
+                portENTER_CRITICAL(&s_mux);
+                copy_locked(s_serial_sent, sizeof(s_serial_sent), tok);
+                portEXIT_CRITICAL(&s_mux);
+            }
+            continue;
+        }
         char rst[4];
         if (is_rst(tok, rst)) {
             portENTER_CRITICAL(&s_mux);
             memcpy(s_rst_sent, rst, sizeof(rst));
             portEXIT_CRITICAL(&s_mux);
-            break;
+            want_serial = true;
         }
     }
 
@@ -521,16 +590,6 @@ cw_esm_state_t cw_qso_get_state(void)
     cw_esm_state_t st = s_state;
     portEXIT_CRITICAL(&s_mux);
     return st;
-}
-
-// Bounded copy usable inside the spinlock (strncpy trips
-// -Werror=stringop-truncation here, and snprintf is heavy for a critical
-// section).
-static void copy_locked(char *out, size_t out_sz, const char *src)
-{
-    size_t i = 0;
-    for (; src[i] && i + 1 < out_sz; i++) out[i] = src[i];
-    out[i] = '\0';
 }
 
 void cw_qso_get_target(char *out, size_t out_sz)
@@ -570,12 +629,31 @@ void cw_qso_get_rst_rcvd(char *out, size_t out_sz)
     portEXIT_CRITICAL(&s_mux);
 }
 
+void cw_qso_get_serial_sent(char *out, size_t out_sz)
+{
+    if (!out || !out_sz) return;
+    portENTER_CRITICAL(&s_mux);
+    copy_locked(out, out_sz, s_serial_sent);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+void cw_qso_get_serial_rcvd(char *out, size_t out_sz)
+{
+    if (!out || !out_sz) return;
+    portENTER_CRITICAL(&s_mux);
+    copy_locked(out, out_sz, s_serial_rcvd);
+    portEXIT_CRITICAL(&s_mux);
+}
+
 void cw_qso_adopt(const char *call)
 {
     if (!call || !call[0]) return;
     portENTER_CRITICAL(&s_mux);
     snprintf(s_target, sizeof(s_target), "%s", call);
-    s_rst_rcvd[0] = '\0';
+    s_rst_rcvd[0]    = '\0';
+    s_serial_rcvd[0] = '\0';
+    s_serial_sent[0] = '\0';   // a stale serial from a PRIOR QSO must not log onto this one
+    s_awaiting_serial = false;
     s_state = CW_ESM_EXCH;
     portEXIT_CRITICAL(&s_mux);
     ESP_LOGI(TAG, "target adopted: %s", s_target);
@@ -584,9 +662,12 @@ void cw_qso_adopt(const char *call)
 void cw_qso_reset(void)
 {
     portENTER_CRITICAL(&s_mux);
-    s_target[0]   = '\0';
-    s_rst_rcvd[0] = '\0';
-    s_state       = CW_ESM_CQ;
+    s_target[0]       = '\0';
+    s_rst_rcvd[0]     = '\0';
+    s_serial_rcvd[0]  = '\0';
+    s_serial_sent[0]  = '\0';
+    s_awaiting_serial = false;
+    s_state           = CW_ESM_CQ;
     portEXIT_CRITICAL(&s_mux);
     ESP_LOGI(TAG, "ladder reset to CQ");
 }
@@ -695,9 +776,11 @@ bool cw_qso_on_next_sent(void)
         // heard one - never fabricated (the FT8 lesson, v1.3.4).
         qmx_settings_t s;
         settings_load_all(&s);
-        char tgt[CALL_MAX], rst[4], sent[4];
+        char tgt[CALL_MAX], rst[4], sent[4], ser_sent[8], ser_rcvd[8];
         cw_qso_get_target(tgt, sizeof(tgt));
         cw_qso_get_rst_rcvd(rst, sizeof(rst));
+        cw_qso_get_serial_sent(ser_sent, sizeof(ser_sent));
+        cw_qso_get_serial_rcvd(ser_rcvd, sizeof(ser_rcvd));
         portENTER_CRITICAL(&s_mux);
         memcpy(sent, s_rst_sent, sizeof(sent));
         portEXIT_CRITICAL(&s_mux);
@@ -711,9 +794,16 @@ bool cw_qso_on_next_sent(void)
             .rst_sent   = sent,
             .rst_rcvd   = rst,
             .qso_time   = time(NULL),
+            // Only when a contest name is actually set (settings.h,
+            // settings_set_cw_contest_name) - so an ordinary CW QSO never
+            // picks up a stale CONTEST_ID left over from a past contest.
+            .contest_name = s.cw_contest_name[0] ? s.cw_contest_name : NULL,
+            .stx_string   = ser_sent[0] ? ser_sent : NULL,
+            .srx_string   = ser_rcvd[0] ? ser_rcvd : NULL,
         };
         adif_log_record(&q);
-        ESP_LOGI(TAG, "QSO logged: %s CW rst_rcvd='%s'", tgt, rst);
+        ESP_LOGI(TAG, "QSO logged: %s CW rst_rcvd='%s' stx='%s' srx='%s'",
+                 tgt, rst, ser_sent, ser_rcvd);
         cw_qso_reset();
         return true;
     }

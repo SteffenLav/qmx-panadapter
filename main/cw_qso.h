@@ -54,6 +54,16 @@ bool cw_qso_get_heard(char *out, size_t out_sz, int *age_s_out);
 // the log then omits RST_RCVD; never fabricated).
 void cw_qso_get_rst_rcvd(char *out, size_t out_sz);
 
+// Contest exchange capture, same "never fabricated" rule as RST above: a
+// serial number is only stored here if it was actually keyed (sent side, read
+// back from the expanded text - see cw_qso_note_sent()) or actually decoded
+// right after an RST from the target (received side). Both are "" when no
+// serial was exchanged this QSO; the log then omits STX_STRING/SRX_STRING.
+// Cleared on every new adopt() so a stale value from a PRIOR QSO (general or
+// contest) cannot leak onto this one.
+void cw_qso_get_serial_sent(char *out, size_t out_sz);
+void cw_qso_get_serial_rcvd(char *out, size_t out_sz);
+
 // Adopt a station (station-card tap / auto). Enters EXCH.
 void cw_qso_adopt(const char *call);
 

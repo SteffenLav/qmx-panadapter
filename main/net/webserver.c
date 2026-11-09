@@ -813,6 +813,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                     cws.cw_msg_set ? cws.cw_msg_b[i] : cws.cw_msg[i]));
             cJSON_AddBoolToObject(ctx, "set_b", cws.cw_msg_set != 0);
             cJSON_AddStringToObject(ctx, "last_sent", cw_screen_view_last_sent());
+            cJSON_AddStringToObject(ctx, "contest_name", cws.cw_contest_name);
         }
     }
 
@@ -7431,6 +7432,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * needs it to switch which six buttons it is showing/editing. */
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_msg_set")))
         settings_set_cw_msg_set((uint8_t)(it->valueint != 0));
+    /* Contest name/ID, written onto every CW QSO the Tab5 logs while it is
+     * non-empty (see adif_qso_t.contest_name) - Gyula HA3HZ's contest log had
+     * no way to record what the contest WAS. Empty string clears it, same as
+     * every other optional text field here. */
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cw_contest_name"))))
+        settings_set_cw_contest_name(s);
     BOOLTOP("tx_band_guard_off", settings_set_tx_band_guard_off);
     BOOLTOP("qmx_gps",           settings_set_qmx_gps);
     // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool

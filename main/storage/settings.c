@@ -77,6 +77,7 @@ static const char *TAG = "settings";
 #define KEY_CW_PARK    "cw_park"
 #define KEY_CW_RST_CUT "cw_rst_cut"
 #define KEY_CW_SERIAL  "cw_serial"
+#define KEY_CW_CONTEST "cw_contest"
 #define KEY_CW_SIM     "cw_sim"
 #define KEY_CW_PAGE_EN "cw_page_en"
 #define KEY_HOUND_MODE "hound_md"
@@ -278,7 +279,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 158, 1 spare */
+#define DIRTY_WORDS      5                        /* 160 bits; highest used 159, 0 spare - bump to 6 for the next one */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -516,6 +517,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_MSG_SET      156
 #define DIRTY_CW_RST_CUT      157  /* active macro set toggle: 0 = General, 1 = Contest */
 #define DIRTY_CW_SERIAL        158  /* {SERIAL} macro - next contest serial to send */
+#define DIRTY_CW_CONTEST       159  /* contest name/ID - last free bit, see DIRTY_WORDS */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -741,6 +743,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap->cw_park);
         if (dirty_test(&dirty_local, DIRTY_CW_RST_CUT)) nvs_set_u8(s_nvs, KEY_CW_RST_CUT, snap->cw_rst_cut_nines ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_SERIAL)) nvs_set_u16(s_nvs, KEY_CW_SERIAL, snap->cw_serial_next);
+        if (dirty_test(&dirty_local, DIRTY_CW_CONTEST)) nvs_set_str(s_nvs, KEY_CW_CONTEST, snap->cw_contest_name);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_PAGE_EN)) nvs_set_u8(s_nvs, KEY_CW_PAGE_EN, snap->cw_page_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap->hound_mode);
@@ -1096,6 +1099,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_park[0] = '\0';
     out->cw_rst_cut_nines = false;
     out->cw_serial_next = 1;
+    out->cw_contest_name[0] = '\0';
     out->cw_sim_en = false;
     /* ON from v1.24.0 (operator): ships as the release's beta, not hidden
      * behind a config line nobody would find. It still has no abort for a
@@ -1321,6 +1325,9 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
     if (nvs_get_u8(s_nvs, KEY_CW_RST_CUT, &u8v) == ESP_OK) out->cw_rst_cut_nines = (u8v != 0);
     nvs_get_u16(s_nvs, KEY_CW_SERIAL, &out->cw_serial_next);
+    out->cw_contest_name[0] = '\0';
+    sz = sizeof(out->cw_contest_name);
+    nvs_get_str(s_nvs, KEY_CW_CONTEST, out->cw_contest_name, &sz);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_PAGE_EN, &v8) == ESP_OK) out->cw_page_en = v8 != 0; }
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
@@ -2117,6 +2124,30 @@ uint16_t settings_cw_serial_advance(void)
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_SERIAL);
     return sent;
+}
+
+void settings_set_cw_contest_name(const char *name)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (name) {
+        strncpy(s_pending.cw_contest_name, name, sizeof(s_pending.cw_contest_name) - 1);
+        s_pending.cw_contest_name[sizeof(s_pending.cw_contest_name) - 1] = '\0';
+    } else {
+        s_pending.cw_contest_name[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_CONTEST);
+}
+
+void settings_get_cw_contest_name(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    snprintf(out, out_sz, "%s", s_pending.cw_contest_name);
+    xSemaphoreGive(s_mutex);
 }
 
 void settings_set_cw_sim_en(bool v)
