@@ -1963,6 +1963,22 @@ static void tick_cb(lv_timer_t *t)
         qmx_settings_t qs;
         settings_load_all(&qs);
         if (qs.cw_sim_en) cw_qso_sim_tick();
+
+        /* ⛔ cw_msg_set CAN ALSO CHANGE WHILE THIS PAGE IS UP, same class of
+         * gap as the activation check above. The web's General/Contest
+         * toggle (set_toggle_cb's own web twin) goes through
+         * settings_set_cw_msg_set() same as this page's local button, but
+         * nothing here noticed unless THIS page's own tap fired it - so the
+         * highlighted button and the six macro previews (both read
+         * cw_msg_set) went stale until the page was left and re-entered.
+         * Operator, 2026-11-09: "toggling General/Contest set does not
+         * change the Tab5 setting" - it had, just not the display. */
+        static int s_msg_set_seen = -1;
+        if ((int)qs.cw_msg_set != s_msg_set_seen) {
+            s_msg_set_seen = qs.cw_msg_set;
+            refresh_set_toggle();
+            refresh_mem_labels();
+        }
     }
     refresh_card();
     refresh_next_label();

@@ -22,6 +22,36 @@
 // contain punctuation the manual lists (? . , " ` ( ) + - : @ $ < ! >), so the
 // payload is NOT filtered by character - only a NUL or the terminator ends it.
 // ---------------------------------------------------------------------------
+/* One parse attempt at the t/nn/payload fields, starting at p (the t-digit).
+ * Shared by the normal alignment and the one-byte-shifted retry below, so the
+ * two cannot drift into disagreeing about what "well-formed" means. */
+static int try_parse_tb_fields(const char *p, char *out, size_t out_sz, int *t_out)
+{
+    if (!isdigit((unsigned char)p[0])) return -1;
+    if (!isdigit((unsigned char)p[1]) || !isdigit((unsigned char)p[2])) return -1;
+
+    int t  = p[0] - '0';
+    int nn = (p[1] - '0') * 10 + (p[2] - '0');
+    if (nn > CW_DECODE_MAX_CHUNK) return -1;    // longer than the radio's own buffer
+
+    // The payload must be exactly nn characters and then the terminator. A
+    // short one means the response was truncated in transit; taking what
+    // arrived would silently drop characters and, worse, could swallow the
+    // start of whatever came next.
+    const char *payload = p + 3;
+    for (int i = 0; i < nn; i++) {
+        if (payload[i] == '\0' || payload[i] == ';') return -1;
+    }
+    if (payload[nn] != ';') return -1;
+
+    size_t n = (size_t)nn;
+    if (n > out_sz - 1) n = out_sz - 1;
+    memcpy(out, payload, n);
+    out[n] = '\0';
+    *t_out = t;
+    return (int)n;
+}
+
 int cw_decode_parse_tb(const char *resp, char *out, size_t out_sz, int *tx_pending)
 {
     if (!resp || !out || out_sz == 0) return -1;
@@ -29,29 +59,31 @@ int cw_decode_parse_tb(const char *resp, char *out, size_t out_sz, int *tx_pendi
     if (tx_pending) *tx_pending = 0;
 
     if (resp[0] != 'T' || resp[1] != 'B') return -1;
-    if (!isdigit((unsigned char)resp[2])) return -1;
-    if (!isdigit((unsigned char)resp[3]) || !isdigit((unsigned char)resp[4])) return -1;
 
-    int t  = resp[2] - '0';
-    int nn = (resp[3] - '0') * 10 + (resp[4] - '0');
-    if (nn > CW_DECODE_MAX_CHUNK) return -1;    // longer than the radio's own buffer
-
-    // The payload must be exactly nn characters and then the terminator. A
-    // short one means the response was truncated in transit; taking what
-    // arrived would silently drop characters and, worse, could swallow the
-    // start of whatever came next.
-    const char *p = resp + 5;
-    for (int i = 0; i < nn; i++) {
-        if (p[i] == '\0' || p[i] == ';') return -1;
+    int t = 0;
+    int n = try_parse_tb_fields(resp + 2, out, out_sz, &t);
+    if (n < 0 && resp[2] != '\0' && resp[2] != ';') {
+        /* ⭐ MEASURED 2026-11-09: the FIRST "TB" reply after a KY send
+         * consistently carries one spurious byte right after "TB" - e.g.
+         * "TB0900;" is a clean "TB900;" (t=9, nn=0) with an extra '0'
+         * inserted at this exact position. Confirmed across two independent
+         * sends, same position, same shape both times - not random
+         * corruption, and not this parser or the squelch: the transport
+         * (USB/CDC, right where this reply butts up against the preceding
+         * "KY0;" ack) is the source. Every send was losing its first 1-2
+         * characters here, including the natural leading word-space - which
+         * is also why back-to-back sends ran together with no gap on
+         * screen (operator, 2026-11-09).
+         *
+         * Retry ONCE at resp+3 instead of resp+2, and accept it ONLY if it
+         * is itself perfectly well-formed (right-length payload, clean
+         * terminator) - a bounded resync for this one reproduced glitch,
+         * never a loose guess at an otherwise-malformed frame. */
+        n = try_parse_tb_fields(resp + 3, out, out_sz, &t);
     }
-    if (p[nn] != ';') return -1;
-
-    size_t n = (size_t)nn;
-    if (n > out_sz - 1) n = out_sz - 1;
-    memcpy(out, p, n);
-    out[n] = '\0';
+    if (n < 0) return -1;
     if (tx_pending) *tx_pending = t;
-    return (int)n;
+    return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +263,9 @@ static cw_squelch_t     s_squelch;
  * squelch - cw_decode_flush_stale() is the clock cw_squelch_push() itself
  * cannot have. */
 static uint32_t         s_squelch_touch_ms;
+/* The TB t-field from the PREVIOUS response - see cw_decode_feed()'s use of
+ * it for why the terminal chunk of a send needs it. */
+static int              s_last_tx_pending;
 #define CW_SQUELCH_STALE_MS 1500u   /* ~1.5 TB; polls (poll runs at ~1 Hz) */
 /* The buffer is always the MAXIMUM, CW_LINE_ROWS rows. Only the part in use is
  * written, copied and drawn - see s_rows. Sizing it to the current choice
@@ -413,6 +448,7 @@ void cw_decode_init(void)
     memset(s_line, ' ', sizeof(s_line));
     memset(s_line_tx, 0, sizeof(s_line_tx));
     s_line_col = 0;
+    s_last_tx_pending = 0;
 }
 
 /* The text-level entry: squelch it, then into the ring, the grid, the speed
@@ -507,8 +543,22 @@ void cw_decode_feed(const char *resp)
         return;                                 // n < 0: malformed, ignore
     }
     /* t > 0 means a KY send is still running, so this payload is our own
-     * keying coming back through the radio's decoder - see s_line_tx. */
-    cw_decode_feed_text(chunk, n, tx_pending > 0);
+     * keying coming back through the radio's decoder - see s_line_tx.
+     *
+     * ⭐ MEASURED 2026-11-09: the LAST chunk of every send arrives in the
+     * SAME TB response that reports t=0 - keying has already finished by
+     * the time the radio answers that poll, so tx_pending reads 0 for text
+     * we just sent, and it rendered received (cyan) instead of TX (orange)
+     * every time (operator: "last character is always cyan"). Trace that
+     * found it: KY AGN AGN BK -> ...TB102 B; (t=1) -> TB001K; (t=0) - the
+     * final K arrives with the OLD state still t=1 one poll earlier, which
+     * is what it actually belongs to. Carrying the PREVIOUS t forward one
+     * response catches exactly that terminal chunk without reclassifying
+     * anything genuinely received afterward - the next idle poll has t==0
+     * on both sides, so it is unaffected. */
+    bool is_tx = (tx_pending > 0) || (s_last_tx_pending > 0);
+    s_last_tx_pending = tx_pending;
+    cw_decode_feed_text(chunk, n, is_tx);
 }
 
 /* Where the next character will land - i.e. the cursor, in grid columns.
@@ -639,6 +689,7 @@ void cw_decode_clear(void)
     memset(s_line, ' ', sizeof(s_line));
     memset(s_line_tx, 0, sizeof(s_line_tx));
     s_line_col = 0;
+    s_last_tx_pending = 0;
     if (s_lock) xSemaphoreGive(s_lock);
 }
 

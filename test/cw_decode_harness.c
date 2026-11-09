@@ -87,6 +87,27 @@ int main(void)
        prefix test can reject it. */
     expect("well-formed but not TB",      "XY001A;",            -1,  NULL,     0);
 
+    /* ⭐ MEASURED 2026-11-09 on bench1 (real "AGN AGN BK" sends, two
+       independent captures, identical shape both times): the first "TB"
+       reply after a KY send consistently carries one spurious byte right
+       after "TB", immediately following the preceding "KY0;" ack. Taken at
+       face value every one of these was malformed and REJECTED - losing the
+       first 1-2 characters of every send, including the leading word-space
+       (operator: "first character is always skipped", "a space is missing
+       between the tx'es"). The byte-for-byte originals, straight from the
+       serial log: */
+    expect("resync: spurious byte after TB (space)",   "TB0901 ;",   1,  " ",  9);
+    expect("resync: spurious byte after TB (letter)",  "TB0901A;",   1,  "A",  9);
+    expect("resync: spurious byte after TB (idle)",    "TB0900;",    0,  "",   9);
+    expect("resync: spurious byte, 2-char payload",    "TB0902 A;",  2,  " A", 9);
+    /* The resync must NEVER rescue a response that is genuinely malformed
+       for an unrelated reason - it only retries once, at a fixed offset, and
+       only accepts a perfectly well-formed result. Every "malformed" case
+       above already proves this (none of them use the fixed-up nn=9x shape),
+       but this one is the sharpest: well-formed at the NORMAL alignment
+       already, so a resync must not even be attempted. */
+    expect("already valid - no resync needed",          "TB005DL8UG;", 5, "DL8UG", 0);
+
     /* A caller with a small buffer must be truncated safely, never overrun. */
     {
         char small[4];
