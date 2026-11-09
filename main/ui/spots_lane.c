@@ -375,18 +375,22 @@ static void repaint(void)
         }
     }
 
-    /* Hard page rule, NOT the optional filter above: the CW page only lets the
-     * operator tune inside CW + DiGi (ui_page_range_hz(), ui_cw_tune_clamp_hz()),
-     * so an SSB spot here is a dead end at best - tapping it tunes somewhere
-     * the clamp immediately pulls back from. Unconditional and independent of
-     * st.spots_mode_filter (operator, 2026-11-09: "the spots should not even
-     * show other than digi and cw spots - as ssb is not allowed here on this
-     * page"). SPOT_MODE_OTHER (unknown) is dropped too - an unlabelled spot
-     * might be SSB, and the page cannot afford to guess. */
+    /* Hard page rule, NOT the optional filter above: CW-only, not CW+DiGi.
+     * First cut (2026-11-09 earlier) kept DIGI too, reasoning that the Digi
+     * sub-band is reachable from here - true, but reachability and SPOT
+     * SELECTION are different questions. Tapping a DIGI spot sets the mode to
+     * DIGI (tune_to_spot() -> cat_mode_for_spot()), which takes the operator
+     * OFF the CW page's own mode entirely - "no DiGi mode to be selected by
+     * choosing a FT spot" (operator, 2026-11-09). The Digi sub-band itself
+     * stays in reach for CW operation there (ui_page_range_hz(),
+     * ui_cw_tune_clamp_hz() still allow it) - only FT8/FT4 ACTIVITY spots are
+     * hidden, because a CW page has no business advertising a digital QSO to
+     * tune into. SPOT_MODE_OTHER (unknown) is dropped too - an unlabelled spot
+     * might be SSB or DIGI, and the page cannot afford to guess. */
     if (ui_mode_get() == UI_MODE_CW) {
         int keep = 0;
         for (int i = 0; i < n; i++)
-            if (s_w->buf[i].mode == SPOT_MODE_CW || s_w->buf[i].mode == SPOT_MODE_DIGI)
+            if (s_w->buf[i].mode == SPOT_MODE_CW)
                 s_w->buf[keep++] = s_w->buf[i];
         n = keep;
     }

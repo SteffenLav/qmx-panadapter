@@ -9601,6 +9601,13 @@ function drawSpots(ctx, W, H) {
      entirely rather than left as a line pointing at nothing. */
   const cand = [];
   for (const sp of lastSpots) {
+    /* Hard page rule, not the optional mode filter: on the CW page, CW spots
+       only - mirrors spots_lane.c. Tapping a DIGI/SSB spot sets the radio's
+       mode to it (tuneToSpot() -> set_mode), which takes the operator off the
+       CW page's own mode entirely. The Digi sub-band stays reachable for CW
+       operation there; only FT8/FT4/SSB ACTIVITY spots are hidden (operator,
+       2026-11-09: "no DiGi mode to be selected by choosing a FT spot"). */
+    if (lastScreen === "cw" && sp.m !== "cw") continue;
     const opa = spotOpacity(sp.a || 0);
     if (opa <= 0) continue;
     cand.push({ sp, opa, x: freqToPixelX(sp.f, W) });

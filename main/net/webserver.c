@@ -1778,7 +1778,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         double argv;
         if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
         {
-            uint32_t hz = (uint32_t)argv;
+            /* ⛔ ui_cw_tune_clamp_hz() FIRST - a no-op outside CW mode, but on
+             * the CW page this is the ONLY thing standing between a browser
+             * tune (spot tap, tap-to-tune, keypad Save - every one of them
+             * lands here) and a dial outside the page's CW+Digi range. The
+             * Tab5's own equivalent gestures all route through ui_tune_commit()
+             * in ui.c; this endpoint never did, which is exactly how a tapped
+             * spot could send the RX "far outside the band plan" from the
+             * browser (operator, 2026-11-09). */
+            uint32_t hz = ui_cw_tune_clamp_hz((uint32_t)argv);
             /* FORCED, because every caller of this action is a COMMIT.
              *
              * It used to be the rate-limited cat_set_frequency(), whose return
@@ -1870,7 +1878,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // auto-answer down, because the antenna is probably not tuned for
             // the new band. Doing it from the browser must not be the loophole.
             ft8_band_change_stand_down("band changed");
-            uint32_t want = target ? target : center_hz;
+            // Same clamp as set_freq above - a no-op outside CW mode, but a
+            // band preset recalled while on the CW page must land inside its
+            // CW+Digi range exactly like every other tune on this page.
+            uint32_t want = ui_cw_tune_clamp_hz(target ? target : center_hz);
             /* Forced, exactly as the Tab5's own band button does (ui.c
              * band_preset_cb). A band change is a deliberate one-shot, and the
              * plain call is droppable: tune, then change band within 200 ms,
