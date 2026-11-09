@@ -31,7 +31,18 @@ static const bp_seg_t R1_80[]  = {{3500000,3580000,BP_CW},{3580000,3600000,BP_DI
  * number look illegal. Two defects, and fixing only the WSPR dial would have
  * left this one to contradict it. */
 static const bp_seg_t R1_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE},{5366000,5366500,BP_DIGI}};
-static const bp_seg_t R1_40[]  = {{7000000,7040000,BP_CW},{7040000,7050000,BP_DIGI},{7050000,7200000,BP_PHONE}};
+/* ⛔ THE DIGI SEGMENT STOPPED AT 7050, AND FT8 LIVES AT 7074.
+ *
+ * The printed IARU R1 table reserves 7040-7050 for narrow-band legacy
+ * digimodes (RTTY, PSK31) and that is all this table had. FT8's worldwide
+ * standard dial - 7074 kHz, same in every region, set by the WSJT-X default
+ * everyone actually uses - sits 24 kHz above that, inside what this table
+ * called Phone. Widened to 7078 kHz: past FT8's ~3 kHz multi-decode spread
+ * with a little room, same reasoning as the R1_60/WSPR fix above - a usage
+ * convention is not the thing to clamp the CW page's Digi roaming range to
+ * (operator, 2026-11-09: "I hear FT8/4 signals far above the DiGi part of
+ * the band plan on 40m"). FT4 at 7047.5 was already inside the old range. */
+static const bp_seg_t R1_40[]  = {{7000000,7040000,BP_CW},{7040000,7078000,BP_DIGI},{7078000,7200000,BP_PHONE}};
 static const bp_seg_t R1_30[]  = {{10100000,10130000,BP_CW},{10130000,10150000,BP_DIGI}};
 static const bp_seg_t R1_20[]  = {{14000000,14070000,BP_CW},{14070000,14100000,BP_DIGI},{14100000,14350000,BP_PHONE}};
 static const bp_seg_t R1_17[]  = {{18068000,18095000,BP_CW},{18095000,18110000,BP_DIGI},{18110000,18168000,BP_PHONE}};
@@ -91,7 +102,7 @@ static const bp_seg_t R2_6[]   = {{50000000,50100000,BP_CW},{50100000,50300000,B
 static const bp_seg_t R3_160[] = {{1800000,1838000,BP_CW},{1838000,1843000,BP_DIGI},{1843000,2000000,BP_PHONE}};
 static const bp_seg_t R3_80[]  = {{3500000,3535000,BP_CW},{3535000,3580000,BP_DIGI},{3580000,3900000,BP_PHONE}};
 static const bp_seg_t R3_60[]  = {{5351500,5354000,BP_CW},{5354000,5366000,BP_PHONE},{5366000,5366500,BP_DIGI}};  /* see R1_60 */
-static const bp_seg_t R3_40[]  = {{7000000,7040000,BP_CW},{7040000,7050000,BP_DIGI},{7050000,7300000,BP_PHONE}};
+static const bp_seg_t R3_40[]  = {{7000000,7040000,BP_CW},{7040000,7078000,BP_DIGI},{7078000,7300000,BP_PHONE}};  /* see R1_40 - same FT8-at-7074 fix */
 static const bp_seg_t R3_30[]  = {{10100000,10130000,BP_CW},{10130000,10150000,BP_DIGI}};
 static const bp_seg_t R3_20[]  = {{14000000,14070000,BP_CW},{14070000,14112000,BP_DIGI},{14112000,14350000,BP_PHONE}};
 static const bp_seg_t R3_17[]  = {{18068000,18095000,BP_CW},{18095000,18110000,BP_DIGI},{18110000,18168000,BP_PHONE}};
