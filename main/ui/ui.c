@@ -12872,6 +12872,20 @@ static void wf_track_viewport(void)
     int64_t view_lo = ui_view_lo_now(&span);   /* snapped - see view_lo_snapped */
     if (span <= 0) return;
 
+    /* ⭐ MEASURED 2026-11-09, the 2026-10-24 "prime suspect" below confirmed:
+     * 16 full clears logged in one ~5 s two-finger pinch on the CW page
+     * (operator: "it is super jumpy"). A live pinch recomputes zoom - and
+     * therefore span - on EVERY poll tick by design (that is what a live
+     * zoom gesture is), so nearly every tick took the expensive clear branch
+     * below. Not page-specific: it only shows up where still-view is on
+     * AND the operator is actively pinch-zooming, which happens to be the
+     * CW habit. Freeze the waterfall at its last good scale while a pinch
+     * is live instead - the spectrum above still tracks it live, so the
+     * zoom/pan feel is unaffected - and let the clear below fire exactly
+     * ONCE, naturally, on the first tick after the gesture ends (span then
+     * mismatches the frozen anchor). */
+    if (s_pinch_active) return;
+
     /* A scale change cannot be honoured by moving pixels - the old rows are at
      * a different Hz/px and rescaling them would be a lie. Start again. */
     if (!s_wf_anchor_ok || s_wf_anchor_span != span) {
