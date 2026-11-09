@@ -6979,8 +6979,15 @@ static void bp_solve_view(int64_t view_center_hz, uint32_t *dial_out, int64_t *p
      * the box instead would drift the pan by the remainder on every drag. */
     int64_t d = ((view_center_hz - pan) + 500) / 1000 * 1000;
 
+    /* ⛔ effective_drag_edges(), NOT legal_band_edges() directly - this is one
+     * of the five places the comment at effective_drag_edges() warns about.
+     * legal_band_edges() alone let the band-plan knob (Tab5 release AND the
+     * web's view_center, both funnel through here) land the dial anywhere in
+     * the WHOLE band on the CW page, so the window could be dragged past the
+     * CW+Digi segments the strip now paints - "the spectrum cannot extend out
+     * over the band plan" (operator, 2026-11-09). */
     uint32_t lo, hi;
-    if (legal_band_edges(s_last_qmx_freq_hz, &lo, &hi)) {
+    if (effective_drag_edges(s_last_qmx_freq_hz, &lo, &hi)) {
         if (d < (int64_t)lo) d = (int64_t)lo;
         if (d > (int64_t)hi) d = (int64_t)hi;
     }

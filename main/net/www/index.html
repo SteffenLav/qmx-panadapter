@@ -11545,7 +11545,15 @@ function bpSolveView(wantCenterHz) {
   /* The DIAL lands on a whole kHz, so the box lands within 500 Hz of where it
      was dropped - under two pixels at band scale. */
   let d = Math.round((wantCenterHz - pan) / 1000) * 1000;
-  if (lastBandplan) d = Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, d));
+  /* bpEffectiveRange(), NOT lastBandplan.lo/hi directly - ui.c's bp_solve_view()
+     had the matching bug (legal_band_edges() instead of effective_drag_edges()),
+     which is what let the dial - and so the preview here - land anywhere in the
+     whole band on the CW page instead of staying inside CW+Digi (operator,
+     2026-11-09). Same fix, same reason, both ends of the one gesture. */
+  if (lastBandplan) {
+    const r = bpEffectiveRange(lastBandplan);
+    d = Math.max(r.lo, Math.min(r.hi, d));
+  }
   return { dial: d, center: d + pan };
 }
 
