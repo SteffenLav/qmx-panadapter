@@ -13855,8 +13855,24 @@ static void touch_event_cb(lv_event_t *e)
             /* What moves is the WINDOW CENTRE - see bp_solve_view(). The dial
              * comes with it only when the radio cannot reach that far. */
             int64_t cwant = s_bp_drag_start_view_hz + (int64_t)lround((double)dx * hz_per_px);
-            if (cwant < (int64_t)s_bp_drag_band_lo) cwant = (int64_t)s_bp_drag_band_lo;
-            if (cwant > (int64_t)s_bp_drag_band_hi) cwant = (int64_t)s_bp_drag_band_hi;
+            /* ⛔ Clamp the CENTRE to [lo + span/2, hi - span/2], NOT to [lo, hi]
+             * directly. The visible-span BOX is span_hz wide and is drawn centred
+             * on cwant (see s_bp_span above) - clamping only its centre to the
+             * band edges let up to half the box hang off either end, pixel-clipped
+             * at the strip's border so it LOOKED like it stopped there while the
+             * window it represents (and the spectrum/waterfall showing it) did
+             * not. "It has to stop whenever the EDGES touch the end or start of
+             * the band plan" (operator, 2026-11-09) - a slider thumb, not a point. */
+            int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+            int64_t lo  = (int64_t)s_bp_drag_band_lo;
+            int64_t hi  = (int64_t)s_bp_drag_band_hi;
+            int64_t half = span_hz / 2;
+            if (hi - lo <= span_hz) {
+                cwant = (lo + hi) / 2;   /* box is wider than the track: no room to slide */
+            } else {
+                if (cwant < lo + half) cwant = lo + half;
+                if (cwant > hi - half) cwant = hi - half;
+            }
             s_bp_drag_view_hz = cwant;
 
             uint32_t dial_pred = s_last_qmx_freq_hz;

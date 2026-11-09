@@ -11808,8 +11808,21 @@ function drawBandplanOob(ctx, W, H, dpr) {
 
     const r = bpEffectiveRange(lastBandplan);
     const hzPerPx = (r.hi - r.lo) / rectW;
-    targetCenter = Math.max(r.lo,
-                     Math.min(r.hi, startCenter + dx * hzPerPx));
+    /* ⛔ Clamp the CENTRE to [lo + span/2, hi - span/2], NOT to [lo, hi]
+       directly - mirrors ui.c's touch_event_cb fix. The visible-span BOX is
+       spanHz wide, drawn centred on targetCenter; clamping only its centre
+       let up to half the box hang off either end, pixel-clipped at the strip
+       so it LOOKED stopped while the window it represents did not (operator,
+       2026-11-09: "it has to stop whenever the edges touch the end or start
+       of the band plan"). Same spanHz drawBandplan() uses for the box. */
+    const spanHz = lastView ? lastView.span : 48000 / lastZoom;
+    const half = spanHz / 2;
+    if (r.hi - r.lo <= spanHz) {
+      targetCenter = (r.lo + r.hi) / 2;   // box wider than the track: no room to slide
+    } else {
+      targetCenter = Math.max(r.lo + half,
+                       Math.min(r.hi - half, startCenter + dx * hzPerPx));
+    }
     drawBandplan(targetCenter);
     /* Usually unchanged - a drag inside the radio's reach moves the window and
        leaves the dial alone, which is the point of the gesture. */
