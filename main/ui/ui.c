@@ -10579,6 +10579,18 @@ static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
     return c ? c : hz;
 }
 
+// Exported for callers outside this file that commit a FORCED tune of their
+// own instead of going through ui_tune_commit() - today that is spots_lane.c's
+// tap-to-tune and off-screen-arrow paths, which called cat_set_frequency_forced()
+// directly and so were "the one gesture that still could" walk the CW page out
+// of its own band segment (operator, 2026-11-09: "the spots can ALSO send the
+// RX far outside the band plan"). Same rule, same reason as every other tuning
+// path on this page - see ui_tune_commit()'s own comment just below.
+uint32_t ui_cw_tune_clamp_hz(uint32_t hz)
+{
+    return (ui_mode_get() == UI_MODE_CW) ? cw_bandplan_clamp_hz(hz) : hz;
+}
+
 // The one tuning entry point for UI paths that can run on the CW page: it
 // applies the CW-segment clamp and then commits. Every user-initiated tune
 // must go through this, or the page can be walked out of its own band
