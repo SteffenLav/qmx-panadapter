@@ -158,17 +158,22 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.24.2 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
+**v1.25.0 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, a MODE: CW page, an internet
 radio player, and the radio's own menus on the screen.** The panadapter, FT8/FT4 receive and
 transmit, WSPR, ADIF logging and all four logbook uploads — QRZ, eQSL, ARRL LoTW and your own
 Cloudlog or Wavelog — are stable and in daily use. **Audio and binaural CW are no longer a
-beta.** **JS8 Normal** and the new **CW page** are — see below. **v1.24.2 fixes WSPR decoding
-dying after a visit to the FT8 page**, adds a **CW TX offset shortcut** and **Semi QSK
-break-in delay** to the CW page, and fixes an FT8 pileup crash, an RRR handling bug, and a
-one-frame screen flash — see the [release notes](releases.md) for the full list. In v1.24.0:
-the CW page (decode ticker, copilot hints, General/Contest macro sets), Web Radio, and
-two-finger pinch now pans while it zooms, on the Panadapter and the CW page alike.
+beta.** **JS8 Normal** and the new **CW page** are — see below. **v1.25.0 puts the CW page on
+the web too**, at parity with the Tab5 — tap-to-send macros, macro editing, a contest-name
+setting that logs the actual exchange, and manual callsign entry on the Tab5 itself. The CW
+page's band-plan fence now covers the band's **Digi** sub-band as well as CW, on both screens,
+closing a gap where a web spot tap could tune outside it; the sidetone's Absolute/Relative
+setting now switches itself on entering and leaving the page; and RBN/DX-cluster spots moved
+off a persistent connection onto periodic polling — see the [release notes](releases.md) for
+the full list. In v1.24.2: WSPR decoding no longer dies after a visit to the FT8 page, plus a
+CW TX offset shortcut and Semi QSK break-in delay. In v1.24.0: the CW page (decode ticker,
+copilot hints, General/Contest macro sets), Web Radio, and two-finger pinch now pans while it
+zooms, on the Panadapter and the CW page alike.
 
 !!! warning "Coming from v1.14.x or earlier? One USB-C cable update first"
 
@@ -338,7 +343,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.24.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.25.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

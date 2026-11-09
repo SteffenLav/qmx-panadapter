@@ -89,6 +89,14 @@ Either way the radio tunes to the station *and* switches mode:
 Bandwidth is deliberately **not** forced. The QMX keeps a filter per mode and
 loads it when the mode changes, so the right width follows by itself.
 
+!!! note "The CW page shows CW spots only (v1.25.0)"
+    On the [CW page](cw.md), the lane (and its off-screen counts) only ever
+    shows **CW**-mode spots — never DiGi or SSB. The Digi sub-band is still
+    somewhere you can tune and operate CW (see [Band discipline](cw.md#band-discipline)),
+    but an FT8/FT4 activity spot there would just switch the radio's mode out
+    from under you the moment you tapped it, which the CW page has no business
+    offering.
+
 **Tap an off-screen count** (`< spots (3)` / `spots (5) >`) and you jump to the nearest spot on
 that side, which brings it into view. Those counts have a deliberately large
 touch area — the visible text is small, but the target around it is not.
@@ -142,19 +150,21 @@ screen.
 
 ### 4. About RBN
 
-RBN is **off by default, on purpose.** It is a continuous global feed rather than
-an occasional fetch, and it arrives over a persistent connection on the part of
-this board that has historically been the most delicate. Off by default means it
-can never affect anyone who has not asked for it.
+*(From v1.25.0: a periodic fetch from [spothole.app](https://spothole.app),
+not a persistent telnet connection — see the note at the end of this
+section.)*
+
+RBN is **off by default, on purpose.** Off by default means it can never
+affect anyone who has not asked for it.
 
 If you do switch it on:
 
-- **Your callsign is required.** The feed asks for one when connecting; it is how
-  RBN attributes load, not a password. Set it under **Callsign & Grid**.
-- **Only your current band is kept.** RBN reports the whole world, and the
-  display can only show one band at a time, so spots outside the band you are on
-  are discarded as they arrive. Changing band clears the picture and it refills
-  within a few seconds.
+- **Your callsign is required**, so the fetch can be scoped sensibly and so
+  your own CQ can be matched for the self-spot map (see
+  [Spot Map](spot-map.md)). Set it under **Callsign & Grid**.
+- **Only your current band is kept.** The query is itself band-filtered, so
+  spots on other bands are never fetched in the first place. Changing band
+  re-queries for the new one.
 - **Duplicates are merged.** The same CQ is typically reported by ten or more
   skimmers; you see one entry per station, at the best reported signal.
 - **RBN spots** are held for up to **10 minutes** after any skimmer last heard
@@ -177,35 +187,36 @@ A **DX cluster** is people typing. That is the whole difference, and it is why
 this exists as a third source:
 
 - **Phone spots** — SSB activity you cannot see any other way.
-- **Park and summit references** — a human writes `POTA ES-2081` in the comment,
-  so a cluster spot can also tag your chase in the log.
+- **Park and summit references** — a human writes `POTA ES-2081` in the comment;
+  spothole already reclassifies a cluster spot carrying a POTA/SOTA/WWFF
+  reference under that programme's own source, so it arrives tagged rather
+  than as free text to parse.
 - **Everything else people bother to spot** — DX, contest activity, anything
   worth telling other operators about.
 
 Switch it on with **DX cluster spots (phone)**, next to the other two sources in
-the settings drawer, or from the web UI. Like RBN it is **off by default**: it is
-a second continuous connection, and the same caution applies.
+the settings drawer, or from the web UI. Like RBN it is **off by default**.
 
 Things worth knowing:
 
-- **Your callsign is required**, for the same reason as RBN — the node asks for
-  one to identify the connection.
+- **Your callsign is required**, for the same reason as RBN.
 - **Only your current band is kept**, again like RBN.
 - **Mode is worked out for you.** Most cluster spots carry no mode field at all.
   If the spotter typed one (`LSB`, `CW`, `FT8`) it is used; otherwise the
   frequency is looked up in your band plan — 14.020 is CW, 14.285 is phone. The
   same inference you would make reading the line yourself.
-- **Skimmer spots relayed onto the cluster are ignored.** Some nodes forward RBN
-  traffic; those entries would duplicate what RBN already gives you, so they are
-  dropped rather than drawn twice.
 - Spots are held for up to **15 minutes** — longer than RBN, because a human
   spot describes something slower-moving than a skimmer's automatic report.
 
-!!! note "Not every node is equally busy"
-    Cluster nodes vary enormously. In testing, one node produced two spots in
-    four minutes while another produced seventy-five in fifteen. A quiet node
-    looks exactly like a broken connection, so give it a few minutes before
-    concluding anything.
+!!! note "RBN and the DX cluster now share one periodic fetch (v1.25.0)"
+    Both used to be their own persistent, always-open connection. They are now
+    a single band-filtered query to spothole.app every **60 seconds**, backing
+    off to as long as 900 seconds if the server is unreachable — the same
+    pattern SOTA below has always used, and gentler on the one part of this
+    board (the WiFi/SDIO link) that has historically been the most delicate.
+    One side effect: **spothole's feed carries no signal-strength figure**, so
+    the SNR column for an RBN or cluster spot reads **0** rather than the dB
+    value a direct skimmer/cluster connection used to report.
 
 ---
 
@@ -236,8 +247,9 @@ shown is the one that was spotted, exactly as spotted.
 - POTA is fetched about **once a minute** — spot rates on that service change on
   that sort of timescale, and the fetch briefly pauses the web UI's spectrum
   stream so the two never compete for the link.
-- RBN and the DX cluster arrive continuously and are merged into the display
-  every **10 seconds**.
+- RBN and the DX cluster are fetched the same way, every **60 seconds**
+  (backing off to 900 seconds if spothole is unreachable) — see the note in
+  section 4.
 - Ageing is re-evaluated every second, so spots dim and disappear on their own
   even when nothing new arrives.
 

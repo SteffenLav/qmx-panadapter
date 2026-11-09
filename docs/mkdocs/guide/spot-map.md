@@ -127,8 +127,10 @@ Worth knowing, since there is no longer a setting to weigh this against:
 
 **It holds a connection on your behalf, permanently.** From boot, the Tab5
 holds a live session to PSK Reporter's broker subscribed to your callsign,
-and polls RBN and wsprnet. That used to be something you asked for first;
-now it starts with everything else.
+and polls wsprnet. The CW (RBN) row is a periodic spothole.app query rather
+than a persistent connection from v1.25.0 - see [Live Spots](spots.md#4-about-rbn)
+for the general-purpose RBN feed, which changed the same way. All three
+started with everything else from boot, before this change and after it.
 
 **It costs memory that other things need.** Measured on the bench, running
 the feeds costs about 6.6 KB of internal RAM and 2.6 KB of the DMA pool —

@@ -7,6 +7,11 @@ The CW page is the third screen in the carousel: swipe left from the Panadapter 
 
 The page is built for one-handed, gloved, field operation — the kind of CW you do standing at a picnic table with a paddle you have not touched in a month.
 
+*(v1.25.0)* **The CW page is now also on the web** — see
+[Web UI → CW Control](web-ui.md#cw-control) for sending macros, editing them,
+switching macro sets, entering a callsign by hand, and setting a contest name,
+all from a browser.
+
 ---
 
 ## The screen
@@ -30,12 +35,24 @@ The page is built for one-handed, gloved, field operation — the kind of CW you
 
 ## Band discipline
 
-The CW page only lets you operate the CW portion of the band. That is deliberate:
+The CW page lets you operate the CW **and Digi** portions of the band — not the
+phone portion. That is deliberate: CW is legal inside the digital sub-band, but
+digital modes are not legal inside the CW one, so clamping to CW alone would
+deny you spectrum you are actually allowed to use.
 
 - Entering the page moves you into the band's CW segment if you were somewhere else.
 - Changing band lands you in the **middle of that band's CW segment**.
-- Tuning — by tap, drag, band-plan strip or keypad — is **clamped** to the CW segment. You cannot accidentally tune into the phone portion while on this page.
-- The band-plan strip below the spectrum shows only the CW segment, and the filter is set to **300 Hz** on entry.
+- Tuning — by tap, drag, band-plan strip or keypad, **on the Tab5 or from the
+  web** *(v1.25.0 — the web's own tuning paths now honour this too)* — is
+  **clamped** to CW + Digi. You cannot tune into the phone portion while on
+  this page.
+- The band-plan strip below the spectrum draws the CW and Digi segments only,
+  each in its own colour, stretched to fill the whole strip — never Phone —
+  and the filter is set to **300 Hz** on entry.
+- *(v1.25.0)* **Spots on this page are CW only**, even though Digi is in
+  reach — see [Live Spots](spots.md#2-tapping-a-spot). Tapping an FT8/FT4
+  activity spot would switch the radio's mode away from CW, which this page
+  has no business offering.
 
 The segment boundaries come from the band plan for your region, which you can set in **Settings → Band-plan region**.
 
@@ -71,6 +88,8 @@ Six slots, each with macros expanded when you send:
 | `{MYCALL}` | Your callsign from Settings |
 | `{PARK}` | The park reference from the Park button |
 | `{CALL}` | The station you are working |
+| `{RST}` | A pro-forma signal report: `599`, or `5NN` if you long-press the `{RST}` button when inserting it (toggles a saved cut-numbers preference) |
+| `{SERIAL}` | Your contest serial, incrementing with each exchange sent, with cut numbers (0 sent as T) — see [Contest logging](#contest-logging) |
 
 **Sending and editing:**
 
@@ -125,6 +144,15 @@ Hints are **green when there is something to act on** and amber otherwise, and t
 This is what makes the page usable if you cannot yet copy CW by ear: the ticker gives you the letters, the hint tells you what just happened, and NEXT tells you what to send back.
 
 **The station card** appears when a callsign is heard, showing the country, whether you have worked them before (and on this band), the report they sent you, and their **park reference** if they gave one. Tap the card to start working them; tap again to drop them.
+
+**With nothing heard, the card shows "tap to enter a callsign"** *(v1.24.2)* — tap
+it to type one on a popup keyboard instead of waiting for it to be decoded.
+That is how you adopt a station you can copy by ear but the decoder has not
+caught, or one you already know from another source.
+
+**The pencil icon beside the card** *(v1.24.2)* always opens the same
+manual-entry keyboard, whether or not a callsign is already showing — so a
+wrongly auto-adopted call can be corrected without first dropping the contact.
 
 ---
 
@@ -199,17 +227,22 @@ Without a switch you have to choose one:
 - **QMX in one ear, Tab5 in the other, Binaural CW off** — a monitor in one
   ear and mono receive in the other.
 
-On the radio's side, whichever you pick, set the monitor so it stops moving
-when you change receive volume:
+*(v1.25.0)* **The Tab5 now does this for you.** Left at the factory setting of
+*Relative*, the QMX's main volume control moves the received audio and your
+sidetone together by the same amount, so you cannot bring the receive level
+down without taking your own monitor with it. Entering the CW page now checks
+the radio's reported `Sidetone abs/rel` setting, and if it reads **Relative**,
+switches it to **Absolute** and starts mirroring the **QMX volume** slider into
+**Sidetone volume** itself (with a 15% floor, so it can never go fully silent).
+Leaving the page restores **Relative**, so a standalone QMX is never left
+needing to be repaired by hand. If the radio is already **Absolute** — Michael
+KZ4LY's own deliberate binaural setup, described above — this does nothing at
+all.
 
-1. In the QMX's **CW** menu set **Sidetone abs/rel** to **Absolute**.
-2. Set **Sidetone volume** to taste.
-
-Left at the factory setting of *Relative*, the main volume control moves the
-received audio and your sidetone together by the same amount, so you cannot
-bring the receive level down without taking your own monitor with it. The
-**CW monitor level** row in the settings drawer sets both of these from the
-Tab5, and reads them back from the radio rather than keeping its own copy.
+The **CW monitor level** row in the settings drawer still exists for setting
+the level and the abs/rel mode directly, and reads them back from the radio
+rather than keeping its own copy — useful outside the CW page, or if you want
+a level other than what the automatic mirror would pick.
 
 ---
 
@@ -224,6 +257,26 @@ The **NEXT** button always shows exactly what it will send. One tap sends it and
 A station is adopted automatically when the decoder hears your call followed by `DE <their call>` shortly after your CQ. You can also adopt anyone by tapping the station card, which is how you answer someone else's CQ. **Long-press NEXT** to drop the contact and go back to CQ.
 
 The logged contact records mode CW, the report you sent, and the report you received **only if it was actually decoded** — a report that was never exchanged is left out of the log rather than invented.
+
+---
+
+## Contest logging
+
+*(v1.25.0)* **Set contest…**, from the web CW panel (see
+[Web UI → CW Control](web-ui.md#cw-control)) or `[cw] contest =` in a config
+file, names the contest you are currently running. While it is set, every CW
+QSO logged here carries that name as ADIF `CONTEST_ID`, alongside a genuine
+contest exchange:
+
+- **The serial you actually sent** — read back from the expanded `{SERIAL}`
+  macro text, never a number assumed from a counter — as ADIF `STX_STRING`.
+- **The serial the other station sent back** — captured from the decoder right
+  after their report, the same way the report itself is captured — as ADIF
+  `SRX_STRING`.
+
+The station card shows the received serial next to the report once it has been
+decoded. This is mutually exclusive with ARRL Field Day logging, which keeps
+writing its own `CONTEST_ID` the way it always has.
 
 ---
 

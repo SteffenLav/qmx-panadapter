@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.24.2.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.24.2 fixes WSPR decoding dying after a visit to the FT8 page**, adds a **CW TX offset shortcut** and **Semi QSK break-in delay** to the CW page, and fixes an FT8 pileup crash, an RRR handling bug, and a one-frame screen flash - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.24.0 added a **MODE: CW page** (beta) and an internet **Web Radio** player.
+> **Release — v1.25.0.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.25.0 puts the MODE: CW page on the web too**, at parity with the Tab5: tap-to-send macros, macro editing, the General/Contest toggle, and a contest-name setting that logs the actual serial exchanged. The CW page's band-plan fence now covers the band's **Digi** sub-band as well as CW, on both screens, closing a gap where a web spot tap could tune outside it; the sidetone's Absolute/Relative setting now switches itself; and RBN/DX-cluster spots moved off a persistent connection onto periodic polling - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.24.2 fixed WSPR decoding dying after a visit to the FT8 page; v1.24.0 added the **MODE: CW page** (beta) and an internet **Web Radio** player.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.24.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.25.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -639,6 +639,21 @@ The Tab5's playback path is about 100 ms deep, which is longer than a dot at
 20 WPM, so the tone would arrive after the element that made it. The chapter
 says which path does what, and what the two honest headphone arrangements are.
 
+**New in v1.25.0: the CW page is now also on the web**, at parity with the
+Tab5 — six tap-to-send macro buttons plus free text, a pencil icon to edit
+each macro, the General/Contest toggle, and a **Set contest…** button that
+names the contest you are running, so every CW QSO logged carries it as
+ADIF `CONTEST_ID` along with the actual serial sent and received. On the
+Tab5: tap the station card (or a pencil icon beside it) to type in a
+callsign by hand instead of waiting for the decoder; the radio's **Sidetone
+abs/rel** now switches itself to Absolute on entering the page and back to
+Relative on leaving, so the monitor level stops being tied to your receive
+volume without you having to set it by hand; and the band-plan strip and
+every tuning path — Tab5 and web alike — now reach the band's **Digi**
+sub-band too, not just CW (CW is legal there; digital modes are not legal
+inside the CW segment), while spots shown on this page stay CW-only so
+tapping one can never switch you into a digital mode.
+
 **New in v1.24.2:** tap the WPM number for direct numeric entry; a **TX
 offset** button beside Park, so you can shift your transmit frequency off
 zero-beat without a trip to the drawer; and **Semi QSK**, the radio's CW
@@ -1123,16 +1138,14 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.23.0 is here.** Next on the bench:
+**v1.25.0 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.
-- **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 - **A real JS8 Fast station decoded.** v1.23.0 can decode one alternate JS8 speed alongside the one you are using, one slot in five, receive-only and default off. It has only ever decoded my own encoder. Until a station actually running Fast is read off the air it stays untested.
 
 ### Longer term
 
-- **CW decoder.** Goertzel-based, text scrolling under the spectrum. The QMX already does this internally — question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of

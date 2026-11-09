@@ -4,26 +4,37 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.24.2** - 2026-11-04
+**v1.25.0** - 2026-11-09
+
+**The MODE: CW page is now also on the web, at parity with the Tab5. The CW page's band-plan fence covers the Digi sub-band too, on both screens — and closes the one gesture (a spot tap, from the browser) that could still tune outside it. Contest logging, manual callsign entry, and an automatic sidetone fix.**
+
+- **CW on the web.** The browser now shows a CW panel when the Tab5 is on the CW page: "MODE: CW" in the top bar, the band-plan strip drawing CW+Digi only (not Phone), a "Switch to CW" entry in the Radio menu, six tap-to-send macro buttons plus a free-text box (`{MYCALL}`/`{PARK}`/`{CALL}`/`{RST}`/`{SERIAL}` all expand here too), a pencil icon to edit each macro, the General/Contest toggle, and a **Set contest…** button. See [Web UI → CW Control](guide/web-ui.md#cw-control). Also corrected the FT8/FT4/WSPR Radio-menu entry colours, which had drifted from the Tab5 drawer's own constants.
+- **Contest logging.** A contest name, set from the web CW panel or `[cw] contest =` in a config file, is written as ADIF `CONTEST_ID` on every CW QSO logged while it is set, alongside the actual serial sent (`STX_STRING`) and received (`SRX_STRING`) — not an assumed or invented one. Mutually exclusive with ARRL Field Day logging. See [Contest logging](guide/cw.md#contest-logging).
+- **Manual callsign entry on the CW page.** The station card now shows "tap to enter a callsign" when nothing has been heard, and a pencil icon beside it always opens the same manual-entry keyboard — including to correct a wrongly auto-adopted call without first dropping the contact.
+- **The CW page's band-plan fence now covers Digi, not just CW** — on the Tab5 and from the web. CW is legal inside the digital sub-band, but digital modes are not legal inside the CW one, so the old CW-only clamp was denying spectrum you are actually allowed to use. The band-plan strip, the band-plan drag/slider, and every tuning path (tap, drag, keypad, spot tap, band preset) now agree on the same CW+Digi range. ⛔ **The band-plan slider could also be dragged until its own edges hung half off the strip**, even though its centre was correctly clamped — fixed to behave like a scrollbar thumb, stopping once either edge reaches the track.
+- **Spots on the CW page are CW-only**, not CW+Digi, even though Digi is in reach for tuning: tapping an FT8/FT4 activity spot would switch the radio's mode away from CW, which this page has no business offering.
+- ⛔ **The web's own tap-to-tune, keypad entry and band presets could tune the CW page outside its band-plan fence entirely** — found while tracing the spot-tap report above. Unlike every Tab5 gesture, the browser's `set_freq`/`set_band` endpoints never routed through the CW-page clamp at all. Both now do.
+- **40 m's Digi segment was 24 kHz short of where FT8 actually operates.** The coarse band-plan table's Digi range (7040–7050 kHz) matched the printed IARU Region 1 allocation for narrow-band legacy digimodes, but FT8's worldwide standard dial — 7074 kHz, the same in every region — sits above it, inside what the table called Phone. Widened to 7040–7078 kHz (Region 1 and Region 3); does not affect transmit-legality checks, which use the whole-band edges, not this sub-segment split.
+- **The sidetone's Absolute/Relative setting now switches itself.** Entering the CW page checks the radio's `Sidetone abs/rel`, and if it reads Relative, switches it to Absolute and mirrors the **QMX volume** slider into **Sidetone volume** (15% floor, so it can never go fully silent) — so turning down your receive volume no longer takes your keying monitor with it. Leaving the page restores Relative. Does nothing if the radio is already Absolute.
+- **RBN and DX cluster spots moved off a persistent connection onto periodic spothole.app polling**, the same pattern SOTA spots already used — band-filtered, 60-second period backing off to 900 seconds if unreachable. One trade-off: spothole's feed carries no signal-strength field, so the SNR column for an RBN/cluster spot now reads 0. See [Live Spots](guide/spots.md#4-about-rbn).
+- **A CW decode-ticker misclassification is fixed**: the very last character of your own macro send was being shown as received (cyan) rather than sent (orange), every time.
+- **The CW macro-set toggle (General/Contest) now stays in sync** between the Tab5 and the web regardless of which one last changed it.
+- **A jumpy two-finger pinch-zoom on the CW/Panadapter pages is fixed** — the waterfall was clearing itself on almost every tick of an active pinch; it now freezes at its last scale during the gesture and clears once, cleanly, when it ends.
+- **Dead Zoom/Tune controls on the FT8/JS8 top bar now hide outright**, matching Band/Mode/BW/RIT, instead of sitting there doing nothing.
+- **A real bug in the web FT8 grey-list view is fixed**: a hand-skipped station and an auto-grey-listed one were shown — and cleared — as if they were the same list.
+
+## Previous Releases
+
+### v1.24.2 - 2026-11-04
 
 **WSPR decoding dead after a visit to FT8 is fixed for good. Two new CW page controls: a TX offset shortcut and Semi QSK break-in delay. A pileup crash and an RRR bug fixed. Plus a one-frame screen flash, found and fixed the same night it was introduced.**
 
-A note before the list: this release adds more small controls to the CW page than any single release should, really. I'm aware the app is edging toward being a Swiss-army knife, and I don't want that to become the norm — a simple, easy-to-understand UI matters more to me than a complete feature checklist. Expect me to start saying no to requests, and to occasionally retire something, so the app stays something one person can maintain and everyone can still find their way around.
-
-- **WSPR could stop decoding entirely after a visit to the FT8 page, for the rest of the session** *(Gyula HA3HZ and others, a recurring report)*. Not a timing race as first suspected: FT8's memory pool and WSPR's own capture buffers were landing side by side in PSRAM, so when FT8 later freed its pool the memory couldn't join back into one contiguous block big enough for WSPR's candidate search. Total free memory looked fine; the layout was just permanently split. WSPR now waits for FT8 to fully release its memory before claiming any of its own, closing the gap for good. Verified live: switching FT8 -> WSPR now decodes candidates every single cycle.
-- **CW TX offset, from the CW page itself.** A new button beside Park opens a popup to shift your transmit frequency away from zero-beat on the station you're calling, without touching the dial — previously only reachable through the settings drawer. See [TX offset](guide/cw.md#tx-offset) in the guide.
-- **Semi QSK — the radio's CW break-in delay — is now exposed in the settings drawer** *(Michael K Johnson KZ4LY, Gyula HA3HZ)*. Six modes (Off/Auto/Contest/three Custom units) plus a 0-999 delay value, read from and written straight to the radio. Useful if you run an amplifier or relay that needs the receiver quiet for the whole transmission. See [Semi QSK](guide/settings.md#radio) in the guide.
-- **Tap the WPM number for direct numeric entry**, instead of stepping one WPM at a time with +/-.
-- **Fixed a crash from clicking into an FT8 pileup** — a manual reply built from a pileup row could overflow the stack; now shares the same safe path as every other manual reply.
-- **Fixed WAIT_RPT reading a bare RRR as a signal report instead of a direct acknowledgement** *(Gyula HA3HZ, Randy N4OPI)*. A station that had already said RRR and would not repeat itself was left sitting in the wrong wait state until timeout.
-- **A new `{SERIAL}` macro** for a send-time contest serial number, and an `{RST}` placeholder for a signal report.
-- **The help screen links to the full online manual**, not only the on-device pages.
-- **A one-frame cyan screen flash, introduced earlier the same evening while chasing the WSPR fix above, was found and fixed before it shipped.** A boot-time memory diagnostic was doing a full PSRAM heap scan with interrupts off — the exact pattern a resolved hardware investigation months ago had already ruled out everywhere else in this codebase. Caught on the same bench, same night.
-- **esp_hosted's SDIO driver now survives a failed memory allocation instead of crashing the device** — closes one specific crash site found during a 14-hour WSPR soak test. The underlying memory pressure that led to it is still being tracked down; this stops that one crash from taking the radio down while that continues.
-- **A full SD card can now recover on its own**: history pruning used to run only on a log-size trigger, so a card that was already full before that triggered could never free space. It now prunes directly on a full-card write failure too.
-- **Downloading or uploading a file in the SD browser now mutes the Tab5 speaker for the duration**, the same protection the diagnostic log mirror already had, so the file transfer can't glitch the audio.
-
-## Previous Releases
+- WSPR could stop decoding entirely after a visit to the FT8 page, for the rest of the session — a PSRAM fragmentation issue, now fixed for good.
+- CW TX offset, from the CW page itself, and a numeric keypad for the WPM number.
+- Semi QSK — the radio's CW break-in delay — exposed in the settings drawer.
+- A new `{SERIAL}` macro and an `{RST}` placeholder for CW macros.
+- Fixed a crash from clicking into an FT8 pileup, and WAIT_RPT reading a bare RRR as a signal report.
+- esp_hosted's SDIO driver now survives a failed memory allocation instead of crashing the device; a full SD card can now recover on its own; the SD browser now mutes the Tab5 speaker during a file transfer.
 
 ### v1.24.1 - 2026-11-03
 
@@ -1254,7 +1265,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.24.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.25.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
