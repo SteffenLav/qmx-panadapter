@@ -13411,6 +13411,212 @@ fpsEl.addEventListener("click", wsReclaim);
  * small enough that the correction is rare and audible as nothing much, and a
  * rate loop against a transport delay is the thing that rang in rx_audio.c
  * (2026-09-22). */
+/* NR-BEGIN ------------------------------------------------------------------
+ * T18 - noise reduction for SSB and AM, in the BROWSER (Sam W7STF's ask).
+ *
+ * RNNoise v0.1.1 (xiph, BSD-3), built to WASM by tools/build_rnnoise_wasm.sh
+ * and served as /rnnoise.wasm. It runs here on the 12 kHz stream after the
+ * mu-law decode, so it costs the Tab5 only the 141 KB of flash the file
+ * takes - no CPU, no RAM. ⛔ NOT v0.2: its model is 13.5 MB gzipped.
+ *
+ * RNNoise is a speech model. It removes what is NOT speech, which includes a
+ * CW note and every data tone - so it is offered for USB, LSB and AM only.
+ *
+ * RNNoise wants 48 kHz in 480-sample frames, int16-scaled floats. We have
+ * 12 kHz: up x4 through a 65-tap low-pass, 480 at a time through the model,
+ * and down x4 through the same filter. 65 taps is chosen so that both group
+ * delays (32 + 32 samples at 48 kHz) add up to a WHOLE number of 12 kHz
+ * samples (16), which the dry path has to be delayed by exactly - see
+ * NR_LATENCY_12K.
+ *
+ * Strength is a wet/dry mix with the dry path time-aligned: Low leaves the
+ * noise 6 dB down, Medium 14 dB, High takes all RNNoise removes. Without
+ * the alignment the mix is a comb filter.
+ *
+ * This block is extracted verbatim by test/web_nr_harness.mjs - keep it
+ * self-contained (no DOM, no globals from outside it). */
+const NR_LEVELS = [
+  { name: "Off",  wet: 0.0 },
+  { name: "Low",  wet: 0.5 },
+  { name: "Med",  wet: 0.8 },
+  { name: "High", wet: 1.0 },
+];
+const NR_TAPS = 65;
+const NR_FRAME48 = 480;
+/* Dry-path delay, in 12 kHz samples, that lines the dry signal up with the
+   wet one: NR_PLC_HOLD for the hole concealment, 16 for the two filters, 120
+   for RNNoise's own one-frame overlap-add delay, 120 for the primed output
+   FIFO. The dry ring covers all but the first, since the dry path is taken
+   AFTER the concealment. MEASURED by the harness
+   (cross-correlation peak), not only derived - it refuses if they differ. */
+/* Hole concealment ahead of the model - see nrPlc(). PLC_HOLD is its fixed
+   look-ahead: the longest hole it patches (700) plus both 10 ms fades (2 x 120)
+   fits inside it, so a hole is always whole before any of it is emitted. */
+const NR_PLC_HOLD = 1024;
+const NR_PLC_MIN = 100, NR_PLC_MAX = 700, NR_PLC_FADE = 120, NR_PLC_XF = 24;
+const NR_LATENCY_12K = NR_PLC_HOLD + 16 + 120 + 120;
+const NR_FIR = (() => {
+  /* Windowed sinc, Blackman, cutoff 5.6 kHz at 48 kHz: flat to the 12 kHz
+     stream's useful band, and down far enough at 6 kHz+ to keep the images
+     of the x4 stuffing out of the model's input. */
+  const h = new Float32Array(NR_TAPS), M = NR_TAPS - 1, fc = 5600 / 48000;
+  let sum = 0;
+  for (let i = 0; i < NR_TAPS; i++) {
+    const n = i - M / 2;
+    const sinc = n === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * n) / (Math.PI * n);
+    const w = 0.42 - 0.5 * Math.cos(2 * Math.PI * i / M) + 0.08 * Math.cos(4 * Math.PI * i / M);
+    h[i] = sinc * w; sum += h[i];
+  }
+  for (let i = 0; i < NR_TAPS; i++) h[i] /= sum;   /* unity DC gain */
+  return h;
+})();
+
+async function nrCreate(wasmBytes) {
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+  const ex = instance.exports;
+  if (ex._initialize) ex._initialize();
+  const st = ex.rnnoise_create(0);            /* 0 = the built-in model */
+  const inPtr = ex.malloc(NR_FRAME48 * 4), outPtr = ex.malloc(NR_FRAME48 * 4);
+  return {
+    ex, st, inPtr, outPtr,
+    upHist: new Float32Array(Math.ceil(NR_TAPS / 4)),   /* last x[n-k], k=0.. */
+    dnHist: new Float32Array(NR_TAPS),                   /* last 48 kHz samples */
+    /* 3, not 0: the decimator then keeps 48 kHz samples 0, 4, 8... - the
+       phase the x4 stuffing put the input on. Started at 0 it kept 3, 7,
+       11..., and the wet path lagged by 255.25 samples at 12 kHz: measured
+       by the harness as 255 against the dry ring's 256, a quarter-sample
+       skew that turns the wet/dry mix into a gentle comb. */
+    dnPos: 3,                                            /* 48 kHz phase, 0..3 */
+    acc: new Float32Array(NR_FRAME48), accN: 0,
+    fifo: new Float32Array(4096), fifoN: 120, fifoR: 0,            /* primed - see LATENCY */
+    dry: new Float32Array(NR_LATENCY_12K - NR_PLC_HOLD), dryPos: 0,
+    /* PLC: [2048 of history already emitted | pending]; primed with
+       NR_PLC_HOLD zeros so every call can emit exactly what it was given */
+    plc: new Float32Array(2048 + NR_PLC_HOLD + 8192), plcN: 2048 + NR_PLC_HOLD,
+    plcPatched: 0,
+    vad: 0,
+  };
+}
+
+function nrDestroy(nr) {
+  try { nr.ex.free(nr.inPtr); nr.ex.free(nr.outPtr); nr.ex.rnnoise_destroy(nr.st); }
+  catch (e) {}
+}
+
+/* One RNNoise frame: nr.acc (48 kHz, -1..1) in, 120 samples at 12 kHz onto
+   the FIFO. The heap view is re-taken every call - malloc may have grown the
+   memory, and a stale Float32Array over a detached buffer reads as zeros. */
+function nrRunFrame(nr) {
+  const heap = new Float32Array(nr.ex.memory.buffer);
+  const ib = nr.inPtr >> 2, ob = nr.outPtr >> 2;
+  for (let i = 0; i < NR_FRAME48; i++) heap[ib + i] = nr.acc[i] * 32768;
+  nr.vad = nr.ex.rnnoise_process_frame(nr.st, nr.outPtr, nr.inPtr);
+  const h = NR_FIR, d = nr.dnHist;
+  if (nr.fifoR > 0) {                             /* compact once per frame */
+    nr.fifo.copyWithin(0, nr.fifoR, nr.fifoN); nr.fifoN -= nr.fifoR; nr.fifoR = 0;
+  }
+  if (nr.fifoN + 120 > nr.fifo.length) {          /* cannot happen in steady state */
+    const f = new Float32Array(nr.fifo.length * 2); f.set(nr.fifo); nr.fifo = f;
+  }
+  for (let i = 0; i < NR_FRAME48; i++) {
+    d.copyWithin(1, 0, NR_TAPS - 1);
+    d[0] = heap[ob + i] / 32768;
+    if (++nr.dnPos === 4) {
+      nr.dnPos = 0;
+      let y = 0;
+      for (let j = 0; j < NR_TAPS; j++) y += h[j] * d[j];
+      nr.fifo[nr.fifoN++] = y;
+    }
+  }
+}
+
+/* ⛔ HOLES IN THE STREAM DEFEAT THE MODEL, so they are concealed first.
+ *
+ * MEASURED 2026-11-10 on bench1, twelve 20-40 s captures of 20 m noise: the
+ * web stream carries 1-3 holes a second of EXACT digital zero, 135 samples
+ * long (or 392 / 648 for two or three in a row). They are rx_audio.c's
+ * read-timeout gap frames - 1024 pairs at 48 kHz, 10 ms faded, the rest
+ * zero - which the web tap copies from the speaker output along with
+ * everything else. That file measured them as WiFi/SDIO contention (3.08/s
+ * with WiFi up, 0.42/s without), and streaming to a browser means WiFi is up.
+ *
+ * RNNoise reads the restart after every hole as the start of speech and opens
+ * up: on the raw capture it flagged 19 % of frames as voice and took the noise
+ * down only 8 dB. The same capture with the holes spliced out: VAD 2 %,
+ * median -24 dB. The same spectrum with its time structure scrambled: -60 dB.
+ *
+ * Fixing it on the Tab5 is not the cheap side: the gap frames are part of the
+ * stream's sample count, so dropping them there would leave the browser ~21 ms
+ * short per hole - 2-6 %, beyond its +-3 % rate trim.
+ *
+ * So: a run of NR_PLC_MIN..NR_PLC_MAX exact zeros, plus the 10 ms fade either
+ * side, is replaced by a copy of the audio just before it, cross-faded in and
+ * out. On band noise a 30 ms repeat is inaudible; on speech it is far milder
+ * than a hole. A LONGER zero run is left alone - that is a closed squelch or
+ * a real outage, and silence is what it should sound like. */
+function nrPlc(nr, x) {
+  const H = 2048, P = nr.plc;
+  if (nr.plcN + x.length > P.length) {           /* a catch-up burst: grow */
+    const g = new Float32Array((nr.plcN + x.length) * 2); g.set(P.subarray(0, nr.plcN)); nr.plc = g;
+  }
+  const B = nr.plc;
+  B.set(x, nr.plcN); nr.plcN += x.length;
+  /* scan the pending part for complete zero runs with their trailing fade */
+  let i = H;                                     /* everything before H is emitted */
+  while (i < nr.plcN) {
+    if (B[i] !== 0) { i++; continue; }
+    let e = i; while (e < nr.plcN && B[e] === 0) e++;
+    const run = e - i;
+    if (e + NR_PLC_FADE > nr.plcN) break;         /* not whole yet - next call */
+    if (run >= NR_PLC_MIN && run <= NR_PLC_MAX && !nr.plcDisabled) {   /* plcDisabled: harness mutation only */
+      const r0 = i - NR_PLC_FADE, r1 = e + NR_PLC_FADE, len = r1 - r0;
+      const s0 = r0 - len;                          /* the audio just before it */
+      if (s0 >= 0) {
+        for (let k = 0; k < len; k++) {
+          const fi = k < NR_PLC_XF ? k / NR_PLC_XF : 1;              /* into the copy */
+          const fo = k >= len - NR_PLC_XF ? (len - k) / NR_PLC_XF : 1; /* back out */
+          const w = Math.min(fi, fo);
+          B[r0 + k] = w * B[s0 + k] + (1 - w) * B[r0 + k];
+        }
+        nr.plcPatched++;
+      }
+    }
+    i = e;
+  }
+  /* emit the oldest x.length pending samples, keep H of history */
+  const out = B.slice(H, H + x.length);
+  B.copyWithin(0, x.length, nr.plcN); nr.plcN -= x.length;
+  return out;
+}
+
+/* x: 12 kHz samples, -1..1. Returns a NEW array of the same length, delayed
+   by NR_LATENCY_12K, mixing wet and aligned dry by `wet` (0..1). */
+function nrProcess(nr, x0, wet) {
+  const x = nrPlc(nr, x0);
+  const h = NR_FIR, K = nr.upHist.length, out = new Float32Array(x.length);
+  for (let n = 0; n < x.length; n++) {
+    nr.upHist.copyWithin(1, 0, K - 1);
+    nr.upHist[0] = x[n];
+    for (let p = 0; p < 4; p++) {
+      let y = 0;
+      for (let k = 0, j = p; j < NR_TAPS; k++, j += 4) y += h[j] * nr.upHist[k];
+      nr.acc[nr.accN++] = 4 * y;
+      if (nr.accN === NR_FRAME48) { nrRunFrame(nr); nr.accN = 0; }
+    }
+    /* dry: a ring of NR_LATENCY_12K - NR_PLC_HOLD (the concealment's own
+       delay is already in x) */
+    const dly = nr.dry[nr.dryPos];
+    nr.dry[nr.dryPos] = x[n];
+    if (++nr.dryPos === nr.dry.length) nr.dryPos = 0;
+    /* wet: the FIFO is primed with 120 and refilled 120 per 120 inputs, so
+       it never runs dry here */
+    const w = nr.fifo[nr.fifoR++];
+    out[n] = wet * w + (1 - wet) * dly;
+  }
+  return out;
+}
+/* NR-END ------------------------------------------------------------------ */
+
 let audioCtx = null, audioGain = null, audioNext = 0;
 let audioWantOn = false, audioSeq = -1, audioFrames = 0, audioGaps = 0, audioGapsPainted = 0;
 /* ⛔ RIDE THROUGH A RECONNECT INSTEAD OF GOING SILENT UNTIL SOMEBODY CLICKS.

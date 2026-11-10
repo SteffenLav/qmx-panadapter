@@ -127,3 +127,6 @@ graphify-out/
 
 # Host harness build output (test/build_*.sh)
 build_host/
+
+# T18: zig output for tools/build_rnnoise_wasm.sh (the .gz in main/net/www is committed)
+build_wasm/
