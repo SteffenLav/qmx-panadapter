@@ -366,11 +366,14 @@ upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
     The power limits are **not** enforced by the Tab5 — it checks frequencies.
     A QMX at 5 W is inside the 9.15 W figure anyway.
 
-!!! warning "What it does not cover"
-    CW keying and SWR Tune are not checked. They are things you start yourself,
-    where the dial is the transmitted frequency and what you see is what goes
-    out; the guard is aimed at the digital modes, which transmit on a schedule
-    and can do so with nobody watching.
+!!! info "What it covers, and the one thing it does not"
+    FT8, FT4, JS8 and WSPR are checked, and so are **Antenna Tune** and
+    **Calibrate Power**. From **v1.26.0** a **CW message** sent from the Tab5 or
+    the web page is checked too: outside the band, or with no IARU region set,
+    it is refused with a `CW not sent:` message and any queued text is dropped.
+
+    A **paddle or key connected to the QMX is not checked**. The radio keys
+    itself there, and the Tab5 is not in that path.
 
 ## Battery Care
 

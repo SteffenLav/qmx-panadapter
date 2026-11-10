@@ -1,7 +1,6 @@
 # Web Radio
 
-An internet radio player on the Tab5, for when the bands are quiet. New in
-this release. It has nothing to do with the QMX — the radio and its I/Q are
+An internet radio player on the Tab5, for when the bands are quiet *(from v1.24.0)*. It has nothing to do with the QMX — the radio and its I/Q are
 untouched while you listen.
 
 ---

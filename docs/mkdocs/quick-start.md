@@ -97,7 +97,7 @@ On first boot you'll be prompted for:
 - **Grid** — your Maidenhead grid square (e.g., JO45)
 - **WiFi** — SSID and password (optional, skip if you're portable)
 
-You can change these anytime by swiping right from the screen edge to open the settings drawer.
+You can change these anytime by swiping left from the right edge, or tapping the right grip, to open the settings drawer.
 
 ## Step 5b: Optional — microSD Card (station backup)
 
@@ -127,12 +127,12 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8 or WSPR |
+| Swipe → from **left edge** | Open the **page picker** - tap Panadapter, CW, FT8, FT4, JS8 or WSPR |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
 
-You'll see faint "breathing" grip handles on the edges — they show you where to swipe.
+You'll see faint "breathing" grip handles on the edges — they show you where to swipe. A tap on the left or right grip opens the same thing as the swipe.
 
 !!! note "This is the short version"
     [Gestures & Controls](reference/gestures.md) is the authoritative list and
@@ -146,16 +146,16 @@ You'll see faint "breathing" grip handles on the edges — they show you where t
 You're now receiving. The **spectrum** shows signal strength across the band, and the **waterfall** scrolls down showing signal activity over time.
 
 - **Tap the spectrum or waterfall** to tune to that frequency
-- **Pinch** to zoom in/out; **one-finger horizontal drag** to pan and retune
+- **Pinch** to zoom in/out; **one-finger horizontal swipe** to pan (from ×2 the dial stays where it is; at ×1 it retunes)
 - **Tap the coloured band-plan strip** (along the bottom, just above the status bar) to jump to a frequency, or **drag along it** to scrub through the band — you can also grab it from *anywhere on the bottom bar* and drag sideways (a vertical up-swipe there still opens memory channels)
 - **Tap the Freq label** on the top bar to open the frequency keypad — drag the "Enter freq" title bar to reposition it, pinch or swipe up/down to resize it
 - **Swipe ↑ from the bottom edge** to open memory channels — tap an empty slot to create one, long-press a filled slot to edit it, long-press and drag to move a channel (or drag it onto the **wastebin** cell to delete it). A new device comes with a few example channels and plays a one-time tour of these gestures the first time you open the picker
 - **Tap Band** to switch between your configured bands
-- **Tap Mode** to switch USB/LSB/CW/DiGi
+- **Tap Mode** to switch USB/LSB/CW/DiGi (plus AM on QMX firmware 1.04 or later)
 
 ## Step 8: FT8, FT4 and JS8 (Optional)
 
-Swipe → from the left edge to switch to the **decode view**. You'll see:
+Swipe → from the left edge and tap **MODE: FT8** in the page picker to open the **decode view**. You'll see:
 
 - **Live decode list** — every station heard on frequency
 - **Waterfall** — same real-time spectrum waterfall
@@ -167,10 +167,9 @@ column to pick **FT8**, **FT4** or **JS8**; the Tab5 retunes to that mode's call
 frequency on the band you are on.
 
 **JS8** *(beta)* is the keyboard mode: it carries free text instead of FT8's fixed
-exchange, so you hold a short conversation. In JS8 the page gains a **Conversation**
-tab beside **Stations**, and a **Free text** button under Call CQ opens a box to type
-a message — it tells you how many seconds the message will hold the frequency before
-anything is transmitted. See [JS8](guide/js8.md).
+exchange, so you hold a short conversation. In JS8 the page shows **Stations**, **Conversation** and a type box together. Type
+a message in the box — it tells you how many seconds the message will hold the
+frequency before anything is transmitted. See [JS8](guide/js8.md).
 
 
 ## Step 9: WiFi & Web UI (Optional)

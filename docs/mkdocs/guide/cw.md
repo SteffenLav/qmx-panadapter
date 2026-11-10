@@ -1,9 +1,9 @@
 # CW *(beta)*
 
-The CW page is the third screen in the carousel: swipe left from the Panadapter to reach FT8, and left again for CW. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships **on** - it is this release's own beta. Turn it off with `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}` over the API, if you would rather not have it yet.
+To open the CW page, open the **page picker** (swipe right from the left edge, or tap the left grip) and tap **MODE: CW**. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships **on** and is a beta. Turn it off with `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}` over the API, if you would rather not have it yet.
 
 !!! warning "There is no abort for a message in progress"
-    `KY` has no abort in the QMX's CAT manual. Tested on the bench: neither sending `RX;` nor bouncing the mode away from CW and back stops an in-flight send - both were tried and both simply had no effect, the keyer ran to completion either way. Once you tap a memory, it sends to the end. Keying the radio itself **is** confirmed working, off air, by the operator.
+    `KY` has no abort in the QMX's CAT manual. Tested on the bench: neither sending `RX;` nor bouncing the mode away from CW and back stops an in-flight send - both were tried and both simply had no effect, the keyer ran to completion either way. Once the radio holds a message, it sends to the end. What you *can* stop is text that is still queued on the Tab5 - see [STOP](#stop-and-the-send-queue). Keying the radio itself **is** confirmed working, off air, by the operator.
 
 The page is built for one-handed, gloved, field operation — the kind of CW you do standing at a picnic table with a paddle you have not touched in a month.
 
@@ -26,7 +26,7 @@ all from a browser.
 | **TX offset** *(v1.24.2)* | Opens the CW transmit offset popup — see [TX offset](#tx-offset) below. |
 | **NEXT** | The one-tap QSO ladder — see [Running a QSO](#running-a-qso). |
 | **Six memory buttons** | Your keyer messages. |
-| **Status line** | What the radio is doing: receiving, keying, or how many characters are left to send. |
+| **Status line** | What the radio is doing: receiving, keying, or how many characters are left to send. While text is queued it is replaced by a red **STOP** button *(v1.26.0)*. |
 | **General / Contest toggle** (bottom of the panel) | Switches between two named sets of six macros — see [Macro sets](#macro-sets). Placed at the very bottom, separated from the memory buttons by the status line, so it cannot be mis-hit while working the macros above it. |
 
 **Right of the pane:** the live spectrum and waterfall, the **decode ticker** along the bottom, the **copilot hint** line just above it, and the **station card** when a callsign has been heard.
@@ -96,7 +96,16 @@ Six slots, each with macros expanded when you send:
 - **Tap** a memory to send it. The button lights **light grey** while your finger is down so you can see which one will fire.
 - **Drag up or down** without lifting to move to a different button — useful because the buttons are narrow and a fingertip covers more than one. Lift on the one you want.
 - **Hold for 800 ms** and the editor opens immediately, with your finger still down. The hold timer restarts whenever you slide to a different button, so taking your time to aim never opens the editor by accident.
+- **Slide sideways** about 40 px and the touch is abandoned: nothing is sent *(v1.26.0)*. The left-edge grip lies in front of the first three buttons, so a swipe that started there used to send a macro. A slide to the right from near the left edge now opens the page picker instead.
 - An **empty slot** opens the editor when tapped.
+
+### STOP and the send queue
+
+*(v1.26.0)* A message tapped while another is keying is **queued** behind it, up to 256 characters. The Tab5 hands the radio the next part, 80 characters at most, only when the radio's own buffer is empty.
+
+While text is queued, the status line becomes a red button: **STOP - drop N queued**. It drops the text the radio has not been given yet. The part the radio already holds still runs to the end, because the QMX has no command to stop it.
+
+Each send is also checked against the band plan at the moment it is keyed. Outside the band, or with no IARU region set, the send is refused with a `CW not sent:` message and the queue is dropped. See [Transmitting outside the band plan](settings.md#transmitting-outside-the-band-plan).
 
 The editor shows all six messages at once, so you can set up a whole activation in one visit.
 
@@ -153,6 +162,20 @@ caught, or one you already know from another source.
 **The pencil icon beside the card** *(v1.24.2)* always opens the same
 manual-entry keyboard, whether or not a callsign is already showing — so a
 wrongly auto-adopted call can be corrected without first dropping the contact.
+
+**The Log button above the card** *(v1.26.0)* opens the **Log a contact** window
+with the current station's callsign filled in - one tap, where it used to be a
+trip through the settings drawer. With no station it opens the same window
+empty. The pencil icon sits one row above it.
+
+**Listening in a browser?** From v1.26.0 the web page has noise reduction for
+CW. It uses the spectral kind, which keeps a CW note. See [Web DSP](web-dsp.md).
+
+**While you transmit, the waterfall adds no rows** *(v1.26.0)* - including when
+you key by hand - so your own signal is not painted over the band. It resumes
+about 0.7 seconds after the last element. The spectrum trace keeps drawing. The
+browser's waterfall does not do this yet. This is implemented and not yet
+measured against a hand key *(Bryan N0LUF)*.
 
 ---
 
@@ -310,6 +333,7 @@ or off, the same gesture FT8 uses for its own simulator.
 
 ## Known limitations
 
-- **No abort for a message in progress** (see the warning at the top) — both
-  tested candidates (`RX;`, a mode bounce) were tried and neither works.
+- **No abort for a message the radio already holds** (see the warning at the top) — both
+  tested candidates (`RX;`, a mode bounce) were tried and neither works. Text
+  still queued on the Tab5 can be dropped with **STOP**.
 - **Zero-beat tuning aid** and **speed matching** are designed but not yet built; both need real signals to develop against.

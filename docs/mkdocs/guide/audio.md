@@ -447,58 +447,15 @@ Notes on what this costs and what it does not:
 - **Only one browser gets the page at a time.** Opening the panadapter page in a second
   browser takes the connection from the first, which takes the audio with it.
 
-### Noise reduction
+### Noise reduction and auto-notch
 
-The page can take the band noise down before you hear it. Open **Radio** in the
-bottom bar and tick **Noise reduction**, then pick **Low**, **Med** or **High**.
-It starts at Med.
+From **v1.26.0** the page can clean this audio before you hear it: two kinds of
+noise reduction (a speech model for voice, a spectral one that also works on
+CW) and an auto-notch for carriers. All of it runs in the browser and costs the
+Tab5 nothing. Open **Radio** in the bottom bar and tick **Noise reduction** or
+**Auto-notch**.
 
-There are two kinds, and the row lets you pick which one voice uses:
-
-- **Speech model** - a small neural network trained on speech. The stronger of
-  the two on a voice. USB, LSB and AM only: it removes what is not speech, and
-  that includes a CW note.
-- **Spectral** - classic noise reduction. It follows the noise floor in each
-  47 Hz slice of the audio and turns down the slices that hold nothing else.
-  It makes no assumption about the signal, so it works on **CW**, and CW always
-  uses it. On a voice it is the gentler choice.
-
-| Level | Speech model, noise between words | Spectral, noise between words | Spectral, steady noise |
-|---|---|---|---|
-| Low | about 6 dB down | 4 to 6 dB down | 6 dB down |
-| Med | about 13 dB down | 5 to 10 dB down | 12 dB down |
-| High | 19 to 31 dB down, and the voice loses more | 6 to 14 dB down | 18 dB down |
-
-The "between words" figures are measured on real SSB from 40 m and 20 m. The
-"steady noise" column is a test signal: real band noise is not steady, so the
-spectral kind does less on it than its setting says.
-
-On CW the spectral kind was measured on a test signal, not yet on the air: a
-clear signal gains 8 to 10 dB over the noise at Med, a weak one 1 to 3 dB, and
-one at the edge of copy gains nothing. A weak note is turned down as well -
-less than the noise is.
-
-- In the digital modes it does nothing, and the row says so.
-- It runs **in your browser**, not on the Tab5. It costs the Tab5 no CPU and no
-  memory, and it changes nothing for anybody else listening.
-- The first time you switch the speech model on, the page fetches it from the
-  Tab5 (141 KB). After that the browser keeps it. The spectral kind is part of
-  the page.
-- It adds about **0.1 s** of delay to the audio.
-- The setting is kept per browser.
-
-### Auto-notch
-
-Tick **Auto-notch** in the same row and the page removes a steady carrier from
-the audio - a tuner-upper, a broadcast carrier beside an SSB signal. It works
-with noise reduction on or off.
-
-- It finds a carrier within about a second and filters out a 40 Hz slice at
-  that frequency; up to four carriers at once. Measured: 40 dB or more.
-- When there is no carrier it changes nothing at all.
-- About half a second after the carrier stops, the filter is gone again.
-- **USB, LSB and AM** only. In CW the signal you want is a carrier.
-- It adds no delay.
+It has a chapter of its own: [Web DSP](web-dsp.md).
 
 ## Feedback
 

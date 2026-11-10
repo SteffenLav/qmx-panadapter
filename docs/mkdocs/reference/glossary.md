@@ -7,6 +7,9 @@ Common terms and acronyms used throughout this guide.
 | **ADIF** | Amateur Data Interchange Format — the standard log-file format for QSO records (exported by the panadapter, uploaded to QRZ/eQSL) |
 | **AM** | Amplitude Modulation — a voice mode. Receive only on the QMX+, and only on firmware 1_04 and later |
 | **ARRL** | American Radio Relay League — the US national amateur radio society, which runs Logbook of The World |
+| **Auto-notch** | A filter that finds a steady carrier in the audio by itself and removes it. In the browser from v1.26.0 |
+| **Band guard** | The check the Tab5 makes before it keys the radio: the frequency that will go out must be inside your IARU region's band plan |
+| **Carrier** | A steady, unmodulated signal on one frequency. Heard as a constant tone in SSB |
 | **CAT** | Computer-Aided Transceiver — radio control protocol (Kenwood-style commands via serial/USB) |
 | **CDC-ACM** | Communications Device Class / Abstract Control Model — USB standard for serial ports |
 | **CQ** | General call to any station (not directed at anyone specific) |
@@ -24,8 +27,10 @@ Common terms and acronyms used throughout this guide.
 | **GFSK** | Gaussian Frequency-Shift Keying — the modulation FT8, FT4 and JS8 all use |
 | **GNSS / GPS** | A satellite navigation receiver, which gives the Tab5 UTC and the date with no internet - an M5Stack Unit GPS on PORT.A, a Module GPS on the 30-pin bus, or a GPS-equipped QMX+ answering over CAT |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
+| **Hamlib / rigctld** | A common radio-control library and its network server. The Tab5 runs a rigctld-compatible server on port 4532, so a logger can read and set the radio |
 | **Heartbeat** | The periodic `HB <call> <grid>` a JS8 station sends to say it is listening |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
+| **IARU region** | One of three world regions (1: Europe, Africa; 2: the Americas; 3: Asia-Pacific) with different band limits. The band plan and the band guard use it |
 | **IF** | Intermediate Frequency — the QMX presents the VFO signal at a +12 kHz offset in baseband |
 | **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |
 | **JS8** | A keyboard mode built on FT8's modulation that carries free text, so stations hold short conversations. Decoded and transmitted on the device, as a sub-mode of the FT8/FT4 page |
@@ -35,9 +40,11 @@ Common terms and acronyms used throughout this guide.
 | **LVGL** | Light and Versatile Graphics Library — open-source embedded UI toolkit used for the display |
 | **Maidenhead / grid** | The locator system amateurs use for position, e.g. `JO65`. Four characters is a ~100 km square, six is finer. FT8 and WSPR both carry one |
 | **NMEA** | The sentence format a GNSS receiver speaks - what the Tab5 reads for time, date and position |
+| **NR** | Noise reduction. In the browser from v1.26.0, in two kinds: Speech model and Spectral |
 | **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
 | **PA** | Power Amplifier — the radio's final transmit stage. **Max. PA voltage** sets how hard it is driven, and so how much power comes out; see [WSPR](../guide/wspr.md) and Calibrate Power |
 | **OTA** | Over-The-Air update - the Tab5 fetching and installing new firmware over WiFi, with no cable |
+| **Page picker** | The list of pages (Panadapter, CW, FT8, FT4, JS8, WSPR) that opens with a swipe from the left edge or a tap on the left grip |
 | **Pileup** | Everyone calling you at once. The Tab5 collects them in a list so you can work them in turn |
 | **POTA** | Parks on the Air — portable operating activity from designated parks |
 | **PSK Reporter** | A worldwide database of who heard whom. The panadapter can send it your decodes, and reads it back to show who has heard **you** |
@@ -46,21 +53,27 @@ Common terms and acronyms used throughout this guide.
 | **QRP** | Low-power operating, conventionally 5 W or less. QRP Labs, who make the QMX, are named for it |
 | **QRZ** | QRZ.com Logbook — online logbook and callsign service for uploading QSOs |
 | **QSO** | Radio contact / conversation between two stations |
+| **QTH** | The location of a station |
 | **RBN** | Reverse Beacon Network — automated receivers ("skimmers") that continuously report the CW and digital signals they hear. One of SelfSpotter's three sources |
 | **RIT** | Receiver Incremental Tuning — shifts what you *hear* without moving what you would *transmit* on. The QMX has RIT but no XIT |
+| **RNNoise** | A small neural network that separates speech from noise, by Xiph.Org. The browser's Speech model noise reduction |
 | **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
+| **Sidetone** | The tone the radio plays in your own headphones while you key CW |
 | **Slot** | The fixed window a digital mode transmits in - 15 s for FT8 and JS8, 7.5 s for FT4. Every station starts together, which is why the clock must be right |
 | **SNR** | Signal-to-Noise Ratio — signal strength relative to the noise floor; the FT8/FT4 signal report |
 | **SNTP** | Simple Network Time Protocol — synchronizes the system clock via WiFi/internet |
 | **SOTA** | Summits on the Air — portable operating activity from mountain summits |
+| **Spectral noise reduction** | Noise reduction that measures the noise floor in each narrow slice of the audio and turns down the slices that hold only noise. Works on any signal, CW included |
 | **SSB** | Single Sideband — the voice-mode family (USB / LSB) |
 | **SSID** | The name of a WiFi network |
 | **STFT** | Short-Time Fourier Transform — sliding-window FFT used to build the waterfall |
 | **SWR** | Standing Wave Ratio — antenna impedance matching metric (1.0 = perfect) |
 | **TX / RX** | Transmit / Receive — keying the radio and listening |
+| **Type-ahead** | Typing CW text while the radio is still keying earlier text. The Tab5 queues it and hands it to the radio in order |
 | **UAC** | USB Audio Class — standard for streaming audio over USB |
 | **USB** | Universal Serial Bus — physical connector and protocol (carries both audio and CAT commands). In a radio context, "USB" can also mean Upper Sideband — see SSB. |
 | **UTC** | Coordinated Universal Time — timezone-independent time standard for FT8 slot alignment |
 | **VFO** | Variable Frequency Oscillator — the radio's tuning dial / frequency setting |
+| **WPM** | Words per minute, the speed of CW |
 | **WSJT-X** | The desktop program most FT8 and WSPR operators use. The panadapter does the same job without a PC, and its decodes and reports are meant to be comparable |
 | **WSPR** | Weak Signal Propagation Reporter, said "whisper" — a beacon mode carrying only callsign, grid and power. Nobody replies; stations worldwide report hearing you, so you learn where your signal actually goes. See [WSPR](../guide/wspr.md) |

@@ -18,6 +18,8 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 
 Slim **breathing grip handles** on these three edges show where to swipe.
+From **v1.26.0** a **tap on the left or right grip** opens the same thing as the
+swipe, as a Bluetooth mouse click always did. The bottom grip is swipe only.
 
 !!! note "There is no top-edge swipe any more"
     Earlier versions opened the [spot map](../guide/spot-map.md) with a swipe
@@ -45,7 +47,7 @@ hearing. Mute is instant and is not remembered across a reboot.
 | Item | Selector |
 |---|---|
 | **Frequency** | Numeric keypad (MHz format) |
-| **Mode** | USB / LSB / CW / DiGi buttons |
+| **Mode** | USB / LSB / CW / DiGi buttons, plus AM on QMX firmware 1.04 or later |
 | **Bandwidth** | Filter width (SSB) or CW passband |
 | **Bandwidth**, long press | **CW-Tune** — put the dial on the nearest CW signal within ±400 Hz (see [Settings](../guide/settings.md)) |
 | **Band** | Band list (160 m – 10 m + custom) |
@@ -68,11 +70,11 @@ spectrum gesture.
 | **Pinch (2 fingers)** | Zoom in/out **and pan**, together - the midpoint between your two fingers drives the pan while the spread between them drives the zoom. Move both fingers with roughly steady spacing for a near-pure pan; let the spacing change and it zooms too |
 | **Three-finger hold** | Toggle **Simulation Mode** on/off - FT8's own simulator on the Panadapter page, CW's on the CW page |
 | **Right-drag** (BLE mouse) | **Pan the window** without moving the dial — the same gesture as the browser, and the same direction: drag right to bring lower frequencies into view. The picture slides under the pointer while the button is down and the pan is applied when you let go. Left-drag is unchanged. Works on the CW page too |
-| **Wheel** (BLE mouse) | Tune in steps, using your **Tune snap** setting — as in the browser |
+| **Wheel** (BLE mouse) | Tune in fixed steps: 10 Hz a click in CW and the digital modes, 100 Hz in SSB |
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 
-Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, 250 Hz in USB/LSB, 500 Hz in the digital modes, 1 kHz in AM.
+Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, the **Tune snap** setting (500 Hz unless you change it) in USB/LSB and the digital modes, 1 kHz in AM.
 
 !!! note "Two-finger pan is live, not buttery"
     Unlike the one-finger drag (a local preview, settled on release), the
@@ -100,6 +102,7 @@ The thin coloured strip just above the bottom status bar shows where you are wit
 | **Tap** | Send that macro |
 | **Press and drag up/down** | Re-pick which button will fire, without lifting - the highlighted one is a preview, not a commitment |
 | **Hold 800 ms** | Open the editor for all six macros in the current set |
+| **Slide sideways** (about 40 px) | Abandon the touch - nothing is sent. A slide to the right from near the left edge opens the page picker *(v1.26.0)* |
 | **Tap the General/Contest toggle** | Switch macro sets (bottom of the panel) |
 
 See [CW](../guide/cw.md#memory-messages) for the macro-set editor and what each set is for.
@@ -154,8 +157,9 @@ Enter frequency as `MHz.kHz.Hz` (e.g., `14.074` for 14.074 MHz).
 
 | Gesture | Effect |
 |---|---|
-| **Tap row** | Reply to that CQ |
-| **Long-press row** | (reserved for future use) |
+| **Tap row** | Open the confirmation window for that station |
+| **Hold 250 ms** | Enter selection: the list stops scrolling and a drag moves the highlight; lift to confirm |
+| **Hold 700 ms on a CQ row** | Pounce with no confirmation |
 | **Scroll** | List is scrollable; swipe up/down |
 
 ## ADIF Log Viewer

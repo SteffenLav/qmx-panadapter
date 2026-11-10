@@ -49,7 +49,9 @@ Returns the current state of the panadapter.
 
 Notes:
 
-- `screen` is `"panadapter"` or `"ft8"`.
+- `screen` is `"panadapter"`, `"cw"`, `"ft8"` or `"wspr"`. FT4 and JS8 report `"ft8"`.
+- **`cw_tx` is present only while the Tab5 is on the CW page.** It holds `macros` (the six of the active set), `set_b` (true = the Contest set), `last_sent`, `contest_name`, `queued` (characters not yet handed to the radio), `keying` (the radio's own count of characters left, 0-9, where 9 means 9 or more and -1 means unknown), `target` (the station being worked), `heard` (the last callsign decoded), `heard_age_s` (-1 when nothing was decoded) and `rst_rcvd`.
+- **`tune_out`** `{seq, msg}` is the result of a `cw_tune` that answered `listening`. It is absent until the first result. `seq` goes up by one with each result and `msg` is the text the Tab5 shows.
 - **`ft8` is present only while the FT8/FT4 screen is live** — the engine does not run otherwise, so its text would be stale. `st` is one of `active` / `armed` / `done` / `timeout` / `wait` / `idle`, and `text` is the same line the Tab5 shows on its own TX status label. This is what drives the browser's TX banner and the red dot in the tab title.
 - `bt` is the Bluetooth mouse: `en` is whether it is switched on, `conn` whether a mouse is connected right now. `en: true, conn: false` means it is scanning or waiting for a paired mouse to come back.
 - `signal_dbm` and `bandplan` are `null` when unavailable (no spectrum yet; VFO outside a known band).
@@ -81,17 +83,20 @@ action names its own parameter key (there is no generic `value`).
 | `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
 | `set_rit` | `hz` | RIT offset. Retuning clears it |
-| `cw_tune` | *(none)* | **Put the dial on the signal.** In CW/CW-R it zero-beats the nearest carrier, searching the **last 4 seconds** of spectrum rather than the current frame, because a keyed carrier is absent as often as it is present. In USB/LSB it runs the SSB estimator instead (a 4 s vote on the far station’s filter edge, then a snap to the grid) — the device dispatches on mode, the caller does not choose. Answers `{"ok":true,"mode":"cw"|"ssb","moved_hz":N}`, or `"listening":true` while a window is still open (8 s for CW, 4 s for SSB), or `{"ok":false,"error":...}`. One press, one move — nothing keeps correcting afterwards. Receive only |
+| `cw_tune` | *(none)* | **Put the dial on the signal.** In CW/CW-R it zero-beats the nearest carrier, searching the **last 4 seconds** of spectrum rather than the current frame, because a keyed carrier is absent as often as it is present. In USB/LSB it runs the SSB estimator instead (a 4 s vote on the far station’s filter edge, then a snap to the grid) — the device dispatches on mode, the caller does not choose. Answers `{"ok":true,"mode":"cw"|"ssb","moved_hz":N}`, or `"listening":true` while a window is still open (8 s for CW, 4 s for SSB) - the result then arrives in `/api/status` as `tune_out` *(v1.26.0)* - or `{"ok":false,"error":...}`. One press, one move — nothing keeps correcting afterwards. Receive only |
 | `rit_park` | *(none)* | Stand an engaged RIT offset down **without losing it**, or put the parked one back. Answers `{"ok":true,"parked":true,"hz":N}` or `{"ok":true,"restored":true,"hz":N}`, and `{"ok":false,...}` when there is neither. The same parked value the Tab5’s RIT long-press uses |
 | `out_power` | `watts_x100` *(optional)* | Transmit power on the **current** band. With no argument it reports the calibrated ladder: `band`, `calibrated`, the `watts_x100` levels, the current `target_x100`, and whether the PA is `busy` or held by WSPR. With `watts_x100` it sets that level — it must be **on** the ladder, because the levels are what Calibrate Power actually measured; anything else is refused by name rather than rounded. If the PA is busy the target is stored and the reply carries `"deferred":true` |
-| `set_screen` | `screen: "pan"/"panadapter"/"ft8"/"ft4"/"js8"/"wspr"` | Switch the Tab5's own view. Applied within about a second (handed to the display task). `ft4` and `js8` open the FT8 page **and** select that sub-mode, so one call is enough to put the device into FT4. An unknown name is refused with HTTP 400, not treated as `panadapter` |
+| `set_screen` | `screen: "pan"/"panadapter"/"cw"/"ft8"/"ft4"/"js8"/"wspr"` | Switch the Tab5's own view. Applied within about a second (handed to the display task). `ft4` and `js8` open the FT8 page **and** select that sub-mode, so one call is enough to put the device into FT4. An unknown name is refused with HTTP 400, not treated as `panadapter`. `"cw"` is refused with HTTP 403 while the CW page is switched off |
 | `set_ft8_mode` | `mode: "ft8"/"ft4"`, optional `freq_hz` | **Switch between FT8 and FT4**, optionally retuning. Omit `freq_hz` to keep the current frequency. This is an action rather than a setting because it also retunes the radio and clears stale decodes — read `ft8_op_mode` back from `/api/settings` to confirm |
 | `set_activation` | `ref` | Set the POTA/SOTA activation reference |
 | `cw_adopt` | `call` | **Set the station the CW page is working** - the callsign `{CALL}` sends in a macro. The web equivalent of typing it on the Tab5's station card, for when the signal is too weak to decode. An empty `call` clears it. Letters, digits and `/` only, 15 at most; anything else is refused with HTTP 400. Answers `{"ok":true,"target":"..."}`. The current station, the last decoded callsign and the report copied from the station are in `/api/status` under `cw_tx` (`target`, `heard`, `heard_age_s`, `rst_rcvd`) |
+| `cw_send` | `text` | **Send CW.** A macro with its fields still in it, or free text. The text is **added to a queue** (256 characters), so a second call while the radio keys is sent after the first. **Keys the radio**, and passes the band guard at that moment. Acted on only while the Tab5 is on the CW page. HTTP 400 with no text, HTTP 409 `{"ok":false,"err":"CW queue full"}` when the queue is full *(queue from v1.26.0)* |
+| `cw_cancel` | *(none)* | Drop the CW text that the radio has not been given yet. Answers `{"ok":true,"dropped":N}`. It cannot stop what the radio already holds (80 characters at most) *(v1.26.0)* |
+| `cw_macro_edit` | `idx` (0-5), `text` | Write one of the six macros of the active set |
 | `log_qso` | `call`, optional `rst_sent`, `rst_rcvd`, `name`, `qth`, `comment` | **Log a CW or SSB contact worked by hand**, as the Tab5's own Log window does. `name`, `qth` and `comment` are what the other operator told you (ADIF `NAME`, `QTH`, `COMMENT`; 24, 24 and 60 bytes, longer text is cut). Nothing else is accepted: the frequency, mode, band, date, time, your callsign, your grid and the running activation are read from the device, so a page holding a stale frequency cannot write a record on the wrong band. An empty report logs no report rather than a wrong one. Refused with HTTP 400 and a reason when the callsign is empty or there is no CAT. Answers `{"ok":true,"call":"...","act_qsos":N,"act_need":N,"total":N}`, so the count needs no second request |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
 | `reply` | `call` | Work a decoded station — the same intelligent Transmit a Tab5 row-tap runs. **Keys the radio.** Outcome in `/api/status` `ft8.web_r` |
-| `qso_override` | `what: "resend"/"rr73"/"73"/"cancel"` | Mid-QSO override, as the Tab5's own three buttons do. **Keys the radio** except for `cancel` |
+| `qso_override` | `what: "resend"/"rr73"/"73"/"cancel"/"pause"/"skip"` | Mid-QSO override, as the Tab5's own buttons do. `pause` skips one transmission; `skip` gives up on this caller and keeps answering others. **Keys the radio** except for `cancel`, `pause` and `skip` |
 | `clear_swr` | *(none)* | Clear a latched SWR-protection trip, same as tapping the Tab5's own fault prompt. TX stays refused until this is called |
 | `tune_start` / `tune_stop` | *(none)* | Antenna Tune (QMX 1.04+ only). **Keys the radio continuously**; 60 s safety stop on the device. While running, `/api/status` carries a `tune` object with `watts`, `swr` and `secs` (seconds left before the safety stop); the object is absent when no tune is running |
 | `pause` / `resume` | *(none)* | Release the radio so its own menus can be used, and take it back. While paused the CAT poll, the dead-stream watchdog and the stuck-decode watchdog all stand down |
@@ -105,10 +110,11 @@ action names its own parameter key (there is no generic `value`).
 | `reset_network` | *(none)* | Clear the stored WiFi/network state |
 
 **Radio menus** (the QMX's own terminal, on its second serial port):
-`open`, `close`, `key`, `text`, `term_view`, `qmx_ports`, `qmx_term_probe` —
-see [Radio menus](#) and `GET /api/term`.
+`term_view`, `qmx_ports` and `qmx_term_probe` are `/api/cmd` actions. `open`,
+`close`, `key` and `text` are actions of **`POST /api/term`**, not of
+`/api/cmd`. See [Radio menus](../guide/radio-menus.md) and `GET /api/term`.
 
-**Developer actions.** Not referenced by any web-UI element, and easy to regret:
+**Developer actions.** No button on the web page sends these (the page sends `resmon` on Ctrl+Alt+R), and they are easy to regret:
 
 | Action | Effect |
 |---|---|
@@ -119,12 +125,17 @@ see [Radio menus](#) and `GET /api/term`.
 | `help` | Open the on-device manual at a topic |
 | `panic_test` | **Crash the device deliberately**, to prove the crash recorder works. ⚠ Radio **off** only — a panic reboot is a warm reset, which leaves the QMX needing a power cycle |
 
-**⚠ Check the response BODY, not the status code.** The reply is `{"ok":true}`
-on success — but an unrecognised action returns **HTTP 200** with the body
-`unknown action`, and a refused one (for example `ota_install` while
-transmitting) returns `{"ok":false,"error":"..."}`, also with HTTP 200. A caller
-that only tests the status code cannot tell success from a typo, and a mistyped
-action is then a silent no-op.
+**⚠ Check the response BODY as well as the status code.** The reply is
+`{"ok":true}` on success. An unrecognised action is refused with **HTTP 400**
+and the text `unknown action`. A refused action (for example `ota_install`
+while transmitting) can still answer **HTTP 200** with
+`{"ok":false,"error":"..."}`, so a caller that only tests the status code
+cannot tell success from a refusal. A few CW and JS8 actions name the reason
+`err` instead of `error`.
+
+**The request body can be 1024 bytes at most** *(v1.26.0; it was cut at 255
+before, without an error)*. A longer body is refused with **HTTP 413**. An empty
+body is HTTP 400 `no body`, and invalid JSON is HTTP 400 `bad json`.
 
 `display.peak_hold_s` is the spectrum peak-hold window in **seconds**, 0 = off,
 maximum 60. The Tab5 drawer offers 1, 2, 3 and 5; the API accepts any value in range. It is also in `/api/status` as `peak_hold_s`, so a browser can follow a
@@ -204,8 +215,9 @@ filters, the everyday toggles, QMX volume, band-plan region and the WiFi SSID.
 The spot sources (`spots_en` overall, then `rbn_en` and `cluster_en`),
 propagation feedback (`psk_rx_en`) and the Bluetooth mouse (`bt_mouse_en`) are
 here too — `bt_mouse_en` is stored immediately but only takes effect after a
-restart. `swr_limit_x10` (the SWR limit × 10, so `30` is 3.0:1) is **reported
-but not writable** — a transmit safety limit is set at the device.
+restart. `swr_limit_x10` is the SWR limit × 10, so `30` is 3.0:1. It is
+writable: `0` switches SWR protection off, and any other value is held between
+`20` and `40`.
 
 **The WiFi password is never returned** - only `wifi_pass_set` says whether one is
 stored.
@@ -240,7 +252,7 @@ ADIF viewer's "Del N test" button finds exactly those.
 **Read-only reporters.** `ft8_op_mode` (`"ft8"` / `"ft4"`) and `ft8_freq_hz` are
 returned but not writable here — change them with the `set_ft8_mode` action,
 which also retunes the radio and clears stale decodes, then read these back to
-confirm. `swr_limit_x10` is likewise reported only.
+confirm.
 
 ### GET /api/decodes
 
@@ -301,10 +313,11 @@ in this firmware's manual.
 
 ## CAT Endpoints
 
-There is no raw-CAT HTTP endpoint. Send CAT-level changes through
-`POST /api/cmd` (`set_freq`, `set_mode`, `set_bw`, `set_band`), which routes them
-through the CAT poll task - the only writer to the radio's serial port. The web
-UI's own **CAT** box uses those actions.
+Send CAT-level changes through `POST /api/cmd` (`set_freq`, `set_mode`,
+`set_bw`, `set_band`), which routes them through the CAT poll task - the only
+writer to the radio's serial port. For one raw CAT string there is the developer
+action `cat_raw` with a `cmd` field; its reply appears in the diagnostic log,
+and a command that would transmit passes the band guard first.
 
 ## FT8 Endpoints
 
@@ -364,14 +377,16 @@ Correct **one field of one record**: `?idx=<n>&call=<CALL>&field=<F>&value=<V>`.
 already stored there — both, or the device answers `409` and changes nothing, so
 a browser showing a stale list cannot edit the wrong QSO.
 
-Only three fields are accepted: `RST_SENT`, `RST_RCVD` and `SIG_INFO`. An empty
-`value` removes the field, which for a report is the honest record of one that
-was never exchanged. `SIG_INFO` is the reference the *other* station was
+**Any ADIF field can be edited.** The field name can hold letters, digits and
+underscore only. `RST_SENT`, `RST_RCVD`, `GRIDSQUARE`, `QSO_DATE` and `TIME_ON`
+are format-checked, and a value that does not fit is refused with `400`. An
+empty `value` removes the field, which for a report is the honest record of one
+that was never exchanged. `SIG_INFO` is the reference the *other* station was
 activating (`US-1241`, `G/LD-049`, `DLFF-0123`); the device derives `SIG` from
 its shape and writes it alongside, and clears it again when the reference is
-cleared. Everything else is refused with `400`: callsign, band, mode, date and
-time are what QRZ, eQSL and LoTW match a contact on, and a LoTW record is signed
-over exactly those.
+cleared. Callsign, band, mode, date and time are what QRZ, eQSL and LoTW match
+a contact on, so a change to one of them here does not change the copy a
+logbook already holds.
 
 **Response**: `{"ok":true}`, or `{"ok":false,"error":"…"}`
 
@@ -382,10 +397,7 @@ Clear all QSOs from ADIF log.
 **Response**:
 
 ```json
-{
-  "status": "cleared",
-  "count": 42
-}
+{"ok": true}
 ```
 
 ## Configuration Endpoints
@@ -405,11 +417,10 @@ Upload a configuration file to restore settings.
 **Response**:
 
 ```json
-{
-  "status": "imported",
-  "merged": true
-}
+{"applied": 57}
 ```
+
+`applied` is the number of settings the file changed.
 
 ## Logging Endpoints
 
@@ -518,27 +529,17 @@ Progress of a running QRZ/eQSL/LoTW upload (`busy`, `kind`, `uploaded`, `failed`
 
 Set QRZ API key (stored server-side).
 
-**Request**:
-
-```json
-{
-  "api_key": "1a2b3c4d5e6f..."
-}
-```
+**Request**: the key itself as the raw request body - plain text, not JSON,
+47 characters at most.
 
 ### POST /api/qrz_upload
 
 Upload ADIF to QRZ Logbook.
 
-**Response**:
-
-```json
-{
-  "uploaded": 5,
-  "failed": 0,
-  "error": null
-}
-```
+**Response**: HTTP **202** with `{"status":"uploading"}`. The upload runs in
+the background; read the result from `GET /api/upload_status`, which reports
+`busy`, `kind`, `uploaded`, `failed`, `error` and sometimes a `note`. While
+another upload is running the answer is HTTP **423** `upload in progress`.
 
 ### POST /api/eqsl_creds
 
@@ -548,8 +549,8 @@ Set eQSL username and password.
 
 ```json
 {
-  "username": "oz1lav",
-  "password": "secretpass"
+  "user": "oz1lav",
+  "pswd": "secretpass"
 }
 ```
 
@@ -557,15 +558,10 @@ Set eQSL username and password.
 
 Upload ADIF to eQSL.
 
-**Response**:
-
-```json
-{
-  "uploaded": 5,
-  "failed": 0,
-  "error": null
-}
-```
+**Response**: HTTP **202** with `{"status":"uploading"}`. The upload runs in
+the background; read the result from `GET /api/upload_status`, which reports
+`busy`, `kind`, `uploaded`, `failed`, `error` and sometimes a `note`. While
+another upload is running the answer is HTTP **423** `upload in progress`.
 
 ### POST /api/lotw_cert
 
@@ -575,15 +571,10 @@ Store the LoTW callsign certificate and key (extracted from the TQSL `.p12` in t
 
 Sign all pending QSOs with the stored certificate and upload them to lotw.arrl.org.
 
-**Response**:
-
-```json
-{
-  "uploaded": 5,
-  "failed": 0,
-  "error": null
-}
-```
+**Response**: HTTP **202** with `{"status":"uploading"}`. The upload runs in
+the background; read the result from `GET /api/upload_status`, which reports
+`busy`, `kind`, `uploaded`, `failed`, `error` and sometimes a `note`. While
+another upload is running the answer is HTTP **423** `upload in progress`.
 
 ### GET /api/lotw_tq8
 
@@ -599,21 +590,52 @@ Download the whole log as a signed `.tq8` file, for manual upload to LoTW or off
 ws://<tab5-ip>:80/ws
 ```
 
-Each binary frame is **1026 bytes**:
+There are three kinds of binary frame. The first byte says which.
+
+| First byte | Frame |
+|---|---|
+| `0x01` | Spectrum |
+| `0x02` | Takeover notice: another client has taken the stream, and this one must stop reconnecting |
+| `0x03` | Receiver audio |
+
+**Spectrum frame, 1063 bytes:**
 
 | Bytes | Meaning |
 |-------|---------|
-| `0` | Frame type: `0x01` = spectrum |
+| `0` | `0x01` |
 | `1` | Zoom decimation factor (1 = base 1024-bin spectrum, >1 = zoom-FFT with that decimation) |
-| `2–1025` | 1024 unsigned bytes, one per bin, quantised −130 dBm (0) to −30 dBm (255) |
+| `2–5` | Dial frequency, Hz, for this capture |
+| `6–9` | Left edge of the view, Hz |
+| `10–13` | Span, Hz |
+| `14–17`, `18–21` | Lowest and highest frequency the radio can hear, Hz |
+| `22–23` | IF offset, Hz, signed |
+| `24–1047` | 1024 unsigned bytes, one per bin, quantised −130 dBm (0) to −30 dBm (255) |
+| `1048–1062` | Trailer. Its first two bytes are the S-meter: signal in dBm × 10, signed 16-bit, little-endian, `0x8000` = no reading. The rest is view state for the page |
 
-Bins are **pre-shifted server-side**, so byte 2 is the leftmost screen pixel and
-a client does not have to know where the VFO sits in the FFT. Push rate is about
-**10 fps**.
+Bins are **pre-shifted server-side**, so byte 24 is the leftmost screen pixel
+and a client does not have to know where the VFO sits in the FFT. Push rate is
+about **10 fps**.
+
+**Audio frame** (sent only while a client has asked to listen): byte `0` is
+`0x03`, bytes `2–3` a sequence number, bytes `4–5` the sample rate (12000), and
+from byte `6` the samples, µ-law, mono.
 
 !!! warning "One client at a time"
-    A second connection takes the stream over from the first. Opening the web UI
-    in two tabs is enough to do it.
+    A second connection takes the stream over from the first, which receives
+    one frame of type `0x02`. Opening the web UI in two tabs is enough to do it.
+    A connect can also be refused when the Tab5 is short of memory; try again
+    after 2 seconds.
+
+## Noise reduction
+
+### GET /rnnoise.wasm
+
+The speech model for the browser's noise reduction, as WebAssembly. The page
+fetches it once, the first time the speech model is switched on.
+
+Noise reduction and the auto-notch have **no setting on the Tab5 and no API**.
+They run in the browser and their settings are stored in the browser. See
+[Web DSP](../guide/web-dsp.md).
 
 ## Screenshot
 
@@ -631,21 +653,23 @@ Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
 
 ## Error Responses
 
-All endpoints return errors in a standard format:
+There is no single error format. An error is one of two things:
 
-```json
-{
-  "error": "CAT timeout",
-  "status": 500
-}
-```
+- a plain-text body with an HTTP error status, for example `400` with
+  `unknown action`;
+- a JSON body `{"ok":false,"error":"..."}`, sometimes with HTTP 200. A few CW
+  and JS8 actions use the key `err`.
 
 Common HTTP status codes:
 
-- **200** — Success
-- **400** — Bad request (invalid command)
-- **500** — Server error (QMX not responding, etc.)
-- **503** — Service unavailable (WiFi off, etc.)
+- **200** — Success, or a refusal that says so in the body
+- **202** — An upload was started
+- **400** — Bad request (unknown action, missing or invalid argument)
+- **403** — The feature is switched off
+- **409** — The request does not match the device's state (wrong record, queue full)
+- **413** — The request body is too long
+- **423** — An upload is already running
+- **500** — Server error
 
 ## Example: Tune to 7.074 MHz in Python
 
@@ -656,14 +680,14 @@ ip = "192.168.1.50"
 api = f"http://{ip}/api"
 
 # Set frequency
-requests.post(f"{api}/cmd", json={"cmd": "set_frequency", "value": 7074000})
+requests.post(f"{api}/cmd", json={"action": "set_freq", "hz": 7074000})
 
 # Set mode
-requests.post(f"{api}/cmd", json={"cmd": "set_mode", "value": "USB"})
+requests.post(f"{api}/cmd", json={"action": "set_mode", "mode": "USB"})
 
 # Check status
 status = requests.get(f"{api}/status").json()
-print(f"Now on {status['frequency_hz']} Hz, {status['mode']} mode")
+print(f"Now on {status['freq_hz']} Hz, {status['mode']} mode")
 ```
 
 ---

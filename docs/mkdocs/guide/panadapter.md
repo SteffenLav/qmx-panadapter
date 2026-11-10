@@ -15,7 +15,6 @@ row: 22 Band-plan strip | CW / Digi / Phone segments, with the visible span mark
 row: 36 Status bar | battery, UTC clock, WiFi
 note: amber | the VFO cursor sits at the dial frequency; in USB the passband tint runs upward from it, in LSB downward
 note: dim | in a digital mode the tint spans 150-3200 Hz, the QMX's one fixed digital filter (corrected in v1.8.3)
-note: dim | the top-right 200 x 120 of the spectrum is a deadzone, so a tap near the drawer grip cannot retune you
 ```
 
 
@@ -112,7 +111,7 @@ means clears RIT, on the assumption that you have moved on.
 
 While RIT is armed, taps use a 10 Hz grid whatever the mode. The normal grid above exists
 to land the dial on a tidy frequency; RIT is a fine adjustment onto one caller's tone, and
-SSB's 250 Hz step would leave only a handful of usable offsets. The range is ±500 Hz —
+SSB's 500 Hz step would leave only a handful of usable offsets. The range is ±500 Hz —
 tapping further away clamps to the limit and says so.
 
 Available in the browser too, where a click does the same thing. The offset itself is
@@ -141,7 +140,7 @@ Use two fingers to pinch in (zoom out) or pinch out (zoom in). The display cente
 
 #### Pan (One-Finger Drag)
 
-Drag horizontally with one finger to scroll the spectrum left/right. Release to tune to the new center frequency.
+Drag horizontally with one finger to scroll the spectrum left/right. With **Still spectrum** on (the default, from ×2) the dial stays where it is. At ×1, or with Still spectrum off, the radio retunes to the new centre when you release.
 
 **With a Bluetooth mouse**, hold the **right** button and drag to pan instead.
 It moves the window without touching the dial, so the frequency stays where it
@@ -219,7 +218,7 @@ Swipe ↑ from the bottom edge to open the memory picker — a 4×8 grid of 32 c
 - Mode (USB, LSB, CW, DiGi)
 - Label (your own name for the channel)
 
-Each button shows the mode colour (CW = green, DiGi = teal, USB = brick red, LSB = purple) so you can tell mode at a glance without reading the label.
+Each button shows the mode colour (CW = blue, DiGi = amber, USB = brick red, LSB = purple, AM = teal) so you can tell mode at a glance without reading the label.
 
 **Recall:** Tap a filled channel to immediately retune to it.
 
@@ -342,7 +341,7 @@ Tap the **band name** on the top bar to switch between configured bands. The ban
 
 On radios with many configured bands (QMX+), the picker lays the bands out in **two side-by-side columns** so every band is visible without scrolling. Selecting a band jumps to the **nearest** band centre, so closely-spaced bands like 10 m and 11 m are no longer confused for one another.
 
-Switching bands **remembers the last frequency you visited on each band**, so you can flip between 20m and 40m without losing your place.
+**Each band remembers the last frequency and mode you used on it**, so you can flip between 20m and 40m without losing your place. From **v1.26.0** both are kept across a restart; before that the frequency lasted only until power-off and the mode was not recalled at all. A band you have not visited starts in **LSB below 10 MHz and USB above**, if the radio is in a sideband mode. The mode recall applies on the Panadapter page; a spot or a memory channel sets its own mode.
 
 ### 8. Zoom & Pan
 
@@ -363,13 +362,13 @@ Pinching sets any value in between; double-tap returns to ×1 and re-centres.
 
 | Gesture | Effect |
 |---------|--------|
-| One-finger fast horizontal swipe | Pan ("stroll") the view — retunes to the new centre on release |
+| One-finger horizontal swipe (about 70 px or more) | Pan ("stroll") the view. With Still spectrum on the dial stays; otherwise it retunes to the new centre on release |
 | Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
 | Two-finger drag | Pan the zoomed window |
 | Double-tap | Reset zoom and pan to ×1.0, centred |
 | Top-bar **Zoom** -> tap | Pick a preset |
 
-**One-finger pan (stroll).** A fast horizontal swipe — more than about 70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
+**One-finger pan (stroll).** A horizontal swipe of about 70 px or more, at any speed, slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip. With Still spectrum on (the default, from ×2) the dial stays where it is; at ×1, or with Still spectrum off, the radio retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
 
 At zoom levels above ×1 the display **centres on the passband**, not the VFO dial — which matters in USB and LSB, where the passband sits to one side of the carrier. It re-centres whenever you change mode, filter width or zoom, so the active receive area stays on screen, and the passband lines and frequency axis track correctly at every zoom level. What happens as you *tune* is governed by **Still Spectrum**, below.
 

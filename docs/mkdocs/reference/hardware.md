@@ -5,7 +5,7 @@
 - **Processor**: ESP32-P4 @ 360 MHz
 - **RAM**: 2 MB SRAM + 28 MB PSRAM
 - **Storage**: 16 MB flash (firmware + settings)
-- **Display**: 5" IPS LCD, 720×1280 landscape (10-bit parallel)
+- **Display**: 5" IPS LCD, 720×1280 landscape (MIPI-DSI)
 - **Touch**: ST7121 or ST7123 capacitive (100 kHz I2C)
 - **Audio**: I2S codec ES8388 (CW audio output)
 - **WiFi**: C6 co-processor (WiFi 6 802.11ax)

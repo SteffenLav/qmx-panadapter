@@ -4,26 +4,56 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.25.0** - 2026-11-09
+**v1.26.0** - 2026-11-10
+
+**Noise reduction and an auto-notch in the browser, at no cost to the Tab5. Each band remembers its frequency and its mode across a restart. The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser and a band guard on every send.**
+
+- **Web DSP: noise reduction and auto-notch in the browser** *(Samuel W7STF)*. The web page can clean the audio that **Listen** plays. **Speech model** (RNNoise) is for SSB and AM voice. **Spectral** follows the noise floor in each 47 Hz slice of the audio and also works on CW; CW always uses it. **Auto-notch** finds a steady carrier in about a second and filters out up to four at once. Low, Med and High; Med is the default. All of it runs in the browser, so it costs the Tab5 no CPU and no memory. Measured on real SSB at Med: noise between words about 13 dB down with the speech model, 5 to 10 dB down with Spectral. Measured on real CW: gaps of 60 ms and longer reach the level's limit (6 / 12 / 19-20 dB), and a strong note is 0.3 dB down. It adds about 0.1 s of delay; the notch adds none. ⚠ **Spectral on SSB and the auto-notch are measured, not yet judged by ear on a live band.** The speech model on SSB and Spectral on CW were both heard live. See [Web DSP](guide/web-dsp.md).
+- **Each band remembers its frequency and its mode, across a restart.** The per-band frequency used to last only until power-off, and the mode was never recalled: USB on 20 m stayed USB on 40 m. Both are now stored. A band you have not visited starts in LSB below 10 MHz and USB above.
+- **CW type-ahead from the browser** *(Ralph DL1HR)*. A new box on the web CW page: Space keys each word, Enter keys the rest, and you can continue to type while the radio keys. The Tab5 holds up to 256 characters and gives the radio the next part only when the radio's own buffer is empty. **Stop** drops what the radio has not been given yet. ⚠ Tested in a host harness; not exercised separately on the radio.
+- **A STOP button on the Tab5 CW page.** While text is queued, the status line becomes a red **STOP - drop N queued**. The part the radio already holds still runs to the end, because the QMX has no command to stop it.
+- **A Station row and a Log button on the web CW page; Name, QTH and Remarks in the log window** *(Gyula HA3HZ)*. Type the other station's callsign in the browser, so `{CALL}` works on a signal too weak to decode. **Log this contact** opens the log window with the callsign and report filled in. The three new fields are written to ADIF as `NAME`, `QTH` and `COMMENT`.
+- **A Log button on the Tab5 CW page** *(Gyula HA3HZ)*. One tap above the station card, where it used to be a trip through the settings drawer.
+- **A CW macro touch can be abandoned** *(Gyula HA3HZ)*. The left-edge grip lies in front of the first three macro buttons, so a swipe that started there sent a macro. A sideways slide of about 40 px now abandons the touch, and a slide to the right from near the left edge opens the page picker.
+- **A tap on the left or right edge grip opens its drawer**, as a Bluetooth mouse click always did. The bottom grip is unchanged.
+- ⛔ **CW sent from the Tab5 now passes the band guard.** FT8, FT4, JS8, WSPR and Antenna Tune were checked; a CW macro or typed text was not. It is now refused outside your region's band plan. ⚠ **Behaviour change: with no IARU region set, CW send is refused**, as FT8 already was. Set the region, or a grid for the Tab5 to work it out from. A paddle or key on the QMX is not checked, because the radio keys itself.
+- **Web Tune shows its result** *(Ralph DL1HR)*. On a quiet band the Tune button answers "listening" and moves the dial up to 8 seconds later. The Tab5 showed that result; the web page did not. It does now.
+- **The Tab5 waterfall adds no rows while you transmit CW** *(Bryan N0LUF)*, including when you key by hand, so your own signal is not painted over the band. ⚠ Implemented; not yet measured against a hand key. The browser's waterfall is not covered.
+- **SSB Tune refuses fewer good signals.** In the test set it accepted 93 % of the signals it should and now accepts 96 to 97 %; the signals it wrongly refused all had a 200 Hz pitch. Not re-graded on live SSB.
+- **The web page says when it is out of date** *(Gyula HA3HZ)*. After an update a browser could show its own stored copy of the page with the old controls. The page now checks and shows a banner. ⚠ Proven in Chromium only, not in Firefox.
+
+**Fixes**
+
+- **The web spectrum could stay dead for a whole session.** The task that feeds it was created once, at the moment the Tab5 has the least free memory. When that failed, browsers connected and received nothing. Seen in 12 of 573 starts on the bench. It is now created when a browser connects.
+- **A spectrum frame could be written into the next web reply** after a browser left, which corrupted that reply. Measured in 4 of 11 test rounds on v1.25.0; 0 of 40 after the fix.
+- **A web command longer than 255 bytes was cut and refused as "bad json".** The limit is now 1024 bytes, and a longer one is refused with a reason.
+- **The CW page kept the Panadapter's band-plan strip** when you arrived from a zoomed view, and showed "Digi | Phone" with no CW segment.
+- **60 m no longer has its own sideband rule.** Every band below 10 MHz starts in LSB.
+
+**Documentation**
+
+- A new chapter, [Web DSP](guide/web-dsp.md).
+- The [Web API](reference/web-api.md) page had about 25 errors, some of them old: wrong status codes and reply bodies, a WebSocket frame described as 1026 bytes when it is 1063, and a Python example that no longer worked. All corrected against the code, and the CW actions added.
+- Gesture, tuning-step, mode-colour and page-picker descriptions corrected in the manual and the PDF.
+
+**Known, not fixed**
+
+- One capture showed the first CW message after a QMX power cycle held by the radio for 33 seconds and then sent ahead of the next one. It has not been reproduced and the cause is not known.
+- The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
+
+## Previous Releases
+
+### v1.25.0 - 2026-11-09
 
 **The MODE: CW page is now also on the web, at parity with the Tab5. The CW page's band-plan fence covers the Digi sub-band too, on both screens — and closes the one gesture (a spot tap, from the browser) that could still tune outside it. Contest logging, manual callsign entry, and an automatic sidetone fix.**
 
-- **CW on the web.** The browser now shows a CW panel when the Tab5 is on the CW page: "MODE: CW" in the top bar, the band-plan strip drawing CW+Digi only (not Phone), a "Switch to CW" entry in the Radio menu, six tap-to-send macro buttons plus a free-text box (`{MYCALL}`/`{PARK}`/`{CALL}`/`{RST}`/`{SERIAL}` all expand here too), a pencil icon to edit each macro, the General/Contest toggle, and a **Set contest…** button. See [Web UI → CW Control](guide/web-ui.md#cw-control). Also corrected the FT8/FT4/WSPR Radio-menu entry colours, which had drifted from the Tab5 drawer's own constants.
-- **Contest logging.** A contest name, set from the web CW panel or `[cw] contest =` in a config file, is written as ADIF `CONTEST_ID` on every CW QSO logged while it is set, alongside the actual serial sent (`STX_STRING`) and received (`SRX_STRING`) — not an assumed or invented one. Mutually exclusive with ARRL Field Day logging. See [Contest logging](guide/cw.md#contest-logging).
-- **Manual callsign entry on the CW page.** The station card now shows "tap to enter a callsign" when nothing has been heard, and a pencil icon beside it always opens the same manual-entry keyboard — including to correct a wrongly auto-adopted call without first dropping the contact.
-- **The CW page's band-plan fence now covers Digi, not just CW** — on the Tab5 and from the web. CW is legal inside the digital sub-band, but digital modes are not legal inside the CW one, so the old CW-only clamp was denying spectrum you are actually allowed to use. The band-plan strip, the band-plan drag/slider, and every tuning path (tap, drag, keypad, spot tap, band preset) now agree on the same CW+Digi range. ⛔ **The band-plan slider could also be dragged until its own edges hung half off the strip**, even though its centre was correctly clamped — fixed to behave like a scrollbar thumb, stopping once either edge reaches the track.
-- **Spots on the CW page are CW-only**, not CW+Digi, even though Digi is in reach for tuning: tapping an FT8/FT4 activity spot would switch the radio's mode away from CW, which this page has no business offering.
-- ⛔ **The web's own tap-to-tune, keypad entry and band presets could tune the CW page outside its band-plan fence entirely** — found while tracing the spot-tap report above. Unlike every Tab5 gesture, the browser's `set_freq`/`set_band` endpoints never routed through the CW-page clamp at all. Both now do.
-- **40 m's Digi segment was 24 kHz short of where FT8 actually operates.** The coarse band-plan table's Digi range (7040–7050 kHz) matched the printed IARU Region 1 allocation for narrow-band legacy digimodes, but FT8's worldwide standard dial — 7074 kHz, the same in every region — sits above it, inside what the table called Phone. Widened to 7040–7078 kHz (Region 1 and Region 3); does not affect transmit-legality checks, which use the whole-band edges, not this sub-segment split.
-- **The sidetone's Absolute/Relative setting now switches itself.** Entering the CW page checks the radio's `Sidetone abs/rel`, and if it reads Relative, switches it to Absolute and mirrors the **QMX volume** slider into **Sidetone volume** (15% floor, so it can never go fully silent) — so turning down your receive volume no longer takes your keying monitor with it. Leaving the page restores Relative. Does nothing if the radio is already Absolute.
-- **RBN and DX cluster spots moved off a persistent connection onto periodic spothole.app polling**, the same pattern SOTA spots already used — band-filtered, 60-second period backing off to 900 seconds if unreachable. One trade-off: spothole's feed carries no signal-strength field, so the SNR column for an RBN/cluster spot now reads 0. See [Live Spots](guide/spots.md#4-about-rbn).
-- **A CW decode-ticker misclassification is fixed**: the very last character of your own macro send was being shown as received (cyan) rather than sent (orange), every time.
-- **The CW macro-set toggle (General/Contest) now stays in sync** between the Tab5 and the web regardless of which one last changed it.
-- **A jumpy two-finger pinch-zoom on the CW/Panadapter pages is fixed** — the waterfall was clearing itself on almost every tick of an active pinch; it now freezes at its last scale during the gesture and clears once, cleanly, when it ends.
-- **Dead Zoom/Tune controls on the FT8/JS8 top bar now hide outright**, matching Band/Mode/BW/RIT, instead of sitting there doing nothing.
-- **A real bug in the web FT8 grey-list view is fixed**: a hand-skipped station and an auto-grey-listed one were shown — and cleared — as if they were the same list.
-
-## Previous Releases
+- The MODE: CW page in the browser: tap-to-send macros, free text, macro editing, the General/Contest toggle and a contest name.
+- Contest logging: `CONTEST_ID` and the serials actually sent and received.
+- Manual callsign entry on the CW page's station card.
+- The CW page's band-plan fence covers Digi as well as CW, on both screens, and the web's tuning paths now honour it.
+- The sidetone's Absolute/Relative setting switches itself on entering and leaving the CW page.
+- RBN and DX cluster spots moved to periodic polling.
+- Fixes: the last character of a macro shown as received, a jumpy pinch-zoom, dead Zoom/Tune controls on the FT8 top bar, the web grey-list view.
 
 ### v1.24.2 - 2026-11-04
 
@@ -1265,7 +1295,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.25.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

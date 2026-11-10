@@ -203,8 +203,8 @@ else on this page will help.
 **Fix:**
 
 1. Check QMX firmware version (see Quick Start)
-2. Try a manual CAT command via web API: `curl "http://<ip>/api/cat" -d '{"cmd": "TX;"}' -H "Content-Type: application/json"`
-3. If that fails, you have a CAT issue (see above)
+2. Check that CAT is alive: open `http://<ip>/api/status` and confirm that `freq_hz` follows the dial and `qmx_fw` shows the radio's firmware
+3. If it does not, you have a CAT issue (see above)
 4. Check settings -> FT8 -> Simulation Mode is **off**
 5. Restart both devices
 
@@ -460,7 +460,7 @@ serial monitor still holding the port.
 
 You can now reset from the web page, with no computer or flashing tool needed. In the web UI, open the **Miscellaneous** menu in the bottom bar and pick the scope:
 
-- **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults. Your memory channels and logs are separate.
+- **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults, **and the memory channels with them**. The QSO log and the WiFi settings are kept.
 - **Reset WiFi** — clears just the Wi-Fi / network state, for when the connection is stuck.
 
 Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Files** menu -> **Config download ↓**) if you want to restore it afterward.
@@ -505,3 +505,32 @@ The maintainer (OZ1LAV) and other users are very responsive to well-documented i
 ---
 
 **Next:** Explore [Build from Source](../build/build.md) if you want to modify the firmware.
+
+## Web page
+
+### The web page shows old controls after an update
+
+The browser is showing its own stored copy of the page. From v1.26.0 the page
+checks this and shows a banner that tells you to reload. Press F5. If there is
+no banner and a control described in this manual is missing, reload anyway.
+See [After a firmware update](../guide/web-ui.md#after-a-firmware-update).
+
+### Noise reduction or Auto-notch does nothing
+
+1. **Listen** must be on (the **▶** button). The tools work on that audio only.
+2. Read the grey text under the row in the **Radio** menu. `NR is not active in
+   DIGI` or `notch is not active in CW` means the tool does not work in the
+   present mode.
+3. `speech model could not load` means the browser could not fetch it from the
+   Tab5. Reload the page.
+4. The Tab5's own speaker is never affected. These tools are in the browser.
+
+See [Web DSP](../guide/web-dsp.md).
+
+### CW text typed in the browser is not sent
+
+1. The Tab5 must be on the CW page. Text sent while it is on another page is
+   not acted on.
+2. The band guard refused it. The Tab5 shows `CW not sent:` with the reason:
+   the frequency is outside your region's band plan, or no IARU region is set.
+3. The queue is full (256 characters). Wait, or press **Stop**.

@@ -31,6 +31,8 @@ It looks at what is on screen and opens the chapter that covers it:
 | Panadapter | The panadapter chapter, at the screen layout |
 | FT8 or FT4, receiving | The FT8 receive chapter, at the decode list |
 | FT8 or FT4, with a transmission armed or running | The FT8 transmit chapter |
+| WSPR | The WSPR chapter |
+| CW | The panadapter chapter (the CW page has no entry of its own yet; open **CW** from the contents) |
 
 The transmit case is deliberate: someone mid-transmission is asking a different
 question from someone watching the decode list, and the device already knows
@@ -77,7 +79,7 @@ how to zoom the spectrum, what the coloured callsigns on the trace are, where
 your contacts are logged. It scrolls, so keep going past the first few rows.
 
 **Rows that are happening right now are highlighted** and moved to the top, with
-a warning triangle. The Tab5 can see four things for itself:
+a warning triangle. The Tab5 can see six things for itself:
 
 | Highlighted row | What the device checked |
 |-----------------|-------------------------|
@@ -85,6 +87,8 @@ a warning triangle. The Tab5 can see four things for itself:
 | The spectrum looks mirrored or shifted | The QMX never confirmed IQ mode |
 | Nothing appears in the decode list | FT8/FT4 running, radio present, nothing decoded |
 | I cannot reach the web page | WiFi is switched on but not connected |
+| What do I get from an SD card? | No card is mounted |
+| The spot map is empty | The spot map is open and has no spots |
 
 WiFi deliberately switched off — for POTA, or to save battery — is **not**
 reported as a fault. The row stays in the list as a normal question; it just is
