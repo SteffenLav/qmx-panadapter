@@ -8134,6 +8134,7 @@ async function tick() {
        had since changed on the glass. */
     lastRitParkedHz = (typeof s.rit_parked_hz === "number") ? s.rit_parked_hz : 0;
     lastKeyerWpm    = (typeof s.keyer_wpm === "number") ? s.keyer_wpm : -1;
+    applyTuneOutcome(s.tune_out);
     updateRitParkPill();
     /* ⚠ The keyer pill is NOT updated here. It is shown only in CW, and
        lastMode is not assigned until further down this same function - so a
@@ -10024,11 +10025,44 @@ function pillSay(id, msg, ms) {
    list offers, and a radio set outside it still reports its true speed. */
 const KEYER_WPM_LIST = [0, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40];
 
+/* The deferred half of Tune (Ralph DL1HR, 2026-11-10). When the band is quiet
+   the device answers "listening" and moves the dial (or gives up) up to 8 s
+   later. The Tab5 toasts that ending; this page used to show "listening", go
+   back to the glyph, and never say what happened - which read as the web tune
+   being less precise than the Tab5's. It is the same estimator. The ending now
+   arrives on the status poll as tune_out {seq, msg}, the toast's own words. */
+const ZB_GLYPH = "◎";
+let tuneOutSeq   = 0;      // last outcome seq this page has seen
+let tuneWaitSeq  = -1;     // >= 0 while a press of OURS is listening
+let tuneWaitTmr  = null;
+let zbRestoreTmr = null;
+
+function zbShow(msg, ms) {
+  const val = document.getElementById("zerobeat");
+  if (!val) return;
+  val.textContent = msg;
+  clearTimeout(zbRestoreTmr);
+  zbRestoreTmr = ms ? setTimeout(() => { val.textContent = ZB_GLYPH; }, ms) : null;
+}
+
+function applyTuneOutcome(to) {
+  const seq = (to && typeof to.seq === "number") ? to.seq : 0;
+  /* Only an outcome that arrived AFTER our own press is ours to show. A press
+     on the Tab5 has its own toast, and an old outcome is history. */
+  if (tuneWaitSeq >= 0 && seq !== tuneWaitSeq && to && to.msg) {
+    tuneWaitSeq = -1;
+    clearTimeout(tuneWaitTmr);
+    zbShow(to.msg.replace(/^(Zero-beat|SSB tune): /, ""), 4000);
+  }
+  tuneOutSeq = seq;
+}
+
 async function zeroBeatClick() {
   const val = document.getElementById("zerobeat");
   if (!val) return;
-  const was = val.textContent;
+  const was = ZB_GLYPH;
   val.textContent = "...";
+  const seqAtPress = tuneOutSeq;
   const r = await sendCmd({ action: "cw_tune" });
   /* The device answers with what it DID, including which estimator ran and
      whether it is still listening - say that rather than a bare tick, because
@@ -10041,8 +10075,17 @@ async function zeroBeatClick() {
     msg = r.moved_hz ? ((r.moved_hz > 0 ? "+" : "") + r.moved_hz + " Hz") : "on peak";
   else if (r.ok) msg = "done";
   else msg = r.error || "refused";
-  val.textContent = msg;
-  setTimeout(() => { val.textContent = was; }, 3000);
+  if (r && r.ok && r.listening) {
+    /* Hold "listening" until the outcome lands on the status poll. The
+       device's own windows are 8 s (CW) and 4 s (SSB); 12 s covers both plus
+       a slow poll, and then the pill gives up rather than sticking. */
+    tuneWaitSeq = seqAtPress;
+    zbShow(msg, 0);
+    clearTimeout(tuneWaitTmr);
+    tuneWaitTmr = setTimeout(() => { tuneWaitSeq = -1; zbShow(was, 1); }, 12000);
+    return;
+  }
+  zbShow(msg, 3000);
 }
 
 function updateRitParkPill() {

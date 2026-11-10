@@ -527,6 +527,11 @@ typedef enum {
 ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz);
 const char  *ui_cw_tune_reason(ui_cw_tune_t r);
 
+/* How the last DEFERRED CW or SSB tune ended (the Tab5's toast text), for the
+ * web. Returns a sequence number that changes with every new outcome; 0 means
+ * none yet this boot. buf may be NULL. */
+uint32_t ui_tune_outcome(char *buf, size_t n);
+
 /* T90 SSB auto-tune - the sibling of CW-Tune, on the same gesture.
  *
  * SSB has no carrier, so the reference is the sharp edge the far station's

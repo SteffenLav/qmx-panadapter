@@ -1544,6 +1544,19 @@ static esp_err_t status_handler(httpd_req_t *req)
           }
         }
     }
+    // How the last deferred CW/SSB Tune ended - the Tab5 toast's own words. The
+    // cw_tune action answers "listening" when the band is quiet, and the move
+    // (or the give-up) happens seconds later; without this the web never heard
+    // it (Ralph DL1HR, 2026-11-10). See ui_tune_outcome().
+    {
+        char tmsg[72];
+        uint32_t tseq = ui_tune_outcome(tmsg, sizeof(tmsg));
+        if (tseq) {
+            cJSON *to = cJSON_AddObjectToObject(root, "tune_out");
+            cJSON_AddNumberToObject(to, "seq", tseq);
+            cJSON_AddStringToObject(to, "msg", tmsg);
+        }
+    }
     // Web tune session: live power/SWR while active. There is deliberately NO
     // stand-down-if-the-radio-left-TUNE check here - see below.
     if (s_web_tune_active) {

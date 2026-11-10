@@ -11584,6 +11584,41 @@ ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
     return r;
 }
 
+/* ⭐ THE DEFERRED OUTCOME, FOR THE WEB (Ralph DL1HR, 2026-11-10).
+ *
+ * Both tune gestures can end LATER than the press: CW listens up to 8 s, SSB
+ * always votes for 4 s. The Tab5 says how it ended with a toast; the web only
+ * ever got the press's own answer ("listening") and then nothing. Ralph read
+ * that as the web tune being less precise than the Tab5's - it is the SAME
+ * estimator (ui_cw_tune_to_peak / ui_sb_tune_start, one code path for both
+ * callers), and the web simply never heard the result.
+ *
+ * Every deferred ending goes through here, next to its toast, so the two
+ * surfaces say the same words. The seq lets a page tell "a new outcome" from
+ * the last one it already showed. Written from the spectrum-push task, read
+ * from httpd: a spinlock around a short copy. */
+static portMUX_TYPE s_tune_out_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t     s_tune_out_seq;
+static char         s_tune_out_msg[72];
+
+static void tune_outcome(const char *msg)
+{
+    portENTER_CRITICAL(&s_tune_out_mux);
+    strlcpy(s_tune_out_msg, msg, sizeof(s_tune_out_msg));
+    s_tune_out_seq++;
+    portEXIT_CRITICAL(&s_tune_out_mux);
+    ui_toast_ms(msg, 2500);
+}
+
+uint32_t ui_tune_outcome(char *buf, size_t n)
+{
+    portENTER_CRITICAL(&s_tune_out_mux);
+    uint32_t seq = s_tune_out_seq;
+    if (buf && n) strlcpy(buf, s_tune_out_msg, n);
+    portEXIT_CRITICAL(&s_tune_out_mux);
+    return seq;
+}
+
 /* Called once per spectrum push, with the lock held. Does nothing unless a
  * press is waiting for a signal to appear. */
 static void cw_tune_tick(int64_t now_us)
@@ -11597,10 +11632,10 @@ static void cw_tune_tick(int64_t now_us)
         char msg[72];
         if (moved) snprintf(msg, sizeof(msg), "Zero-beat: %+d Hz", (int)moved);
         else       snprintf(msg, sizeof(msg), "Zero-beat: already on the peak");
-        ui_toast_ms(msg, 2500);
+        tune_outcome(msg);
     } else if (now_us >= s_cw_wait_until_us) {
         s_cw_wait_until_us = 0;
-        ui_toast_ms("Zero-beat: nothing heard within 400 Hz", 2500);
+        tune_outcome("Zero-beat: nothing heard within 400 Hz");
     }
 }
 
@@ -11773,7 +11808,7 @@ static void sb_tune_tick(int64_t now_us)
     if (best < 0 || s_sb_vote_n[best] < SB_MIN_VOTES) {
         ESP_LOGI(TAG, "SSB tune: refused - %d/%d frames accepted, %d distinct target(s)",
                  s_sb_acc, s_sb_frames, s_sb_slots);
-        ui_toast_ms("SSB tune: no station edge found", 2500);
+        tune_outcome("SSB tune: no station edge found");
         return;
     }
 
@@ -11791,7 +11826,7 @@ static void sb_tune_tick(int64_t now_us)
     } else {
         snprintf(msg, sizeof(msg), "SSB tune: already on the station");
     }
-    ui_toast_ms(msg, 2500);
+    tune_outcome(msg);
 }
 
 ui_sb_tune_t ui_sb_tune_start(void)
