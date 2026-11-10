@@ -6323,7 +6323,7 @@ static void build_top_bar(lv_obj_t *parent)
 
     // Slim grip on the right screen edge, purely a visual hint that the
     // settings drawer lives off-screen there. Non-clickable by design -
-    // opening the drawer is swipe-only (right_edge_swipe_cb, on its own
+    // opening the drawer is a swipe or a tap on this grip (right_edge_swipe_cb, on its own
     // always-on-top overlay strip below), same as the left/bottom grips.
     // LVGL skips non-clickable objects during hit-testing, so touches here
     // fall through to that strip underneath.
@@ -8265,6 +8265,33 @@ static bool grip_mouse_click(lv_event_t *e, lv_obj_t *grip)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     return point_on_grip(grip, p.x, p.y);
+}
+
+/* T186: a TOUCH tap on the left or right grip opens its drawer, as the mouse
+ * click does (operator, 2026-11-10: "a tap on both right and left grip should
+ * open both r and l drawer... exactly the same way ble mouse do it"). Until
+ * then touch was swipe-only, and Gyula HA3HZ tapped the left grip with an 8 mm
+ * stylus: nothing opened, and a tap that landed 30+ px in sent a CW macro.
+ * The event is already on the 30 px strip, so x needs no test; y must be on the
+ * grip (a fingertip is wider than the mouse's 10 px slop), and the touch must
+ * not have travelled - a short swipe is not a tap.
+ * ⛔ NOT the bottom grip: a tap there must keep doing nothing, see
+ * grip_mouse_click(). */
+#define GRIP_TAP_SLOP_Y_PX  24
+#define GRIP_TAP_MAX_DX_PX  15
+static bool grip_touch_tap(lv_event_t *e, lv_obj_t *grip, int start_x)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev || indev == s_mouse_indev || start_x < 0) return false;
+    if (!grip || lv_obj_has_flag(grip, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    int dx = (int)p.x - start_x;
+    if (dx < 0) dx = -dx;
+    lv_area_t a;
+    lv_obj_get_coords(grip, &a);
+    return dx <= GRIP_TAP_MAX_DX_PX &&
+           p.y >= a.y1 - GRIP_TAP_SLOP_Y_PX && p.y <= a.y2 + GRIP_TAP_SLOP_Y_PX;
 }
 
 // One wheel click moves this many pixels. A touch UI has large rows, so a
@@ -14407,8 +14434,9 @@ static void left_edge_swipe_cb(lv_event_t *e)
         if (s_left_edge_swipe_start_x >= 0 &&
             (int)p.x - s_left_edge_swipe_start_x >= EDGE_SWIPE_MIN_DX) {
             left_drawer_open();
-        } else if (grip_mouse_click(e, s_left_edge_grip)) {
-            left_drawer_open();         // a pointer cannot swipe: see grip_mouse_click()
+        } else if (grip_mouse_click(e, s_left_edge_grip) ||
+                   grip_touch_tap(e, s_left_edge_grip, s_left_edge_swipe_start_x)) {
+            left_drawer_open();         // a pointer cannot swipe; a finger may tap (T186)
         }
         s_left_edge_swipe_start_x = -1;
     }
@@ -14593,8 +14621,8 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
 
 // Right-edge swipe (drag left) opens the settings drawer. Same always-on-top
 // overlay approach as left_edge_swipe_cb/bottom_edge_swipe_cb, so it works
-// in every UI mode (Panadapter, FT8/4, future CW/...) - deliberately
-// swipe-only, no tap fallback, to keep this gesture uniform across modes.
+// in every UI mode. Swipe, or a tap on the grip (T186, 2026-11-10 - it was
+// swipe-only until then).
 static void right_edge_swipe_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -14612,7 +14640,8 @@ static void right_edge_swipe_cb(lv_event_t *e)
         if (s_right_edge_swipe_start_x >= 0 &&
             s_right_edge_swipe_start_x - (int)p.x >= EDGE_SWIPE_MIN_DX) {
             drawer_open();
-        } else if (grip_mouse_click(e, s_burger_btn)) {
+        } else if (grip_mouse_click(e, s_burger_btn) ||
+                   grip_touch_tap(e, s_burger_btn, s_right_edge_swipe_start_x)) {
             // The right edge's visual grip is s_burger_btn - a screen child, not
             // a child of this strip (see build_edge_swipe_strips). It is
             // non-clickable, so the click lands here, on the strip beneath it.
