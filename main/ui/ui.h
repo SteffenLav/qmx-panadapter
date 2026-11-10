@@ -85,6 +85,9 @@ void ui_set_cw_cal_hz(int16_t hz);     // CW LO trim (Hz), +/-100, persisted to 
 float    ui_get_zoom_factor(void);      // current zoom (1.0=full, max 24.0)
 uint16_t ui_get_cw_pitch_hz(void);
 void ui_set_rit_pill_show(bool show);  // panadapter RIT pill visibility (NVS-backed)
+/* Open the left page picker (same as the left-edge swipe). LVGL thread only. */
+void ui_left_drawer_open(void);
+
 void ui_band_recall_mode(uint32_t center_hz, uint32_t target_hz);   // T188 - after a band button's retune; see ui.c
 uint32_t ui_band_last_hz(uint32_t center_hz); // 0 if never visited      // CW sidetone offset in Hz
 // True if hz falls inside a recognized HF amateur band's edges (lo/hi

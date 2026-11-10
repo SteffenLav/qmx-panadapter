@@ -14414,6 +14414,10 @@ static void left_edge_swipe_cb(lv_event_t *e)
     }
 }
 
+/* T186: the CW page's macro buttons call this when a swipe that was meant for
+ * the strip above started 30+ px in, on a button. LVGL thread only. */
+void ui_left_drawer_open(void) { left_drawer_open(); }
+
 // top_edge_swipe_cb REMOVED 2026-09-13. Operator: "The top down swipe needs
 // to be dropped - there are too many top bar features that is colliding with
 // it." The door in is now a "SelfSpotter" button in the drawer, right below

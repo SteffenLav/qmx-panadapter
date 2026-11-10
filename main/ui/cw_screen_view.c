@@ -1201,6 +1201,22 @@ static uint32_t s_mem_press_tick = 0;
 static int      s_mem_sel        = -1;   // highlighted button, -1 = none
 static bool     s_mem_fired      = false; // editor already opened by the hold
 
+/* T186: a sideways slide ABANDONS the touch. Until 2026-11-10 every release on
+ * a macro button transmitted, and KY has no abort. Measured from the code: the
+ * left-edge grip (4 x 120 px, screen y 300..420) lies in front of macro buttons
+ * 1-3 (y 292..436), and its swipe strip is only 30 px wide. A stylus or finger
+ * that lands at x >= 30 is on a macro button, so reaching for the page picker
+ * sent CQ (Gyula HA3HZ, 8 mm stylus: "CQ, CQ POTA and CALL are located there").
+ * Sideways travel is measured from the press point and must exceed the vertical
+ * travel, so a vertical re-pick that strays sideways still works (see
+ * mem_hit_test). Once abandoned the touch stays dead until the finger lifts. */
+#define MEM_SLIDE_PX        40    // sideways travel that abandons the touch
+#define MEM_EDGE_SWIPE_PX   60    // = ui.c EDGE_SWIPE_MIN_DX
+#define MEM_EDGE_START_PX  120    // a swipe that starts this near the left edge opens the page picker
+static lv_point_t s_mem_press_pt;
+static bool       s_mem_cancelled   = false;
+static bool       s_mem_drawer_done = false;
+
 static void mem_highlight(int idx)
 {
     for (int i = 0; i < N_CW_MEM; i++) {
@@ -1232,6 +1248,10 @@ static void mem_pressed_cb(lv_event_t *e)
     s_mem_sel = idx;
     s_mem_press_tick = lv_tick_get();
     s_mem_fired = false;
+    s_mem_cancelled = false;
+    s_mem_drawer_done = false;
+    lv_indev_t *indev = lv_indev_active();
+    if (indev) lv_indev_get_point(indev, &s_mem_press_pt);
     mem_highlight(idx);
 }
 
@@ -1243,6 +1263,24 @@ static void mem_pressing_cb(lv_event_t *e)
     if (!indev) return;
     lv_point_t p;
     lv_indev_get_point(indev, &p);
+    int dx = (int)p.x - (int)s_mem_press_pt.x;
+    int dy = (int)p.y - (int)s_mem_press_pt.y;
+    int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+    if (!s_mem_cancelled && adx >= MEM_SLIDE_PX && adx > ady) {
+        s_mem_cancelled = true;
+        s_mem_sel = -1;
+        s_mem_press_tick = 0;
+        mem_highlight(-1);
+    }
+    if (s_mem_cancelled) {
+        /* The swipe the operator meant: it started beside the grip, on a button. */
+        if (!s_mem_drawer_done && dx >= MEM_EDGE_SWIPE_PX &&
+            s_mem_press_pt.x < MEM_EDGE_START_PX) {
+            s_mem_drawer_done = true;
+            ui_left_drawer_open();
+        }
+        return;
+    }
     int idx = mem_hit_test(&p);
     if (idx >= 0 && idx != s_mem_sel) {
         s_mem_sel = idx;
@@ -1270,12 +1308,13 @@ static void mem_released_cb(lv_event_t *e)
 {
     (void)e;
     int idx = s_mem_sel;
-    bool fired = s_mem_fired;
+    bool fired = s_mem_fired || s_mem_cancelled;
     s_mem_sel = -1;
     s_mem_press_tick = 0;
     s_mem_fired = false;
+    s_mem_cancelled = false;
     mem_highlight(-1);
-    if (fired) return;                  // the hold already opened the editor
+    if (fired) return;                  // the hold opened the editor, or a slide abandoned it
     if (idx < 0 || idx >= N_CW_MEM) return;
 
     qmx_settings_t s;
@@ -1291,6 +1330,7 @@ static void mem_press_lost_cb(lv_event_t *e)
     s_mem_sel = -1;
     s_mem_press_tick = 0;
     s_mem_fired = false;
+    s_mem_cancelled = false;
     mem_highlight(-1);
 }
 
