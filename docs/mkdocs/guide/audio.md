@@ -447,6 +447,30 @@ Notes on what this costs and what it does not:
 - **Only one browser gets the page at a time.** Opening the panadapter page in a second
   browser takes the connection from the first, which takes the audio with it.
 
+### Noise reduction
+
+For voice, the page can take the band noise down before you hear it. Open
+**Radio** in the bottom bar and tick **Noise reduction**, then pick **Low**,
+**Med** or **High**. It starts at Med.
+
+| Level | Noise between words |
+|---|---|
+| Low | about 6 dB down |
+| Med | about 13 dB down |
+| High | 19 to 31 dB down, and the voice loses more |
+
+Those figures are measured on real SSB from 40 m and 20 m.
+
+- It works in **USB, LSB and AM** only. It is a speech filter: it removes what
+  is not speech, and that includes a CW note and every data tone. In another
+  mode the row says so and does nothing.
+- It runs **in your browser**, not on the Tab5. It costs the Tab5 no CPU and no
+  memory, and it changes nothing for anybody else listening.
+- The first time you switch it on, the page fetches the filter from the Tab5
+  (141 KB). After that the browser keeps it.
+- It adds about **0.1 s** of delay to the audio.
+- The setting is kept per browser.
+
 ## Feedback
 
 This feature is still under active development. Your feedback shapes the next iteration:
