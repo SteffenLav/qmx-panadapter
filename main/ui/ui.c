@@ -10001,6 +10001,24 @@ void ui_update_frequency(uint32_t freq_hz)
                            : bands[i].center_hz - freq_hz;
             if (d <= 1500000u && d < best_dist) { best_dist = d; current_band_idx = i; }
         }
+        // ⛔ THE BAND THE TAB5 BOOTED ON WAS NEVER REGISTERED. MEASURED
+        // 2026-11-10 on bench1: the one frequency update after boot came at
+        // 21.6 s and the radio's band list at 29.7 s, so that update found no
+        // bands and left s_last_band_idx at -1. The dial then did not move
+        // until the band button, and leaving 20 m stored nothing - 20 m came
+        // back with an older frequency. The previous dial is still known
+        // here, so the band it was on is worked out now, with the same
+        // nearest-centre rule.
+        if (s_last_band_idx < 0 && s_last_qmx_freq_hz != 0) {
+            uint32_t bd = 1500000u + 1u;
+            for (int i = 0; i < band_count; i++) {
+                uint32_t d = (s_last_qmx_freq_hz > bands[i].center_hz)
+                               ? s_last_qmx_freq_hz - bands[i].center_hz
+                               : bands[i].center_hz - s_last_qmx_freq_hz;
+                if (d <= 1500000u && d < bd) { bd = d; s_last_band_idx = i; }
+            }
+            if (s_last_band_idx >= 0) s_band_last_hz[s_last_band_idx] = s_last_qmx_freq_hz;
+        }
         // T188: the band being LEFT is stored now, with its last frequency and
         // the mode still in use there - before the new frequency overwrites
         // anything. Once per band change, so NVS sees a handful of writes a day.
