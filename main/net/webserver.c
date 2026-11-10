@@ -1801,15 +1801,50 @@ static bool cmd_num_arg(httpd_req_t *req, cJSON *root, const char *key, double *
 
 static esp_err_t cmd_handler(httpd_req_t *req)
 {
-    char buf[256];
-    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (len <= 0) {
+    /* ⛔ THE WHOLE BODY, NOT THE FIRST 255 BYTES OF IT.
+     *
+     * This was `char buf[256]` and ONE httpd_req_recv(). Every command was
+     * short enough until log_qso gained name, QTH and a remark (T179): the
+     * first real test body was 290 bytes, the JSON was cut mid-string, and
+     * the answer was a bare "bad json" - found 2026-11-10 on bench1 before it
+     * shipped. A browser sends UTF-8, so 24 + 24 + 60 CHARACTERS of accented
+     * text alone can be 400 bytes.
+     *
+     * Sized from Content-Length, on the heap (this task's stack is budgeted),
+     * read in a loop because one recv may return less than was sent, and
+     * refused with a reason above CMD_BODY_MAX rather than truncated. */
+    enum { CMD_BODY_MAX = 1024 };
+    if (req->content_len == 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
         return ESP_FAIL;
     }
-    buf[len] = '\0';
+    if (req->content_len > CMD_BODY_MAX) {
+        httpd_resp_set_status(req, "413 Payload Too Large");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"command too long (1024 bytes at most)\"}");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(req->content_len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+        return ESP_FAIL;
+    }
+    size_t got = 0;
+    while (got < req->content_len) {
+        int r = httpd_req_recv(req, buf + got, req->content_len - got);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;   /* httpd's own retry rule */
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    if (got < req->content_len) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[got] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
+    free(buf);          /* cJSON copies what it keeps */
     if (!root) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
         return ESP_FAIL;
