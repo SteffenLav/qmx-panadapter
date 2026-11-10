@@ -80,6 +80,16 @@ not us. Run the checker; do not re-read the prose. See
 ⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
 the served bytes with `cmp`, not the upload's exit code.
 
+## ⛔ The site is published by `git push` in `site/` - NOT by FTP
+
+`site/` has its own nested `.git` (remote `qmx-panadapter-site`); Simply.com
+deploys from it. After `mkdocs build --clean` and AFTER the GitHub release exists:
+`cd site; git add -A; git commit -m "site: mkdocs build for tab5.lav.dk vX.Y.Z (Simply.com Git-import deploy)"; git push origin main`.
+Then `curl https://tab5.lav.dk/latest.json` until it shows vX.Y.Z (took ~7 min at v1.26.0).
+⛔ Do NOT run `publish_site.ps1` (FTP) - redundant, port 21 is flaky. Operator
+reminded me at v1.25.0 AND v1.26.0; the rule existed only in memory.
+See [site deploy](../../../memory/project_site_git_import_deploy.md).
+
 ## ⛔ Every transmit path must pass the band guard
 
 `python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
