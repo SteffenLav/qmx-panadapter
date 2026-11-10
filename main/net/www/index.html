@@ -284,19 +284,6 @@
   /* Asked for and not yet arriving - the device may be in a mode it does not
      demodulate, so the button must not claim to be playing. */
   #listenbtn.wait { background: #1f2937; color: var(--warn, #fbbf24); }
-  /* T18 - same shape as Listen, which it belongs to. .na: a level is set but
-     the mode is not voice, so it is not doing anything right now. */
-  #nrbtn {
-    background: #1f2937; color: var(--dim);
-    border: 1px solid var(--border); border-radius: 4px;
-    height: 1.8rem; padding: 0 0.5rem; margin-left: 0.3rem;
-    font-family: inherit; font-weight: 700; cursor: pointer; flex-shrink: 0;
-    white-space: nowrap;
-    -webkit-tap-highlight-color: transparent;
-  }
-  #nrbtn.on   { background: var(--accent); color: var(--bg); }
-  #nrbtn.wait { color: var(--warn, #fbbf24); }
-  #nrbtn.na   { text-decoration: line-through; }
   #fps {
     color: var(--ok); font-size: 0.75rem; min-width: 4.5rem;
     text-align: right; flex-shrink: 0;
@@ -1297,8 +1284,6 @@
            start audio from a real click - this button IS that gesture. -->
       <button id="listenbtn" type="button"
               title="Listen to the receiver here (the Tab5's own demodulated audio)">&#9654; Listen</button>
-      <!-- T18: noise reduction for that audio, done in this browser. -->
-      <button id="nrbtn" type="button">NR Off</button>
       <div id="fps" class="bad">disconnected</div>
     </div>
   </div>
@@ -1679,6 +1664,14 @@
         <a href="#" class="screen-to" data-screen="ft4" style="color:#FF6A00" title="Open the FT8 page on the Tab5 and select FT4">Switch to FT4</a>
         <a href="#" class="screen-to" data-screen="js8" style="color:#E040FB" title="Open the FT8 page on the Tab5 and select JS8">Switch to JS8</a>
         <a href="#" class="screen-to" data-screen="wspr" style="color:#5CC060" title="Open the WSPR page on the Tab5">Switch to WSPR</a>
+        <!-- T18 noise reduction for the audio Listen plays, done in this
+             browser. ⛔ A MENU ROW, NOT A TOP-BAR BUTTON. It was first built as
+             a button beside Listen: 81 px, MEASURED to push the top bar into
+             a horizontal scroll at 1440, 1366 and 1280 px, where it had fitted
+             before. Operator, 2026-11-10: "you cannot just widen the web view
+             with a scroll function". The top bar is full - a new control
+             needs a home that costs it no width. -->
+        <a href="#" id="nrbtn">Noise reduction: <span id="nr-state">Off</span></a>
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
         <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
@@ -13964,7 +13957,7 @@ function listenPaint() {
     : (audioFrames === 0
        ? "Asked for audio - nothing arriving yet. The Tab5 only demodulates "
          + "CW, CW-R, USB, LSB and AM; in any other mode there is nothing to send."
-       : "Listening. " + audioGaps + " frame gap(s), " + audioLate
+       : "Listening. Noise reduction for voice is in the Radio menu. " + audioGaps + " frame gap(s), " + audioLate
          + " re-prime(s), " + audioDropped + " chunk(s) dropped to clock drift. "
          + "Click to stop.");
 }
@@ -14030,7 +14023,7 @@ async function listenToggle() {
   listenPaint();
 })();
 
-/* T18 - the NR button. The DSP is the NR-BEGIN block above; this is only the
+/* T18 - the NR row in the Radio menu. The DSP is the NR-BEGIN block above; this is only the
    level, the lazy load of /rnnoise.wasm (141 KB, fetched the first time NR is
    actually needed and never by a page that leaves it Off) and the paint.
    The level is this browser's, not the device's: the Tab5 does none of it. */
@@ -14061,24 +14054,26 @@ async function nrLoad() {
 }
 
 function nrPaint() {
-  const b = document.getElementById("nrbtn");
-  if (!b) return;
-  b.textContent = "NR " + NR_LEVELS[nrLevel].name;
-  b.classList.toggle("on", nrWanted() && !!nrInst);
-  b.classList.toggle("wait", nrWanted() && !nrInst);
-  b.classList.toggle("na", nrLevel > 0 && !nrModeOk());
+  const b = document.getElementById("nrbtn"), st = document.getElementById("nr-state");
+  if (!b || !st) return;
+  const na = nrLevel > 0 && !nrModeOk();
+  st.textContent = NR_LEVELS[nrLevel].name
+    + (na ? " (not in " + lastMode + ")" : (nrWanted() && !nrInst ? " (loading)" : ""));
   b.title = nrLoadErr
     ? "Noise reduction could not be loaded (" + nrLoadErr + "). Click to try again."
-    : (nrLevel > 0 && !nrModeOk()
+    : (na
        ? "Noise reduction is set to " + NR_LEVELS[nrLevel].name + " but only works on "
          + "voice (USB, LSB, AM). It is a speech filter: it would remove a CW note."
-       : "Noise reduction for the audio you hear on this page (USB, LSB, AM). "
+       : "Noise reduction for the audio Listen plays on this page (USB, LSB, AM). "
          + "Click to step Off - Low - Med - High. It adds about 0.1 s of delay.");
 }
 
 (() => {
   const b = document.getElementById("nrbtn");
-  if (b) b.addEventListener("click", () => {
+  if (b) b.addEventListener("click", (ev) => {
+    /* stopPropagation: the bar's click-anywhere handler would close the Radio
+       menu on every step, and the level is stepped several times in a row. */
+    ev.preventDefault(); ev.stopPropagation();
     nrLevel = (nrLevel + 1) % NR_LEVELS.length;
     nrLoadErr = "";
     try { localStorage.setItem("nrLevel", String(nrLevel)); } catch (e) {}
