@@ -27,8 +27,14 @@ bool tx_band_guard_allows(uint32_t rf_lo_hz, uint32_t rf_hi_hz,
      * own reporting (see wspr_tx.c's key-down verification). */
     if (rf_lo_hz == 0 || rf_hi_hz == 0) return true;
 
-    qmx_settings_t c;
-    settings_load_all(&c);
+    /* ⛔ NOT settings_load_all(): that puts the whole qmx_settings_t on the
+     * CALLER's stack, and one caller is cat_poll (4096 B), which reaches here
+     * for every CW send since the KY guard. MEASURED 2026-11-10 on bench1: the
+     * first CW send on that build was a stack protection fault in cat_poll at
+     * this function, and the Tab5 rebooted. Two fields are needed; the narrow
+     * getter exists for exactly this (see its comment in settings.h). */
+    struct { uint8_t bandplan_region; char my_grid[8]; } c;
+    settings_get_bandplan(&c.bandplan_region, c.my_grid);
 
     /* ⛔ AN UNKNOWN REGION REFUSES. Operator's call, 2026-10-21: "I would
      * argue that the region is just as important as the call sign and grid to
