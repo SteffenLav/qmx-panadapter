@@ -1,8 +1,7 @@
 // Host test for the CW transmit queue (main/cw_txq.c), compiled from the same
 // file the firmware builds:
 //
-//   gcc -std=c11 -Wall -Wextra -I main -o cw_txq_harness
-//       test/cw_txq_harness.c main/cw_txq.c && ./cw_txq_harness
+//   gcc -std=c11 -Wall -Wextra -I main -o cw_txq_harness test/cw_txq_harness.c main/cw_txq.c && ./cw_txq_harness
 //
 // What matters is the release rule, because it decides what keys the radio:
 // never a second chunk while the radio may still be keying the first, never a
