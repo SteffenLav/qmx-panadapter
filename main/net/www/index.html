@@ -1036,6 +1036,7 @@
   #nr-row label { display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
   #nr-row input { accent-color: var(--accent); }
   #nr-row .nr-main { color: var(--fg, #e5e7eb); flex-basis: 100%; }
+  #nr-row .nr-brk { flex-basis: 100%; height: 0; }
   #nr-state { color: var(--dim); flex-basis: 100%; }
   #nr-state:empty { display: none; }
   /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
@@ -1707,6 +1708,13 @@
           <label><input type="radio" name="nr-level" value="1"> Low</label>
           <label><input type="radio" name="nr-level" value="2"> Med</label>
           <label><input type="radio" name="nr-level" value="3"> High</label>
+          <!-- T184: which noise reduction the voice modes use (CW always gets
+               Spectral - the speech model removes a CW note), and the
+               auto-notch, which is its own switch and works with NR off. -->
+          <span class="nr-brk"></span>
+          <label title="RNNoise, a small neural network trained on speech. The stronger of the two on a voice."><input type="radio" name="nr-type" value="0"> Speech model</label>
+          <label title="Classic spectral noise reduction. Gentler on a voice, and the one CW uses."><input type="radio" name="nr-type" value="1"> Spectral</label>
+          <label class="nr-main" title="Finds a steady carrier in the audio and filters it out, up to four at once. USB, LSB and AM."><input type="checkbox" id="an-on"> Auto-notch</label>
           <span id="nr-state"></span>
         </div>
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
@@ -8299,7 +8307,7 @@ async function tick() {
         pb.style.borderColor= on ? "#ffc02a" : "";
       } }
     lastMode       = s.mode        || "USB";
-    nrPaint();           // NR is voice-only, so its button follows the mode too
+    nrPaint();           // which NR runs, and whether the notch does, follows the mode
     updateKeyerPill();   // CW-only, so it has to follow the mode it reads
     updateCwTx(s);       // CW page TX panel - absent from s.cw_tx when not on that screen
     /* ⚠ THIS REPAINTS, IT DOES NOT RE-READ. The ladder and the current target
@@ -13600,10 +13608,12 @@ fpsEl.addEventListener("click", wsReclaim);
  * This block is extracted verbatim by test/web_nr_harness.mjs - keep it
  * self-contained (no DOM, no globals from outside it). */
 const NR_LEVELS = [
-  { name: "Off",  wet: 0.0 },
-  { name: "Low",  wet: 0.5 },
-  { name: "Med",  wet: 0.8 },
-  { name: "High", wet: 1.0 },
+  /* wet: RNNoise's wet/dry mix. floor: the spectral NR's least gain per bin
+     (T184, further down) - 6, 12 and 20 dB. */
+  { name: "Off",  wet: 0.0, floor: 1.0 },
+  { name: "Low",  wet: 0.5, floor: 0.5 },
+  { name: "Med",  wet: 0.8, floor: 0.25 },
+  { name: "High", wet: 1.0, floor: 0.1 },
 ];
 const NR_TAPS = 65;
 const NR_FRAME48 = 480;
@@ -13762,8 +13772,9 @@ function nrPlc(nr, x) {
 
 /* x: 12 kHz samples, -1..1. Returns a NEW array of the same length, delayed
    by NR_LATENCY_12K, mixing wet and aligned dry by `wet` (0..1). */
-function nrProcess(nr, x0, wet) {
+function nrProcess(nr, x0, wet, an) {
   const x = nrPlc(nr, x0);
+  if (an) anProcess(an, x);                       /* after the concealment - see anProcess() */
   const h = NR_FIR, K = nr.upHist.length, out = new Float32Array(x.length);
   for (let n = 0; n < x.length; n++) {
     nr.upHist.copyWithin(1, 0, K - 1);
@@ -13785,6 +13796,289 @@ function nrProcess(nr, x0, wet) {
     out[n] = wet * w + (1 - wet) * dly;
   }
   return out;
+}
+
+/* ---- T184: spectral noise reduction and auto-notch, plain JavaScript -------
+ *
+ * RNNoise above is a speech model: it removes a CW note, so CW listeners had
+ * no noise reduction at all. This one is not a speech model. It makes no
+ * assumption about the signal except that the NOISE changes slowly:
+ *
+ *   STFT, 256 points at 12 kHz (46.9 Hz bins), hop 64, Hann in and Hann out.
+ *   Per bin: a noise floor tracked through the gaps in the signal (MCRA -
+ *   the minimum of the smoothed power over 0.6-1.2 s says where the floor is,
+ *   and the floor estimate is only updated while the bin sits near it), then
+ *   a Wiener gain from the decision-directed a-priori SNR.
+ *
+ * Strength is the gain FLOOR: no bin is ever turned down further than the
+ * level allows (Low 6 dB, Med 12 dB, High 20 dB). A floor of 1 is the input
+ * delayed by SN_LATENCY_12K, which the harness checks.
+ *
+ * A carrier that never keys is, to this tracker, noise: it is taken down to
+ * the floor after about a second, in every mode. A CW signal is not, because
+ * it has gaps - the harness keys one at 12 and 35 WPM to prove it.
+ *
+ * Same hole concealment as RNNoise (nrPlc): a hole of exact zeros is a false
+ * minimum, and the tracker would take it for the floor. */
+const SN_N = 256, SN_HOP = 64, SN_BINS = SN_N / 2 + 1;
+const SN_LATENCY_12K = NR_PLC_HOLD + SN_N;
+const SN_AS = 0.7;        /* smoothing of the power the minimum is taken over */
+const SN_WIN_FRAMES = 110;/* minimum window: 110-220 frames = 0.59-1.17 s */
+const SN_DELTA = 5;       /* power / minimum above this = signal present */
+const SN_AP = 0.2;        /* smoothing of that presence decision */
+const SN_AD = 0.95;       /* floor update rate while the signal is absent */
+const SN_DD = 0.96;       /* decision-directed weight on the previous frame */
+const SN_OVER = 1.0;      /* the floor estimate is taken this much too high */
+const SN_WIN = (() => {
+  /* periodic Hann, scaled so that analysis x synthesis overlap-adds to 1 at
+     hop N/4 (the sum of hann^2 over four overlaps is 1.5) */
+  const w = new Float32Array(SN_N), g = Math.sqrt(1 / 1.5);
+  for (let i = 0; i < SN_N; i++) w[i] = g * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / SN_N));
+  return w;
+})();
+/* In-place radix-2 complex FFT of size N (a power of two); inv = inverse,
+   scaled by 1/N. A factory because the notch detector wants 2048 points. */
+function nrFftMake(N) {
+  const c = new Float64Array(N / 2), s = new Float64Array(N / 2), rev = new Uint16Array(N);
+  for (let i = 0; i < N / 2; i++) { c[i] = Math.cos(2 * Math.PI * i / N); s[i] = Math.sin(2 * Math.PI * i / N); }
+  for (let i = 0, bits = Math.log2(N); i < N; i++) {
+    let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b);
+    rev[i] = r;
+  }
+  return (re, im, inv) => {
+    for (let i = 0; i < N; i++) { const j = rev[i]; if (j > i) {
+      let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let len = 2; len <= N; len <<= 1) {
+      const half = len >> 1, step = N / len;
+      for (let i = 0; i < N; i += len) for (let j = 0, k = 0; j < half; j++, k += step) {
+        const wr = c[k], wi = inv ? s[k] : -s[k], a = i + j, b = a + half;
+        const xr = re[b] * wr - im[b] * wi, xi = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+      }
+    }
+    if (inv) for (let i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
+  };
+}
+const snFft = nrFftMake(SN_N);
+
+function snCreate() { return snReset({}); }
+function snReset(sn) {
+  sn.buf = new Float32Array(SN_N); sn.cnt = 0;       /* last SN_N inputs */
+  sn.ola = new Float32Array(SN_N);
+  sn.fifo = new Float32Array(SN_HOP * 4); sn.fifoN = SN_HOP; sn.fifoR = 0;  /* primed: latency = SN_N */
+  sn.re = new Float64Array(SN_N); sn.im = new Float64Array(SN_N);
+  sn.S = new Float64Array(SN_BINS); sn.Smin = new Float64Array(SN_BINS); sn.Stmp = new Float64Array(SN_BINS);
+  sn.p = new Float64Array(SN_BINS); sn.Nz = new Float64Array(SN_BINS);
+  sn.A2 = new Float64Array(SN_BINS);                 /* previous frame's clean-signal power estimate */
+  sn.p2 = new Float64Array(SN_BINS);
+  sn.frames = 0;                                     /* frames WITH signal seen so far */
+  /* the same concealment state nrPlc() keeps in an RNNoise instance */
+  sn.plc = new Float32Array(2048 + NR_PLC_HOLD + 8192); sn.plcN = 2048 + NR_PLC_HOLD;
+  sn.plcPatched = 0;
+  return sn;
+}
+
+/* One frame: sn.buf in, SN_HOP finished samples onto the FIFO. */
+function snFrame(sn, floor) {
+  const re = sn.re, im = sn.im, w = SN_WIN, p2 = sn.p2;
+  let e = 0;
+  for (let i = 0; i < SN_N; i++) { re[i] = sn.buf[i] * w[i]; im[i] = 0; e += re[i] * re[i]; }
+  snFft(re, im, false);
+  for (let k = 0; k < SN_BINS; k++) p2[k] = re[k] * re[k] + im[k] * im[k];
+  /* ⛔ Silence teaches the tracker nothing. The buffer starts as zeros and a
+     closed squelch is zeros: a minimum of 0 would mark every later frame as
+     "signal present" until the window rolled over, with a floor estimate of
+     0 - a second of no noise reduction at every start. Skip those frames. */
+  const live = e > 1e-12;
+  if (live) {
+    const first = sn.frames === 0, early = sn.frames < 30;
+    for (let k = 0; k < SN_BINS; k++) {
+      const sf = 0.25 * p2[k > 0 ? k - 1 : k] + 0.5 * p2[k] + 0.25 * p2[k < SN_BINS - 1 ? k + 1 : k];
+      if (first) { sn.S[k] = sf; sn.Smin[k] = sf; sn.Stmp[k] = sf; sn.Nz[k] = p2[k]; sn.p[k] = 0; continue; }
+      const S = sn.S[k] = SN_AS * sn.S[k] + (1 - SN_AS) * sf;
+      if (S < sn.Smin[k]) sn.Smin[k] = S;
+      if (S < sn.Stmp[k]) sn.Stmp[k] = S;
+      const pr = sn.p[k] = SN_AP * sn.p[k] + (1 - SN_AP) * (S > SN_DELTA * sn.Smin[k] ? 1 : 0);
+      /* the first 30 frames (160 ms) are taken as noise, as every such
+         tracker does: there is no minimum to compare against yet */
+      const ad = early ? 0.8 : SN_AD + (1 - SN_AD) * pr;
+      sn.Nz[k] = ad * sn.Nz[k] + (1 - ad) * p2[k];
+    }
+    if (++sn.frames % SN_WIN_FRAMES === 0) for (let k = 0; k < SN_BINS; k++) {
+      sn.Smin[k] = Math.min(sn.Stmp[k], sn.S[k]); sn.Stmp[k] = sn.S[k];
+    }
+  }
+  for (let k = 0; k < SN_BINS; k++) {
+    let g = 1;
+    if (floor < 1 && sn.frames > 0) {
+      const nz = SN_OVER * sn.Nz[k] + 1e-20, post = p2[k] / nz;
+      const prio = Math.max(SN_DD * sn.A2[k] / nz + (1 - SN_DD) * Math.max(post - 1, 0), 0.003);
+      g = prio / (1 + prio);
+      sn.A2[k] = g * g * p2[k];
+      if (g < floor) g = floor;
+      if (sn.identity) g = 1;                       /* harness mutation only */
+    }
+    re[k] *= g; im[k] *= g;
+    if (k > 0 && k < SN_N / 2) { re[SN_N - k] = re[k]; im[SN_N - k] = -im[k]; }
+  }
+  snFft(re, im, true);
+  const o = sn.ola;
+  for (let i = 0; i < SN_N; i++) o[i] += re[i] * w[i];
+  if (sn.fifoR > 0) { sn.fifo.copyWithin(0, sn.fifoR, sn.fifoN); sn.fifoN -= sn.fifoR; sn.fifoR = 0; }
+  sn.fifo.set(o.subarray(0, SN_HOP), sn.fifoN); sn.fifoN += SN_HOP;
+  o.copyWithin(0, SN_HOP); o.fill(0, SN_N - SN_HOP);
+  sn.buf.copyWithin(0, SN_HOP);
+}
+
+/* x: 12 kHz samples, -1..1. Returns a NEW array of the same length, delayed
+   by SN_LATENCY_12K. `floor` is the least gain any bin gets (1 = untouched). */
+function snProcess(sn, x0, floor, an) {
+  const x = nrPlc(sn, x0);
+  if (an) anProcess(an, x);
+  const out = new Float32Array(x.length);
+  for (let n = 0; n < x.length; n++) {
+    sn.buf[SN_N - SN_HOP + sn.cnt] = x[n];
+    if (++sn.cnt === SN_HOP) { snFrame(sn, floor); sn.cnt = 0; }
+    out[n] = sn.fifo[sn.fifoR++];
+  }
+  return out;
+}
+
+/* Auto-notch: takes a steady carrier out of the audio (the 1107 Hz tone on
+ * 14.273 MHz, 2026-11-10; a broadcast carrier beside an SSB signal).
+ *
+ * It FINDS the carrier and then puts a narrow filter on it:
+ *   - a 2048-point spectrum (5.9 Hz bins) every 43 ms, lightly averaged;
+ *   - a carrier is a peak AN_PEAK above the median of the 230 Hz either side
+ *     of it, present in the newest frame as well as the average, that stays
+ *     within two bins of where it was first seen for AN_ON frames in a row
+ *     (0.85 s). The reference point may follow it by 2 Hz a second, which is
+ *     a drifting transmitter and not a voice;
+ *   - each one found gets a biquad notch AN_BW wide at its interpolated
+ *     frequency, faded in over 20 ms; up to AN_MAX at once;
+ *   - gone for AN_OFF frames (0.43 s) and the notch fades out again. "Gone"
+ *     is judged on the newest frame: the average alone holds a strong
+ *     carrier for two seconds after it has stopped (measured).
+ * Speech does not qualify: a voice harmonic does not hold one 6 Hz bin for
+ * most of a second, and the gaps between words reset the count.
+ *
+ * With no carrier found the audio passes through UNTOUCHED, bit for bit -
+ * the harness checks that on noise and after a carrier has gone.
+ *
+ * ⛔ DEAD END, MEASURED 2026-11-10: the textbook LMS auto-notch (predict the
+ * sample from the audio 32..96 samples back, subtract the prediction; 64 and
+ * 128 taps, five step sizes). On synthetic noise it looked right: -30..-45 dB
+ * on a strong carrier, noise and a test voice untouched. On the three real
+ * SSB captures, which hold NO carrier, it changed the audio all the time: the
+ * difference from the input was 5..12 dB under the input itself, one setting
+ * made that difference LARGER than the input (+2.5 dB), and a carrier 10 dB
+ * under the audio came down only 10-16 dB. Do not go back to it on a
+ * synthetic result. (Why the real audio is predictable was not measured.)
+ *
+ * ⛔ NOT FOR CW: a CW note held for a second is a carrier. The page offers
+ * the notch in USB, LSB and AM only.
+ *
+ * No delay: the filters sit in the path, the detector looks on from the
+ * side. Works IN PLACE and returns x. Runs AFTER the hole concealment when
+ * NR is on, so the detector sees no holes either. */
+const AN_N = 2048, AN_HOP = 512, AN_MAX = 4;
+const AN_LO_HZ = 100, AN_HI_HZ = 3600;
+const AN_PEAK = 8;        /* x the local median = 9 dB */
+const AN_ON = 20, AN_OFF = 10;
+const AN_BW = 40;         /* Hz, -3 dB width of each notch */
+const AN_AVG = 0.8;       /* spectrum smoothing: 5 frames = 0.21 s */
+const AN_RAMP = 240;      /* fade, samples */
+const AN_WIN = (() => { const w = new Float64Array(AN_N);
+  for (let i = 0; i < AN_N; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / AN_N); return w; })();
+const anFft = nrFftMake(AN_N);
+
+function anCreate() { return anReset({}); }
+function anReset(an) {
+  an.buf = new Float32Array(AN_N); an.cnt = 0; an.fill = 0;
+  an.re = new Float64Array(AN_N); an.im = new Float64Array(AN_N);
+  an.A = new Float64Array(AN_N / 2 + 1); an.P = new Float64Array(AN_N / 2 + 1); an.have = false;
+  an.tr = [];             /* tracks: { f, f0, hits, miss, on, dead, mix, k, b1, a1, a2, z1, z2 } */
+  an.med = new Float64Array(70);
+  return an;
+}
+function anCoef(t) {
+  const w0 = 2 * Math.PI * t.f / 12000, alpha = Math.sin(w0) * AN_BW / (2 * t.f), a0 = 1 + alpha;
+  t.k = 1 / a0; t.b1 = -2 * Math.cos(w0) / a0; t.a1 = t.b1; t.a2 = (1 - alpha) / a0;
+}
+/* One detector frame over an.buf. */
+function anDetect(an) {
+  const re = an.re, im = an.im, A = an.A, P = an.P, H = AN_N / 2;
+  for (let i = 0; i < AN_N; i++) { re[i] = an.buf[i] * AN_WIN[i]; im[i] = 0; }
+  anFft(re, im, false);
+  for (let k = 0; k <= H; k++) {
+    const p = P[k] = re[k] * re[k] + im[k] * im[k];
+    A[k] = an.have ? AN_AVG * A[k] + (1 - AN_AVG) * p : p;
+  }
+  an.have = true;
+  const hzBin = 12000 / AN_N, lo = Math.max(42, Math.round(AN_LO_HZ / hzBin)), hi = Math.min(H - 42, Math.round(AN_HI_HZ / hzBin));
+  const cand = [];
+  for (let k = lo; k <= hi && !an.frozen; k++) {       /* frozen: harness mutation only */
+    const v = A[k];
+    if (!(v > A[k - 1] && v >= A[k + 1] && v > A[k - 2] && v > A[k + 2]) || v < 1e-14) continue;
+    const m = an.med; let n = 0;
+    for (let j = 6; j <= 40; j++) { m[n++] = A[k - j]; m[n++] = A[k + j]; }
+    m.sort();
+    if (v < AN_PEAK * m[n >> 1]) continue;
+    /* ...and there NOW, at half that. Measured at a quarter (2 x the median):
+       one noise frame in three passes it, and a notch then stayed 2 s on a
+       carrier that had stopped. */
+    if (Math.max(P[k - 1], P[k], P[k + 1]) < 0.5 * AN_PEAK * m[n >> 1]) continue;
+    /* parabola through the log of the three top bins: the frequency to a
+       fraction of a hertz, which is what the depth of a 40 Hz notch needs */
+    const la = Math.log(A[k - 1] + 1e-30), lb = Math.log(v), lc = Math.log(A[k + 1] + 1e-30);
+    const d = 0.5 * (la - lc) / (la - 2 * lb + lc);
+    cand.push({ f: (k + d) * hzBin, v, used: false });
+  }
+  for (const t of an.tr) {
+    let best = null;
+    for (const c of cand) if (!c.used && Math.abs(c.f - t.f0) <= 2 * hzBin && (!best || c.v > best.v)) best = c;
+    if (best) {
+      best.used = true; t.hits++; t.miss = 0;
+      t.f0 += Math.max(-0.1, Math.min(0.1, best.f - t.f0));
+      if (Math.abs(best.f - t.f) > 0.2) { t.f = 0.5 * t.f + 0.5 * best.f; anCoef(t); }
+    } else if (++t.miss > AN_OFF) { t.on = false; t.dead = true; }
+    else if (!t.on) t.hits = 0;                        /* in a row, or it does not count */
+    if (!t.on && !t.dead && t.hits >= AN_ON && an.tr.filter(u => u.on).length < AN_MAX) {
+      t.on = true; t.z1 = 0; t.z2 = 0;
+    }
+  }
+  an.tr = an.tr.filter(t => !(t.dead && t.mix <= 0));
+  cand.sort((p, q) => q.v - p.v);
+  for (const c of cand) {
+    if (c.used || an.tr.length >= 12) continue;
+    const t = { f: c.f, f0: c.f, hits: 1, miss: 0, on: false, dead: false, mix: 0, z1: 0, z2: 0 };
+    anCoef(t); an.tr.push(t);
+  }
+}
+function anProcess(an, x) {
+  for (let n = 0; n < x.length; n++) {
+    const v = x[n];
+    an.buf[AN_N - AN_HOP + an.cnt] = v;
+    let y = v;
+    for (let i = 0; i < an.tr.length; i++) {
+      const t = an.tr[i];
+      if (!t.on && t.mix <= 0) continue;
+      /* transposed direct form II; b0 = b2 = k */
+      const o = t.k * y + t.z1;
+      t.z1 = t.b1 * y - t.a1 * o + t.z2;
+      t.z2 = t.k * y - t.a2 * o;
+      t.mix = t.on ? Math.min(1, t.mix + 1 / AN_RAMP) : Math.max(0, t.mix - 1 / AN_RAMP);
+      y += t.mix * (o - y);
+    }
+    x[n] = y;
+    if (++an.cnt === AN_HOP) {
+      an.cnt = 0;
+      if (an.fill < AN_N) an.fill += AN_HOP;
+      if (an.fill >= AN_N) anDetect(an);               /* not on a half-empty buffer */
+      an.buf.copyWithin(0, AN_HOP);
+    }
+  }
+  return x;
 }
 /* NR-END ------------------------------------------------------------------ */
 
@@ -13915,7 +14209,7 @@ function audioStopAndTell() {
 
 function audioStop() {
   audioWantOn = false;
-  nrRunning = false;           /* the next start resets the model */
+  nrRunKey = "";              /* the next start resets the model */
   audioNext = 0;
   if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
   audioSeq = -1;
@@ -13985,18 +14279,31 @@ function audioFrame(buf) {
   src.set(audioTail, 0);
   for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
 
-  /* T18 noise reduction, on the decoded 12 kHz samples and before the
-     resampler. Same sample count in and out, so nothing below changes.
-     ⛔ Off, a mode RNNoise is not offered for, or a model not loaded yet
-     all SKIP this - the samples above reach the resampler untouched. */
-  if (nrWanted()) {
-    if (!nrInst) nrLoad();                    /* lazy, once; dry until it lands */
-    else if (rate === 12000) {
-      if (!nrRunning || nrRunMode !== lastMode) nrReset(nrInst);
-      nrRunning = true; nrRunMode = lastMode;
-      src.set(nrProcess(nrInst, src.subarray(T), NR_LEVELS[nrLevel].wet), T);
-    }
-  } else nrRunning = false;
+  /* T18 / T184 noise reduction and auto-notch, on the decoded 12 kHz samples
+     and before the resampler. Same sample count in and out, so nothing below
+     changes.
+     ⛔ Everything off, a mode none of it is offered for, or a speech model not
+     loaded yet all SKIP this - the samples above reach the resampler untouched. */
+  {
+    let eng = nrEngine();
+    if (eng === 1 && !nrInst) { nrLoad(); eng = 0; }     /* lazy, once; dry until it lands */
+    const notch = anWanted();
+    if ((eng || notch) && rate === 12000) {
+      /* A new start, another mode, another engine: begin from nothing, so no
+         noise estimate and no notch is carried from one signal to the next. */
+      const key = eng + "|" + lastMode + "|" + (notch ? 1 : 0);
+      if (key !== nrRunKey) {
+        if (eng === 1) nrReset(nrInst);
+        if (eng === 2) snInst = snInst ? snReset(snInst) : snCreate();
+        if (notch) anInst = anInst ? anReset(anInst) : anCreate();
+        nrRunKey = key;
+      }
+      const seg = src.subarray(T), an = notch ? anInst : null, lv = NR_LEVELS[nrLevel];
+      if (eng === 1) src.set(nrProcess(nrInst, seg, lv.wet, an), T);
+      else if (eng === 2) src.set(snProcess(snInst, seg, lv.floor, an), T);
+      else anProcess(an, seg);                           /* notch alone: in place, no delay */
+    } else nrRunKey = "";
+  }
 
   /* ⛔ TRIM THE RATE, DO NOT WAIT TO DROP A CHUNK.
    *
@@ -14187,15 +14494,28 @@ async function listenToggle() {
    on those clips: Med takes the noise between words down 12-13 dB; High takes
    19-31 dB but costs the voice more. */
 let nrOn = false, nrLevel = 2, nrInst = null, nrLoading = false, nrLoadErr = "";
-let nrRunning = false, nrRunMode = "";
+/* T184. nrType: what the voice modes use - 0 the speech model (RNNoise), 1 the
+   spectral NR. CW always uses the spectral one. anOn: the auto-notch, its own
+   switch. nrRunKey names what audioFrame() is running, "" when nothing is. */
+let nrType = 0, anOn = false, snInst = null, anInst = null, nrRunKey = "";
 try {
   nrOn = localStorage.getItem("nrOn") === "1";
   const v = parseInt(localStorage.getItem("nrLevel"), 10);
   if (v >= 1 && v < NR_LEVELS.length) nrLevel = v;
+  nrType = localStorage.getItem("nrType") === "1" ? 1 : 0;
+  anOn = localStorage.getItem("anOn") === "1";
 } catch (e) {}
 
-function nrModeOk() { return lastMode === "USB" || lastMode === "LSB" || lastMode === "AM"; }
-function nrWanted() { return nrOn && nrModeOk(); }
+function nrVoice() { return lastMode === "USB" || lastMode === "LSB" || lastMode === "AM"; }
+function nrCw() { return (lastMode || "").toUpperCase().startsWith("CW"); }
+/* 0 nothing, 1 the speech model, 2 spectral. The digital modes get nothing:
+   nobody listens to them, and a decoder is not fed from this audio. */
+function nrEngine() {
+  if (!nrOn) return 0;
+  if (nrCw()) return 2;
+  return nrVoice() ? (nrType === 1 ? 2 : 1) : 0;
+}
+function anWanted() { return anOn && nrVoice(); }
 
 async function nrLoad() {
   if (nrInst || nrLoading) return;
@@ -14215,18 +14535,26 @@ async function nrLoad() {
 
 function nrPaint() {
   const row = document.getElementById("nr-row"), on = document.getElementById("nr-on");
-  const st = document.getElementById("nr-state");
-  if (!row || !on || !st) return;
-  on.checked = nrOn;
+  const st = document.getElementById("nr-state"), an = document.getElementById("an-on");
+  if (!row || !on || !st || !an) return;
+  on.checked = nrOn; an.checked = anOn;
   row.querySelectorAll('input[name="nr-level"]').forEach((r) => {
     r.checked = Number(r.value) === nrLevel;
   });
-  st.textContent = nrLoadErr ? "could not load (" + nrLoadErr + ")"
-    : (nrOn && !nrModeOk() ? "voice only - not active in " + lastMode
-       : (nrWanted() && !nrInst ? "loading..." : ""));
-  row.title = "Noise reduction for the audio Listen plays on this page. It is a "
-    + "speech filter, so it works in USB, LSB and AM only - it would remove a CW "
-    + "note. It runs in this browser, not on the Tab5, and adds about 0.1 s of delay.";
+  row.querySelectorAll('input[name="nr-type"]').forEach((r) => {
+    r.checked = Number(r.value) === nrType;
+  });
+  const eng = nrEngine(), notes = [];
+  if (nrLoadErr) notes.push("speech model could not load (" + nrLoadErr + ")");
+  else if (nrOn && !eng) notes.push("NR is not active in " + lastMode);
+  else if (eng === 1 && !nrInst) notes.push("loading...");
+  else if (nrOn && nrCw() && nrType === 0) notes.push("CW uses Spectral");
+  if (anOn && !nrVoice()) notes.push("notch is not active in " + lastMode);
+  st.textContent = notes.join(" - ");
+  row.title = "Noise reduction and auto-notch for the audio Listen plays on this page. "
+    + "They run in this browser, not on the Tab5. Noise reduction adds about 0.1 s of "
+    + "delay; the notch adds none. The speech model works in USB, LSB and AM only - it "
+    + "would remove a CW note - so CW uses the spectral one.";
 }
 
 (() => {
@@ -14238,11 +14566,15 @@ function nrPaint() {
   row.addEventListener("change", (ev) => {
     const t = ev.target;
     if (t.id === "nr-on") nrOn = t.checked;
+    else if (t.id === "an-on") anOn = t.checked;
     else if (t.name === "nr-level") { nrLevel = Number(t.value); nrOn = true; }  /* picking a level means "on" */
+    else if (t.name === "nr-type") nrType = Number(t.value);
     nrLoadErr = "";
     try { localStorage.setItem("nrOn", nrOn ? "1" : "0");
-          localStorage.setItem("nrLevel", String(nrLevel)); } catch (e) {}
-    if (nrWanted()) nrLoad();     /* asked for - do not wait for Listen */
+          localStorage.setItem("nrLevel", String(nrLevel));
+          localStorage.setItem("nrType", String(nrType));
+          localStorage.setItem("anOn", anOn ? "1" : "0"); } catch (e) {}
+    if (nrEngine() === 1) nrLoad();     /* asked for - do not wait for Listen */
     nrPaint();
   });
   nrPaint();
