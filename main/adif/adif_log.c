@@ -552,6 +552,11 @@ void adif_log_record(const adif_qso_t *qso)
         write_field(f, "SIG",      qso->their_sig ? qso->their_sig : "POTA");
         write_field(f, "SIG_INFO", qso->their_sig_info);
     }
+    // Free text last: nothing after it depends on what the operator typed.
+    // The caller caps and cleans it (ADIF_NAME_MAX and friends in the header).
+    write_field(f, "NAME",    qso->name);
+    write_field(f, "QTH",     qso->qth);
+    write_field(f, "COMMENT", qso->comment);
 
     fprintf(f, "<EOR>\n");
 

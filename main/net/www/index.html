@@ -1440,6 +1440,25 @@
               style="font-size:13px; padding:2px 8px;"></button>
       <span id="cw-tx-last" style="color:var(--dim); font-size:13px; margin-left:auto;"></span>
     </div>
+    <!-- The station being worked (Gyula HA3HZ, 2026-11-10). {CALL} in a macro
+         is THIS callsign. On the Tab5 it is the station card: filled by the
+         decoder, or typed after a tap (T162). The page had neither - on a weak
+         signal nothing decodes, and there was nowhere to type it. "Log" is here
+         too: the log window was two menus away (Radio > Log a contact) and came
+         up empty, in the middle of a contact. -->
+    <div id="cw-stn" style="display:none; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+      <label for="cw-stn-call" style="color:var(--dim); font-size:13px;">Station</label>
+      <input id="cw-stn-call" type="text" maxlength="15" autocomplete="off" spellcheck="false"
+             placeholder="their callsign"
+             title="The station you are working. {CALL} in a macro sends this callsign. Type it and press Enter - no decode is needed."
+             style="width:11em; text-transform:uppercase; font-weight:700;">
+      <button id="cw-stn-set" type="button" title="Use this callsign as {CALL} - same as entering it on the Tab5's station card">Set</button>
+      <button id="cw-stn-clear" type="button" title="Forget this station and go back to calling CQ">Clear</button>
+      <button id="cw-stn-heard" type="button" style="display:none"></button>
+      <span id="cw-stn-state" style="color:var(--dim); font-size:13px;"></span>
+      <button id="cw-stn-log" type="button" style="margin-left:auto;"
+              title="Open the log window with this callsign and the report already filled in">Log this contact&hellip;</button>
+    </div>
     <div id="cw-tx-macros" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px; margin-bottom:10px;"></div>
     <div style="display:flex; gap:8px;">
       <input id="cw-tx-input" type="text" maxlength="80" placeholder="Free text - {MYCALL} {PARK} {CALL} {RST} {SERIAL} work here too"
@@ -1757,10 +1776,13 @@
        after logging, and Log clears the callsign while keeping the reports -
        a run of CW contacts is not one dialog at a time.
 
-       ⛔ ONLY THREE FIELDS, like the Tab5 window. Frequency, mode, band, date,
-       time, our callsign, our grid and the activation come from the device
-       inside /api/cmd log_qso; a page holding a stale frequency must not be
-       able to write a record on the wrong band. -->
+       ⛔ ONLY WHAT THE DEVICE CANNOT KNOW. Frequency, mode, band, date, time,
+       our callsign, our grid and the activation come from the device inside
+       /api/cmd log_qso; a page holding a stale frequency must not be able to
+       write a record on the wrong band.
+       Name, QTH and Remarks were added for Gyula HA3HZ (2026-11-10): they are
+       what the other operator SAYS, so they are the operator's to type. All
+       three are optional. The Tab5's own Log window does not have them yet. -->
   <div id="log-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
     <div style="max-width:560px; margin:12vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
       <div style="display:flex; align-items:center; margin-bottom:10px;">
@@ -1788,6 +1810,23 @@
           <div style="color:var(--dim); font-size:12px; margin-bottom:3px">RST rcvd</div>
           <input id="log-rst-r" type="text" maxlength="6"
                  style="width:100%; font-size:17px; padding:6px 8px;">
+        </label>
+      </div>
+      <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:10px; flex-wrap:wrap;">
+        <label style="flex:1 1 150px">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">Name <span style="opacity:.7">(optional)</span></div>
+          <input id="log-name" type="text" maxlength="24" autocomplete="off"
+                 style="width:100%; font-size:15px; padding:5px 8px;">
+        </label>
+        <label style="flex:1 1 150px">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">QTH <span style="opacity:.7">(optional)</span></div>
+          <input id="log-qth" type="text" maxlength="24" autocomplete="off"
+                 style="width:100%; font-size:15px; padding:5px 8px;">
+        </label>
+        <label style="flex:1 1 100%">
+          <div style="color:var(--dim); font-size:12px; margin-bottom:3px">Remarks <span style="opacity:.7">(optional)</span></div>
+          <input id="log-comment" type="text" maxlength="60" autocomplete="off"
+                 style="width:100%; font-size:15px; padding:5px 8px;">
         </label>
       </div>
       <!-- Clearing a report logs NO report rather than a wrong one - the same
@@ -2265,6 +2304,8 @@ let lastScreen     = "panadapter";  // "panadapter" | "ft8" - which screen the T
 let lastCwMacros   = null;   // 6 raw macro strings, last seen - rebuild buttons only on change
 let lastCwSetB     = null;
 let lastCwLastSent = null;
+let lastCwStn      = null;   // { target, heard, heard_age_s, rst_rcvd } from cw_tx, or null on firmware without it
+let cwStnDirty     = false;  // the operator is typing in the Station box - the poll must not overwrite it
 let lastCwContestName = null;
 let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
@@ -10203,8 +10244,81 @@ function sendCwText(text) {
   sendCmd({ action: "cw_send", text: text });
 }
 
+/* Set (or with "" clear) the station the CW page is working. */
+async function cwStnAdopt(call) {
+  const st = document.getElementById("cw-stn-state");
+  try {
+    const r = await fetch("/api/cmd", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cw_adopt", call: call })
+    });
+    let j = {};
+    try { j = await r.json(); } catch (e) {}
+    if (!r.ok || j.ok === false) {
+      if (st) st.textContent = j.error || ("HTTP " + r.status);
+      return false;
+    }
+    cwStnDirty = false;
+    /* Paint the answer now; the next poll confirms it. */
+    if (lastCwStn) { lastCwStn.target = j.target || ""; lastCwStn.rst_rcvd = ""; }
+    cwStnPaint();
+    return true;
+  } catch (err) {
+    if (st) st.textContent = "No answer from the Tab5.";
+    return false;
+  }
+}
+
+function cwStnPaint() {
+  const row = document.getElementById("cw-stn");
+  if (!row) return;
+  /* Firmware without the station fields: no row, rather than a box that
+     appears to set a callsign and does nothing. */
+  if (!lastCwStn) { row.style.display = "none"; return; }
+  row.style.display = "flex";
+  const inp = document.getElementById("cw-stn-call");
+  if (!cwStnDirty && document.activeElement !== inp) inp.value = lastCwStn.target || "";
+  const st = document.getElementById("cw-stn-state");
+  st.textContent = lastCwStn.target
+    ? "{CALL} sends " + lastCwStn.target
+      + (lastCwStn.rst_rcvd ? " - their report " + lastCwStn.rst_rcvd : "")
+    : "no station set - {CALL} is empty";
+  const hb = document.getElementById("cw-stn-heard");
+  const h = lastCwStn.heard || "";
+  if (h && h !== lastCwStn.target) {
+    hb.style.display = "";
+    hb.textContent = "Use " + h;
+    hb.title = "Decoded " + (lastCwStn.heard_age_s >= 0 ? lastCwStn.heard_age_s + " s ago" : "recently")
+             + " - click to work this station";
+    hb.dataset.call = h;
+  } else hb.style.display = "none";
+}
+
+(function wireCwStation() {
+  const inp = document.getElementById("cw-stn-call");
+  if (!inp) return;
+  inp.addEventListener("input", () => { cwStnDirty = true; });
+  const set = () => { const c = inp.value.trim().toUpperCase(); if (c) cwStnAdopt(c); };
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); set(); inp.blur(); } });
+  document.getElementById("cw-stn-set").addEventListener("click", set);
+  document.getElementById("cw-stn-clear").addEventListener("click", () => { inp.value = ""; cwStnAdopt(""); });
+  document.getElementById("cw-stn-heard").addEventListener("click", (e) => cwStnAdopt(e.currentTarget.dataset.call || ""));
+  document.getElementById("cw-stn-log").addEventListener("click", () => {
+    /* What is typed counts even if Set was not pressed: he is logging THIS call. */
+    const typed = inp.value.trim().toUpperCase();
+    logOpen({ call: typed || (lastCwStn && lastCwStn.target) || "",
+              rstRcvd: (lastCwStn && lastCwStn.rst_rcvd) || "" });
+  });
+})();
+
 function updateCwTx(s) {
   const ctx = s.cw_tx;
+  /* Off the CW page there is no station - the log window must not pre-fill
+     one that was being worked an hour ago. */
+  lastCwStn = ((s.screen || "panadapter") === "cw" && ctx && typeof ctx.target === "string")
+    ? { target: ctx.target, heard: ctx.heard || "", heard_age_s: ctx.heard_age_s, rst_rcvd: ctx.rst_rcvd || "" }
+    : null;
+  cwStnPaint();
   // Checked on s.screen directly, not on the wrap's own display style: the
   // screen-change block that sets that style runs LATER in this same poll
   // handler, so reading it back here would lag the switch by one tick.
@@ -10580,8 +10694,16 @@ function logSyncState() {
       : "no activation running";
 }
 
-function logOpen() {
-  document.getElementById('log-call').value = "";
+/* pre: optional { call, rstRcvd } - the CW panel's "Log this contact" hands
+   over the station it is working, so the window does not open empty in the
+   middle of a contact. From the menu on the CW page the same station is used. */
+function logOpen(pre) {
+  if (!pre && lastCwStn && lastCwStn.target)
+    pre = { call: lastCwStn.target, rstRcvd: lastCwStn.rst_rcvd };
+  pre = pre || {};
+  document.getElementById('log-call').value = pre.call || "";
+  for (const id of ['log-name', 'log-qth', 'log-comment'])
+    document.getElementById(id).value = "";
   /* PRE-FILLED FROM THE MODE. A CW window offering 59 would be re-typed for
      every contact; clearing one logs no report rather than a wrong one. */
   document.getElementById('log-rst-s').value = logDefaultRst();
@@ -10594,12 +10716,15 @@ function logOpen() {
     const cw = (lastMode || "").toUpperCase().startsWith("C");
     document.getElementById('log-rst-r').value =
         (u === null) ? logDefaultRst() : (cw ? "5" + u + "9" : "5" + u);
+    /* A report actually copied from the station beats a measured S digit. */
+    if (pre.rstRcvd) document.getElementById('log-rst-r').value = pre.rstRcvd;
   }
   document.getElementById('log-err').textContent = "";
   document.getElementById('log-ok').textContent = "";
   logSyncState();
   document.getElementById('log-modal').style.display = "block";
-  document.getElementById('log-call').focus();
+  /* With the callsign already there, the next thing to type is the name. */
+  document.getElementById(pre.call ? 'log-name' : 'log-call').focus();
 }
 
 async function logSend() {
@@ -10613,7 +10738,10 @@ async function logSend() {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({action: "log_qso", call: call,
                           rst_sent: document.getElementById('log-rst-s').value.trim(),
-                          rst_rcvd: document.getElementById('log-rst-r').value.trim()})
+                          rst_rcvd: document.getElementById('log-rst-r').value.trim(),
+                          name:     document.getElementById('log-name').value.trim(),
+                          qth:      document.getElementById('log-qth').value.trim(),
+                          comment:  document.getElementById('log-comment').value.trim()})
   });
   let j = {};
   try { j = await r.json(); } catch (e) {}
@@ -10629,7 +10757,16 @@ async function logSend() {
       + (j.act_qsos ? "  -  " + j.act_qsos + (j.act_need ? "/" + j.act_need : "")
                     : "");
   document.getElementById('log-call').value = "";
+  /* Name, QTH and remarks belong to THAT contact - unlike the reports, which
+     a run of contacts keeps. */
+  for (const id of ['log-name', 'log-qth', 'log-comment'])
+    document.getElementById(id).value = "";
   document.getElementById('log-call').focus();
+  /* The contact with the CW panel's station is finished: forget it, as the
+     Tab5's own "TU + log" step does, so {CALL} cannot key the last station's
+     callsign into the next contact. */
+  if (lastCwStn && lastCwStn.target && lastCwStn.target === (j.call || call))
+    cwStnAdopt("");
   /* The answer already carries the new count, but the pill and everything else
      reading /api/status should not wait a second to agree with it. */
   tick();
@@ -10644,9 +10781,9 @@ async function logSend() {
   document.getElementById('log-modal').addEventListener('click', (e) => {
     if (e.target.id === 'log-modal') close();
   });
-  /* Enter logs from any of the three fields - the same key the Tab5 window's
-     keyboard action does. */
-  for (const id of ['log-call', 'log-rst-s', 'log-rst-r']) {
+  /* Enter logs from any field - the same key the Tab5 window's keyboard
+     action does. */
+  for (const id of ['log-call', 'log-rst-s', 'log-rst-r', 'log-name', 'log-qth', 'log-comment']) {
     document.getElementById(id).addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); logSend(); }
     });

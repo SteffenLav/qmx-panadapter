@@ -32,7 +32,23 @@ typedef struct {
     const char *contest_name;     // CONTEST_ID, operator-set free text, e.g. "CQ WW CW"
     const char *stx_string;       // our sent exchange (e.g. a contest serial)
     const char *srx_string;       // their received exchange
+    // What the operator was told on the air (Gyula HA3HZ, 2026-11-10): the
+    // other operator's name, QTH and a free remark. NULL/empty = not written.
+    // KEEP THEM SHORT - see ADIF_NAME_MAX below. Five readers hold a record
+    // in a 512-byte buffer and adif_log_get_record() truncates without saying.
+    const char *name;             // NAME
+    const char *qth;              // QTH
+    const char *comment;          // COMMENT
 } adif_qso_t;
+
+// Byte caps for the three free-text fields, terminator included. Measured
+// 2026-11-10: a plain record is 190 bytes; a contest QSO inside an activation
+// that is also a chase reaches about 355. 24 + 24 + 60 and their tags add at
+// most 134, which keeps the worst case under the 512-byte reader buffers
+// (eQSL, LoTW, QRZ, the web editor, the Tab5 log viewer).
+#define ADIF_NAME_MAX     25
+#define ADIF_QTH_MAX      25
+#define ADIF_COMMENT_MAX  61
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.
 // Call once at boot after NVS is initialised (does not depend on WiFi/CAT).

@@ -621,6 +621,18 @@ bool cw_qso_get_heard(char *out, size_t out_sz, int *age_s_out)
     return have;
 }
 
+bool cw_qso_peek_heard(char *out, size_t out_sz, int *age_s_out)
+{
+    if (!out || !out_sz) return false;
+    portENTER_CRITICAL(&s_mux);
+    bool have = s_heard[0] != '\0';
+    copy_locked(out, out_sz, s_heard);
+    int64_t age = have ? (esp_timer_get_time() - s_heard_us) : 0;
+    portEXIT_CRITICAL(&s_mux);
+    if (age_s_out) *age_s_out = (int)(age / 1000000);
+    return have;
+}
+
 void cw_qso_get_rst_rcvd(char *out, size_t out_sz)
 {
     if (!out || !out_sz) return;

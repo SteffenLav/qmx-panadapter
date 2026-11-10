@@ -27,6 +27,7 @@
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "cw_screen_view.h"   // cw_screen_view_request_send, cw_screen_view_last_sent
 #include "ui_mode.h"          // ui_mode_get (CW page reports screen:"cw")
+#include "cw_qso.h"           // the CW page's station, for cw_tx and cw_adopt
 #include "js8_chat.h"      // the JS8 conversation store, reported in /api/status
 #include "js8_submode.h"   // the submode table and the one refusal rule
 #include "js8_alt.h"       // T132 alternate-submode decode (RX only)
@@ -818,6 +819,23 @@ static esp_err_t status_handler(httpd_req_t *req)
             // t-field (0-9, 9 = "9 or more", -1 unknown) for what it holds.
             cJSON_AddNumberToObject(ctx, "queued", cw_screen_view_queued());
             cJSON_AddNumberToObject(ctx, "keying", cat_get_cw_tx_remaining());
+            /* The station card, for the browser (Gyula HA3HZ, 2026-11-10: on a
+             * weak signal nothing decodes, and the page had nowhere to type
+             * the other station's callsign - {CALL} could only be set on the
+             * Tab5). "target" is the adopted station, "heard" the last call
+             * the decoder caught, "rst_rcvd" what was copied from the target.
+             * peek, not get: the get consumes the LVGL tick's auto-adopt. */
+            {
+                char tgt[20] = "", hrd[20] = "", rst[8] = "";
+                int age = 0;
+                cw_qso_get_target(tgt, sizeof(tgt));
+                bool have = cw_qso_peek_heard(hrd, sizeof(hrd), &age);
+                cw_qso_get_rst_rcvd(rst, sizeof(rst));
+                cJSON_AddStringToObject(ctx, "target", tgt);
+                cJSON_AddStringToObject(ctx, "heard", have ? hrd : "");
+                cJSON_AddNumberToObject(ctx, "heard_age_s", have ? age : -1);
+                cJSON_AddStringToObject(ctx, "rst_rcvd", rst);
+            }
         }
     }
 
@@ -1760,6 +1778,14 @@ static bool wspr_owns_the_dial(httpd_req_t *req, cJSON *root, const char *what)
  * Answers 400 itself; the caller must free root and return ESP_FAIL. Actions
  * whose argument is genuinely OPTIONAL keep their ternary default and are
  * deliberately NOT routed through here. */
+/* Free text for an ADIF field, from the browser: trimmed, capped at dst_sz - 1
+ * BYTES without cutting a UTF-8 character in half, control characters dropped.
+ * '<' and '>' become spaces: ADIF itself would carry them (fields are
+ * length-prefixed), but adif_log_extract_field() finds a field by searching
+ * for "<NAME:", and a remark containing "<CALL:" would be read as the call.
+ * Checked on the host by test/log_free_text_harness.c. */
+#include "util/log_free_text.h"
+
 static bool cmd_num_arg(httpd_req_t *req, cJSON *root, const char *key, double *out)
 {
     cJSON *item = cJSON_GetObjectItem(root, key);
@@ -2198,6 +2224,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         const char *rs   = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rst_sent"));
         const char *rr   = cJSON_GetStringValue(cJSON_GetObjectItem(root, "rst_rcvd"));
+        /* Name, QTH and a remark - what the operator was told on the air and
+         * the device cannot know (Gyula HA3HZ, 2026-11-10). Optional. This is
+         * NOT an exception to the rule above: frequency, mode and time still
+         * come from the device only. */
+        char nm[ADIF_NAME_MAX], qt[ADIF_QTH_MAX], cm[ADIF_COMMENT_MAX];
+        log_free_text(nm, sizeof nm, cJSON_GetStringValue(cJSON_GetObjectItem(root, "name")));
+        log_free_text(qt, sizeof qt, cJSON_GetStringValue(cJSON_GetObjectItem(root, "qth")));
+        log_free_text(cm, sizeof cm, cJSON_GetStringValue(cJSON_GetObjectItem(root, "comment")));
         char ucall[32] = "";
         if (call) {
             size_t n = 0;
@@ -2226,6 +2260,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 .rst_sent   = (rs && rs[0]) ? rs : NULL,
                 .rst_rcvd   = (rr && rr[0]) ? rr : NULL,
                 .qso_time   = time(NULL),
+                .name       = nm,
+                .qth        = qt,
+                .comment    = cm,
             };
             adif_log_record(&qso);
             ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
@@ -2391,6 +2428,36 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"CW queue full\"}");
             return ESP_OK;
         }
+    } else if (action && strcmp(action, "cw_adopt") == 0) {
+        /* Set or clear the CW page's station from the browser - the web half
+         * of T162's "tap to enter a callsign" (Gyula HA3HZ, 2026-11-10). An
+         * empty call clears it, which is what a tap on the adopted card does.
+         * Safe from this task: adopt and reset only swap strings under the
+         * spinlock, and the Tab5's card repaints from its own 500 ms tick.
+         * Letters, digits and '/' only - it is keyed as {CALL} and written to
+         * the log as CALL. */
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        char c2[16] = ""; size_t n = 0; bool bad = false;
+        for (const char *p = call ? call : ""; *p; p++) {
+            char c = *p;
+            if (c == ' ') continue;
+            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+            if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/') ||
+                n + 1 >= sizeof(c2)) { bad = true; break; }
+            c2[n++] = c;
+        }
+        c2[n] = '\0';
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        if (bad) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            return httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"A callsign is letters, digits and / only, 15 at most\"}");
+        }
+        if (c2[0]) cw_qso_adopt(c2); else cw_qso_reset();
+        char body[64];
+        snprintf(body, sizeof body, "{\"ok\":true,\"target\":\"%s\"}", c2);
+        return httpd_resp_sendstr(req, body);
     } else if (action && strcmp(action, "cw_cancel") == 0) {
         /* T145 / type-ahead: drop everything not yet keyed. Cannot stop what
          * the radio already holds - KY has no abort (measured 2026-11-02).

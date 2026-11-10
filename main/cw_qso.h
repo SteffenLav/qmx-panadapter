@@ -50,6 +50,11 @@ void cw_qso_get_target(char *out, size_t out_sz);
 // = how long ago it was heard.
 bool cw_qso_get_heard(char *out, size_t out_sz, int *age_s_out);
 
+// The same heard call, WITHOUT the side effect: cw_qso_get_heard() also
+// consumes a pending auto-adopt, which belongs to the page's own LVGL tick.
+// The web status poll uses this one.
+bool cw_qso_peek_heard(char *out, size_t out_sz, int *age_s_out);
+
 // RST captured from the target after adoption ("" if never heard one —
 // the log then omits RST_RCVD; never fabricated).
 void cw_qso_get_rst_rcvd(char *out, size_t out_sz);
