@@ -169,6 +169,45 @@ static uint64_t s_wspr_pa_check_us = 0; // last non-blocking WSPR PA-guard check
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
+
+/* ⭐ T129 (Bryan N0LUF): IS THE RADIO TRANSMITTING, WHOEVER KEYED IT.
+ *
+ * The Tab5 knew about a transmission only when it started one, so a paddle or
+ * straight key on the QMX painted the operator's own CW across the waterfall
+ * (T124: 1.0 W into a dummy load lifts the I/Q ~6 dB - the radio's own front
+ * end). In CW the poll now asks "KD;SW;" ~4x a second:
+ *   KD; - key state, KD1 = key down. CW only (DiGi answers ?;).
+ *   SW; - a value only while transmitting; bare "SW;" in receive. This is the
+ *         behaviour cat_query_power_swr() already relies on.
+ * ⚠ NEITHER HAS BEEN MEASURED AGAINST A HAND KEY. KD may follow each element
+ * (key up between dits), SW the whole T/R state. So "transmitting" is EITHER,
+ * held for CAT_TX_HANG_US after the last sighting so the gaps between elements
+ * do not unblank the waterfall row by row - and every change of either is
+ * logged with both readings, so the first paddle session says which tracks.
+ * Read by render.c to stop adding waterfall rows. */
+#define CAT_TX_POLL_US 250000
+#define CAT_TX_HANG_US 700000
+static volatile int64_t s_tx_seen_us = 0;
+static volatile bool    s_kd_down = false, s_sw_tx = false;
+static int64_t          s_last_txpoll_us = 0;
+
+static void tx_sense_note(char which, bool tx)
+{
+    bool *slot = (which == 'K') ? (bool *)&s_kd_down : (bool *)&s_sw_tx;
+    if (*slot != tx) {
+        *slot = tx;
+        ESP_LOGI(TAG, "TX sense: %s -> %s (KD %d, SW %d)",
+                 which == 'K' ? "KD" : "SW", tx ? "TX" : "RX",
+                 (int)s_kd_down, (int)s_sw_tx);
+    }
+    if (tx) s_tx_seen_us = esp_timer_get_time();
+}
+
+bool cat_radio_transmitting(void)
+{
+    int64_t t = s_tx_seen_us;
+    return t != 0 && (esp_timer_get_time() - t) < CAT_TX_HANG_US;
+}
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
 // Which VFO the radio RECEIVES on, from "FR;": 0 = VFO A, 1 = VFO B, 2 = Split.
 // -1 = not asked yet / no answer. We poll and write FA, i.e. VFO A ONLY, so a radio
@@ -1473,6 +1512,13 @@ static void process_cat_message(const char *msg, size_t len)
         s_sw_resp_len = len < sizeof(s_sw_resp) ? len : sizeof(s_sw_resp) - 1;
         memcpy(s_sw_resp, msg, s_sw_resp_len);
         s_sw_resp[s_sw_resp_len] = '\0';
+        tx_sense_note('S', len > 3);    // T129: a value only while transmitting
+        return;
+    }
+    // KD response: "KD0;" key up, "KD1;" key down. CW only - DiGi answers ?;.
+    // Only ever sent as the READ "KD;" (T129 poll); this firmware never sets it.
+    if (len == 4 && msg[0] == 'K' && msg[1] == 'D' && (msg[2] == '0' || msg[2] == '1')) {
+        tx_sense_note('K', msg[2] == '1');
         return;
     }
     // QMX returns "?;" for unsupported commands; we just log once.
@@ -3154,8 +3200,16 @@ static void poll_task(void *arg)
                          // ~48x margin - asking five times a second bought
                          // nothing and put needless traffic on the CAT link.
                          int64_t now_tb = esp_timer_get_time();
-                         if (now_tb - s_last_tb_us < TB_POLL_MIN_US) { cmd = NULL; }
-                         else { s_last_tb_us = now_tb; cmd = "TB;"; cmd_len = 3; }
+                         if (now_tb - s_last_tb_us >= TB_POLL_MIN_US) {
+                             s_last_tb_us = now_tb; cmd = "TB;"; cmd_len = 3;
+                         } else if (now_tb - s_last_txpoll_us >= CAT_TX_POLL_US) {
+                             /* T129: who is transmitting - see tx_sense_note().
+                              * Only reachable in CW (this phase exists only
+                              * when cw_poll), where KD; is understood. */
+                             s_last_txpoll_us = now_tb; cmd = "KD;SW;"; cmd_len = 6;
+                         } else {
+                             cmd = NULL;
+                         }
                      }
                      break;
         }

@@ -111,6 +111,8 @@ static lv_obj_t *s_lbl_wpm   = NULL;
 static lv_obj_t *s_wpm_panel = NULL;   /* numeric entry popup - built lazily */
 static lv_obj_t *s_lbl_park  = NULL;
 static lv_obj_t *s_lbl_status = NULL;
+static lv_obj_t *s_btn_stop   = NULL;   // T145 - shares the status line's slot
+static lv_obj_t *s_lbl_stop   = NULL;
 static lv_timer_t *s_timer   = NULL;
 static bool      s_shown     = false;
 
@@ -1320,6 +1322,18 @@ static void next_pressed_cb(lv_event_t *e)
     s_next_press_tick = lv_tick_get();
 }
 
+/* T145: drop everything the radio has not received. What it already holds
+ * runs to the end - the toast says so, so the operator is not surprised. */
+static void stop_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    int n = cw_screen_view_cancel_send();
+    char msg[80];
+    snprintf(msg, sizeof msg, "Stopped - %d char%s not sent. The radio finishes what it holds.",
+             n, n == 1 ? "" : "s");
+    ui_toast(msg);
+}
+
 static void next_clicked_cb(lv_event_t *e)
 {
     (void)e;
@@ -2056,6 +2070,19 @@ static void tick_cb(lv_timer_t *t)
     refresh_hint();
 
     int rem = cat_get_cw_tx_remaining();
+
+    /* T145: STOP replaces the status line while anything is queued. */
+    int queued = cw_screen_view_queued();
+    if (s_btn_stop && s_lbl_status) {
+        if (queued > 0) {
+            lv_label_set_text_fmt(s_lbl_stop, "STOP - drop %d queued", queued);
+            lv_obj_remove_flag(s_btn_stop, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_btn_stop, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     if (s_lbl_status) {
         if (!cat_is_ready()) {
             lv_label_set_text(s_lbl_status, "No QMX connected");
@@ -2271,6 +2298,21 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(s_lbl_status, 10, y + 4);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_20, 0);
+
+    /* T145: STOP, in the status line's own slot. The pane has 8 px of slack,
+     * so there is no row to add; the status line yields to it only while
+     * there is text the radio has NOT received yet - the one thing a stop can
+     * drop. While the radio keys with nothing queued it stays hidden: KY has
+     * no abort (measured 2026-11-02), and a button that cannot do anything
+     * would teach the operator that it does. tick_cb swaps the two. */
+    s_btn_stop = make_pane_btn(s_pane, 10, y + 4, PANE_W - 20, 44, 0x8b1e1e, 0xc03030);
+    lv_obj_add_event_cb(s_btn_stop, stop_clicked_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_stop = lv_label_create(s_btn_stop);
+    lv_label_set_text(s_lbl_stop, "STOP");
+    lv_obj_set_style_text_color(s_lbl_stop, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_stop, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_stop);
+    lv_obj_add_flag(s_btn_stop, LV_OBJ_FLAG_HIDDEN);
 
     // Macro set toggle (General/Contest) - moved to the very bottom of the
     // pane 2026-11-03, see the note above the WPM row for why. Anchored to

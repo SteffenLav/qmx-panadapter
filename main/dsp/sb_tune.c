@@ -198,7 +198,25 @@ sb_tune_result_t sb_tune_find_edge_fit(const float *win_db, int n, int centre_i,
 
     const double mean_lo = (s1[best_e] - s1[0]) / (double)best_e;
     const double mean_hi = (s1[n] - s1[best_e]) / (double)(n - best_e);
-    const double step    = mean_hi - mean_lo;
+    double step = mean_hi - mean_lo;
+
+    /* T140: the gate's step on a +/-R running max, split at the SAME best_e,
+     * so where the edge is does not change - only whether it is believed. See
+     * gate_smooth_bins in sb_tune.h for the measurement. No scratch array:
+     * O(n * (2R+1)) on a window of tens of bins, and nothing on the stack. */
+    const int R = cfg->gate_smooth_bins;
+    if (R > 0) {
+        double lo = 0.0, hi = 0.0;
+        for (int i = 0; i < n; i++) {
+            float m = v[i];
+            for (int k = -R; k <= R; k++) {
+                const int j = i + k;
+                if (j >= 0 && j < n && v[j] > m) m = v[j];
+            }
+            if (i < best_e) lo += (double)m; else hi += (double)m;
+        }
+        step = hi / (double)(n - best_e) - lo / (double)best_e;
+    }
 
     if (snr_db) *snr_db = (float)step;
 

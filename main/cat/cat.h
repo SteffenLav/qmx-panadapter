@@ -732,6 +732,10 @@ int  cat_cw_send_queued(void);                 /* chars waiting, not yet keyed *
  * conflicting-types error. Main's keyer surface is the one that ships; only
  * the two CW-page-specific calls below are declared here. */
 int  cat_get_cw_tx_remaining(void);           /* TB t-field: 0 = receiving, -1 = unknown */
+/* T129: true while the radio transmits, WHOEVER keyed it (paddle included),
+ * plus a short hang. From the CW-mode KD;SW; poll and any PC;SW; read. ⚠ Not
+ * yet measured against a hand key - see tx_sense_note() in cat.c. Any task. */
+bool cat_radio_transmitting(void);
 void cat_cw_poll_set_active(bool active);     /* TB; poll while CW page visible */
 
 /**

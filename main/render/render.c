@@ -13,6 +13,7 @@
 #include "ui_mode.h"
 #include <limits.h>        /* UINT_MAX, for the push-spacing min */
 #include "render_waterfall.h"
+#include "cat.h"            /* cat_radio_transmitting - T129 */
 #include <string.h>
 
 static const char *TAG = "render";
@@ -556,7 +557,18 @@ static void render_task(void *arg)
              * rows * dt_ms and emit per whole 1000. At dt_ms = 100 this is
              * arithmetically the old expression, so the timer path is
              * unchanged. */
-            s_wf_acc += (uint32_t)s_wf_rows * dt_ms;
+            /* T129 (Bryan N0LUF): no rows while the radio transmits. His own
+             * 2.5 W CW, keyed by hand, painted a carpet across the waterfall -
+             * the radio's front end leaks it into the I/Q (T124). The rows are
+             * SKIPPED, not painted dark, so the waterfall shows what was heard
+             * and the overs simply do not appear. The accumulator is cleared
+             * so un-keying does not dump a burst of catch-up rows. The live
+             * spectrum line above still draws. */
+            if (cat_radio_transmitting()) {
+                s_wf_acc = 0;
+            } else {
+                s_wf_acc += (uint32_t)s_wf_rows * dt_ms;
+            }
             while (s_wf_acc >= 1000) {
                 s_wf_acc -= 1000;
                 render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);

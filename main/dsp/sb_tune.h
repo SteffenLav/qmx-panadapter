@@ -78,8 +78,28 @@ typedef struct {
      * (p90 11.5) at 20-30 dB, and 18.7 dB mean (p10 15.9) above 30 dB. It is
      * set to that 20-30 dB p90: a first try at 13 dB cleared only 91.2 % of
      * the 30-40 dB band against Gate 1's 95 % criterion, and the table says
-     * where the room is. */
+     * where the room is.
+     *
+     * ⭐ T140, 2026-11-10: NOW 13 dB ON A SMOOTHED PROFILE - see gate_smooth_bins. */
     float min_step_db;
+
+    /* ⭐ T140: THE GATE'S STEP IS MEASURED ON A +/-N-BIN RUNNING MAX; THE EDGE
+     * POSITION IS NOT. Gate 1 had failed since the fit landed (93.4 / 92.8 %
+     * accepted at 30-40 dB against 95 %). Listing the refused cases showed ALL
+     * 19 were f0 = 200 Hz, none at 100 or 125 Hz: with harmonics ~4 bins apart,
+     * most signal-side bins sit at the noise floor between them, so the mean in
+     * dB - the step - falls under the gate while the peaks are 30 dB up. The
+     * step was measuring the talker's pitch, not the signal's strength.
+     *
+     * A +/-1-bin max fills those gaps. Measured on the host (sweep of radius
+     * 0/1/2 against gate 11.5/13/15/17): radius 1 at 13 dB accepts 96.4/97.1 %
+     * at 30-40 dB AND leaks LESS of the 20-30 dB band (5.3/4.3 % vs 11.5/10.7 %),
+     * 0 % below 20 dB, every gate passing. Radius 2 leaks more for the same
+     * acceptance. ⛔ Not a lower gate: 05126bdd measured that lowering
+     * min_step_db on the raw mean admits wrong frames next to a neighbour.
+     * ⚠ NOT re-graded on real captures: the 05126bdd/aa8a31b3 pair is gone from
+     * disk. 0 restores the raw-mean statistic exactly. */
+    int gate_smooth_bins;
 } sb_tune_cfg_t;
 
 // The edge threshold must clear the noise reference by this much or the window
@@ -97,7 +117,8 @@ typedef struct {
     .min_snr_db   = 25.0f,                     \
     .edge_drop_db = 6.0f,                       \
     .inband_bins  = 5,                         \
-    .min_step_db  = 11.5f,                     \
+    .min_step_db  = 13.0f,                     \
+    .gate_smooth_bins = 1,                     \
 })
 
 // win_db      per-bin power in dB, low frequency first
