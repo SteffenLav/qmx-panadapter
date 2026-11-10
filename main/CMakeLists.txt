@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "cw_decode.c"
+        "cw_txq.c"
         "display/display.c"
         "ui/ui.c"
         "ui/ui_clock.c"

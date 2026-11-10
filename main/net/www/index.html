@@ -1434,11 +1434,25 @@
              style="flex:1; min-width:0;">
       <button id="cw-tx-send-btn" title="Key this text now, through the QMX's own keyer - same as a Tab5 tap">Send</button>
     </div>
-    <!-- T145 is still open: nothing here can interrupt a send once it starts,
-         same gap the Tab5 itself has (CLAUDE.md, "CW page is ON MAIN"). A long
-         macro run is just as uninterruptible from the browser as from the
-         glass - not worse, but not better either. -->
-    <div style="color:var(--dim); font-size:12px; margin-top:6px;">No abort once sent - same as the Tab5 (long messages run to the end).</div>
+    <!-- Type-ahead (Ralph DL1HR, 2026-11-10): each word is sent the moment it
+         is finished (Space), so you can keep typing while the radio keys -
+         the flrig-keyer way of working. The device queues it and hands it to
+         the radio only when the radio's own buffer is empty (cw_txq.h), so
+         a burst of typing is never lost. Stop drops what has not reached the
+         radio yet (T145); what the radio already holds runs to the end, because
+         KY has no abort (measured 2026-11-02). -->
+    <div style="display:flex; gap:8px; margin-top:8px; align-items:center;">
+      <input id="cw-tx-live" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Type-ahead: each word keys when you press Space, Enter sends the rest"
+             style="flex:1; min-width:0;">
+      <button id="cw-tx-stop" type="button"
+              title="Drop everything typed but not yet handed to the radio. What the radio already holds still runs to the end - KY has no abort.">Stop</button>
+    </div>
+    <div style="display:flex; gap:12px; color:var(--dim); font-size:12px; margin-top:6px;">
+      <span id="cw-tx-sentline" style="flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left;"></span>
+      <span id="cw-tx-queue"></span>
+    </div>
+    <div style="color:var(--dim); font-size:12px; margin-top:4px;">Stop cannot cut a word the radio is already keying (up to 80 characters) - same as the Tab5.</div>
   </div>
 
   <!-- =====================================================================
@@ -10168,6 +10182,7 @@ function updateCwTx(s) {
   // screen-change block that sets that style runs LATER in this same poll
   // handler, so reading it back here would lag the switch by one tick.
   if ((s.screen || "panadapter") !== "cw" || !ctx) return;
+  updateCwQueue(ctx);
 
   const setLbl = document.getElementById("cw-tx-set");
   if (setLbl) setLbl.textContent = (ctx.set_b ? "Contest set" : "General set") + " ⇄";
@@ -10286,6 +10301,68 @@ function updateCwTx(s) {
   btn.addEventListener("click", go);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
 })();
+
+/* Type-ahead (Ralph DL1HR, 2026-11-10). The field only ever holds the word
+   being typed: a finished word (Space) is sent and leaves the field, so there
+   is nothing on screen that looks editable but has already gone. A paste of
+   several words sends every complete one. Enter sends the remainder. Sent
+   words collect in the line below so the operator can see the run. */
+let cwLiveSent = "";
+function cwLiveEcho(t) {
+  cwLiveSent = (cwLiveSent + t).slice(-200);
+  const el = document.getElementById("cw-tx-sentline");
+  if (el) el.textContent = cwLiveSent;
+}
+async function cwLiveSend(t) {
+  if (!t.trim()) return;
+  const r = await sendCmd({ action: "cw_send", text: t });
+  if (r && r.ok === false) {
+    const el = document.getElementById("cw-tx-sentline");
+    if (el) el.textContent = "NOT SENT (" + (r.err || "refused") + "): " + t;
+    return;
+  }
+  cwLiveEcho(t);
+}
+(function wireCwLive() {
+  const input = document.getElementById("cw-tx-live");
+  const stop  = document.getElementById("cw-tx-stop");
+  if (!input || !stop) return;
+  input.addEventListener("input", () => {
+    const v = input.value;
+    const last = v.lastIndexOf(" ");
+    if (last < 0) return;
+    const done = v.slice(0, last + 1).replace(/^ +/, "");
+    input.value = v.slice(last + 1);
+    // Collapse runs of spaces: a double tap of Space would otherwise key a
+    // long gap, and the radio's word space is already in the keyer.
+    if (done.trim()) cwLiveSend(done.replace(/ +/g, " "));
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const rest = input.value.trim();
+    input.value = "";
+    if (rest) cwLiveSend(rest + " ");
+  });
+  stop.addEventListener("click", async () => {
+    const r = await sendCmd({ action: "cw_cancel" });
+    const el = document.getElementById("cw-tx-sentline");
+    if (el && r && r.ok)
+      el.textContent = r.dropped ? ("stopped - " + r.dropped + " char(s) not sent")
+                                 : "stopped - nothing was waiting";
+    cwLiveSent = "";
+  });
+})();
+
+function updateCwQueue(ctx) {
+  const el = document.getElementById("cw-tx-queue");
+  if (!el) return;
+  const q = typeof ctx.queued === "number" ? ctx.queued : 0;
+  const k = typeof ctx.keying === "number" ? ctx.keying : -1;
+  const parts = [];
+  if (k > 0) parts.push("keying " + k + (k >= 9 ? "+" : "") + " left");
+  if (q > 0) parts.push(q + " queued");
+  el.textContent = parts.join(" · ");
+}
 
 function updateOutPwrPill() {
   const pill = document.getElementById("pill-outpwr");

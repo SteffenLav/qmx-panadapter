@@ -814,6 +814,10 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON_AddBoolToObject(ctx, "set_b", cws.cw_msg_set != 0);
             cJSON_AddStringToObject(ctx, "last_sent", cw_screen_view_last_sent());
             cJSON_AddStringToObject(ctx, "contest_name", cws.cw_contest_name);
+            // Type-ahead: typed but not yet handed to the radio, and the TB
+            // t-field (0-9, 9 = "9 or more", -1 unknown) for what it holds.
+            cJSON_AddNumberToObject(ctx, "queued", cw_screen_view_queued());
+            cJSON_AddNumberToObject(ctx, "keying", cat_get_cw_tx_remaining());
         }
     }
 
@@ -2379,7 +2383,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"no text\"}");
             return ESP_OK;
         }
-        cw_screen_view_request_send(txt);
+        /* APPENDS since 2026-11-10 (type-ahead): the page sends each word as
+         * it is completed. A full buffer is said, not swallowed. */
+        if (!cw_screen_view_request_send(txt)) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_sendstr(req, "{\"ok\":false,\"err\":\"CW queue full\"}");
+            return ESP_OK;
+        }
+    } else if (action && strcmp(action, "cw_cancel") == 0) {
+        /* T145 / type-ahead: drop everything not yet keyed. Cannot stop what
+         * the radio already holds - KY has no abort (measured 2026-11-02).
+         * Safe from any task: it only clears two queues. */
+        int dropped = cw_screen_view_cancel_send();
+        cJSON_Delete(root);
+        char body[64];
+        snprintf(body, sizeof body, "{\"ok\":true,\"dropped\":%d}", dropped);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "cw_macro_edit") == 0) {
         /* T159 follow-up (Ralph DL1HR): edit one of the six macros from the
          * browser. A plain settings write - not deferred to the LVGL task like

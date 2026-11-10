@@ -38,7 +38,17 @@ void cw_screen_clear_decode(void);
 // send_cw_text() (expansion, the sim interlock, the CAT hand-off) belongs to
 // the LVGL thread. Drained by the page's own 500 ms timer, so it only takes
 // effect while the Tab5 is actually showing the CW page (T159, Ralph DL1HR).
-void cw_screen_view_request_send(const char *raw_text);
+// APPENDS (type-ahead); returns false when the pending buffer is full.
+#include <stdbool.h>
+bool cw_screen_view_request_send(const char *raw_text);
+
+// Drop everything not yet keyed - the web's pending text and the CAT queue.
+// What the radio already holds runs to the end (KY has no abort). Any task.
+// Returns the characters dropped.
+int  cw_screen_view_cancel_send(void);
+
+// Characters typed or queued but not yet handed to the radio. Any task.
+int  cw_screen_view_queued(void);
 
 // The last text actually sent (expanded, real or sim), for the web status
 // poll to echo back - same string the Tab5's own "Keying:" line shows.

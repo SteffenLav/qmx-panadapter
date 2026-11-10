@@ -1037,16 +1037,80 @@ static bool has_token_ci(const char *hay, const char *needle)
 // whole by snprintf and read whole by the status poll needs no lock here,
 // the same argument ft8_screen_view's pending-flag fields already rely on.
 static char s_last_sent[CW_SEND_MAX + 1] = "";
-static char s_web_send_pending[CW_SEND_MAX + 1] = "";
-static bool s_web_send_has_pending = false;
+
+/* ⛔ The web's pending text is APPENDED, not replaced (type-ahead, Ralph
+ * DL1HR 2026-11-10). It was one slot written whole, so two words typed inside
+ * one 500 ms tick kept only the second. Now a short FIFO under a spinlock -
+ * the single-buffer no-lock argument above no longer holds once the HTTP task
+ * appends while the LVGL task drains. */
+#define CW_WEB_PENDING_CAP 256
+static char         s_web_pending[CW_WEB_PENDING_CAP + 1] = "";
+static int          s_web_pending_len = 0;
+static portMUX_TYPE s_web_pending_mux = portMUX_INITIALIZER_UNLOCKED;
 
 const char *cw_screen_view_last_sent(void) { return s_last_sent; }
 
-void cw_screen_view_request_send(const char *raw_text)
+bool cw_screen_view_request_send(const char *raw_text)
 {
-    if (!raw_text) return;
-    snprintf(s_web_send_pending, sizeof(s_web_send_pending), "%s", raw_text);
-    s_web_send_has_pending = true;
+    if (!raw_text || !raw_text[0]) return true;
+    int n = (int)strlen(raw_text);
+    bool ok;
+    portENTER_CRITICAL(&s_web_pending_mux);
+    ok = s_web_pending_len + n <= CW_WEB_PENDING_CAP;
+    if (ok) {
+        memcpy(s_web_pending + s_web_pending_len, raw_text, (size_t)n);
+        s_web_pending_len += n;
+        s_web_pending[s_web_pending_len] = '\0';
+    }
+    portEXIT_CRITICAL(&s_web_pending_mux);
+    return ok;
+}
+
+int cw_screen_view_cancel_send(void)
+{
+    portENTER_CRITICAL(&s_web_pending_mux);
+    int n = s_web_pending_len;
+    s_web_pending_len = 0;
+    s_web_pending[0] = '\0';
+    portEXIT_CRITICAL(&s_web_pending_mux);
+    return n + cat_cw_send_cancel();
+}
+
+int cw_screen_view_queued(void)
+{
+    portENTER_CRITICAL(&s_web_pending_mux);
+    int n = s_web_pending_len;
+    portEXIT_CRITICAL(&s_web_pending_mux);
+    return n + cat_cw_send_queued();
+}
+
+/* Take one piece of the web's pending text, cut after a space so a macro
+ * placeholder or a word is never split, and short enough that its expansion
+ * fits CW_SEND_MAX ({MYCALL} etc. grow). Returns false when empty. */
+#define CW_WEB_PIECE_MAX 48
+static bool web_pending_take(char *out, size_t out_sz)
+{
+    bool got = false;
+    portENTER_CRITICAL(&s_web_pending_mux);
+    if (s_web_pending_len > 0) {
+        int max = CW_WEB_PIECE_MAX;
+        if (max > (int)out_sz - 1) max = (int)out_sz - 1;
+        int n = s_web_pending_len;
+        if (n > max) {
+            int cut = -1;
+            for (int i = max - 1; i > 0; i--)
+                if (s_web_pending[i] == ' ') { cut = i + 1; break; }
+            n = cut > 0 ? cut : max;
+        }
+        memcpy(out, s_web_pending, (size_t)n);
+        out[n] = '\0';
+        memmove(s_web_pending, s_web_pending + n, (size_t)(s_web_pending_len - n));
+        s_web_pending_len -= n;
+        s_web_pending[s_web_pending_len] = '\0';
+        got = true;
+    }
+    portEXIT_CRITICAL(&s_web_pending_mux);
+    return got;
 }
 
 // ---- sending ----------------------------------------------------------------
@@ -1078,7 +1142,10 @@ static bool send_cw_text(const char *raw)
         cw_screen_feed_decoded(" ", 1);   // keep the stream's token boundary honest
     } else {
         if (!cat_is_ready()) { ui_toast("No QMX connected"); return false; }
-        cat_request_cw_send(exp);
+        if (!cat_request_cw_send(exp)) {
+            ui_toast("CW queue full - wait for it to drain");
+            return false;
+        }
         // {SERIAL} advances only on a real send that actually keys the radio -
         // never on sim (a phantom QSO must not burn a real contest number) and
         // never on the 500 ms preview tick (that only ever reads the current
@@ -1873,9 +1940,13 @@ static void tick_cb(lv_timer_t *t)
 
     // Web-requested send, drained here rather than acted on directly by the
     // HTTP task - see cw_screen_view_request_send()'s header comment.
-    if (s_web_send_has_pending) {
-        s_web_send_has_pending = false;
-        send_cw_text(s_web_send_pending);
+    {
+        char piece[CW_WEB_PIECE_MAX + 1];
+        while (web_pending_take(piece, sizeof piece)) {
+            /* A refusal (queue full, identity missing, no QMX) has toasted;
+             * what is still pending would only meet the same refusal. */
+            if (!send_cw_text(piece)) { cw_screen_view_cancel_send(); break; }
+        }
     }
 
     /* Draw cw_decode.c's grid - the same one the panadapter and the browser

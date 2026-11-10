@@ -38,12 +38,19 @@ MAIN = os.path.join(ROOT, "main")
 #   TX;        key down
 #   MD8 / TUNE SWR Tune mode - the radio keys a carrier by itself
 # TA<freq>; is the audio tone that modulates an already-keyed DiGi carrier; it
-# makes no RF on its own, so it is not a keying site. KY/CW are not here
-# because this firmware never keys CW - it sets the keyer speed and the split
-# offset, and the operator keys with a paddle on the radio.
+# makes no RF on its own, so it is not a keying site.
+#   KY <text>; the radio's own keyer sends the text - RF for as long as it takes
+#
+# ⛔ KY WAS MISSING FROM THIS LIST UNTIL 2026-11-10. The comment here said "this
+# firmware never keys CW - the operator keys with a paddle". True when written,
+# false from the day the CW page shipped, and this script went on reporting
+# every path guarded while the CW page's KY send had no band check. Found while
+# adding type-ahead. Both wire forms are matched: the plain one and the TS480
+# fixed-length experiment.
 KEYING = [
     (re.compile(r'"TX;"'),                 "TX; key-down"),
     (re.compile(r'cat_request_mode\("TUNE"\)'), "SWR Tune (MD8) carrier"),
+    (re.compile(r'"KY ?%s;"'),             "KY CW send"),
 ]
 
 # How far above a keying site the guard may sit and still count. The guard is a
