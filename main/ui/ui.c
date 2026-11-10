@@ -272,7 +272,9 @@ static void update_bandplan_strip(uint32_t freq_hz);
 //     (ui_update_mode());
 //   - a band BUTTON, here or on the web page, recalls both
 //     (ui_band_recall_mode()). A band never visited gets the sideband rule:
-//     LSB below 10 MHz, USB above, and USB on 60 m.
+//     LSB below 10 MHz, USB above. No exception: 60 m is LSB too (operator,
+//     2026-11-10: "all bands less than 10MHz shall default to lsb and vice
+//     versa"). I had added USB on 60 m by convention; he did not ask for it.
 // Only the band buttons recall. A spot, a memory channel and the FT8/WSPR
 // pages set their own mode, and a recall fired from the frequency change
 // itself would arrive after theirs and override it.
@@ -310,8 +312,7 @@ void ui_band_recall_mode(uint32_t center_hz, uint32_t target_hz)
         /* Never visited. The sideband convention, and only when the radio is
            in a sideband now - an operator in CW or DIGI keeps it. */
         if (strcmp(s_current_mode, "USB") != 0 && strcmp(s_current_mode, "LSB") != 0) return;
-        bool m60 = target_hz >= 5250000u && target_hz <= 5450000u;
-        snprintf(want, sizeof(want), "%s", (target_hz < 10000000u && !m60) ? "LSB" : "USB");
+        snprintf(want, sizeof(want), "%s", target_hz < 10000000u ? "LSB" : "USB");
     }
     if (strcmp(want, s_current_mode) == 0) return;
     ESP_LOGI("ui", "band recall: %lu Hz -> mode %s (was %s)", (unsigned long)target_hz, want, s_current_mode);
