@@ -6693,6 +6693,14 @@ typedef struct {
     int32_t  pan_hz;
     int32_t  pb_lo_hz, pb_hi_hz;
     bool     dragging;
+    /* ⛔ THE PAGE IS AN INPUT. The CW page draws this strip differently - at
+     * x=320, CW and DiGi only - and the page was not in this key. MEASURED
+     * 2026-11-10 (T190): panadapter on 14.027 CW at zoom x8, then the CW page
+     * with nothing else changed: the gate skipped the repaint and the CW page
+     * showed the panadapter's whole-band strip, with its CW segment hidden
+     * under the left pane ("Phone? And where is CW?"). A 10 Hz dial move
+     * repainted it correctly. */
+    uint8_t  page;
 } bp_inputs_t;
 static bp_inputs_t s_bp_last_in;
 
@@ -6747,6 +6755,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
     in.pan_hz   = (int32_t)(s_bp_dragging ? s_bp_preview_pan_hz
                                           : ui_get_pan_offset_hz());
     in.dragging = s_bp_dragging;
+    in.page     = (uint8_t)ui_mode_get();
     compute_passband_edges_hz(&in.pb_lo_hz, &in.pb_hi_hz);
 
     if (s_bp_last_in.valid && bp_caches_valid &&
