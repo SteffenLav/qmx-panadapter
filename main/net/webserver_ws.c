@@ -491,6 +491,35 @@ static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
     return ws_send_all(hd, fd, frame, hdr + payload_len, budget_ms);
 }
 
+// ⛔ THE fd IS OURS ONLY WHILE httpd HAS IT OPEN - so httpd tells us when it closes.
+//
+// s_ws_fd used to be cleared in two places only: a takeover, and the push
+// task's own send-failure streak. Nothing cleared it when the CLIENT left. A
+// page reload (or any client that just drops the socket) has httpd close the
+// session and LWIP hand the same fd number to the next accepted connection -
+// and httpd_socket_send() only checks that the fd is A session, not that it is
+// OUR session. The push task then wrote the next spectrum frame into somebody
+// else's HTTP response, in front of its status line.
+//
+// MEASURED 2026-11-10 on bench1 (v1.25.0): open /ws, read 3 frames, drop the
+// socket, GET /api/status at once - 4 of the first 11 rounds had the reply
+// begin 82 7e 04 27 01 08 (a WS binary frame, 1063 bytes, type SPECTRUM)
+// instead of "HTTP/1.". Found because a Python client reported BadStatusLine.
+// In a browser it is a page or a JSON fetch that fails right after a reload.
+//
+// The session context's free function runs inside httpd's own session
+// teardown, before the fd is closed and long before it can be reused. The
+// context is fd + 1 only because a NULL context is never freed.
+static void ws_sess_gone(void *ctx)
+{
+    int fd = (int)(intptr_t)ctx - 1;
+    if (s_ws_fd == fd) {
+        s_session_active = false;
+        s_ws_fd = -1;
+        s_closes++;
+    }
+}
+
 // httpd worker has 1 task, so this URI handler runs in the only worker.
 // We must return ESP_OK quickly so subsequent /api/status requests can be served.
 static esp_err_t ws_uri_handler(httpd_req_t *req)
@@ -552,6 +581,7 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     s_ws_fd = fd;
     s_sessions++;
     s_session_active = true;
+    httpd_sess_set_ctx(req->handle, fd, (void *)(intptr_t)(fd + 1), ws_sess_gone);
 
     // Bound how long a single WS send may block. On a weak/congested link
     // (this board's esp_hosted WiFi, worse at low RSSI) a send into a full TCP
