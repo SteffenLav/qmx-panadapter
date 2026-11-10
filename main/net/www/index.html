@@ -284,6 +284,19 @@
   /* Asked for and not yet arriving - the device may be in a mode it does not
      demodulate, so the button must not claim to be playing. */
   #listenbtn.wait { background: #1f2937; color: var(--warn, #fbbf24); }
+  /* T18 - same shape as Listen, which it belongs to. .na: a level is set but
+     the mode is not voice, so it is not doing anything right now. */
+  #nrbtn {
+    background: #1f2937; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px;
+    height: 1.8rem; padding: 0 0.5rem; margin-left: 0.3rem;
+    font-family: inherit; font-weight: 700; cursor: pointer; flex-shrink: 0;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #nrbtn.on   { background: var(--accent); color: var(--bg); }
+  #nrbtn.wait { color: var(--warn, #fbbf24); }
+  #nrbtn.na   { text-decoration: line-through; }
   #fps {
     color: var(--ok); font-size: 0.75rem; min-width: 4.5rem;
     text-align: right; flex-shrink: 0;
@@ -1284,6 +1297,8 @@
            start audio from a real click - this button IS that gesture. -->
       <button id="listenbtn" type="button"
               title="Listen to the receiver here (the Tab5's own demodulated audio)">&#9654; Listen</button>
+      <!-- T18: noise reduction for that audio, done in this browser. -->
+      <button id="nrbtn" type="button">NR Off</button>
       <div id="fps" class="bad">disconnected</div>
     </div>
   </div>
@@ -8232,6 +8247,7 @@ async function tick() {
         pb.style.borderColor= on ? "#ffc02a" : "";
       } }
     lastMode       = s.mode        || "USB";
+    nrPaint();           // NR is voice-only, so its button follows the mode too
     updateKeyerPill();   // CW-only, so it has to follow the mode it reads
     updateCwTx(s);       // CW page TX panel - absent from s.cw_tx when not on that screen
     /* ⚠ THIS REPAINTS, IT DOES NOT RE-READ. The ladder and the current target
@@ -13475,27 +13491,34 @@ async function nrCreate(wasmBytes) {
   const { instance } = await WebAssembly.instantiate(wasmBytes, {});
   const ex = instance.exports;
   if (ex._initialize) ex._initialize();
-  const st = ex.rnnoise_create(0);            /* 0 = the built-in model */
   const inPtr = ex.malloc(NR_FRAME48 * 4), outPtr = ex.malloc(NR_FRAME48 * 4);
-  return {
-    ex, st, inPtr, outPtr,
-    upHist: new Float32Array(Math.ceil(NR_TAPS / 4)),   /* last x[n-k], k=0.. */
-    dnHist: new Float32Array(NR_TAPS),                   /* last 48 kHz samples */
-    /* 3, not 0: the decimator then keeps 48 kHz samples 0, 4, 8... - the
-       phase the x4 stuffing put the input on. Started at 0 it kept 3, 7,
-       11..., and the wet path lagged by 255.25 samples at 12 kHz: measured
-       by the harness as 255 against the dry ring's 256, a quarter-sample
-       skew that turns the wet/dry mix into a gentle comb. */
-    dnPos: 3,                                            /* 48 kHz phase, 0..3 */
-    acc: new Float32Array(NR_FRAME48), accN: 0,
-    fifo: new Float32Array(4096), fifoN: 120, fifoR: 0,            /* primed - see LATENCY */
-    dry: new Float32Array(NR_LATENCY_12K - NR_PLC_HOLD), dryPos: 0,
-    /* PLC: [2048 of history already emitted | pending]; primed with
-       NR_PLC_HOLD zeros so every call can emit exactly what it was given */
-    plc: new Float32Array(2048 + NR_PLC_HOLD + 8192), plcN: 2048 + NR_PLC_HOLD,
-    plcPatched: 0,
-    vad: 0,
-  };
+  return nrReset({ ex, st: 0, inPtr, outPtr });
+}
+
+/* Back to the state of a new instance, without a second instantiate: the
+   page calls this every time NR starts or the mode changes, so the model
+   never carries the previous signal's noise estimate into the next one.
+   The harness checks a reset instance against a new one, sample for sample. */
+function nrReset(nr) {
+  if (nr.st) nr.ex.rnnoise_destroy(nr.st);
+  nr.st = nr.ex.rnnoise_create(0);            /* 0 = the built-in model */
+  nr.upHist = new Float32Array(Math.ceil(NR_TAPS / 4));   /* last x[n-k], k=0.. */
+  nr.dnHist = new Float32Array(NR_TAPS);                   /* last 48 kHz samples */
+  /* 3, not 0: the decimator then keeps 48 kHz samples 0, 4, 8... - the
+     phase the x4 stuffing put the input on. Started at 0 it kept 3, 7,
+     11..., and the wet path lagged by 255.25 samples at 12 kHz: measured
+     by the harness as 255 against the dry ring's 256, a quarter-sample
+     skew that turns the wet/dry mix into a gentle comb. */
+  nr.dnPos = 3;                                            /* 48 kHz phase, 0..3 */
+  nr.acc = new Float32Array(NR_FRAME48); nr.accN = 0;
+  nr.fifo = new Float32Array(4096); nr.fifoN = 120; nr.fifoR = 0;  /* primed - see LATENCY */
+  nr.dry = new Float32Array(NR_LATENCY_12K - NR_PLC_HOLD); nr.dryPos = 0;
+  /* PLC: [2048 of history already emitted | pending]; primed with
+     NR_PLC_HOLD zeros so every call can emit exactly what it was given */
+  nr.plc = new Float32Array(2048 + NR_PLC_HOLD + 8192); nr.plcN = 2048 + NR_PLC_HOLD;
+  nr.plcPatched = 0;
+  nr.vad = 0;
+  return nr;
 }
 
 function nrDestroy(nr) {
@@ -13744,6 +13767,7 @@ function audioStopAndTell() {
 
 function audioStop() {
   audioWantOn = false;
+  nrRunning = false;           /* the next start resets the model */
   audioNext = 0;
   if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
   audioSeq = -1;
@@ -13812,6 +13836,19 @@ function audioFrame(buf) {
   const src = new Float32Array(T + n);
   src.set(audioTail, 0);
   for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+
+  /* T18 noise reduction, on the decoded 12 kHz samples and before the
+     resampler. Same sample count in and out, so nothing below changes.
+     ⛔ Off, a mode RNNoise is not offered for, or a model not loaded yet
+     all SKIP this - the samples above reach the resampler untouched. */
+  if (nrWanted()) {
+    if (!nrInst) nrLoad();                    /* lazy, once; dry until it lands */
+    else if (rate === 12000) {
+      if (!nrRunning || nrRunMode !== lastMode) nrReset(nrInst);
+      nrRunning = true; nrRunMode = lastMode;
+      src.set(nrProcess(nrInst, src.subarray(T), NR_LEVELS[nrLevel].wet), T);
+    }
+  } else nrRunning = false;
 
   /* ⛔ TRIM THE RATE, DO NOT WAIT TO DROP A CHUNK.
    *
@@ -13991,6 +14028,64 @@ async function listenToggle() {
   const b = document.getElementById("listenbtn");
   if (b) b.addEventListener("click", listenToggle);
   listenPaint();
+})();
+
+/* T18 - the NR button. The DSP is the NR-BEGIN block above; this is only the
+   level, the lazy load of /rnnoise.wasm (141 KB, fetched the first time NR is
+   actually needed and never by a page that leaves it Off) and the paint.
+   The level is this browser's, not the device's: the Tab5 does none of it. */
+let nrLevel = 0, nrInst = null, nrLoading = false, nrLoadErr = "";
+let nrRunning = false, nrRunMode = "";
+try {
+  const v = parseInt(localStorage.getItem("nrLevel"), 10);
+  if (v >= 0 && v < NR_LEVELS.length) nrLevel = v;
+} catch (e) {}
+
+function nrModeOk() { return lastMode === "USB" || lastMode === "LSB" || lastMode === "AM"; }
+function nrWanted() { return nrLevel > 0 && nrModeOk(); }
+
+async function nrLoad() {
+  if (nrInst || nrLoading) return;
+  nrLoading = true; nrLoadErr = ""; nrPaint();
+  try {
+    const r = await fetch("/rnnoise.wasm");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    nrInst = await nrCreate(await r.arrayBuffer());
+  } catch (err) {
+    /* Back to Off, or audioFrame() would ask again ten times a second. The
+       saved level is left alone - a reload tries once more. */
+    nrLoadErr = String(err && err.message || err);
+    nrLevel = 0;
+  }
+  nrLoading = false; nrPaint();
+}
+
+function nrPaint() {
+  const b = document.getElementById("nrbtn");
+  if (!b) return;
+  b.textContent = "NR " + NR_LEVELS[nrLevel].name;
+  b.classList.toggle("on", nrWanted() && !!nrInst);
+  b.classList.toggle("wait", nrWanted() && !nrInst);
+  b.classList.toggle("na", nrLevel > 0 && !nrModeOk());
+  b.title = nrLoadErr
+    ? "Noise reduction could not be loaded (" + nrLoadErr + "). Click to try again."
+    : (nrLevel > 0 && !nrModeOk()
+       ? "Noise reduction is set to " + NR_LEVELS[nrLevel].name + " but only works on "
+         + "voice (USB, LSB, AM). It is a speech filter: it would remove a CW note."
+       : "Noise reduction for the audio you hear on this page (USB, LSB, AM). "
+         + "Click to step Off - Low - Med - High. It adds about 0.1 s of delay.");
+}
+
+(() => {
+  const b = document.getElementById("nrbtn");
+  if (b) b.addEventListener("click", () => {
+    nrLevel = (nrLevel + 1) % NR_LEVELS.length;
+    nrLoadErr = "";
+    try { localStorage.setItem("nrLevel", String(nrLevel)); } catch (e) {}
+    if (nrWanted()) nrLoad();     /* the click asked for it - do not wait for Listen */
+    nrPaint();
+  });
+  nrPaint();
 })();
 
 /* Clear the decoded-CW window - Bryan N0LUF. The DEVICE is cleared, not a copy

@@ -5904,6 +5904,23 @@ static esp_err_t forge_js_handler(httpd_req_t *req)
                            forge_js_gz_end - forge_js_gz_start);
 }
 
+// GET /rnnoise.wasm - T18 web noise reduction. RNNoise v0.1.1 built by
+// tools/build_rnnoise_wasm.sh, pre-gzipped. The browser runs it; the Tab5 only
+// stores it, and the page fetches it only when NR is first switched on.
+extern const uint8_t rnnoise_wasm_gz_start[] asm("_binary_rnnoise_wasm_gz_start");
+extern const uint8_t rnnoise_wasm_gz_end[]   asm("_binary_rnnoise_wasm_gz_end");
+static esp_err_t rnnoise_wasm_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/wasm");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(req, (const char *)rnnoise_wasm_gz_start,
+                           rnnoise_wasm_gz_end - rnnoise_wasm_gz_start);
+}
+static const httpd_uri_t uri_rnnoise_wasm = {
+    .uri = "/rnnoise.wasm", .method = HTTP_GET, .handler = rnnoise_wasm_handler,
+};
+
 static const httpd_uri_t uri_lotw_cert = {
     .uri = "/api/lotw_cert", .method = HTTP_POST, .handler = lotw_cert_handler,
 };
@@ -9686,6 +9703,7 @@ esp_err_t webserver_start(void)
     reg(&uri_lotw_upload);
     reg(&uri_lotw_tq8);
     reg(&uri_forge_js);
+    reg(&uri_rnnoise_wasm);
     reg(&uri_config_get);
     reg(&uri_config_post);
     reg(&uri_term_get);

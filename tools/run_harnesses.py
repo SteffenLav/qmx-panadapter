@@ -184,6 +184,30 @@ def main():
             failures.append((name, "run", (r.stdout + r.stderr).strip()))
             nfail += 1
 
+    # Node harnesses (*_harness.mjs): they test the web page's own JavaScript,
+    # so there is nothing to compile - run them with node. Skipped, not failed,
+    # on a machine without node: the firmware build does not need it.
+    node = shutil.which("node")
+    for src in sorted((ROOT / "test").glob("*_harness.mjs")):
+        name = src.stem
+        if only and only not in name:
+            continue
+        if not node:
+            print(f"  {name:<26} SKIP  (no node on this machine)")
+            nskip += 1
+            continue
+        r = subprocess.run([node, str(src)], cwd=ROOT, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=300)
+        if r.returncode == 0:
+            print(f"  {name:<26} pass  (node)")
+            npass += 1
+        else:
+            print(f"  {name:<26} RUN FAIL  (node)")
+            failures.append((name, "run", (r.stdout + r.stderr).strip()))
+            nfail += 1
+
     print(f"\nharnesses: {npass} passed, {nfail} failed, {nskip} skipped")
     for name, phase, msg in failures:
         print(f"\n--- {name} ({phase}) ---")

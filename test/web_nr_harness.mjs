@@ -35,7 +35,7 @@ const html = readFileSync(join(ROOT, "main/net/www/index.html"), "utf8");
 const a = html.indexOf("/* NR-BEGIN"), b = html.indexOf("/* NR-END");
 if (a < 0 || b < 0) { console.error("NR-BEGIN/NR-END not found in index.html"); process.exit(1); }
 const NR = new Function(html.slice(a, b) +
-  "\nreturn { NR_LEVELS, NR_LATENCY_12K, nrCreate, nrDestroy, nrProcess };")();
+  "\nreturn { NR_LEVELS, NR_LATENCY_12K, nrCreate, nrDestroy, nrProcess, nrReset };")();
 const wasm = gunzipSync(readFileSync(join(ROOT, "main/net/www/rnnoise.wasm.gz")));
 
 let fails = 0;
@@ -160,6 +160,15 @@ async function gate(wasmBytes, label, quiet) {
     const loss = db(rms(voice, FS, N - L)) - db(rms(y, FS + L, N));
     _check(loss <= VOICE_MAX_LOSS_DB, `voiced signal loses <= ${VOICE_MAX_LOSS_DB} dB at High (${loss.toFixed(1)})`); }
 
+  // 5b. nrReset(): the page resets the instance every time NR starts or the
+  //     mode changes. A reset instance must be a NEW one, sample for sample -
+  //     otherwise the previous signal's noise estimate leaks into the next.
+  { const fresh = await NR.nrCreate(wasmBytes); const want = run(fresh, voice, 1); NR.nrDestroy(fresh);
+    const nr = await NR.nrCreate(wasmBytes); run(nr, noise, 1); NR.nrReset(nr);
+    const got = run(nr, voice, 1); NR.nrDestroy(nr);
+    let worst = 0; for (let i = 0; i < N; i++) worst = Math.max(worst, Math.abs(got[i] - want[i]));
+    _check(worst === 0, `a reset instance equals a new one (max diff ${worst})`); }
+
   // 7. CPU
   if (!quiet) {
     const nr = await NR.nrCreate(wasmBytes); const t0 = performance.now(); run(nr, noise, 1);
@@ -199,6 +208,14 @@ await gate(wasm, "RNNoise", false);
   const caught = await gate(wasm, "mutation: no hole concealment", true);
   fails = saved; NR.nrCreate = real;
   check(caught > 0, `mutation (concealment off) is refused by ${caught} check(s)`);
+}
+{
+  const real = NR.nrReset;
+  NR.nrReset = (nr) => nr;
+  const saved = fails;
+  const caught = await gate(wasm, "mutation: reset does nothing", true);
+  fails = saved; NR.nrReset = real;
+  check(caught > 0, `mutation (reset does nothing) is refused by ${caught} check(s)`);
 }
 
 // ---- optional report on real captures -----------------------------------------
