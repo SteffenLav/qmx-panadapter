@@ -11708,19 +11708,22 @@ function checkPageIsStale(running) {
   if (!running) return;
   if (s_fw_seen === null) { s_fw_seen = running; return; }
   if (running === s_fw_seen) return;
-  if (document.getElementById("stale-page")) return;   // already saying so
+  // Names both versions: "it updated" is a different message from "you are
+  // looking at something old", and the operator needs the second one.
+  stalePageBanner("This page was loaded from firmware " + s_fw_seen +
+                  " and the Tab5 is now running " + running +
+                  " - reload to get the current controls.");
+}
 
+function stalePageBanner(text) {
+  if (document.getElementById("stale-page")) return;   // already saying so
   const bar = document.createElement("div");
   bar.id = "stale-page";
   bar.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99999;" +
     "background:#ffa040;color:#101010;font:600 15px system-ui,sans-serif;" +
     "padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:center";
   const txt = document.createElement("span");
-  // Names both versions: "it updated" is a different message from "you are
-  // looking at something old", and the operator needs the second one.
-  txt.textContent = "This page was loaded from firmware " + s_fw_seen +
-                    " and the Tab5 is now running " + running +
-                    " - reload to get the current controls.";
+  txt.textContent = text;
   const btn = document.createElement("button");
   btn.textContent = "Reload";
   btn.style.cssText = "font:600 15px system-ui,sans-serif;padding:5px 14px;cursor:pointer";
@@ -11733,6 +11736,42 @@ function checkPageIsStale(running) {
   bar.appendChild(txt); bar.appendChild(btn);
   document.body.appendChild(bar);
 }
+
+// ⛔ THE SECOND WAY TO BE STALE: OLD FROM THE FIRST MOMENT (T180).
+// checkPageIsStale() above compares the firmware at the first poll with the
+// firmware later, so it only catches an update that happens WHILE the page is
+// open. A page the browser shows from its own copy without asking the Tab5 -
+// a restored session, a tab brought back - sees the new firmware from its
+// first poll on, and says nothing. Gyula HA3HZ, 2026-11-10: updated over
+// Wi-Fi, opened Firefox, saw the old page with no banner; later it was right.
+// (Which Firefox path showed him the old copy was not measured.)
+//
+// The server names the page by the firmware's ELF hash (the ETag). So: read
+// the ETag of the copy this browser holds, and ask the Tab5 whether that is
+// still the page - a conditional GET, answered with a bodyless 304 when it
+// is. A 200 with another ETag means this page is not the firmware's page.
+// only-if-cached never touches the network; if the browser holds no copy the
+// first fetch throws and nothing is claimed.
+async function checkPageCopyIsCurrent() {
+  try {
+    const held = await fetch("/", { cache: "only-if-cached", mode: "same-origin" });
+    const tag = held.headers.get("ETag");
+    try { if (held.body) held.body.cancel(); } catch (e) {}
+    if (!tag) return "no-etag";
+    const ac = new AbortController();
+    const now = await fetch("/", { cache: "no-store", headers: { "If-None-Match": tag }, signal: ac.signal });
+    const cur = now.headers.get("ETag");
+    ac.abort();                                  // a 200 carries the whole page: not wanted
+    if (now.status === 200 && cur && cur !== tag) {
+      stalePageBanner("Your browser showed its own old copy of this page - the Tab5 has " +
+                      "newer firmware. Reload to get the current controls.");
+      return "stale";
+    }
+    return "current";
+  } catch (e) { return "unknown"; }
+}
+/* A few seconds in: the page's own first requests go first on this link. */
+setTimeout(checkPageCopyIsCurrent, 4000);
 
 function paintUpdateNotice(s) {
   const el = document.getElementById("tab5fw");
