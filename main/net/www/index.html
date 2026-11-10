@@ -1026,6 +1026,18 @@
               cursor: pointer; }
   #port-mode-row input { accent-color: var(--accent); }
   #port-mode-result { color: var(--dim); }
+  /* T18 noise reduction: an on/off box and three levels, same shape as the
+     port row. width:0 + min-width:100% takes the width the menu's other
+     rows give it instead of setting one: as one line it made the menu 328 px
+     wide, measured, against 209 px before. Two lines: the box, then the levels. */
+  #nr-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.2rem 0.6rem;
+              padding: 0.4rem 0.6rem; font-size: 0.78rem; color: #9aa4b2;
+              width: 0; min-width: 100%; box-sizing: border-box; }
+  #nr-row label { display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
+  #nr-row input { accent-color: var(--accent); }
+  #nr-row .nr-main { color: var(--fg, #e5e7eb); flex-basis: 100%; }
+  #nr-state { color: var(--dim); flex-basis: 100%; }
+  #nr-state:empty { display: none; }
   /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
      applicable - greyed and inert, with its tooltip swapped for the reason. */
   #gpio-row.port-off { opacity: 0.5; }
@@ -1671,7 +1683,13 @@
              before. Operator, 2026-11-10: "you cannot just widen the web view
              with a scroll function". The top bar is full - a new control
              needs a home that costs it no width. -->
-        <a href="#" id="nrbtn">Noise reduction: <span id="nr-state">Off</span></a>
+        <div id="nr-row">
+          <label class="nr-main"><input type="checkbox" id="nr-on"> Noise reduction</label>
+          <label><input type="radio" name="nr-level" value="1"> Low</label>
+          <label><input type="radio" name="nr-level" value="2"> Med</label>
+          <label><input type="radio" name="nr-level" value="3"> High</label>
+          <span id="nr-state"></span>
+        </div>
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
         <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
@@ -14027,15 +14045,20 @@ async function listenToggle() {
    level, the lazy load of /rnnoise.wasm (141 KB, fetched the first time NR is
    actually needed and never by a page that leaves it Off) and the paint.
    The level is this browser's, not the device's: the Tab5 does none of it. */
-let nrLevel = 0, nrInst = null, nrLoading = false, nrLoadErr = "";
+/* Off until switched on, and Med when it is. Operator, 2026-11-10, after
+   the A/B files of real 40 m and 20 m SSB (Off/Low/Med/High): "Med". Measured
+   on those clips: Med takes the noise between words down 12-13 dB; High takes
+   19-31 dB but costs the voice more. */
+let nrOn = false, nrLevel = 2, nrInst = null, nrLoading = false, nrLoadErr = "";
 let nrRunning = false, nrRunMode = "";
 try {
+  nrOn = localStorage.getItem("nrOn") === "1";
   const v = parseInt(localStorage.getItem("nrLevel"), 10);
-  if (v >= 0 && v < NR_LEVELS.length) nrLevel = v;
+  if (v >= 1 && v < NR_LEVELS.length) nrLevel = v;
 } catch (e) {}
 
 function nrModeOk() { return lastMode === "USB" || lastMode === "LSB" || lastMode === "AM"; }
-function nrWanted() { return nrLevel > 0 && nrModeOk(); }
+function nrWanted() { return nrOn && nrModeOk(); }
 
 async function nrLoad() {
   if (nrInst || nrLoading) return;
@@ -14046,38 +14069,43 @@ async function nrLoad() {
     nrInst = await nrCreate(await r.arrayBuffer());
   } catch (err) {
     /* Back to Off, or audioFrame() would ask again ten times a second. The
-       saved level is left alone - a reload tries once more. */
+       saved setting is left alone - a reload tries once more. */
     nrLoadErr = String(err && err.message || err);
-    nrLevel = 0;
+    nrOn = false;
   }
   nrLoading = false; nrPaint();
 }
 
 function nrPaint() {
-  const b = document.getElementById("nrbtn"), st = document.getElementById("nr-state");
-  if (!b || !st) return;
-  const na = nrLevel > 0 && !nrModeOk();
-  st.textContent = NR_LEVELS[nrLevel].name
-    + (na ? " (not in " + lastMode + ")" : (nrWanted() && !nrInst ? " (loading)" : ""));
-  b.title = nrLoadErr
-    ? "Noise reduction could not be loaded (" + nrLoadErr + "). Click to try again."
-    : (na
-       ? "Noise reduction is set to " + NR_LEVELS[nrLevel].name + " but only works on "
-         + "voice (USB, LSB, AM). It is a speech filter: it would remove a CW note."
-       : "Noise reduction for the audio Listen plays on this page (USB, LSB, AM). "
-         + "Click to step Off - Low - Med - High. It adds about 0.1 s of delay.");
+  const row = document.getElementById("nr-row"), on = document.getElementById("nr-on");
+  const st = document.getElementById("nr-state");
+  if (!row || !on || !st) return;
+  on.checked = nrOn;
+  row.querySelectorAll('input[name="nr-level"]').forEach((r) => {
+    r.checked = Number(r.value) === nrLevel;
+  });
+  st.textContent = nrLoadErr ? "could not load (" + nrLoadErr + ")"
+    : (nrOn && !nrModeOk() ? "voice only - not active in " + lastMode
+       : (nrWanted() && !nrInst ? "loading..." : ""));
+  row.title = "Noise reduction for the audio Listen plays on this page. It is a "
+    + "speech filter, so it works in USB, LSB and AM only - it would remove a CW "
+    + "note. It runs in this browser, not on the Tab5, and adds about 0.1 s of delay.";
 }
 
 (() => {
-  const b = document.getElementById("nrbtn");
-  if (b) b.addEventListener("click", (ev) => {
-    /* stopPropagation: the bar's click-anywhere handler would close the Radio
-       menu on every step, and the level is stepped several times in a row. */
-    ev.preventDefault(); ev.stopPropagation();
-    nrLevel = (nrLevel + 1) % NR_LEVELS.length;
+  const row = document.getElementById("nr-row");
+  if (!row) return;
+  /* stopPropagation: the bar's click-anywhere handler would close the Radio
+     menu on every click, and the level is tried several times in a row. */
+  row.addEventListener("click", (ev) => ev.stopPropagation());
+  row.addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (t.id === "nr-on") nrOn = t.checked;
+    else if (t.name === "nr-level") { nrLevel = Number(t.value); nrOn = true; }  /* picking a level means "on" */
     nrLoadErr = "";
-    try { localStorage.setItem("nrLevel", String(nrLevel)); } catch (e) {}
-    if (nrWanted()) nrLoad();     /* the click asked for it - do not wait for Listen */
+    try { localStorage.setItem("nrOn", nrOn ? "1" : "0");
+          localStorage.setItem("nrLevel", String(nrLevel)); } catch (e) {}
+    if (nrWanted()) nrLoad();     /* asked for - do not wait for Listen */
     nrPaint();
   });
   nrPaint();
