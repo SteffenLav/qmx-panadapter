@@ -400,7 +400,7 @@ void manual_log_modal_init(void)
     modal_build();
 }
 
-void manual_log_modal_show(void)
+static void manual_log_modal_show_impl(void)
 {
     modal_build();
     if (s_open) return;
@@ -452,4 +452,16 @@ void manual_log_modal_show(void)
 
     /* ⛔ NO PRE-FOCUS AND NO KEYBOARD UNTIL A FIELD IS TAPPED - the tombstone
      * in ui_theme.h, and the same rule js8_text_modal.c follows. */
+}
+
+void manual_log_modal_show(void) { manual_log_modal_show_impl(); }
+
+void manual_log_modal_show_for(const char *call)
+{
+    bool was_open = s_open;
+    manual_log_modal_show_impl();
+    /* Not over a window that was already up: the operator may be typing in it. */
+    if (was_open || !call || !call[0] || !s_ta_call) return;
+    lv_textarea_set_text(s_ta_call, call);
+    s_from_pick = false;        /* the caller named the station, not a spot tap */
 }

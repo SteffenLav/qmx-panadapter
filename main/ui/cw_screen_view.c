@@ -39,6 +39,7 @@
 #include "cw_decode.h"   // cw_squelch_push() - the SHARED noise filter
 #include "util/dxcc.h"
 #include "adif/adif_log.h"
+#include "manual_log_modal.h"
 
 #include <string.h>
 #include <strings.h>   // strncasecmp
@@ -1494,6 +1495,14 @@ static void callentry_open(void)
 static void call_entry_btn_clicked_cb(lv_event_t *e) { (void)e; callentry_open(); }
 
 // ---- station card -----------------------------------------------------------
+static void log_btn_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    char tgt[16];
+    cw_qso_get_target(tgt, sizeof(tgt));
+    manual_log_modal_show_for(tgt);
+}
+
 static void card_clicked_cb(lv_event_t *e)
 {
     (void)e;
@@ -2457,8 +2466,11 @@ void cw_screen_view_init(lv_obj_t *parent)
     // 44x44 - the project's own measured touch-target minimum.
     s_call_entry_btn = lv_obj_create(s_container);
     lv_obj_set_size(s_call_entry_btn, 44, 44);
+    // T185: one row higher than before (-100, was -50). The Log button below
+    // took the row directly above the card - layout shown to the operator
+    // 2026-11-10 ("under the pen icon?").
     lv_obj_set_pos(s_call_entry_btn, MID_W - 370 + 330 - 44,
-                   MID_H - TICKER_H - BANDPLAN_H - 132 - 50);
+                   MID_H - TICKER_H - BANDPLAN_H - 132 - 100);
     lv_obj_set_style_bg_color(s_call_entry_btn, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_call_entry_btn, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_call_entry_btn, lv_color_hex(0x555555), 0);
@@ -2471,6 +2483,28 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(ce_icon, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(ce_icon, &lv_font_montserrat_24, 0);
     lv_obj_center(ce_icon);
+
+    // T185 (Gyula HA3HZ, 2026-11-10): the Log window, one tap from the CW
+    // page. It was two - the drawer, then its "Log a contact" row. Under the
+    // pen, right-aligned with the card. 120x44, not a 44x44 icon: the
+    // operator measured 44x44 against his fingertip as too small (see the TX
+    // offset button above). Opens with the page's target station filled in.
+    lv_obj_t *blog = lv_obj_create(s_container);
+    lv_obj_set_size(blog, 120, 44);
+    lv_obj_set_pos(blog, MID_W - 370 + 330 - 120,
+                   MID_H - TICKER_H - BANDPLAN_H - 132 - 50);
+    lv_obj_set_style_bg_color(blog, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(blog, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(blog, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(blog, 2, 0);
+    lv_obj_set_style_radius(blog, 8, 0);
+    lv_obj_clear_flag(blog, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(blog, log_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *llog = lv_label_create(blog);
+    lv_label_set_text(llog, "Log");
+    lv_obj_set_style_text_color(llog, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(llog, &lv_font_montserrat_22, 0);
+    lv_obj_center(llog);
 
     ESP_LOGI(TAG, "CW screen built");
 }

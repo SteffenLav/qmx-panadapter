@@ -14,3 +14,6 @@
 
 void manual_log_modal_init(void);
 void manual_log_modal_show(void);
+/* T185: the same window, opened for a station the caller already knows - the CW
+ * page's target. NULL or "" behaves exactly like manual_log_modal_show(). */
+void manual_log_modal_show_for(const char *call);
