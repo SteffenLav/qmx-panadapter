@@ -1716,6 +1716,17 @@ void    settings_set_line_in_gain_db(uint8_t db);
  * a config import obey the same rule. The button also ellipsizes, so a name
  * from an older store can never spill into its neighbour. */
 #define CW_PROFILE_NAME_MAX 9
+/* T188 - what the operator last used on each band: the frequency and the mode.
+ * Keyed by the band's centre frequency from cat_get_band_list(), not by its
+ * index - the list is the radio's own and may be reordered. Written straight
+ * to NVS (a band change is rare and deliberate), not through the dirty bits:
+ * DIRTY_WORDS has none left.
+ *   _get: false if the band was never stored. Either out pointer may be NULL;
+ *         mode comes back "" when only a frequency is known.
+ *   _set: freq_hz 0 = keep the stored frequency; mode NULL or "" = keep the mode. */
+bool settings_band_mem_get(uint32_t center_hz, uint32_t *freq_hz, char *mode, size_t mode_sz);
+void settings_band_mem_set(uint32_t center_hz, uint32_t freq_hz, const char *mode);
+
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask);
 void settings_set_cw_profile(int idx, const char *name,

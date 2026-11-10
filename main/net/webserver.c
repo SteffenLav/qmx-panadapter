@@ -1973,6 +1973,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
              * whole new band's spectrum with the old dial until the FA poll
              * caught up. */
             ui_update_frequency(want);
+            /* T188: and the mode last used on that band, exactly as the Tab5's
+             * own band button does. */
+            ui_band_recall_mode(center_hz, want);
         }
     } else if (action && strcmp(action, "set_mode") == 0) {
         if (wspr_owns_the_dial(req, root, "Mode")) return ESP_OK;

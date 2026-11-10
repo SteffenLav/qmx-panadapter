@@ -259,18 +259,63 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 static void update_bandplan_strip(uint32_t freq_hz);
 
 // ---- Band preset popup ------------------------------------------------
-// Per-band last-used frequency (session memory, not persisted).
-// Index mirrors cat_get_band_list(). 0 = never visited, use center_hz.
+// Per-band last-used frequency. s_band_last_hz[] is this session's working
+// copy (index mirrors cat_get_band_list(); 0 = not visited this session).
+//
+// T188 (operator, 2026-11-10): "remember freq and mode on any band I visit",
+// kept across a reboot. Until then this was session-only - band_preset_cb's
+// comment called it "NVS-persisted" and it never was - and the MODE was not
+// recalled at all: USB on 20 m, band button to 40 m, still USB.
+//   - leaving a band stores its frequency and the mode in use there
+//     (settings_band_mem_set, straight to NVS; ui_update_frequency());
+//   - a mode chosen while staying on a band is stored for that band
+//     (ui_update_mode());
+//   - a band BUTTON, here or on the web page, recalls both
+//     (ui_band_recall_mode()). A band never visited gets the sideband rule:
+//     LSB below 10 MHz, USB above, and USB on 60 m.
+// Only the band buttons recall. A spot, a memory channel and the FT8/WSPR
+// pages set their own mode, and a recall fired from the frequency change
+// itself would arrive after theirs and override it.
 static uint32_t s_band_last_hz[CAT_MAX_BANDS] = {0};
+static int64_t  s_band_change_us = 0;     // when the dial last moved to another band
+static char     s_current_mode[8];        // fwd: defined with the top-bar statics
 
 uint32_t ui_band_last_hz(uint32_t center_hz)
 {
     int band_count = 0;
     const cat_band_entry_t *bands = cat_get_band_list(&band_count);
     for (int i = 0; i < band_count; i++) {
-        if (bands[i].center_hz == center_hz) return s_band_last_hz[i];
+        if (bands[i].center_hz == center_hz && s_band_last_hz[i]) return s_band_last_hz[i];
     }
-    return 0;
+    uint32_t stored = 0;
+    settings_band_mem_get(center_hz, &stored, NULL, 0);
+    return stored;
+}
+
+static bool band_mem_mode_ok(const char *m)
+{
+    return m && (!strcmp(m, "USB") || !strcmp(m, "LSB") || !strcmp(m, "AM") ||
+                 !strcmp(m, "CW")  || !strcmp(m, "DIGI"));
+}
+
+/* Called by a band button AFTER it has retuned (so ui_update_frequency() has
+ * already stored the band being left, with the mode still in use there).
+ * Panadapter page only: the CW, FT8 and WSPR pages own the mode. */
+void ui_band_recall_mode(uint32_t center_hz, uint32_t target_hz)
+{
+    if (ui_mode_get() != UI_MODE_PANADAPTER) return;
+    char want[8] = "";
+    settings_band_mem_get(center_hz, NULL, want, sizeof(want));
+    if (!band_mem_mode_ok(want)) {
+        /* Never visited. The sideband convention, and only when the radio is
+           in a sideband now - an operator in CW or DIGI keeps it. */
+        if (strcmp(s_current_mode, "USB") != 0 && strcmp(s_current_mode, "LSB") != 0) return;
+        bool m60 = target_hz >= 5250000u && target_hz <= 5450000u;
+        snprintf(want, sizeof(want), "%s", (target_hz < 10000000u && !m60) ? "LSB" : "USB");
+    }
+    if (strcmp(want, s_current_mode) == 0) return;
+    ESP_LOGI("ui", "band recall: %lu Hz -> mode %s (was %s)", (unsigned long)target_hz, want, s_current_mode);
+    cat_request_mode(want);
 }
 
 static lv_obj_t *s_band_popup = NULL;
@@ -380,7 +425,7 @@ static void band_preset_cb(lv_event_t *e)
 {
     uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     band_popup_close();
-    // Recall the last-visited (NVS-persisted) frequency on this band - KEEP this,
+    // Recall the last-visited frequency on this band (NVS-persisted since T188) - KEEP this,
     // it's a deliberate per-band-memory feature. Fall back to the always-legal
     // band center ONLY when the remembered spot was parked OUTSIDE the legal
     // allocation: the QMX rejects an out-of-band recall, which made the band look
@@ -417,6 +462,7 @@ static void band_preset_cb(lv_event_t *e)
     // can lag or be briefly garbled after a CDC write) so the band button always
     // visibly retunes the Tab5 immediately.
     ui_update_frequency(target);
+    ui_band_recall_mode(center_hz, target);   // T188 - after the retune, see its comment
 }
 
 static void band_overlay_cb(lv_event_t *e)
@@ -9955,6 +10001,17 @@ void ui_update_frequency(uint32_t freq_hz)
                            : bands[i].center_hz - freq_hz;
             if (d <= 1500000u && d < best_dist) { best_dist = d; current_band_idx = i; }
         }
+        // T188: the band being LEFT is stored now, with its last frequency and
+        // the mode still in use there - before the new frequency overwrites
+        // anything. Once per band change, so NVS sees a handful of writes a day.
+        if (current_band_idx != s_last_band_idx) {
+            if (s_last_band_idx >= 0 && s_last_band_idx < band_count && s_band_last_hz[s_last_band_idx]) {
+                bool pan = ui_mode_get() == UI_MODE_PANADAPTER;
+                settings_band_mem_set(bands[s_last_band_idx].center_hz, s_band_last_hz[s_last_band_idx],
+                                      (pan && band_mem_mode_ok(s_current_mode)) ? s_current_mode : NULL);
+            }
+            s_band_change_us = esp_timer_get_time();
+        }
         if (current_band_idx >= 0) s_band_last_hz[current_band_idx] = freq_hz;
         // Band changed: flush decode list (stale signals from different band)
         if (current_band_idx != s_last_band_idx) {
@@ -10072,8 +10129,21 @@ void ui_update_mode(const char *mode)
     // Phase 5.10F: cache for snap-step lookup in touch handler
     if (mode) {
         bool changed = strncmp(s_current_mode, mode, sizeof(s_current_mode) - 1) != 0;
+        static bool s_mode_seen = false;      // the first reading is the radio's state, not a choice
         strncpy(s_current_mode, mode, sizeof(s_current_mode) - 1);
         s_current_mode[sizeof(s_current_mode) - 1] = '\0';
+        // T188: a mode chosen while STAYING on a band belongs to that band.
+        // Not within 3 s of a band change: that is the old band's mode still
+        // on the radio, or the recall's own request arriving.
+        if (changed && s_mode_seen && s_last_band_idx >= 0 && band_mem_mode_ok(s_current_mode) &&
+            ui_mode_get() == UI_MODE_PANADAPTER &&
+            esp_timer_get_time() - s_band_change_us > 3000000) {
+            int bc = 0;
+            const cat_band_entry_t *bl = cat_get_band_list(&bc);
+            if (s_last_band_idx < bc)
+                settings_band_mem_set(bl[s_last_band_idx].center_hz, s_band_last_hz[s_last_band_idx], s_current_mode);
+        }
+        s_mode_seen = true;
         // The passband (bw) shape is mode-dependent, so the passband-centered
         // pan offset (zoom > x1) needs to be recomputed once the real mode is
         // known from CAT - otherwise the freq/bw cursor lines stay where they
