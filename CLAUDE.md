@@ -80,16 +80,19 @@ not us. Run the checker; do not re-read the prose. See
 ⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
 the served bytes with `cmp`, not the upload's exit code.
 
-## ⛔ Site deploy is UNRESOLVED - verify a SUBDIRECTORY page, not latest.json
+## ⛔ The site is published by `git push` in `site/` - NEVER FTP
 
-`site/` has its own nested `.git` (remote `qmx-panadapter-site`). Pushing it was
-believed to deploy tab5.lav.dk. ⚠ MEASURED 2026-11-11: it did not. Every file
-under `guide/`, `md/`, `releases/` was still v1.24.2 (`bb683fa`, md5-identical);
-only root files were v1.26.0, uploaded 20:49 UTC by the FTP loop, 12 min BEFORE
-the site commit. `latest.json` was the "proof" both times and FTP put it there.
-New pages 404'd (Samuel W7STF found `guide/web-dsp/`).
-After any publish: `curl -sI https://tab5.lav.dk/md/releases.md` - Last-Modified
-must be today, and a page new in this release must answer 200.
+`site/` has its own nested `.git` (remote `qmx-panadapter-site`); Simply.com
+deploys from it. After `mkdocs build --clean` and AFTER the GitHub release exists:
+`cd site; git add -A; git commit -m "site: mkdocs build for tab5.lav.dk vX.Y.Z (Simply.com Git-import deploy)"; git push origin main`.
+⛔ Never run `publish_site.ps1` (FTP) - operator's rule, v1.25.0/v1.26.0/2026-11-11.
+
+⚠ **The push is not the deploy.** The repo has NO webhook; Simply pulls on its
+side. Measured 2026-11-11: GitHub had `b9ff361` (v1.26.0) but every page under
+`guide/`, `md/` was still v1.24.2, so new pages 404'd (Samuel W7STF). Root files
+looked new only because a stray FTP run uploaded them. **Verify a SUBDIRECTORY
+page, never `latest.json`**: `curl -sI https://tab5.lav.dk/md/releases.md` -
+Last-Modified must be today. If not, the operator triggers the pull at Simply.
 See [site deploy](../../../memory/project_site_git_import_deploy.md).
 
 ## ⛔ Every transmit path must pass the band guard
