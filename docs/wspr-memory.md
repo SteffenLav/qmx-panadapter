@@ -58,14 +58,21 @@ The total is the same peak the old code needed whenever a decode overlapped a
 capture. The difference: it is taken once, while the heap is clean, and either
 fits or the page says so at entry with the numbers.
 
-## Second version cost 11 s per search (28891b06)
+## Second version rebuilt the twiddles every search (28891b06) - about 1.3 s
 
 28891b06 shared R0 between the search cfg and stage-1 I, so every search
-rebuilt the 131072-point twiddles. Measured on bench1, 2026-11-11: search
-14.9 s and 15.4 s, against 3.0-3.7 s in every earlier build. Earlier builds
-took the same 14-17 s on their FIRST search after page entry, which is where
-the figure comes from: about 11 s of double-precision cos/sin in software.
-Two searches per cycle = about 22 s of the 115 s decode budget.
+rebuilt the 131072-point twiddles. Search on bench1: 14.2 s median (n=22);
+with the cfg resident (4e34d8e1, timed directly): 12.5 s. So the rebuild
+costs about 1.3 s per search.
+
+⛔ I first wrote "11 s" here. The "3.0-3.7 s in earlier builds" it rested on
+were cycles where the search FAILED with NOMEM and returned at once. Split by
+outcome over 2,480 cycles: NOMEM 3.7 s median, successful 9.5 s. Always split
+a timing series by outcome before comparing it.
+
+The real history of the search time, successful cycles, median per build:
+8.4-10.2 s for v1.16-v1.21, 11.1 s at v1.23.1, 13.1-16.7 s from v1.24.1.
+That growth predates this work and its cause is NOT known.
 
 The memory part of that run was good: page entry allocated everything with
 1256 KB PSRAM left (largest free 1184 KB), and cycle 1 decoded 2.
@@ -101,7 +108,7 @@ fails if the largest block grows past 1,400,000 B.
    exit. Nothing inside a cycle calls malloc, calloc or free.
 2. The search scratch and the stage-1/stage-2 scratch are never used at the
    same moment, so they share blocks. The search's FFT cfg is NOT shared: its
-   twiddles cost 11 s to build on the P4, so they are built once at entry.
+   twiddles cost about 1.3 s to build on the P4, so they are built once at entry.
 3. If the page-entry allocation does not fit, the page says so once, with the
    numbers. It does not fail silently each cycle.
 4. A host test fails if any allocation happens between page entry and page exit.

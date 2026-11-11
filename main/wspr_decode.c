@@ -82,10 +82,10 @@ typedef float wspr_tp_t;
  *
  * THE kiss_fftr CFG IS BUILT ONCE AND NEVER SHARED. The first 4-block version
  * (28891b06) shared R0 between the cfg and stage-1 I, so every search rebuilt
- * the 131072-point twiddles: about 11 s on the P4 (double cos/sin in
- * software), two searches per cycle. Measured on bench1 2026-11-11: search
- * 14.9 s against 3.0-3.7 s in every earlier build, whose FIRST search after
- * page entry took the same 14-17 s. Now R0 holds the cfg alone, and stage-1
+ * the 131072-point twiddles, two searches per cycle. Measured on bench1
+ * 2026-11-11: search 14.2 s median with the rebuild, 12.5 s without, so
+ * about 1.3 s each. (A first estimate of 11 s compared against NOMEM
+ * cycles, which return at once - see docs/wspr-memory.md.) Now R0 holds the cfg alone, and stage-1
  * I/Q move to R1/R2. Cost: about 0.3 MB more arena; the largest block is
  * unchanged. The October code held more than this and ran 1045 cycles clean.
  *
@@ -203,7 +203,7 @@ int wspr_decode_scratch_init(long n)
     }
     s_rg_owned = 1;
     wspr_decode_capture_changed();
-    {   /* The twiddles: about 11 s on the P4, so here, once, not per search. */
+    {   /* The twiddles: about 1.3 s on the P4, so here, once, not per search. */
         const int nfft = search_nfft(n);
         if (nfft && !search_cfg(nfft)) { wspr_decode_scratch_deinit(); return 0; }
     }

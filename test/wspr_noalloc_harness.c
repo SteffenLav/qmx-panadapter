@@ -11,7 +11,7 @@
  * and fails on a single allocation between page entry and page exit.
  *
  * It also fails if the search rebuilds its kiss_fftr cfg inside a cycle: that
- * is computation, not allocation, but 11 s of it per search on the P4
+ * is computation, not allocation, but about 1.3 s of it per search on the P4
  * (28891b06, measured on bench1 2026-11-11).
  *
  * It also checks the arena is the ONLY source: with it detached the search

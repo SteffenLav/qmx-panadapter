@@ -4809,8 +4809,11 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
         memset(tone_buf, 0, (size_t)n_wave * sizeof(float));
     }
     if (!synth_gfsk_heap(tones, n_sym, tone_hz, gfsk_bt, sym_per, SR_HZ, tone_buf)) {
+        /* It fails only when its dphi/pulse buffers cannot be allocated -
+         * dphi is the 622,080 B that lost to the WSPR page at boot. */
         if (tone_buf != signal + start) heap_caps_free(tone_buf);
         heap_caps_free(signal);
+        s_synth_nomem = true;
         return false;
     }
     if (tone_buf != signal + start) {
@@ -4826,6 +4829,7 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
     monitor_t *mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!mon) {
         heap_caps_free(signal);
+        s_synth_nomem = true;
         return false;
     }
     monitor_init(mon, &cfg);
@@ -4833,6 +4837,7 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
         monitor_free(mon);
         heap_caps_free(mon);
         heap_caps_free(signal);
+        s_synth_nomem = true;
         return false;
     }
 
