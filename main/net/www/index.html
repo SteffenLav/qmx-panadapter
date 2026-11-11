@@ -1039,6 +1039,20 @@
   #nr-row .nr-brk { flex-basis: 100%; height: 0; }
   #nr-state { color: var(--dim); flex-basis: 100%; }
   #nr-state:empty { display: none; }
+  /* TX power row: same shape as #nr-row, and the same width:0 + min-width
+     trick so a long ladder wraps instead of widening the menu. */
+  #pwr-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.3rem 0.35rem;
+             padding: 0.4rem 0.6rem; font-size: 0.78rem; color: #9aa4b2;
+             width: 0; min-width: 100%; box-sizing: border-box; }
+  #pwr-row .pwr-main { color: var(--fg, #e5e7eb); flex-basis: 100%; }
+  #pwr-btns { display: contents; }
+  #pwr-btns button { font: inherit; background: #1f2937; color: var(--fg);
+             border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.45rem;
+             cursor: pointer; }
+  #pwr-btns button:hover { border-color: var(--accent); }
+  #pwr-btns button.active { border-color: var(--accent); color: var(--accent); }
+  #pwr-state { color: var(--dim); flex-basis: 100%; }
+  #pwr-state:empty { display: none; }
   /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
      applicable - greyed and inert, with its tooltip swapped for the reason. */
   #gpio-row.port-off { opacity: 0.5; }
@@ -1265,14 +1279,6 @@
            title="Your keyer speed, sent to the radio and read back. 0 is Straight Key mode."
            ><span class="lab">Keyer</span><span id="keyer">--</span><span class="arr">▾</span>
         <div class="dropdown" id="dd-keyer"></div>
-      </div>
-      <!-- Output power, per band. Shown only where the band has been through
-           Calibrate Power, because the levels ARE that sweep's results - see
-           the out_power action for why a free-text wattage is refused. -->
-      <div class="pill clickable" id="pill-outpwr" style="display:none" onclick="openOutPwr()"
-           title="Transmit power on this band, from its power calibration."
-           ><span class="lab">PWR</span><span id="outpwr">--</span><span class="arr">▾</span>
-        <div class="dropdown" id="dd-outpwr"></div>
       </div>
       <!-- Activation, shown ONLY while one is running. The hazard is forgetting, so
            it says so without being asked - the same job the Tab5's bottom bar does. -->
@@ -1703,6 +1709,17 @@
              before. Operator, 2026-11-10: "you cannot just widen the web view
              with a scroll function". The top bar is full - a new control
              needs a home that costs it no width. -->
+        <!-- Output power, per band (operator, 2026-11-11: moved here from a
+             PWR pill in the top bar, which was full and scrolled sideways).
+             One button per level of this band's Calibrate Power sweep - the
+             levels ARE that sweep's results, see the out_power action for why
+             a free-text wattage is refused. An uncalibrated band shows why
+             there are no buttons instead of hiding the row. -->
+        <div id="pwr-row" title="Transmit power on this band, from its power calibration.">
+          <span class="pwr-main">TX power <span id="pwr-band"></span></span>
+          <span id="pwr-btns"></span>
+          <span id="pwr-state"></span>
+        </div>
         <div id="nr-row">
           <label class="nr-main"><input type="checkbox" id="nr-on"> Noise reduction</label>
           <label><input type="radio" name="nr-level" value="1"> Low</label>
@@ -10513,62 +10530,81 @@ function updateCwQueue(ctx) {
   el.textContent = parts.join(" · ");
 }
 
+const fmtW = (w) => (w / 100).toFixed(2).replace(/0$/, "") + " W";
+
+/* Paints the TX power row in the Radio menu from outPwrInfo. */
 function updateOutPwrPill() {
-  const pill = document.getElementById("pill-outpwr");
-  if (!pill) return;
-  /* Hidden until the ladder has been fetched once AND this band turned out to
-     be calibrated. An uncalibrated band has no levels to offer, and offering
-     a watts box there would invite exactly the free-text wattage the device
-     refuses. */
+  const btns = document.getElementById("pwr-btns");
+  const st   = document.getElementById("pwr-state");
+  if (!btns || !st) return;
   /* ⛔ CASE-INSENSITIVE, AND THIS IS NOT DEFENSIVE PADDING - the two sources
      genuinely disagree. Measured on bench1, 2026-10-31: /api/status reports
      band "20m" and the out_power action reports "20M", because the ladder's
      name comes from adif_log_band_for_freq() (ADIF bands are upper case) and
      the status field comes from ui_get_band_str(). A strict === here meant
-     the pill was NEVER shown on any band, which is exactly what the first
+     the control was NEVER shown on any band, which is exactly what the first
      run on hardware did. */
   const sameBand = outPwrInfo && typeof outPwrInfo.band === "string" &&
                    outPwrInfo.band.toUpperCase() === (lastBandStr || "").toUpperCase();
+  document.getElementById("pwr-band").textContent = lastBandStr ? "(" + lastBandStr + ")" : "";
   const ok = outPwrInfo && outPwrInfo.calibrated && sameBand;
-  pill.style.display = ok ? "" : "none";
-  if (!ok) return;
-  const t = outPwrInfo.target_x100;
-  document.getElementById("outpwr").textContent =
-    (typeof t === "number") ? ((t / 100).toFixed(2).replace(/0$/, "") + " W") : "--";
+  /* An uncalibrated band has no levels to offer, and a watts box there would
+     invite exactly the free-text wattage the device refuses - so: no buttons,
+     and the reason in their place. */
+  if (!ok) {
+    btns.innerHTML = "";
+    if (st.dataset.say !== "1")
+      st.textContent = (outPwrInfo && sameBand)
+        ? "Not calibrated on this band - run Calibrate Power on the Tab5."
+        : "--";
+    return;
+  }
+  const levels = outPwrInfo.watts_x100 || [];
+  const key = levels.join(",") + "|" + outPwrInfo.target_x100;
+  if (btns.dataset.key !== key) {
+    btns.dataset.key = key;
+    btns.innerHTML = "";
+    levels.forEach(w => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = fmtW(w);
+      if (w === outPwrInfo.target_x100) b.classList.add("active");
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();          // keep the menu open to show the result
+        const r = await sendCmd({ action: "out_power", watts_x100: w });
+        /* A deferred write is a success that did only half the job, and the
+           device says which - pass it on rather than implying the PA moved
+           while WSPR or a burst still owns it. */
+        if (r && r.ok && r.deferred) pwrSay(r.note || "stored, not applied");
+        else if (r && !r.ok) pwrSay(r.error || "refused");
+        await refreshOutPwr();
+      });
+      btns.appendChild(b);
+    });
+  }
+  if (st.dataset.say !== "1") st.textContent = "";
+}
+
+function pwrSay(msg) {
+  const st = document.getElementById("pwr-state");
+  if (!st) return;
+  st.textContent = msg; st.dataset.say = "1";
+  setTimeout(() => { st.dataset.say = ""; updateOutPwrPill(); }, 4000);
 }
 
 async function refreshOutPwr() {
   /* On demand only - it reads this band's whole calibration table, which is
-     not something to do at 1 Hz. Called when the pill is opened and when the
-     band changes. */
+     not something to do at 1 Hz. Called on a band change, when the Radio
+     menu opens and after our own write. */
   outPwrInfo = await sendCmd({ action: "out_power" });
   updateOutPwrPill();
 }
 
-async function openOutPwr() {
-  await refreshOutPwr();
-  const dd = document.getElementById("dd-outpwr");
-  if (!dd || !outPwrInfo || !outPwrInfo.calibrated) return;
-  dd.innerHTML = "";
-  (outPwrInfo.watts_x100 || []).forEach(w => {
-    const btn = document.createElement("button");
-    btn.textContent = (w / 100).toFixed(2).replace(/0$/, "") + " W";
-    if (w === outPwrInfo.target_x100) btn.classList.add("active");
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      closeAllDropdowns();
-      const r = await sendCmd({ action: "out_power", watts_x100: w });
-      /* A deferred write is a success that did only half the job, and the
-         device says which - pass it on rather than letting the pill imply the
-         PA moved while WSPR or a burst still owns it. */
-      if (r && r.ok && r.deferred) pillSay("outpwr", r.note || "stored, not applied", 4000);
-      else if (r && !r.ok) pillSay("outpwr", r.error || "refused", 4000);
-      await refreshOutPwr();
-    };
-    dd.appendChild(btn);
-  });
-  toggleDropdown("outpwr");
-}
+/* Re-read on every opening of the Radio menu, so a level changed on the Tab5
+   is right when the row is looked at - the poll only repaints. */
+document.getElementById("radio-group-btn").addEventListener("click", () => {
+  refreshOutPwr();
+});
 
 /* =====================================================================
    Activation (POTA / SOTA). The pill is only visible while one is RUNNING - the
@@ -12582,12 +12618,23 @@ function drawSpectrumRaw(bytes) {
   const W = specPxW, H = specPxH;
   sctx.fillStyle = "#000"; sctx.fillRect(0, 0, W, H);
 
+  /* The Tab5's dB range (display.db_min/db_max, from /api/status) fills the
+     height, exactly as db_to_y() in ui.c does. This used to draw the WIRE scale
+     (-150..-30 dBm) instead, so moving the range sliders changed the Tab5 and
+     the browser's labels but not the browser's trace (Samuel W7STF, v1.26.0).
+     lastDbRange was stored for that since 48037789 and never read. The wire
+     scale is only the fallback for firmware that does not send db_lo/db_hi. */
+  const rng = (lastDbRange && lastDbRange.hi > lastDbRange.lo)
+            ? lastDbRange : { lo: WS_DB_MIN, hi: WS_DB_MAX };
+  const dbY = (db) => {
+    const d = Math.min(rng.hi, Math.max(rng.lo, db));
+    return H - 1 - Math.round((d - rng.lo) * (H-1) / (rng.hi - rng.lo));
+  };
+  const byteY = (q) => dbY(WS_DB_MIN + q / WS_COUNTS_PER_DB);
+  const gridDb = lastDbLines || [-40, -60, -80, -100, -120];
+
   sctx.fillStyle = "#1f2530";
-  for (const db of [-120, -100, -80, -60, -40]) {
-    const q = dbToByte(db);
-    const y = H - 1 - Math.round(q * (H-1) / 255);
-    sctx.fillRect(0, y, W, 1);
-  }
+  for (const db of gridDb) sctx.fillRect(0, dbY(db), W, 1);
 
   drawPassbandTint(sctx, W, H);
 
@@ -12610,20 +12657,20 @@ function drawSpectrumRaw(bytes) {
   for (let i = 0; i < W; i++) {
     const b = getBinR(i);
     if (b === null) { sctx.stroke(); sctx.beginPath(); continue; }  /* leave it empty */
-    sctx.lineTo(i, H - 1 - Math.round(bytes[b] * (H-1) / 255));
+    sctx.lineTo(i, byteY(bytes[b]));
   }
   sctx.lineTo(W, H); sctx.closePath();
   sctx.fillStyle = "#003800"; sctx.fill();
 
   sctx.beginPath();
-  sctx.moveTo(0, H - 1 - Math.round(bytes[getBinR(0)] * (H-1) / 255));
+  sctx.moveTo(0, byteY(bytes[getBinR(0)]));
   for (let i = 1; i < W; i++)
-    sctx.lineTo(i, H - 1 - Math.round(bytes[getBinR(i)] * (H-1) / 255));
+    sctx.lineTo(i, byteY(bytes[getBinR(i)]));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
-  if (peakBegin(W, H, "raw|" + (frameDialHz || radioFreqHz) + "|" + lastZoom + "|" + lastPanBins + "|" + lastZoomDecim)) {
+  if (peakBegin(W, H, "raw|" + (frameDialHz || radioFreqHz) + "|" + lastZoom + "|" + lastPanBins + "|" + lastZoomDecim + "|" + rng.lo + "|" + rng.hi)) {
     for (let i = 0; i < W; i++) {
       const b = getBinR(i);
-      peakFeed(i, b === null ? null : H - 1 - Math.round(bytes[b] * (H-1) / 255));
+      peakFeed(i, b === null ? null : byteY(bytes[b]));
     }
     peakStroke(W);
   }
@@ -12640,9 +12687,8 @@ function drawSpectrumRaw(bytes) {
      changed while the browser's labels went on describing a scale that was no
      longer there. That is precisely the bug db_gridlines.c exists to fix, and
      the browser had never been given the answer. */
-  for (const db of (lastDbLines || [-40, -60, -80, -100, -120])) {
-    const q = dbToByte(db);
-    const y = H - 1 - Math.round(q * (H-1) / 255);
+  for (const db of gridDb) {
+    const y = dbY(db);
     if (y > 8 && y < H - 2) sctx.fillText(db + " dBm", W - 3, y - 2);
   }
   sctx.textAlign = "left";

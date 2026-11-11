@@ -56,11 +56,6 @@ The web UI provides full remote control:
   real setting: it selects Straight Key mode, which is the quick way to key down for a
   tune-up. This is what *you* send — the decoded-CW line shows the speed of the station
   you are *hearing*, which is a different number
-- **PWR** — transmit power on this band, shown only where that band has been through
-  Calibrate Power. The levels offered are the ones your own sweep measured, so a figure
-  the PA never produced is refused rather than rounded to a neighbour. While a
-  transmission is in progress, or while WSPR owns the PA, the target is stored and the
-  page says so
 
 Everything mirrors the Tab5 display with sub-second latency.
 
@@ -621,6 +616,12 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Radio ▲** — the things that reach the radio itself:
 
 - **Switch to Panadapter / CW / FT8 / FT4 / JS8 / WSPR** — changes the Tab5’s own screen from the browser. *(v1.25.0: CW added to the list.)* The **Radio** menu lists all six pages, so each one is a single click; it no longer steps through them in sequence. Choosing a page is what enables it, and the menu follows the Tab5 if you switch there instead
+- **TX power** — transmit power on this band, one button per level. *(After v1.26.0: moved
+  here from the top bar.)* The levels are the ones your own Calibrate Power sweep
+  measured, so a figure the PA never produced is refused rather than rounded to a
+  neighbour. A band with no calibration shows no buttons and says so. While a
+  transmission is in progress, or while WSPR owns the PA, the target is stored and the
+  row says so
 - **Noise reduction** and **Auto-notch** *(v1.26.0)* — for the audio that the **Listen** button plays: an on/off box, Low / Med / High, Speech model or Spectral, and the Auto-notch box. They run in the browser and cost the Tab5 nothing. See [Web DSP](web-dsp.md).
 - **Memory channels** — your 32 channels: click one to tune to it, drag one onto another slot to move it, or onto the bin to clear it
 - **Let me use the QMX menus** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you hand it back. See [Settings](settings.md#radio)

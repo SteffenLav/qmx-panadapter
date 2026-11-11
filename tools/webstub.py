@@ -51,6 +51,8 @@ DEFAULT = {
     },
 }
 
+OUT_PWR = {"target": 500}   # out_power write target, in memory
+
 JS8 = {
     "mode": "js8", "lines": [], "row_msg": [], "senders": [], "count": 0,
 }
@@ -202,6 +204,26 @@ class H(BaseHTTPRequestHandler):
             return self._send(json.dumps({"ok": True, "frames": frames,
                                           "secs": frames * 15, "text": t}),
                               "application/json")
+        # out_power: the band's calibrated ladder, the shape webserver.c answers.
+        # The state file's "out_power" key overrides it ({"calibrated": false}
+        # for an uncalibrated band); a write moves the target in memory.
+        if req.get("action") == "out_power":
+            st = merged(self.state_path)
+            op = {"ok": True, "band": str(st.get("band", "20m")).upper(),
+                  "calibrated": True, "watts_x100": [50, 100, 200, 300, 400, 500],
+                  "busy": False, "wspr_owns_pa": False}
+            op.update(st.get("out_power", {}))
+            op.setdefault("target_x100", OUT_PWR["target"])
+            if "watts_x100" in req:
+                w = req["watts_x100"]
+                if not op["calibrated"]:
+                    return self._send(json.dumps({"ok": False, "error": "%s is not power-calibrated" % op["band"]}), "application/json")
+                if w not in op["watts_x100"]:
+                    return self._send(json.dumps({"ok": False, "error": "not a calibrated level"}), "application/json")
+                OUT_PWR["target"] = w
+                return self._send(json.dumps({"ok": True}), "application/json")
+            op["target_x100"] = OUT_PWR["target"]
+            return self._send(json.dumps(op), "application/json")
         self._send(json.dumps({"ok": True}), "application/json")
 
     def log_message(self, *a):
