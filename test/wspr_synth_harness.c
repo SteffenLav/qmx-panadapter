@@ -195,6 +195,9 @@ static void test_sensitivity_sweep(void)
 
 int main(void)
 {
+    /* The decoder allocates nothing itself (docs/wspr-memory.md) - give it
+     * its arena once, as the WSPR page does at entry. */
+    if (!wspr_decode_scratch_init(CAPTURE_SAMPLES)) { fprintf(stderr, "no memory for the WSPR arena\n"); return 1; }
     test_multi_signal();
     test_sensitivity_sweep();
 

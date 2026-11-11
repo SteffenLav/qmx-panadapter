@@ -1663,12 +1663,6 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             ESP_LOGI(TAG, "cands(%d): %s", ncand, cl);
         }
     }
-    /* Release the ~2.3 MB candidate-search FFT scratch before the decode
-     * loop below needs room for build_stage1()'s ~1.44 MB - see the
-     * function's own comment in wspr_decode.c. Costs one re-alloc on the
-     * NEXT cycle's wspr_find_candidates() call, same "once per cycle, not
-     * once per candidate" cost class the 2026-09-19 caching fix established. */
-    wspr_find_candidates_release_scratch();
     found_in_pass = 0;
     tried_this_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {
@@ -1916,7 +1910,8 @@ static void wspr_dec_task(void *arg)
         s_pcm_busy[job.slot] = false;
     }
     set_dec_status("%s", "");
-    wspr_decode_free_scratch();   /* real teardown - see its own comment */
+    /* The arena belongs to the slot loop, which frees it after joining this
+     * task - freeing it here raced nothing but read as ownership it is not. */
     ESP_LOGI(TAG, "decode task stopped");
     s_dec_exited = true;
     psram_task_park();
@@ -2428,6 +2423,7 @@ static void wspr_rx_task(void *arg)
     }
     float *cap = NULL;
     bool   pcm_ok = false;
+    bool   arena_ok = false;  /* the decoder's scratch - docs/wspr-memory.md */
     int    charged = 0;      /* iterations with nothing visibly holding it */
     bool   held_logged = false;
     for (int waited = 0;
@@ -2446,7 +2442,13 @@ static void wspr_rx_task(void *arg)
             s_pcm_busy[i] = false;
             if (!s_pcm[i]) pcm_ok = false;
         }
-        if (cap && pcm_ok) break;
+        /* ⛔ THE DECODER'S WHOLE WORKING SET, ONCE, HERE - docs/wspr-memory.md.
+         * It used to be allocated and freed inside every cycle, and every
+         * cycle then depended on PSRAM fragmentation: 2026-11-11 on v1.26.0
+         * every cycle after the first decoded nothing. Taken last, after the
+         * two big buffers, while the heap is as clean as it will ever be. */
+        if (cap && pcm_ok && !arena_ok) arena_ok = wspr_decode_scratch_init(CAP_SAMPLES);
+        if (cap && pcm_ok && arena_ok) break;
         if (!s_run) break;                      /* asked to stop while waiting */
 
         /* The holder we can actually name. While it is alive the memory is
@@ -2474,13 +2476,18 @@ static void wspr_rx_task(void *arg)
         set_status(held ? "waiting for FT8 to release memory" : "waiting for memory");
         vTaskDelay(pdMS_TO_TICKS(WSPR_ALLOC_WAIT_MS));
     }
-    if (!cap || !pcm_ok) {
-        ESP_LOGE(TAG, "could not allocate the capture buffers (%u KB + %d x %u KB)",
+    if (!cap || !pcm_ok || !arena_ok) {
+        ESP_LOGE(TAG, "could not allocate the receiver's memory (%u KB + %d x %u KB "
+                      "+ %u KB decoder) - %u KB free, largest block %u KB",
                  (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
                  WSPR_PCM_SLOTS,
-                 (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024));
+                 (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024),
+                 (unsigned)(wspr_decode_scratch_bytes(CAP_SAMPLES) / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
         free(cap);
         for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
+        wspr_decode_scratch_deinit();
         /* And the decoder's shared 12000 -> 1500 Hz stream, ~1.4 MB of PSRAM
          * that is otherwise held until the next capture happens to land on a
          * different buffer. Freed HERE, with the buffers it was derived from,
@@ -2508,10 +2515,19 @@ static void wspr_rx_task(void *arg)
     ESP_LOGI(TAG, "guards: near=%s (%.1f Hz)  slow=%s (%u cycles) - both always measured",
              s_guards.enforce_near ? "ENFORCED" : "measured", s_guards.near_hz,
              s_guards.enforce_slow ? "ENFORCED" : "measured", s_guards.slow_cycles);
-    ESP_LOGI(TAG, "slot loop up: %u KB capture + %d x %u KB decode (ping-pong), "
+    /* The waterfall's buffers (~340 KB, kept for the device's lifetime) are
+     * allocated by their first wf_begin(). Do that here, at entry, so the only
+     * allocation left in the cycle path is none (docs/wspr-memory.md). Calling
+     * it again at the first capture only re-arms the row counters. */
+    (void)wf_begin();
+    ESP_LOGI(TAG, "slot loop up: %u KB capture + %d x %u KB window + %u KB decoder, "
+                  "all held until page exit (%u KB PSRAM left, largest %u KB); "
                   "up to %d candidates, %d s budget, searching %.0f-%.0f Hz",
              (unsigned)(CAP_SAMPLES * sizeof(float) / 1024), WSPR_PCM_SLOTS,
              (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024),
+             (unsigned)(wspr_decode_scratch_bytes(CAP_SAMPLES) / 1024),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024),
              WSPR_MAX_CANDS, WSPR_DECODE_BUDGET_MS / 1000,
              SEARCH_LO_HZ, SEARCH_HI_HZ);
 
@@ -2801,31 +2817,12 @@ static void wspr_rx_task(void *arg)
          * taken before the first sample and cannot be overtaken by a retune. */
         const uint32_t cap_dial_hz = wspr_rx_cycle_dial_hz();
 
-        /* ⛔ REALLOCATED HERE, NOT KEPT FOR THE WHOLE SESSION. `cap` (5.76 MB)
-         * is only touched between this capture and the float->int16
-         * conversion right after dsp_ft8_capture_finish() below - idle for
-         * the rest of the cycle (candidate search + per-candidate decode,
-         * 12-45+ s measured). It is freed right after that conversion and
-         * reallocated here, so it is never resident at the same time as
-         * wspr_find_candidates()'s ~2.3 MB scratch or build_stage1()'s
-         * ~1.44 MB (T150) - same "lend it back" pattern already proven for
-         * those two tonight, just a bigger buffer and a once-per-cycle
-         * frequency. Costs one alloc per cycle instead of one for the whole
-         * session; failing to get it is not fatal, the existing skip-cycle
-         * path below already covers a failed capture_begin. */
-        if (!cap) cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
-                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!cap) {
-            ESP_LOGW(TAG, "cycle %lld: could not get the capture buffer back "
-                          "(%u KB free, largest %u KB) - skipping this cycle",
-                     (long long)cycle_utc,
-                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
-                     (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
-            set_status("out of memory - no capture");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            continue;
-        }
-
+        /* `cap` is held from page entry to page exit. T150 freed it after
+         * every conversion and allocated it again here, on the claim that it
+         * was never resident together with the decoder's scratch - but the
+         * previous window decodes WHILE this one captures, so they always
+         * were. The churn only added a 5.76 MB allocation per cycle to the
+         * fragmentation lottery (docs/wspr-memory.md, 2026-11-11). */
         const bool wf_live = wf_begin();
         esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
         if (err != ESP_OK) {
@@ -2953,11 +2950,6 @@ static void wspr_rx_task(void *arg)
          * every time, so the address check looked sufficient. It never was. */
         wspr_decode_capture_changed();
 
-        /* Give the 5.76 MB float buffer back now - see the note at its
-         * reallocation above. Nothing below this point touches `cap`. */
-        free(cap);
-        cap = NULL;
-
         /* The rows were drawn live as the capture filled; this only recomputes
          * the floor from the finished window and repaints against it. No FFTs,
          * so the ~8 s post-capture pause the old whole-window build cost is
@@ -3014,6 +3006,7 @@ static void wspr_rx_task(void *arg)
     free(cap);
     if (s_dec_exited) {
         for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
+        wspr_decode_scratch_deinit();   /* after the join: the decoder is gone */
         /* And the decoder's shared 12000 -> 1500 Hz stream, ~1.4 MB of PSRAM
          * that is otherwise held until the next capture happens to land on a
          * different buffer. Freed HERE, with the buffers it was derived from,

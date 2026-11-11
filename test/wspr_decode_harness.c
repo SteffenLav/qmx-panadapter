@@ -153,6 +153,9 @@ int main(void)
         return 1;
     }
     printf("loaded %s: %ld samples (%.1f s)\n\n", path, n, n / (double)rate);
+    /* The decoder allocates nothing itself (docs/wspr-memory.md) - give it
+     * its arena once, as the WSPR page does at entry. */
+    if (!wspr_decode_scratch_init(n)) { fprintf(stderr, "no memory for the WSPR arena\n"); return 1; }
 
     /* ⛔ THIS WAS 8, AND 8 WAS A CEILING PRETENDING TO BE A MEASUREMENT.
      * wspr_find_candidates() no longer blanks +/-5.9 Hz around each peak (it

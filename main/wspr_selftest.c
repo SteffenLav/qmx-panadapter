@@ -167,6 +167,17 @@ static void wspr_selftest_task(void *arg)
              ST_N_STATIONS, (long long)synth_ms);
     heap_line("after synth");
 
+    /* The decoder takes all its working memory from one arena (docs/wspr-
+     * memory.md) and allocates nothing itself - same contract as the page. */
+    if (!wspr_decode_scratch_init(CAP_SAMPLES)) {
+        ESP_LOGE(TAG, "could not allocate %u KB for the decoder arena",
+                 (unsigned)(wspr_decode_scratch_bytes(CAP_SAMPLES) / 1024));
+        free(buf);
+        s_running = false;
+        psram_task_park();
+        return;
+    }
+
     // --- stage 1: candidate search (averaged periodogram over the capture) ---
     wspr_freq_candidate_t cands[8];
     t = esp_timer_get_time();
@@ -231,6 +242,7 @@ static void wspr_selftest_task(void *arg)
                  nfound, ST_N_STATIONS);
     }
 
+    wspr_decode_scratch_deinit();
     free(buf);
     ESP_LOGI(TAG, "self-test task stack: %u bytes still free",
              (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));

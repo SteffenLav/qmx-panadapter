@@ -40,6 +40,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "read failed\n"); return 1; }
     fclose(f);
 
+    /* The decoder allocates nothing itself (docs/wspr-memory.md) - give it
+     * its arena once, as the WSPR page does at entry. */
+    if (!wspr_decode_scratch_init(n)) { fprintf(stderr, "no memory for the WSPR arena\n"); return 1; }
     char found[MAXFOUND][8];
     int nfound = 0;
 

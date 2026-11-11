@@ -1,6 +1,11 @@
 #include "wspr_fano.h"
 #include <stdlib.h>
 #include <string.h>
+#if defined(ESP_PLATFORM)
+#include "esp_attr.h"          /* EXT_RAM_BSS_ATTR */
+#else
+#define EXT_RAM_BSS_ATTR       /* host harnesses: ordinary .bss */
+#endif
 
 /* K=32 rate-1/2 "Layland-Lushbaugh" generator polynomials - the ones WSPR
  * actually uses (WSJT-X's fano.c also lists NASA-standard and
@@ -303,14 +308,17 @@ static int fano_search(const metric_source_t *src, int delta,
     const unsigned int N = WSPR_ENC_BITS;
     const unsigned int WSPR_FLUSH_START = N - 31; /* depths >= this: bit must be 0 */
 
-    long *gamma = (long *)malloc((size_t)(N + 1) * sizeof(long));
-    uint32_t *enc_state = (uint32_t *)malloc((size_t)(N + 1) * sizeof(uint32_t));
-    fano_stage_t *stage = (fano_stage_t *)malloc((size_t)(N + 1) * sizeof(fano_stage_t));
-    if (!gamma || !enc_state || !stage) {
-        free(gamma); free(enc_state); free(stage);
-        return 0;
-    }
-
+    /* Fixed size (N is a compile-time 81): ~1 KB, reserved at link time in
+     * PSRAM .bss. These were three mallocs per decode attempt - an allocation
+     * inside the WSPR cycle (docs/wspr-memory.md: none are allowed).
+     * NOT on the stack: wspr_dec measured only 4128 B free at its deepest
+     * (bench1 capture), and 1 KB more would leave about 3 KB.
+     * NOT internal .bss: internal RAM is the scarce pool (#65).
+     * Static means one decode at a time - already the decoder's contract
+     * (one wspr_dec task; the boot self-test runs before it exists). */
+    static EXT_RAM_BSS_ATTR long gamma[WSPR_ENC_BITS + 1];
+    static EXT_RAM_BSS_ATTR uint32_t enc_state[WSPR_ENC_BITS + 1];
+    static EXT_RAM_BSS_ATTR fano_stage_t stage[WSPR_ENC_BITS + 1];
     unsigned int d = 0;
     gamma[0] = 0;
     enc_state[0] = 0;
@@ -393,9 +401,6 @@ static int fano_search(const metric_source_t *src, int delta,
         }
     }
 
-    free(gamma);
-    free(enc_state);
-    free(stage);
     return success ? 1 : 0;
 }
 

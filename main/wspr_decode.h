@@ -46,6 +46,7 @@
  *    not yet validated against a genuinely weak/marginal real signal.
  */
 #include <stdint.h>
+#include <stddef.h>   /* size_t - the arena API below */
 /* For WSPR_SNR_UNKNOWN, so the sentinel has ONE definition. wspr_spots.h is
  * plain C (stdint/stdbool only), so this does not cost the portability that
  * lets the host harnesses link this decoder. */
@@ -81,10 +82,23 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
                           double f_hi_hz, wspr_freq_candidate_t *out,
                           int max_out);
 
-// Call once per cycle, right after reading the candidate list and before the
-// per-candidate decode loop - frees this ~2.3 MB scratch so build_stage1()'s
-// ~1.44 MB can have the room instead. See the function's own comment.
-void wspr_find_candidates_release_scratch(void);
+/* SCRATCH ARENA (docs/wspr-memory.md). The search and the per-candidate
+ * decode take ALL their working memory from one region, attached before the
+ * first call and kept until the last. They never allocate. Without an arena,
+ * wspr_find_candidates() returns WSPR_CANDS_NOMEM and no candidate decodes.
+ *
+ *   wspr_decode_scratch_bytes(n)  - exact size needed for captures of n samples
+ *   wspr_decode_scratch_init(n)   - allocate that once (PSRAM on the device)
+ *                                   and attach it; 1 = ok, 0 = no memory
+ *   wspr_decode_scratch_deinit()  - detach and free what init allocated
+ *   wspr_decode_scratch_attach(mem, len) / _detach() - caller-owned memory
+ *
+ * Not thread-safe: one decoding task at a time, as before. */
+size_t wspr_decode_scratch_bytes(long n);
+int    wspr_decode_scratch_init(long n);
+void   wspr_decode_scratch_deinit(void);
+int    wspr_decode_scratch_attach(void *mem, size_t len);
+void   wspr_decode_scratch_detach(void);
 
 typedef struct {
     int ok; /* 1 if this cleared all three plausibility checks */
@@ -168,12 +182,6 @@ typedef struct {
  * anything else ever modifies a capture in place.
  */
 void wspr_decode_capture_changed(void);
-
-// Actually frees the stage-1 scratch (~700 KB x2, grow-only, kept across
-// captures by wspr_decode_capture_changed() above). Call once, when the WSPR
-// decode task really exits - not per capture, or the PSRAM churn this exists
-// to avoid just comes back.
-void wspr_decode_free_scratch(void);
 
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                             wspr_decode_result_t *result);

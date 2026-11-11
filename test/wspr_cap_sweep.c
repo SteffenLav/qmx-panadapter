@@ -93,6 +93,9 @@ int main(int argc, char **argv)
     wspr_guards_defaults(&guards);
     wspr_accepted_t accepted = { 0 };
 
+    /* The decoder allocates nothing itself (docs/wspr-memory.md) - give it
+     * its arena once, as the WSPR page does at entry. */
+    if (!wspr_decode_scratch_init(n)) { fprintf(stderr, "no memory for the WSPR arena\n"); return 1; }
     wspr_freq_candidate_t cands[MAX_SWEEP];
     int ncand = wspr_find_candidates(samples, n, 1350.0, 1650.0, cands, max_c);
     printf("  found %d candidate(s)%s\n", ncand,
