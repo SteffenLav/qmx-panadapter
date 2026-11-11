@@ -4,37 +4,28 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.26.0** - 2026-11-10
+**v1.26.1** - 2026-11-11
 
-**Noise reduction and an auto-notch in the browser, at no cost to the Tab5. Each band remembers its frequency and its mode across a restart. The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser and a band guard on every send.**
-
-- **Web DSP: noise reduction and auto-notch in the browser** *(Samuel W7STF)*. The web page can clean the audio that **Listen** plays. **Speech model** (RNNoise) is for SSB and AM voice. **Spectral** follows the noise floor in each 47 Hz slice of the audio and also works on CW; CW always uses it. **Auto-notch** finds a steady carrier in about a second and filters out up to four at once. Low, Med and High; Med is the default. All of it runs in the browser, so it costs the Tab5 no CPU and no memory. Measured on real SSB at Med: noise between words about 13 dB down with the speech model, 5 to 10 dB down with Spectral. Measured on real CW: gaps of 60 ms and longer reach the level's limit (6 / 12 / 19-20 dB), and a strong note is 0.3 dB down. It adds about 0.1 s of delay; the notch adds none. ⚠ **Spectral on SSB and the auto-notch are measured, not yet judged by ear on a live band.** The speech model on SSB and Spectral on CW were both heard live. See [Web DSP](guide/web-dsp.md).
-- **Each band remembers its frequency and its mode, across a restart.** The per-band frequency used to last only until power-off, and the mode was never recalled: USB on 20 m stayed USB on 40 m. Both are now stored. A band you have not visited starts in LSB below 10 MHz and USB above.
-- **CW type-ahead from the browser** *(Ralph DL1HR)*. A new box on the web CW page: Space keys each word, Enter keys the rest, and you can continue to type while the radio keys. The Tab5 holds up to 256 characters and gives the radio the next part only when the radio's own buffer is empty. **Stop** drops what the radio has not been given yet. ⚠ Tested in a host harness; not exercised separately on the radio.
-- **A STOP button on the Tab5 CW page.** While text is queued, the status line becomes a red **STOP - drop N queued**. The part the radio already holds still runs to the end, because the QMX has no command to stop it.
-- **A Station row and a Log button on the web CW page; Name, QTH and Remarks in the log window** *(Gyula HA3HZ)*. Type the other station's callsign in the browser, so `{CALL}` works on a signal too weak to decode. **Log this contact** opens the log window with the callsign and report filled in. The three new fields are written to ADIF as `NAME`, `QTH` and `COMMENT`.
-- **A Log button on the Tab5 CW page** *(Gyula HA3HZ)*. One tap above the station card, where it used to be a trip through the settings drawer.
-- **A CW macro touch can be abandoned** *(Gyula HA3HZ)*. The left-edge grip lies in front of the first three macro buttons, so a swipe that started there sent a macro. A sideways slide of about 40 px now abandons the touch, and a slide to the right from near the left edge opens the page picker.
-- **A tap on the left or right edge grip opens its drawer**, as a Bluetooth mouse click always did. The bottom grip is unchanged.
-- ⛔ **CW sent from the Tab5 now passes the band guard.** FT8, FT4, JS8, WSPR and Antenna Tune were checked; a CW macro or typed text was not. It is now refused outside your region's band plan. ⚠ **Behaviour change: with no IARU region set, CW send is refused**, as FT8 already was. Set the region, or a grid for the Tab5 to work it out from. A paddle or key on the QMX is not checked, because the radio keys itself.
-- **Web Tune shows its result** *(Ralph DL1HR)*. On a quiet band the Tune button answers "listening" and moves the dial up to 8 seconds later. The Tab5 showed that result; the web page did not. It does now.
-- **The Tab5 waterfall adds no rows while you transmit CW** *(Bryan N0LUF)*, including when you key by hand, so your own signal is not painted over the band. ⚠ Implemented; not yet measured against a hand key. The browser's waterfall is not covered.
-- **SSB Tune refuses fewer good signals.** In the test set it accepted 93 % of the signals it should and now accepts 96 to 97 %; the signals it wrongly refused all had a 200 Hz pitch. Not re-graded on live SSB.
-- **The web page says when it is out of date** *(Gyula HA3HZ)*. After an update a browser could show its own stored copy of the page with the old controls. The page now checks and shows a banner. ⚠ Proven in Chromium only, not in Firefox.
+**WSPR decodes every cycle again: from v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after it opened and then nothing. The WSPR search is a third faster. The web spectrum follows your dB range, TX power is a slider in the Radio menu, and the web top and bottom bars are cleaned up.**
 
 **Fixes**
 
-- **The web spectrum could stay dead for a whole session.** The task that feeds it was created once, at the moment the Tab5 has the least free memory. When that failed, browsers connected and received nothing. Seen in 12 of 573 starts on the bench. It is now created when a browser connects.
-- **A spectrum frame could be written into the next web reply** after a browser left, which corrupted that reply. Measured in 4 of 11 test rounds on v1.25.0; 0 of 40 after the fix.
-- **A web command longer than 255 bytes was cut and refused as "bad json".** The limit is now 1024 bytes, and a longer one is refused with a reason.
-- **The CW page kept the Panadapter's band-plan strip** when you arrived from a zoomed view, and showed "Digi | Phone" with no CW segment.
-- **60 m no longer has its own sideband rule.** Every band below 10 MHz starts in LSB.
+- ⛔ **WSPR decodes every cycle again** *(Samuel W7STF)*. From v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after you opened it, then logged `NO MEMORY for the candidate search` for every cycle after that, so it looked like a bad antenna or a dead band. The receiver now takes all the memory it needs once, when you open the page, and allocates nothing during a cycle. If the memory is not there, the page says so once, with the numbers. On the bench: 22 cycles and repeated page re-entries with no failure, against 4 failures in 4 cycles on v1.26.0.
+- **The WSPR search is a third faster: 8.3 s instead of 12.8 s.** While the WSPR page was showing, the Tab5 kept drawing the hidden panadapter behind it and took about a third of the processor the decoder runs on. That time now goes to decoding, two searches per cycle.
+- **A memory leak on every visit to the WSPR page is fixed** (16 KB a visit). The same fault, smaller, is fixed in the WiFi scan, WiFi on/off, the Reader page, the QMX terminal and the Bluetooth start. The firmware build now refuses this fault.
+- **The web spectrum follows the dB range** *(Samuel W7STF)*. The browser drew the spectrum on its own fixed scale and ignored the floor and ceiling set on the Tab5. It now uses them (with **F** off, as on the Tab5).
+- **The web WSPR page shows only the controls that work there.** Mode, BW, Zoom, Tune and RIT did nothing on the WSPR page, or were refused, and are no longer shown. **Band** stays and lists the WSPR bands: a pick does what the WSPR page's own band button does.
+- **The FT8 boot self-test says SKIPPED, not FAIL, when it cannot get memory** - for example when the Tab5 starts straight into the WSPR page. It used to report that as a decoding fault.
+
+**Web page**
+
+- **TX power moved from the top bar to the Radio menu**, as a slider with one stop per level your Calibrate Power sweep measured - 0.1 W steps where the radio has them. The top bar no longer scrolls sideways.
+- The top bar's frequency and S-meter, and the bottom bar's clock, are smaller. The bottom bar shows the WiFi network name; the signal strength is in its tooltip. **Miscellaneous** is now **Misc**.
+- The bottom-bar menus are never taller than the window; on a short window a menu scrolls instead of losing its top.
 
 **Documentation**
 
-- A new chapter, [Web DSP](guide/web-dsp.md).
-- The [Web API](reference/web-api.md) page had about 25 errors, some of them old: wrong status codes and reply bodies, a WebSocket frame described as 1026 bytes when it is 1063, and a Python example that no longer worked. All corrected against the code, and the CW actions added.
-- Gesture, tuning-step, mode-colour and page-picker descriptions corrected in the manual and the PDF.
+- The [Web DSP](guide/web-dsp.md) chapter link on tab5.lav.dk works again, and the site now publishes itself on every release.
 
 **Known, not fixed**
 
@@ -42,6 +33,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
 
 ## Previous Releases
+
+### v1.26.0 - 2026-11-10
+
+**Noise reduction and an auto-notch in the browser, at no cost to the Tab5. Each band remembers its frequency and its mode across a restart. The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser and a band guard on every send.**
+
+- Web DSP: a speech model and a spectral noise reduction, and an auto-notch, all in the browser.
+- Each band remembers its frequency and mode across a restart.
+- CW: type-ahead from the browser, a STOP for queued text, a Log button on both screens, a Station row on the web.
+- CW sent from the Tab5 passes the band guard; with no IARU region set, CW send is refused.
+- Fixes: a web spectrum that could stay dead for a session, a frame written into the next web reply, web commands over 255 bytes.
 
 ### v1.25.0 - 2026-11-09
 
@@ -1295,7 +1296,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
