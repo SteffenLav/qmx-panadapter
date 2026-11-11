@@ -205,11 +205,16 @@
   #top-center { display: flex; justify-content: center; align-items: center; }
   #top-right { display: flex; align-items: center; gap: 0.5rem; }
   .top-fill  { flex: 1; min-width: 0; }
+  /* 1.4rem, one step down from 1.6 (operator, 2026-11-11: top-bar cleanup). */
   #vfo {
-    color: var(--accent); font-size: 1.6rem; font-weight: 700;
+    color: var(--accent); font-size: 1.4rem; font-weight: 700;
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
-  #smeter { display: block; width: 240px; height: 40px; flex-shrink: 0; }
+  /* Shown 30 % smaller (operator, 2026-11-11: top-bar cleanup). The canvas
+     still DRAWS at 240 x 40 (width/height attributes, and every coordinate
+     in drawSmeter()), so bar, ticks and labels all shrink together and the
+     1.43x oversampling keeps the text sharp. Change the size here only. */
+  #smeter { display: block; width: 168px; height: 28px; flex-shrink: 0; }
   /* clickable pills */
   .pill {
     background: #1f2937; border-radius: 4px; padding: 0.15rem 0.5rem;
