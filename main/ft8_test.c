@@ -4736,11 +4736,20 @@ bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
                                    out_text, out_len, out_snr_db, out_score);
 }
 
+/* true when the last ft8_synth_and_decode*() returned false because a PSRAM
+ * buffer could not be allocated, not because nothing decoded. 2026-11-11: the
+ * boot self-test lost its 622 KB buffer to the WSPR page (restored at boot,
+ * allocating at the same moment) and logged "FAIL (no candidate decoded)" -
+ * a memory collision reported as a decoder fault. */
+static bool s_synth_nomem;
+bool ft8_synth_last_was_nomem(void) { return s_synth_nomem; }
+
 bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
                              int want_snr_db,
                              char *out_text, size_t out_len,
                              int *out_snr_db, int *out_score)
 {
+    s_synth_nomem = false;
     if (!msg || !out_text || !out_len) return false;
 
     // Whichever protocol is running. The simulator used to be FT8-only and said
@@ -4762,7 +4771,7 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
     int n_wave  = n_sym * n_spsym;
 
     float *signal = heap_caps_malloc((size_t)slot_samp * sizeof(float), MALLOC_CAP_SPIRAM);
-    if (!signal) return false;
+    if (!signal) { s_synth_nomem = true; return false; }
     memset(signal, 0, (size_t)slot_samp * sizeof(float));
 
     // A NOISE FLOOR TO MEASURE AGAINST (#265). Without it the buffer is silent
@@ -4796,7 +4805,7 @@ bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
     if (want_snr_db != FT8_SIM_SNR_CLEAN) {
         // Synthesise into scratch, then ADD it to the noise at the chosen level.
         tone_buf = heap_caps_malloc((size_t)n_wave * sizeof(float), MALLOC_CAP_SPIRAM);
-        if (!tone_buf) { heap_caps_free(signal); return false; }
+        if (!tone_buf) { heap_caps_free(signal); s_synth_nomem = true; return false; }
         memset(tone_buf, 0, (size_t)n_wave * sizeof(float));
     }
     if (!synth_gfsk_heap(tones, n_sym, tone_hz, gfsk_bt, sym_per, SR_HZ, tone_buf)) {
@@ -4881,6 +4890,11 @@ static void ft8_sim_synth_selftest_task(void *arg)
         bool ok = (strcmp(text, "CQ W1AW FN31") == 0);
         ESP_LOGI(TAG, "sim synth selftest: %s decoded='%s' snr=%d score=%d",
                  ok ? "PASS" : "FAIL (mismatch)", text, snr, score);
+    } else if (ft8_synth_last_was_nomem()) {
+        ESP_LOGW(TAG, "sim synth selftest: SKIPPED - no PSRAM for its buffers "
+                      "(free %u KB, largest block %u KB; another page holds it)",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
     } else {
         ESP_LOGE(TAG, "sim synth selftest: FAIL (no candidate decoded)");
     }

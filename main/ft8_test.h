@@ -68,6 +68,10 @@ void ft8_arrl_fd_e2e_selftest(void);
 // same estimator as a real signal, including its calibration offset, and that
 // is the point - the simulator must not report a number it was simply told.
 #define FT8_SIM_SNR_CLEAN  999
+// true when the last ft8_synth_and_decode*() failed for lack of PSRAM, not
+// because nothing decoded - so a caller can say which.
+bool ft8_synth_last_was_nomem(void);
+
 bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
                              int want_snr_db,
                              char *out_text, size_t out_len,

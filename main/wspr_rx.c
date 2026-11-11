@@ -1600,10 +1600,17 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
 
     /* Reset the per-cycle ration of deep searches before the first pass. */
     wspr_decode_begin_cycle();
+    /* Where the decode starts within the 120 s cycle, and how long each
+     * search takes: 2026-11-11 the boundary-to-candidates time was 13-14 s
+     * against a 9.5 s historical median, and the log could not say whether
+     * the search or the hand-off before it had grown. */
+    const long start_in_cycle_ms = (long)(now_ms() % WSPR_CYCLE_MS);
 
-  next_pass:
+  next_pass:;
+    const int64_t search_t0 = esp_timer_get_time();
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                   cands, WSPR_MAX_CANDS);
+    const long search_ms = (long)((esp_timer_get_time() - search_t0) / 1000);
     /* ⛔ OUT OF MEMORY IS NOT AN EMPTY BAND, AND IT USED TO PRINT AS ONE.
      * wspr_find_candidates() needs ~2.3 MB of FFT scratch and entering this
      * page leaves only ~2.1-2.9 MB of PSRAM; when it lost, it returned 0 and
@@ -1660,7 +1667,8 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                 o += (size_t)snprintf(cl + o, sizeof(cl) - o, "%s%.1f/%.0f",
                                       i ? " " : "", cands[i].freq_hz,
                                       cands[i].comb_score);
-            ESP_LOGI(TAG, "cands(%d): %s", ncand, cl);
+            ESP_LOGI(TAG, "cands(%d) search %ld ms, pass %d, decode began +%ld ms: %s",
+                     ncand, search_ms, pass + 1, start_in_cycle_ms, cl);
         }
     }
     found_in_pass = 0;

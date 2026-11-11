@@ -221,7 +221,8 @@ static bool build_message(const char *call_to, const char *call_de, const char *
     // the decoder MEASURED rather than one the simulator announced (#265).
     if (!ft8_synth_and_decode_at(&msg, tone_hz, level_db,
                                  text, sizeof(text), &snr_db, &score)) {
-        ESP_LOGW(TAG, "synth/decode failed for '%s' '%s' '%s'", call_to, call_de, extra);
+        ESP_LOGW(TAG, "synth/decode failed for '%s' '%s' '%s'%s", call_to, call_de, extra,
+                 ft8_synth_last_was_nomem() ? " - no PSRAM for the synth buffer" : "");
         return false;
     }
     snprintf(text_out, text_cap, "%s", text);
