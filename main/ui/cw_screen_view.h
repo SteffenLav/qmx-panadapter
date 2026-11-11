@@ -19,6 +19,9 @@ void       cw_screen_view_init(lv_obj_t *parent);
 void       cw_screen_view_show(void);
 void       cw_screen_view_hide(void);
 lv_obj_t  *cw_screen_view_get_container(void);
+/* The waterfall area this page leaves visible (screen coords); false when
+ * the page is hidden. Used by ui.c to repaint only that part on a shift. */
+bool       cw_screen_view_carpet_visible(lv_area_t *a);
 
 // Called by cat.c's TB; response parser with freshly decoded characters.
 // Runs on the CDC-ACM RX callback context — must never touch LVGL, so it

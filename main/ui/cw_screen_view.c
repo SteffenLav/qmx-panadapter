@@ -2164,6 +2164,30 @@ static lv_obj_t *make_pane_btn(lv_obj_t *parent, int x, int y, int w, int h,
     return b;
 }
 
+/* Screen-space part of the waterfall NOT under the pane or the ticker, for
+ * ui.c's carpet shift. Returns false while this page is not shown - then the
+ * whole carpet must be invalidated as usual.
+ *
+ * ⛔ WHY (measured 2026-11-11, 7B, dev_cw_probe on the CW page): a shift used
+ * lv_image_set_offset_y(), which invalidates the WHOLE carpet, so the pane and
+ * the ticker on top - and the carpet under them - were redrawn on every shift.
+ * Draw time per frame:
+ *     baseline 57-62 ms (13 fps, core 0 0-13 % idle)
+ *     pane hidden 45-49, ticker hidden 45-46, card/hint/pen/Log hidden 58-59
+ *     everything hidden 30
+ *     only the visible carpet invalidated 16 ms (26 fps, core 0 25-39 % idle)
+ * The panadapter page, with no overlay, draws 22 ms. The ticker is OPAQUE for
+ * the same reason: at 90 % the carpet under it would show through, frozen. */
+bool cw_screen_view_carpet_visible(lv_area_t *a)
+{
+    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return false;
+    a->x1 = PANE_W;
+    a->x2 = MID_W - 1;
+    a->y1 = MID_Y;
+    a->y2 = MID_Y + MID_H - TICKER_H - BANDPLAN_H - 1;
+    return true;
+}
+
 void cw_screen_view_init(lv_obj_t *parent)
 {
     s_container = lv_obj_create(parent);
@@ -2400,7 +2424,9 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_size(s_ticker, MID_W - PANE_W, TICKER_H);
     lv_obj_set_pos(s_ticker, PANE_W, MID_H - TICKER_H - BANDPLAN_H);
     lv_obj_set_style_bg_color(s_ticker, lv_color_hex(0x101418), 0);
-    lv_obj_set_style_bg_opa(s_ticker, LV_OPA_90, 0);
+    /* COVER, not 90 %: the carpet under the ticker is no longer repainted on
+     * a shift (see cw_screen_view_carpet_visible), so it must not show. */
+    lv_obj_set_style_bg_opa(s_ticker, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_ticker, lv_color_hex(0x2a323c), 0);
     lv_obj_set_style_border_width(s_ticker, 1, 0);
     lv_obj_set_style_radius(s_ticker, 0, 0);
