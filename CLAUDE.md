@@ -80,19 +80,20 @@ not us. Run the checker; do not re-read the prose. See
 ⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
 the served bytes with `cmp`, not the upload's exit code.
 
-## ⛔ The site is published by `git push` in `site/` - NEVER FTP
+## ⛔ The site: `git push` in `site/`, then HE clicks Importer at Simply - NEVER FTP
 
-`site/` has its own nested `.git` (remote `qmx-panadapter-site`); Simply.com
-deploys from it. After `mkdocs build --clean` and AFTER the GitHub release exists:
-`cd site; git add -A; git commit -m "site: mkdocs build for tab5.lav.dk vX.Y.Z (Simply.com Git-import deploy)"; git push origin main`.
-⛔ Never run `publish_site.ps1` (FTP) - operator's rule, v1.25.0/v1.26.0/2026-11-11.
+`site/` has its own nested `.git` (remote `qmx-panadapter-site`). After
+`mkdocs build --clean` and AFTER the GitHub release exists:
+`cd site; git add -A; git commit -m "site: mkdocs build for tab5.lav.dk vX.Y.Z"; git push origin main`.
+⛔ Never run `publish_site.ps1` (FTP) - operator's rule.
 
-⚠ **The push is not the deploy.** The repo has NO webhook; Simply pulls on its
-side. Measured 2026-11-11: GitHub had `b9ff361` (v1.26.0) but every page under
-`guide/`, `md/` was still v1.24.2, so new pages 404'd (Samuel W7STF). Root files
-looked new only because a stray FTP run uploaded them. **Verify a SUBDIRECTORY
-page, never `latest.json`**: `curl -sI https://tab5.lav.dk/md/releases.md` -
-Last-Modified must be today. If not, the operator triggers the pull at Simply.
+⛔ **The push is NOT the deploy.** Simply's "Importer fra Git" is a one-shot
+clone the operator clicks by hand. Ask him to click it, and give him:
+Git-URL `https://github.com/SteffenLav/qmx-panadapter-site.git`, destination `/tab5`.
+v1.24.2 worked because he clicked it (transcript, 2026-11-04 23:11 UTC); v1.25.0
+and v1.26.0 were pushed and never imported - pages 404'd (Samuel W7STF).
+**Verify a SUBDIRECTORY page, never `latest.json`**:
+`curl -sI https://tab5.lav.dk/md/releases.md` - Last-Modified must be today.
 See [site deploy](../../../memory/project_site_git_import_deploy.md).
 
 ## ⛔ Every transmit path must pass the band guard
