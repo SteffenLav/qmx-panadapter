@@ -72,7 +72,10 @@ a timing series by outcome before comparing it.
 
 The real history of the search time, successful cycles, median per build:
 8.4-10.2 s for v1.16-v1.21, 11.1 s at v1.23.1, 13.1-16.7 s from v1.24.1.
-That growth predates this work and its cause is NOT known.
+That growth predates this work. CAUSE FOUND (T193): on the WSPR page the
+`render` task drew the hidden panadapter at full rate (its gate excluded FT8
+only), at priority 3 on core 1 beside wspr_dec at priority 1 - 36.5 % of the
+core during a search. Gated in render.c: search 12.8 s -> 8.3 s on bench1.
 
 The memory part of that run was good: page entry allocated everything with
 1256 KB PSRAM left (largest free 1184 KB), and cycle 1 decoded 2.

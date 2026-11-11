@@ -384,8 +384,17 @@ static void render_task(void *arg)
          * pixels nobody can see - which is exactly the reasoning the overlay
          * gate beside it already states. The browser keeps its full rate
          * because ws_push_task reads dsp_get_spectrum() on its own path. */
-        bool pan_visible = (ui_mode_get() != UI_MODE_FT8) && !ui_any_overlay_active()
-                           && !ui_get_server_mode();
+        /* ⛔ WSPR JOINS FT8 HERE (T193, 2026-11-11). The WSPR page is the same
+         * opaque 1280 x MID_H container as the FT8 page, yet only FT8 was in
+         * this gate - so on WSPR this task kept drawing the hidden panadapter
+         * at full rate, at priority 3 on core 1, the same core as wspr_dec at
+         * priority 1. cpu_owners 5 s into a search on bench1: wspr_dec 51.8 %,
+         * render 36.5 %. The search took 12.8 s, about twice its own compute;
+         * T193's "search grew from 9.5 s to 13-16 s" was this task, not the
+         * search. CW stays: that page shows the spectrum. */
+        const ui_mode_t mode_now = ui_mode_get();
+        bool pan_visible = (mode_now != UI_MODE_FT8) && (mode_now != UI_MODE_WSPR)
+                           && !ui_any_overlay_active() && !ui_get_server_mode();
         bool have_spectrum = false;
 
         if (pan_visible) {
