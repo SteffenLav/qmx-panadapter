@@ -1001,6 +1001,11 @@
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     padding: 4px; min-width: 170px; z-index: 1000;
     box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+    /* ⛔ NEVER TALLER THAN THE WINDOW. The menu grows UPWARD from the bar, so
+       without a cap its top - the page selector - went off the top of a short
+       window (operator, 2026-11-11). On a window too short for it, it scrolls
+       inside itself; it is never cut off. 3.5rem clears the bar. */
+    max-height: calc(100vh - 3.5rem); overflow-y: auto; overflow-x: hidden;
   }
   .bot-menu.open { display: flex; }
   .bot-menu a {
@@ -1039,20 +1044,23 @@
   #nr-row .nr-brk { flex-basis: 100%; height: 0; }
   #nr-state { color: var(--dim); flex-basis: 100%; }
   #nr-state:empty { display: none; }
-  /* TX power row: same shape as #nr-row, and the same width:0 + min-width
-     trick so a long ladder wraps instead of widening the menu. */
-  #pwr-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.3rem 0.35rem;
+  /* TX power: TWO LINES. Line 1 is the label with the value at its right
+     end; line 2 is the slider at the full menu width. It was a button per
+     calibration level on wrapped lines (the menu, which opens UPWARD, grew
+     until the page selector left the top of the window), then one line of
+     label + slider + value, which squeezed the slider or widened the menu.
+     Operator, 2026-11-11: text goes on the line above; 0.1 W must be
+     reachable. The real 20 m ladder on bench1 has 29 levels, 0.1 W apart
+     below 1.7 W, so the slider needs the whole width. width:0 + min-width
+     keeps the row from widening the menu. A message replaces the value. */
+  #pwr-row { display: flex; flex-flow: row wrap; align-items: center; gap: 0.25rem 0.45rem;
              padding: 0.4rem 0.6rem; font-size: 0.78rem; color: #9aa4b2;
              width: 0; min-width: 100%; box-sizing: border-box; }
-  #pwr-row .pwr-main { color: var(--fg, #e5e7eb); flex-basis: 100%; }
-  #pwr-btns { display: contents; }
-  #pwr-btns button { font: inherit; background: #1f2937; color: var(--fg);
-             border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.45rem;
-             cursor: pointer; }
-  #pwr-btns button:hover { border-color: var(--accent); }
-  #pwr-btns button.active { border-color: var(--accent); color: var(--accent); }
-  #pwr-state { color: var(--dim); flex-basis: 100%; }
-  #pwr-state:empty { display: none; }
+  #pwr-row .pwr-main { color: var(--fg, #e5e7eb); white-space: nowrap; flex: 1 1 auto; }
+  #pwr-val { flex: none; white-space: nowrap; color: var(--fg, #e5e7eb); }
+  #pwr-val.say { color: var(--dim); white-space: normal; flex: 1 1 100%; }
+  #pwr-slider { flex: 1 1 100%; min-width: 0; margin: 0.15rem 0 0; accent-color: var(--accent); }
+  #pwr-slider[hidden] { display: none; }
   /* Unit GPS owns PORT.A: the relay row below is not broken, it is not
      applicable - greyed and inert, with its tooltip swapped for the reason. */
   #gpio-row.port-off { opacity: 0.5; }
@@ -1715,10 +1723,10 @@
              levels ARE that sweep's results, see the out_power action for why
              a free-text wattage is refused. An uncalibrated band shows why
              there are no buttons instead of hiding the row. -->
-        <div id="pwr-row" title="Transmit power on this band, from its power calibration.">
+        <div id="pwr-row" title="Transmit power on this band, from its power calibration. Drag, then let go to set it.">
           <span class="pwr-main">TX power <span id="pwr-band"></span></span>
-          <span id="pwr-btns"></span>
-          <span id="pwr-state"></span>
+          <span id="pwr-val">--</span>
+          <input type="range" id="pwr-slider" min="0" max="0" step="1" value="0" hidden>
         </div>
         <div id="nr-row">
           <label class="nr-main"><input type="checkbox" id="nr-on"> Noise reduction</label>
@@ -6342,6 +6350,7 @@ async function wsprFillBands() {
     const d = await r.json();
     if (!d.bands || !d.bands.length) return;
     wsprBandsLoaded = true;
+    window.__wsprBands = d.bands;   /* the top Band pill uses it on this page */
     const sel = document.getElementById("wspr-band");
     const cfg = await (await fetch("/api/settings", { cache: "no-store" })).json();
     sel.innerHTML = "";
@@ -7999,6 +8008,38 @@ function renderCqParity(v, fromDevice) {
 function buildBandDropdown() {
   const dd = document.getElementById("dd-band");
   dd.innerHTML = "";
+  /* ⭐ ON THE WSPR PAGE THE PILL PICKS A WSPR BAND. set_band is refused there
+     (wspr_owns_the_dial() - W5JSS's 20 m pick put the radio on FT8 while WSPR
+     labelled its spots 160 m), so the pill offers the WSPR page's own band
+     list and goes through the same #wspr-band select, which writes
+     wspr_dial_hz exactly as the Tab5's WSPR band button does. Operator,
+     2026-11-11: "BAND is NOT hidden - how would I change it then?" */
+  const wsel = document.getElementById("wspr-band");
+  if (lastScreen === "wspr" && !window.__wsprBands) {
+    /* Not loaded yet: load it and rebuild, but NEVER fall through to the
+       set_band list below - every pick from it would be refused here. */
+    const wait = document.createElement("button");
+    wait.textContent = "loading…"; wait.disabled = true;
+    dd.appendChild(wait);
+    wsprFillBands().then(() => { if (window.__wsprBands) buildBandDropdown(); });
+    return;
+  }
+  if (lastScreen === "wspr" && window.__wsprBands && wsel) {
+    const cur = parseInt(wsel.value, 10);
+    window.__wsprBands.forEach((b) => {
+      const btn = document.createElement("button");
+      btn.textContent = b.band + "m";
+      if (b.hz === cur) btn.classList.add("active");
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        closeAllDropdowns();
+        wsel.value = String(b.hz);
+        wsel.dispatchEvent(new Event("change"));
+      };
+      dd.appendChild(btn);
+    });
+    return;
+  }
   /* Highlight only the NEAREST band to the current VFO, not every band within
      1.5 MHz — 10m (28.1246) and 11m (27.245) are 0.88 MHz apart, so a fixed
      threshold lit both yellow at once. */
@@ -8417,10 +8458,7 @@ async function tick() {
          gesture outside the panadapter screen at all). Greying with
          `dial-locked` was the old rule; this is the web matching the Tab5's
          own behaviour instead of inventing a softer refusal. */
-      ["band", "mode", "bw", "zoom", "zerobeat"].forEach((id) => {
-        const pill = document.getElementById("pill-" + id);
-        if (pill) pill.style.display = isWspr ? "none" : "";
-      });
+      /* (The pills are set in ONE place, further down - see TOP_PILL_HIDDEN.) */
       /* ⛔ ON THE DIGI SCREEN THESE ARE NOT HIDDEN BECAUSE THEY ARE UNTIDY -
          THEY DO NOT WORK. The FT8/FT4/JS8 engine owns the dial, the firmware
          refuses band, mode and bandwidth while it is running, and the pane
@@ -8442,10 +8480,29 @@ async function tick() {
          can see, and one of them could move your dial." FREQ AND F STAY -
          Freq is how an off-standard JS8/FT8 frequency is seen and set, and F
          was already removed below for having nothing to flatten. */
-      ["band", "bw", "rit", "zoom", "zerobeat"].forEach((id) => {
-        const pill = document.getElementById("pill-" + id);
-        if (pill) pill.style.display = isFt8 ? "none" : "";
-      });
+      /* ⛔ ONE RULE PER PILL, SET ONCE. This used to be two loops: the WSPR
+         one above hid Band/Mode/BW/Zoom/Tune, and then this FT8 one ran and
+         set display "" on every screen that was not FT8 - so on WSPR it put
+         them all straight back. The Mode block below did the same. Measured
+         on bench1 2026-11-11: screen "wspr", all six pills visible. Operator:
+         "remove the MODE and BW and ZOOM and TUNE and RIT buttons from the
+         top bar - what use are they here anyways on WSPR?" Band goes too: the
+         firmware refuses it on the WSPR page (wspr_owns_the_dial()). */
+      {
+        const TOP_PILL_HIDDEN = {
+          band:     isFt8,
+          mode:     isFt8 || isWspr || isCw,
+          bw:       isFt8 || isWspr,
+          zoom:     isFt8 || isWspr,
+          zerobeat: isFt8 || isWspr,
+          rit:      isFt8 || isWspr,
+        };
+        for (const id in TOP_PILL_HIDDEN) {
+          const pill = document.getElementById("pill-" + id);
+          if (pill) pill.style.display = TOP_PILL_HIDDEN[id] ? "none" : "";
+        }
+        updateRitParkPill();   /* Park follows RIT's screen rule */
+      }
       /* Mode is its own rule, not folded into the list above: it hides on
          FT8/JS8 for the same reason the others do (the slot engine owns the
          dial), AND on CW (operator, 2026-11-09) - the mode-banner above
@@ -8456,10 +8513,7 @@ async function tick() {
          block above gives: a control that cannot do anything should not be
          on screen inviting the question. Band/BW/Zoom stay live on CW - it
          is still a tuning page for everything else. */
-      {
-        const pill = document.getElementById("pill-mode");
-        if (pill) pill.style.display = (isFt8 || isCw) ? "none" : "";
-      }
+      /* (Mode is in TOP_PILL_HIDDEN above.) */
       /* F (flat-spectrum) goes with them. It is not a pill, so it needs its
          own line - and it is not kept for being a view control either: there
          is no spectrum on this screen to flatten, so the button does nothing
@@ -10203,7 +10257,9 @@ function updateRitParkPill() {
      you to stop reading it - the same rule the activation pill follows. */
   const canPark    = !!lastRitHz;
   const canRestore = !canPark && !!lastRitParkedHz;
-  pill.style.display = (canPark || canRestore) ? "" : "none";
+  /* Never on a decode page: RIT itself is hidden there (TOP_PILL_HIDDEN). */
+  const decodePage = lastScreen === "ft8" || lastScreen === "wspr";
+  pill.style.display = (!decodePage && (canPark || canRestore)) ? "" : "none";
   if (!canPark && !canRestore) return;
   const hz = canPark ? lastRitHz : lastRitParkedHz;
   document.getElementById("ritpark-lab").textContent = canPark ? "Park" : "Restore";
@@ -10532,11 +10588,14 @@ function updateCwQueue(ctx) {
 
 const fmtW = (w) => (w / 100).toFixed(2).replace(/0$/, "") + " W";
 
-/* Paints the TX power row in the Radio menu from outPwrInfo. */
+/* Paints the TX power row in the Radio menu from outPwrInfo: one slider over
+   the band's calibrated levels (they ARE the Calibrate Power sweep's results -
+   see the out_power action for why a free-text wattage is refused). */
+let pwrSayUntil = 0;
 function updateOutPwrPill() {
-  const btns = document.getElementById("pwr-btns");
-  const st   = document.getElementById("pwr-state");
-  if (!btns || !st) return;
+  const sl  = document.getElementById("pwr-slider");
+  const val = document.getElementById("pwr-val");
+  if (!sl || !val) return;
   /* ⛔ CASE-INSENSITIVE, AND THIS IS NOT DEFENSIVE PADDING - the two sources
      genuinely disagree. Measured on bench1, 2026-10-31: /api/status reports
      band "20m" and the out_power action reports "20M", because the ladder's
@@ -10548,49 +10607,72 @@ function updateOutPwrPill() {
                    outPwrInfo.band.toUpperCase() === (lastBandStr || "").toUpperCase();
   document.getElementById("pwr-band").textContent = lastBandStr ? "(" + lastBandStr + ")" : "";
   const ok = outPwrInfo && outPwrInfo.calibrated && sameBand;
+  const saying = Date.now() < pwrSayUntil;
   /* An uncalibrated band has no levels to offer, and a watts box there would
-     invite exactly the free-text wattage the device refuses - so: no buttons,
-     and the reason in their place. */
+     invite exactly the free-text wattage the device refuses - so: no slider,
+     and the reason in its place. */
   if (!ok) {
-    btns.innerHTML = "";
-    if (st.dataset.say !== "1")
-      st.textContent = (outPwrInfo && sameBand)
-        ? "Not calibrated on this band - run Calibrate Power on the Tab5."
-        : "--";
+    sl.hidden = true;
+    if (!saying) {
+      val.classList.add("say");
+      val.textContent = (outPwrInfo && sameBand) ? "not calibrated - run Calibrate Power on the Tab5" : "--";
+    }
     return;
   }
   const levels = outPwrInfo.watts_x100 || [];
-  const key = levels.join(",") + "|" + outPwrInfo.target_x100;
-  if (btns.dataset.key !== key) {
-    btns.dataset.key = key;
-    btns.innerHTML = "";
-    levels.forEach(w => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = fmtW(w);
-      if (w === outPwrInfo.target_x100) b.classList.add("active");
-      b.addEventListener("click", async (e) => {
-        e.stopPropagation();          // keep the menu open to show the result
-        const r = await sendCmd({ action: "out_power", watts_x100: w });
-        /* A deferred write is a success that did only half the job, and the
-           device says which - pass it on rather than implying the PA moved
-           while WSPR or a burst still owns it. */
-        if (r && r.ok && r.deferred) pwrSay(r.note || "stored, not applied");
-        else if (r && !r.ok) pwrSay(r.error || "refused");
-        await refreshOutPwr();
-      });
-      btns.appendChild(b);
-    });
+  sl.hidden = levels.length < 2;
+  sl.max = String(Math.max(0, levels.length - 1));
+  sl._levels = levels;
+  /* Do not move the knob under a finger that is dragging it. */
+  if (!sl._dragging) {
+    const i = levels.indexOf(outPwrInfo.target_x100);
+    sl.value = String(i >= 0 ? i : 0);
   }
-  if (st.dataset.say !== "1") st.textContent = "";
+  if (!saying) {
+    val.classList.remove("say");
+    const i = parseInt(sl.value, 10);
+    val.textContent = levels.length ? fmtW(levels[i] != null ? levels[i] : levels[0]) : "--";
+  }
 }
 
 function pwrSay(msg) {
-  const st = document.getElementById("pwr-state");
-  if (!st) return;
-  st.textContent = msg; st.dataset.say = "1";
-  setTimeout(() => { st.dataset.say = ""; updateOutPwrPill(); }, 4000);
+  const val = document.getElementById("pwr-val");
+  if (!val) return;
+  pwrSayUntil = Date.now() + 4000;
+  val.classList.add("say");
+  val.textContent = msg;
+  val.title = msg;
+  setTimeout(updateOutPwrPill, 4100);
 }
+
+(function wirePwrSlider() {
+  const sl = document.getElementById("pwr-slider");
+  if (!sl) return;
+  /* While dragging: show the level under the knob, send nothing. */
+  sl.addEventListener("input", () => {
+    sl._dragging = true;
+    const lv = sl._levels || [];
+    const w = lv[parseInt(sl.value, 10)];
+    const val = document.getElementById("pwr-val");
+    if (val && w != null) { val.classList.remove("say"); val.textContent = fmtW(w); }
+  });
+  /* On release: one write. */
+  sl.addEventListener("change", async (e) => {
+    e.stopPropagation();
+    sl._dragging = false;
+    const w = (sl._levels || [])[parseInt(sl.value, 10)];
+    if (w == null) return;
+    const r = await sendCmd({ action: "out_power", watts_x100: w });
+    /* A deferred write is a success that did only half the job, and the
+       device says which - pass it on rather than implying the PA moved
+       while WSPR or a burst still owns it. */
+    if (r && r.ok && r.deferred) pwrSay(r.note || "stored, not applied");
+    else if (r && !r.ok) pwrSay(r.error || "refused");
+    await refreshOutPwr();
+  });
+  /* Keep the menu open while the slider is used. */
+  ["click", "pointerdown"].forEach((ev) => sl.addEventListener(ev, (e) => e.stopPropagation()));
+})();
 
 async function refreshOutPwr() {
   /* On demand only - it reads this band's whole calibration table, which is

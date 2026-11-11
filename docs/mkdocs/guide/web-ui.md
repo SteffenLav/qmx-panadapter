@@ -616,10 +616,11 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Radio ▲** — the things that reach the radio itself:
 
 - **Switch to Panadapter / CW / FT8 / FT4 / JS8 / WSPR** — changes the Tab5’s own screen from the browser. *(v1.25.0: CW added to the list.)* The **Radio** menu lists all six pages, so each one is a single click; it no longer steps through them in sequence. Choosing a page is what enables it, and the menu follows the Tab5 if you switch there instead
-- **TX power** — transmit power on this band, one button per level. *(After v1.26.0: moved
-  here from the top bar.)* The levels are the ones your own Calibrate Power sweep
+- **TX power** — transmit power on this band: a slider over the levels, with the
+  wattage beside it. Drag it and let go to set. *(After v1.26.0: moved here from the
+  top bar.)* The levels are the ones your own Calibrate Power sweep
   measured, so a figure the PA never produced is refused rather than rounded to a
-  neighbour. A band with no calibration shows no buttons and says so. While a
+  neighbour. A band with no calibration shows no slider and says so. While a
   transmission is in progress, or while WSPR owns the PA, the target is stored and the
   row says so
 - **Noise reduction** and **Auto-notch** *(v1.26.0)* — for the audio that the **Listen** button plays: an on/off box, Low / Med / High, Speech model or Spectral, and the Auto-notch box. They run in the browser and cost the Tab5 nothing. See [Web DSP](web-dsp.md).

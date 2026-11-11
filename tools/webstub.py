@@ -51,7 +51,15 @@ DEFAULT = {
     },
 }
 
-OUT_PWR = {"target": 500}   # out_power write target, in memory
+OUT_PWR = {"target": 340}   # out_power write target, in memory
+# bench1's real 20 m ladder (2026-11-11): 29 levels, 0.1 W apart below 1.7 W.
+# A 6-level made-up ladder here hid that the slider needs the whole width.
+BENCH1_20M = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+              160, 170, 190, 200, 210, 230, 240, 250, 260, 280, 290, 310, 320, 340]
+WSPR = {"dial": 14095600}     # wspr_dial_hz, in memory
+WSPR_BANDS = [("160", 1836600), ("80", 3568600), ("40", 7038600),
+              ("30", 10138700), ("20", 14095600), ("17", 18104600),
+              ("15", 21094600), ("10", 28124600)]
 
 JS8 = {
     "mode": "js8", "lines": [], "row_msg": [], "senders": [], "count": 0,
@@ -182,6 +190,15 @@ class H(BaseHTTPRequestHandler):
             return self._send(open(PAGE, encoding="utf-8").read(), "text/html")
         if p == "/api/status":
             return self._send(json.dumps(merged(self.state_path)), "application/json")
+        if p == "/api/wspr":
+            # The WSPR band list webserver.c answers for ?bands=1, plus status.
+            return self._send(json.dumps({
+                "bands": [{"band": b, "hz": hz} for b, hz in WSPR_BANDS],
+                "dial_hz": WSPR["dial"], "rx_live": True, "wspr_tx_en": False,
+                "tx_state": "idle", "spots_held": 0}), "application/json")
+        if p == "/api/settings":
+            return self._send(json.dumps({"wspr_dial_hz": WSPR["dial"],
+                                          "wspr_tx_en": False}), "application/json")
         if p == "/api/js8":
             s = merged(self.state_path)
             j = dict(JS8)
@@ -197,6 +214,8 @@ class H(BaseHTTPRequestHandler):
         except Exception:
             req = {}
         sys.stderr.write("POST %s %s\n" % (self.path, req))
+        if self.path.startswith("/api/settings") and "wspr_dial_hz" in req:
+            WSPR["dial"] = int(req["wspr_dial_hz"])
         # js8_text_plan is the only POST whose ANSWER the page renders.
         if req.get("action") == "js8_text_plan":
             t = " ".join(str(req.get("text", "")).upper().split())
@@ -210,7 +229,7 @@ class H(BaseHTTPRequestHandler):
         if req.get("action") == "out_power":
             st = merged(self.state_path)
             op = {"ok": True, "band": str(st.get("band", "20m")).upper(),
-                  "calibrated": True, "watts_x100": [50, 100, 200, 300, 400, 500],
+                  "calibrated": True, "watts_x100": BENCH1_20M,
                   "busy": False, "wspr_owns_pa": False}
             op.update(st.get("out_power", {}))
             op.setdefault("target_x100", OUT_PWR["target"])

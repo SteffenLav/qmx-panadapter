@@ -126,6 +126,10 @@ amber.
     while this page owns the dial. Only **Freq** stays live, so a beacon found off
     the standard dial frequency can still be chased by typing it in.
 
+    In the web page *(after v1.26.0)*, **Mode**, **BW**, **Zoom**, **Tune** and
+    **RIT** are not shown on the WSPR page, and the top bar's **Band** lists the
+    WSPR bands: picking one does exactly what this button does.
+
     On **v1.12.0 only**, the top bar's Band control overlapped this panel and took
     the touch — picking a band from it wrote an FT8 frequency to the radio while
     WSPR carried on capturing and labelling its spots with the band it thought it
