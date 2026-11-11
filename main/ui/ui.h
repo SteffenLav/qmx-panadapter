@@ -501,9 +501,10 @@ void ui_set_bottom_bt(bool enabled, bool connected);
 
 void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip);
 
-// Bottom-bar UTC clock (center). valid=false shows "--:--:--" with suffix.
-// suffix is the time-source indicator, e.g. " UTC(NTP)" or " UTC".
-void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix);
+// Bottom-bar UTC clock (center): the time-source suffix, e.g. " UTC(NTP)".
+// The digits are painted by ui.c's own LVGL timer from time(), and show
+// "--:--:--" until the clock is synced.
+void ui_set_bottom_clock_suffix(const char *suffix);
 /* CW-Tune (A4 step 2, Sam W7STF): put the dial exactly on the CW signal
  * nearest to it, so the tone lands at the CW centre.
  *

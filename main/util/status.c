@@ -592,14 +592,10 @@ static void status_task(void *arg)
         }
         const char *batt_icon = (shown < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(shown);
 
-        // --- CENTER: UTC time HH:MM:SS + time-source indicator ---
-        time_t now = time(NULL);
-        struct tm tm_utc;
-        gmtime_r(&now, &tm_utc);
-        bool time_valid = tm_utc.tm_year > 100;  // sane only after sync (year > 2000)
+        // --- CENTER: time-source indicator (the HH:MM:SS is ui.c's own timer) ---
 
         const char *clk_suffix;
-        // Scoped with clk_suffix because ui_set_bottom_clock() is called at the
+        // Scoped with clk_suffix because ui_set_bottom_clock_suffix() is called at the
         // end of the same block - the buffer must outlive the pointer.
         char clk_suffix_buf[16];
         // Effective (current-authority) source, not the last one-off writer - so
@@ -679,7 +675,10 @@ static void status_task(void *arg)
                 ui_set_bottom_battery(batt_icon, battery_color(level), left);
             }
         }
-        ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
+        /* Suffix only. The digits are painted by ui.c's own LVGL timer, which
+         * reads time() itself - pushing them from here behind a 20 ms lock
+         * wait dropped up to 11 s of seconds on the 7B (see bot_clock_tick_cb). */
+        ui_set_bottom_clock_suffix(clk_suffix);
         /* The Unit GPS chip. It answers "what is the RECEIVER doing", which is
          * a different question from the suffix's "who is disciplining the
          * clock" - and it hides itself in relay mode, where there is no

@@ -3122,6 +3122,45 @@ static lv_obj_t *s_bot_center_suffix = NULL;
 static lv_coord_t s_bot_clock_x0 = -1, s_bot_clock_x1 = -1;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
+
+/* The bottom-bar seconds are painted HERE, from an LVGL timer, and nowhere
+ * else. This runs inside lv_timer_handler(), which already holds the display
+ * lock, so it can never miss a second waiting for it.
+ *
+ * ⛔ Until 2026-11-11 the status task pushed h/m/s through ui_set_bottom_clock()
+ * behind display_lock(20), and DROPPED the second whenever the wait timed out.
+ * Measured on the 7B (status-loop stall log, 3fa58359): the loop was on time
+ * (gap 1.13-1.18 s, RSSI RPC 36-50 ms) but LVGL drew 57 ms of every 75 ms frame
+ * on the CW page, so 3-9 waits in a row timed out and the seconds froze for up
+ * to 11.6 s, then jumped. Panadapter page, 22 ms draws: still one 4.6 s stall
+ * in 30 s. Waiting longer would only move the problem; reading the clock where
+ * the lock is already held removes it. The suffix (time source) still comes
+ * from status.c, which owns that decision - see ui_set_bottom_clock_suffix(). */
+static void bot_clock_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    static time_t shown = (time_t)-1;
+    time_t now = time(NULL);
+    if (now == shown) return;
+    struct tm tm_utc;
+    gmtime_r(&now, &tm_utc);
+    if (tm_utc.tm_year > 100) {          // sane only after a sync (year > 2000)
+        /* A jump means LVGL itself did not run for that long - which is the
+         * display stalling, not the clock. Logged so it cannot hide again.
+         * ⚠ A time STEP reads the same: the 7B logged "22 s between painted
+         * seconds" at the same millisecond as "Time set from SNTP" (boot,
+         * 2026-11-11). Check for a time_sync line before calling it a stall. */
+        if (shown != (time_t)-1 && now - shown > 2 && now - shown < 3600)
+            ESP_LOGW(TAG, "bottom clock: %ld s between painted seconds",
+                     (long)(now - shown));
+        ui_clock_set_time(&s_bot_clock, tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+    } else {
+        static const int dash[] = { 0, 1, 3, 4, 6, 7 };
+        for (size_t i = 0; i < sizeof(dash) / sizeof(dash[0]); i++)
+            lv_label_set_text(s_bot_clock.cells[dash[i]], "-");
+    }
+    shown = now;
+}
 static lv_obj_t *s_bot_bt = NULL;        // Bluetooth glyph, left of the WiFi fan
 static lv_obj_t *s_bot_wifi_ssid = NULL;
 static ui_wifi_fan_t s_bot_wifi_fan;
@@ -5103,7 +5142,18 @@ void ui_set_iq_mode_warning(bool active)
 static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
 {
     (void)t;
-    if (!s_iq_warn_active || !s_iq_warn_banner) return;
+    if (!s_iq_warn_banner) return;
+    /* Apply the state here too, in LVGL context with the lock already held.
+     * ui_set_iq_mode_warning() is called ONCE (cat.c, after the IQ-mode probe)
+     * behind a 20 ms lock wait, and a timed-out wait used to leave the banner
+     * hidden for the whole session - the same dropped-update class as the
+     * bottom-bar clock (2026-11-11). */
+    bool hidden = lv_obj_has_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
+    if (!s_iq_warn_active) {
+        if (!hidden) lv_obj_add_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (hidden) lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
     if (reader_view_is_active()) return;   // don't draw over the docs Reader
     lv_obj_move_foreground(s_iq_warn_banner);
 }
@@ -7745,6 +7795,10 @@ static void build_bottom_bar(lv_obj_t *parent)
 
         ui_clock_init(&s_bot_clock, bar, x0, 0, font, lv_color_hex(UI_COLOR_TEXT_SECONDARY), cell_w);
         s_bot_clock_valid = true;
+        /* 100 ms: a new second is painted within one tick of the RTC rolling
+         * over. The callback early-outs on an unchanged second, so the cost is
+         * one time() call per tick. */
+        lv_timer_create(bot_clock_tick_cb, 100, NULL);
 
         // The WiFi zone lays itself out from the right edge leftward and must
         // stop here: the clock is CENTRED and stays centred, so it's the SSID
@@ -7753,7 +7807,7 @@ static void build_bottom_bar(lv_obj_t *parent)
         s_bot_wifi_min_x = x0 + clock_w + suffix_w + 24;
 
         s_bot_center_suffix = lv_label_create(bar);
-        lv_label_set_text(s_bot_center_suffix, " UTC");  // updated each second by status_task
+        lv_label_set_text(s_bot_center_suffix, " UTC");  // set by status_task via ui_set_bottom_clock_suffix()
         lv_obj_set_style_text_color(s_bot_center_suffix, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(s_bot_center_suffix, font, 0);
         lv_obj_align(s_bot_center_suffix, LV_ALIGN_LEFT_MID, x0 + clock_w, 0);
@@ -13730,24 +13784,18 @@ void ui_set_update_line_pulsing(const char *text, uint32_t colour)
 }
 
 
-void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
+/* Time-source suffix only (" UTC(NTP)" etc.). The digits are painted by
+ * bot_clock_tick_cb(). A missed lock costs nothing: the suffix changes rarely
+ * and the status task re-sends it every second. Only writes on a change, so
+ * the label is not invalidated once a second for nothing. */
+void ui_set_bottom_clock_suffix(const char *suffix)
 {
-    if (!s_bot_clock_valid) return;
-    if (display_lock(20)) {
-        if (valid) {
-            ui_clock_set_time(&s_bot_clock, h, m, s);
-        } else {
-            lv_label_set_text(s_bot_clock.cells[0], "-");
-            lv_label_set_text(s_bot_clock.cells[1], "-");
-            lv_label_set_text(s_bot_clock.cells[3], "-");
-            lv_label_set_text(s_bot_clock.cells[4], "-");
-            lv_label_set_text(s_bot_clock.cells[6], "-");
-            lv_label_set_text(s_bot_clock.cells[7], "-");
-        }
-        if (s_bot_center_suffix && suffix)
-            lv_label_set_text(s_bot_center_suffix, suffix);
-        display_unlock();
-    }
+    static char shown[24];
+    if (!s_bot_center_suffix || !suffix || strcmp(shown, suffix) == 0) return;
+    if (!display_lock(20)) return;
+    lv_label_set_text(s_bot_center_suffix, suffix);
+    display_unlock();
+    snprintf(shown, sizeof(shown), "%s", suffix);
 }
 
 // Bluetooth state in the bottom bar. Called from the 1 Hz status task, which
