@@ -94,10 +94,15 @@ int main(void)
     if (!orig || !pcm) { printf("FAIL  could not load %s\n", path); return 1; }
 
     const size_t need = wspr_decode_scratch_bytes(n);
-    printf("arena for %ld samples: %zu bytes (%.2f MB)\n", n, need, need / 1048576.0);
-    /* A ceiling, so growth is a decision and not a surprise: the page's whole
-     * budget is in docs/wspr-memory.md. */
-    CHECK(need <= 2700000, "arena %zu B is within the 2,700,000 B budget", need);
+    const size_t big  = wspr_decode_scratch_largest(n);
+    printf("arena for %ld samples: %zu bytes (%.2f MB), largest block %zu\n",
+           n, need, need / 1048576.0, big);
+    /* Ceilings, so growth is a decision and not a surprise (docs/wspr-memory.md).
+     * The LARGEST BLOCK is the one that decides on the device: bench1's PSRAM
+     * never offered more than 2304 KB contiguous with the page's buffers in
+     * place, and a single 2.56 MB arena never fitted (2026-11-11). */
+    CHECK(need <= 2900000, "arena %zu B is within the 2,900,000 B budget", need);
+    CHECK(big <= 1400000, "largest block %zu B is within 1,400,000 B (device ceiling 2304 KB)", big);
 
     /* Page entry: the ONE allocation. */
     CHECK(wspr_decode_scratch_init(n), "arena allocated at page entry");

@@ -77,15 +77,29 @@ typedef float wspr_tp_t;
  * The search scratch and the stage-1/stage-2 scratch are never used at the
  * same moment (the search finishes before the per-candidate loop starts, and
  * a second pass re-runs the search before it decodes again), so they share
- * ONE region, attached once at page entry. The search rebuilds its kiss_fftr
+ * memory, attached once at page entry. The search rebuilds its kiss_fftr
  * twiddles in place each time: computation, not allocation. It invalidates
  * stage 1 first, because it overwrites it.
+ *
+ * FOUR BLOCKS, NOT ONE. The first version of this arena was one 2.56 MB block.
+ * On bench1 (2026-11-11, 6d110df2) it NEVER fitted: with the capture and the
+ * window allocated, 4.5 MB was free but the largest block was 2304 KB - the
+ * same 2304 KB measured that morning, so a fixed property of this heap, not
+ * chance. Each block is shared between one search buffer and one stage
+ * buffer; the largest is the search's 1.31 MB kiss_fftr cfg:
+ *
+ *   R0  search cfg (1.31 MB)          | stage-1 I   (0.72 MB)
+ *   R1  search in + score (0.52 MB)   | stage-1 Q   (0.72 MB)
+ *   R2  search spec (0.52 MB)         | stage-2 I+Q (0.36 MB)
+ *   R3  search mag (0.26 MB)          | -
  * ------------------------------------------------------------------------- */
-static uint8_t *s_ar;               /* the attached region, NULL when detached */
-static size_t   s_ar_len;
-static void    *s_ar_owned_base;    /* set when wspr_decode_scratch_init() allocated it */
+#define AR_NREG 4
+static uint8_t *s_rg[AR_NREG];      /* NULL when detached */
+static size_t   s_rg_len[AR_NREG];
+static int      s_rg_owned;         /* allocated by wspr_decode_scratch_init() */
 
 #define AR_ALIGN(x) (((size_t)(x) + 15u) & ~(size_t)15u)
+#define AR_MAX(a, b) ((a) > (b) ? (a) : (b))
 
 /* The search FFT length for a capture of n samples. Same rule the search has
  * always used; 0 when the capture is shorter than one symbol. */
@@ -96,68 +110,87 @@ static int search_nfft(long n)
     return ((long)nfft > n) ? 0 : nfft;
 }
 
-static size_t search_bytes(int nfft)
+static size_t cfg_bytes(int nfft)
 {
     size_t cfg_len = 0;
     kiss_fftr_alloc(nfft, 0, NULL, &cfg_len);  /* size query only - no malloc */
-    const size_t nbins = (size_t)nfft / 2 + 1;
-    return AR_ALIGN(cfg_len) + AR_ALIGN((size_t)nfft * sizeof(kiss_fft_scalar))
-         + AR_ALIGN(nbins * sizeof(kiss_fft_cpx)) + AR_ALIGN(nbins * sizeof(float));
+    return cfg_len;
 }
 
-/* Stage-1 I/Q (n/8 floats each) followed by stage-2 I/Q (n/32 floats each).
- * The factors are S1_DECIM and S2_DECIM below; a _Static_assert there keeps
- * these two in step with them. */
+/* Stage-1 I/Q are n/8 floats each, stage-2 I/Q n/32 each. The factors are
+ * S1_DECIM and S2_DECIM below; a _Static_assert there keeps these in step. */
 #define AR_S1_DECIM 8
 #define AR_S2_DECIM 4
-static size_t stage_bytes(long n)
+
+/* The four block sizes for captures of n samples (see the table above). */
+static void region_sizes(long n, size_t out[AR_NREG])
 {
+    const int nfft = search_nfft(n);
+    const size_t nbins = nfft ? (size_t)nfft / 2 + 1 : 0;
     const long n1 = n / AR_S1_DECIM, n2 = n1 / AR_S2_DECIM;
-    return 2 * AR_ALIGN((size_t)n1 * sizeof(float))
-         + 2 * AR_ALIGN((size_t)n2 * sizeof(float));
+    out[0] = AR_MAX(nfft ? AR_ALIGN(cfg_bytes(nfft)) : 0, AR_ALIGN((size_t)n1 * sizeof(float)));
+    out[1] = AR_MAX(AR_ALIGN((size_t)nfft * sizeof(kiss_fft_scalar)),
+                    AR_ALIGN((size_t)n1 * sizeof(float)));
+    out[2] = AR_MAX(AR_ALIGN(nbins * sizeof(kiss_fft_cpx)),
+                    2 * AR_ALIGN((size_t)n2 * sizeof(float)));
+    out[3] = AR_ALIGN(nbins * sizeof(float));
 }
 
 size_t wspr_decode_scratch_bytes(long n)
 {
-    const int nfft = search_nfft(n);
-    const size_t a = nfft ? search_bytes(nfft) : 0, b = stage_bytes(n);
-    return (a > b ? a : b) + 16;               /* +16: alignment of the base */
+    size_t r[AR_NREG], t = 0;
+    region_sizes(n, r);
+    for (int i = 0; i < AR_NREG; i++) t += r[i];
+    return t;
 }
 
-int wspr_decode_scratch_attach(void *mem, size_t len)
+size_t wspr_decode_scratch_largest(long n)
 {
-    if (!mem || len < 16) return 0;
-    s_ar = (uint8_t *)AR_ALIGN((uintptr_t)mem);
-    s_ar_len = len - (size_t)(s_ar - (uint8_t *)mem);
-    s_ar_owned_base = NULL;
-    wspr_decode_capture_changed();
+    size_t r[AR_NREG], m = 0;
+    region_sizes(n, r);
+    for (int i = 0; i < AR_NREG; i++) if (r[i] > m) m = r[i];
+    return m;
+}
+
+/* True when every block is attached and at least as large as captures of n
+ * samples need. The search and the stages check this before touching them. */
+static int regions_fit(long n)
+{
+    size_t r[AR_NREG];
+    region_sizes(n, r);
+    for (int i = 0; i < AR_NREG; i++)
+        if (!s_rg[i] || s_rg_len[i] < r[i]) return 0;
     return 1;
-}
-
-void wspr_decode_scratch_detach(void)
-{
-    wspr_decode_capture_changed();
-    s_ar = NULL;
-    s_ar_len = 0;
 }
 
 int wspr_decode_scratch_init(long n)
 {
-    if (s_ar) return 1;
-    const size_t len = wspr_decode_scratch_bytes(n);
-    void *mem = wspr_big_alloc(len);
-    if (!mem) return 0;
-    wspr_decode_scratch_attach(mem, len);
-    s_ar_owned_base = mem;
+    if (s_rg[0]) return 1;
+    size_t r[AR_NREG];
+    region_sizes(n, r);
+    /* Largest first (R0 is), so the 1.31 MB block takes the best hole. */
+    for (int i = 0; i < AR_NREG; i++) {
+        s_rg[i] = (uint8_t *)wspr_big_alloc(r[i]);
+        if (!s_rg[i]) {
+            for (int k = 0; k < i; k++) { free(s_rg[k]); s_rg[k] = NULL; s_rg_len[k] = 0; }
+            return 0;
+        }
+        s_rg_len[i] = r[i];
+    }
+    s_rg_owned = 1;
+    wspr_decode_capture_changed();
     return 1;
 }
 
 void wspr_decode_scratch_deinit(void)
 {
-    void *base = s_ar_owned_base;
-    s_ar_owned_base = NULL;
-    wspr_decode_scratch_detach();
-    free(base);
+    wspr_decode_capture_changed();
+    for (int i = 0; i < AR_NREG; i++) {
+        if (s_rg_owned) free(s_rg[i]);
+        s_rg[i] = NULL;
+        s_rg_len[i] = 0;
+    }
+    s_rg_owned = 0;
 }
 
 int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
@@ -250,17 +283,14 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
      * NOMEM here means nobody attached one or it is too small - a programming
      * error, reported - never a fragmentation lottery. */
     const int nbins = nfft / 2 + 1;
-    if (!s_ar || s_ar_len < search_bytes(nfft)) return WSPR_CANDS_NOMEM;
-    wspr_decode_capture_changed();             /* stage 1 shares this region */
-    size_t cfg_len = s_ar_len;
-    kiss_fftr_cfg s_cand_cfg = kiss_fftr_alloc(nfft, 0, s_ar, &cfg_len);
+    if (!regions_fit(n)) return WSPR_CANDS_NOMEM;
+    wspr_decode_capture_changed();             /* stage 1 shares these blocks */
+    size_t cfg_len = s_rg_len[0];
+    kiss_fftr_cfg s_cand_cfg = kiss_fftr_alloc(nfft, 0, s_rg[0], &cfg_len);
     if (!s_cand_cfg) return WSPR_CANDS_NOMEM;
-    uint8_t *ap = s_ar + AR_ALIGN(cfg_len);
-    kiss_fft_scalar *s_cand_in = (kiss_fft_scalar *)ap;
-    ap += AR_ALIGN((size_t)nfft * sizeof(kiss_fft_scalar));
-    kiss_fft_cpx *s_cand_spec = (kiss_fft_cpx *)ap;
-    ap += AR_ALIGN((size_t)nbins * sizeof(kiss_fft_cpx));
-    float *s_cand_mag = (float *)ap;
+    kiss_fft_scalar *s_cand_in = (kiss_fft_scalar *)s_rg[1];
+    kiss_fft_cpx *s_cand_spec = (kiss_fft_cpx *)s_rg[2];
+    float *s_cand_mag = (float *)s_rg[3];
     memset(s_cand_mag, 0, (size_t)nbins * sizeof(float));
 
     /* 50 % overlap: every sample outside the first and last half-window is
@@ -484,7 +514,7 @@ static void free_baseband(baseband_t *bb)
 _Static_assert(S1_DECIM * S2_DECIM == WSPR_DECIM,
                "stage decimations must multiply to WSPR_DECIM");
 _Static_assert(S1_DECIM == AR_S1_DECIM && S2_DECIM == AR_S2_DECIM,
-               "the arena is sized with these - see stage_bytes()");
+               "the arena is sized with these - see region_sizes()");
 
 /* ⛔ THE RING IS A POWER OF TWO; THE TAP COUNT NEED NOT BE. The ring index is
  * masked because a `% 255` here measured ~40 s per candidate - an integer
@@ -591,9 +621,9 @@ static int build_stage1(const int16_t *samples, long n)
     if (out_n <= 0) return 0;
     /* From the arena: stage-1 I then Q at its start. The search uses the
      * same bytes, which is why it invalidates this before it runs. */
-    if (!s_ar || s_ar_len < stage_bytes(n)) return 0;
-    s_s1i = (float *)s_ar;
-    s_s1q = (float *)(s_ar + AR_ALIGN((size_t)out_n * sizeof(float)));
+    if (!regions_fit(n)) return 0;
+    s_s1i = (float *)s_rg[0];
+    s_s1q = (float *)s_rg[1];
 
     build_lpf();
 
@@ -664,11 +694,9 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
 
     const long out_n = s_s1n / S2_DECIM;
     if (out_n <= 0) return 0;
-    {   /* stage-2 I/Q follow stage-1 I/Q in the arena (see stage_bytes()). */
-        uint8_t *p = s_ar + 2 * AR_ALIGN((size_t)s_s1n * sizeof(float));
-        bb->i = (float *)p;
-        bb->q = (float *)(p + AR_ALIGN((size_t)out_n * sizeof(float)));
-    }
+    /* Stage-2 I/Q share block R2 (see the table at the top of this file). */
+    bb->i = (float *)s_rg[2];
+    bb->q = (float *)(s_rg[2] + AR_ALIGN((size_t)out_n * sizeof(float)));
     bb->n = out_n;
 
     const double w = 2.0 * M_PI * (f0 - S1_CENTRE_HZ) / S1_RATE_HZ;

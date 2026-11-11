@@ -87,18 +87,18 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
  * first call and kept until the last. They never allocate. Without an arena,
  * wspr_find_candidates() returns WSPR_CANDS_NOMEM and no candidate decodes.
  *
- *   wspr_decode_scratch_bytes(n)  - exact size needed for captures of n samples
- *   wspr_decode_scratch_init(n)   - allocate that once (PSRAM on the device)
- *                                   and attach it; 1 = ok, 0 = no memory
- *   wspr_decode_scratch_deinit()  - detach and free what init allocated
- *   wspr_decode_scratch_attach(mem, len) / _detach() - caller-owned memory
+ *   wspr_decode_scratch_bytes(n)   - total size for captures of n samples
+ *   wspr_decode_scratch_largest(n) - its largest single block (4 blocks; a
+ *                                    single 2.56 MB one never fitted on bench1)
+ *   wspr_decode_scratch_init(n)    - allocate the blocks once (PSRAM on the
+ *                                    device); 1 = ok, 0 = no memory
+ *   wspr_decode_scratch_deinit()   - free them
  *
  * Not thread-safe: one decoding task at a time, as before. */
 size_t wspr_decode_scratch_bytes(long n);
+size_t wspr_decode_scratch_largest(long n);
 int    wspr_decode_scratch_init(long n);
 void   wspr_decode_scratch_deinit(void);
-int    wspr_decode_scratch_attach(void *mem, size_t len);
-void   wspr_decode_scratch_detach(void);
 
 typedef struct {
     int ok; /* 1 if this cleared all three plausibility checks */

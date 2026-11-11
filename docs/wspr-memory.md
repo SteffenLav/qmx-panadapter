@@ -48,11 +48,11 @@ Sizes are exact for `CAP_SAMPLES` = 1,440,000 (120 s at 12 kHz).
 |---|---|---|
 | `cap` float capture | 5,760,000 | no longer freed per cycle |
 | `s_pcm[0]` int16 window | 2,880,000 | unchanged |
-| decoder arena (`wspr_decode_scratch_init`) | 2,621,776 | union of search (2.62 MB) and stage 1+2 (1.80 MB) |
+| decoder arena (`wspr_decode_scratch_init`) | 2,817,472 in 4 blocks, largest 1,311,008 | each block shared by one search buffer and one stage buffer |
 | waterfall | ~340,000 | now first allocated at entry |
 | task stacks | 65,536 | unchanged |
 | Fano work arrays | ~1,000 | static, PSRAM `.bss` - no runtime allocation |
-| **Total** | **~11.67 MB** | measured free before entry on bench1, 2026-11-11: 12,869 KB |
+| **Total** | **~11.86 MB** | measured free before entry on bench1, 2026-11-11: 12,869 KB |
 
 The total is the same peak the old code needed whenever a decode overlapped a
 capture. The difference: it is taken once, while the heap is clean, and either
@@ -61,6 +61,14 @@ fits or the page says so at entry with the numbers.
 Cost: the search rebuilds its 131072-point kiss_fftr twiddles in place every
 search (about 98,000 cos/sin pairs in double precision, software on the P4).
 Not yet measured on the device; check the time in the first bench run.
+
+## First version failed on the bench (6d110df2)
+
+The arena was one 2,621,776 B block. On bench1 it never fitted: 4.5 MB free after
+capture and window, largest block 2304 KB - the same figure measured that morning,
+so a fixed property of this heap. I had that number and did not check the design's
+largest allocation against it. Now 4 blocks, largest 1,311,008 B, and the harness
+fails if the largest block grows past 1,400,000 B.
 
 ## Proof
 
