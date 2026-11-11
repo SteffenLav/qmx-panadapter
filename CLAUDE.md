@@ -80,20 +80,17 @@ not us. Run the checker; do not re-read the prose. See
 ⭐ To repair a published release, **ADD the asset — never re-cut.** Then verify
 the served bytes with `cmp`, not the upload's exit code.
 
-## ⛔ The site: `git push` in `site/`, then HE clicks Importer at Simply - NEVER FTP
+## ⛔ The site deploys itself on `git push` in `site/` - NEVER FTP
 
 `site/` has its own nested `.git` (remote `qmx-panadapter-site`). After
 `mkdocs build --clean` and AFTER the GitHub release exists:
 `cd site; git add -A; git commit -m "site: mkdocs build for tab5.lav.dk vX.Y.Z"; git push origin main`.
-⛔ Never run `publish_site.ps1` (FTP) - operator's rule.
-
-⛔ **The push is NOT the deploy.** Simply's "Importer fra Git" is a one-shot
-clone the operator clicks by hand. Ask him to click it, and give him:
-Git-URL `https://github.com/SteffenLav/qmx-panadapter-site.git`, destination `/tab5`.
-v1.24.2 worked because he clicked it (transcript, 2026-11-04 23:11 UTC); v1.25.0
-and v1.26.0 were pushed and never imported - pages 404'd (Samuel W7STF).
-**Verify a SUBDIRECTORY page, never `latest.json`**:
-`curl -sI https://tab5.lav.dk/md/releases.md` - Last-Modified must be today.
+The push runs `site/.github/workflows/deploy.yml` (since 2026-11-11): rsync over
+SSH to `/var/www/lav.dk/tab5`, then it compares live bytes with the commit.
+⛔ **Check the run, not the push:** `gh run list --repo SteffenLav/qmx-panadapter-site --limit 1`
+must be `success`. Never trust `latest.json` alone - it hid a 2-release outage.
+⛔ Never run `publish_site.ps1` (FTP). Fallback if the Action is broken: the
+operator's "Importer fra Git" at Simply. `mkdocs build --clean` keeps `.github/`.
 See [site deploy](../../../memory/project_site_git_import_deploy.md).
 
 ## ⛔ Every transmit path must pass the band guard
