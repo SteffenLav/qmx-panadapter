@@ -611,7 +611,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
-**Miscellaneous ▲** also carries **Prepare for flashing** — closes the USB host cleanly before you unplug the radio or reflash the Tab5, so the QMX is not left half-open.
+**Misc ▲** also carries **Prepare for flashing** — closes the USB host cleanly before you unplug the radio or reflash the Tab5, so the QMX is not left half-open.
 
 **Radio ▲** — the things that reach the radio itself:
 
@@ -637,7 +637,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **GPS status** — the fix, position, grid, satellites and the sky plot; the same page the Tab5 shows when you tap the UTC clock.
 - **Radio menus** — the QMX's own 80×24 menu system, in the browser. Arrow keys, Enter and Back on screen, and your real keyboard works too. Needs the radio's second USB serial port switched on first. See [Radio Menus](radio-menus.md)
 
-**Miscellaneous ▲**:
+**Misc ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
 - **Reboot the Tab5** — restarts it there and then; receiving stops for about ten seconds. Until now a restart was only offered after a firmware update, which is no use when you are in another room and something is stuck *(Randy N4OPI)*
@@ -737,7 +737,7 @@ another room — or another country.
 
 #### Settings that work
 
-In **Miscellaneous ▸ Power-cycle relay**: the pin you actually wired (**G53**),
+In **Misc ▸ Power-cycle relay**: the pin you actually wired (**G53**),
 active level **High**, and **2000 ms** — *"I've found 2000ms to be
 sufficient"*. The firmware's own default is 1000 ms, so this is one to set and
 save; it is remembered from v1.10.9 on.
@@ -761,7 +761,7 @@ the GPS's transmitter.
 
 ### Keyboard shortcuts
 
-**Miscellaneous ▸ Keyboard shortcuts** assigns what the Tab5's snap-on keyboard
+**Misc ▸ Keyboard shortcuts** assigns what the Tab5's snap-on keyboard
 does. Each row is a modifier, a key and an action; **Add shortcut** makes a new
 one, **Remove** deletes it, and **Restore defaults** puts back the nine the
 firmware ships with.
@@ -781,7 +781,7 @@ on the very keyboard you are configuring.
 
 ## Tab5Shot - what the screen looks like right now
 
-**Tab5 screenshot** in the **Miscellaneous** menu opens a live `/ss.bmp` capture of the Tab5's
+**Tab5 screenshot** in the **Misc** menu opens a live `/ss.bmp` capture of the Tab5's
 screen in a new tab, and **(save PNG)** beside it saves one as a file. It is the quickest way to put what you are seeing into a
 bug report or a message to the group, without a camera and without reaching for
 the device.

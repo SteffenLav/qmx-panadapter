@@ -458,7 +458,7 @@ serial monitor still holding the port.
 
 **Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.
 
-You can now reset from the web page, with no computer or flashing tool needed. In the web UI, open the **Miscellaneous** menu in the bottom bar and pick the scope:
+You can now reset from the web page, with no computer or flashing tool needed. In the web UI, open the **Misc** menu in the bottom bar and pick the scope:
 
 - **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults, **and the memory channels with them**. The QSO log and the WiFi settings are kept.
 - **Reset WiFi** — clears just the Wi-Fi / network state, for when the connection is stuck.

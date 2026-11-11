@@ -879,7 +879,8 @@
   }
   #bot { flex-wrap: nowrap; }
   .bot-fill { flex: 1; min-width: 0; }
-  #clock { color: var(--accent); font-weight: 700; font-size: 1.6rem;
+  /* 1.4rem, one step down from 1.6 (operator, 2026-11-11: bottom-bar cleanup). */
+  #clock { color: var(--accent); font-weight: 700; font-size: 1.4rem;
            white-space: nowrap; font-variant-numeric: tabular-nums; }
   /* Bottom-bar action buttons (ADIF/QRZ/Diag/Tab5Shot) - same look + hover
      behaviour as the top-left Band/Mode/BW/Zoom pills: amber frame on hover. */
@@ -1624,7 +1625,7 @@
       </div>
     </div>
     <div class="bot-menu-wrap">
-      <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
+      <button type="button" class="bot-btn" id="reset-group-btn">Misc &#9650;</button>
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who has heard me (24 h)</a>
         <a href="/ss.bmp" id="ss-link" target="_blank" title="Opens in a new tab straight away - quickest way to just look at the screen">Tab5 screenshot</a> <a href="#" id="ss-save" title="Saves a PNG file - slower, but the format forums and apps accept">(save PNG)</a>
@@ -9027,11 +9028,13 @@ async function tick() {
       }
     }
 
-    /* Bottom-right: WiFi + IP */
+    /* Bottom-right: WiFi network name. The signal strength left the bar
+       (operator, 2026-11-11: bottom-bar cleanup) and lives in the tooltip. */
     const wifi = s.wifi;
-    document.getElementById("wifi").textContent =
-      (wifi && wifi.ssid) ? (wifi.ssid + " " + wifi.rssi + " dBm")
-                          : "--";
+    const wifiEl = document.getElementById("wifi");
+    wifiEl.textContent = (wifi && wifi.ssid) ? wifi.ssid : "--";
+    document.getElementById("wifi-wrap").title =
+      (wifi && wifi.ssid) ? ("WiFi " + wifi.ssid + ", " + wifi.rssi + " dBm") : "WiFi";
 
     /* QSO count + ADIF/QRZ/eQSL buttons - all hidden until there's at least
        one QSO logged (nothing to download/upload otherwise). */

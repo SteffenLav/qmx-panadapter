@@ -115,7 +115,7 @@ entity — right country, wrong town. PSK Reporter and WSPR carry a grid square 
 the report itself and never need the lookup.
 
 These are set **in the web UI, not on the Tab5** — open `http://<tab5-ip>` in a
-browser and use **Miscellaneous -> Set QRZ Callbook login**. They are your QRZ.com
+browser and use **Misc -> Set QRZ Callbook login**. They are your QRZ.com
 username and password for the Callsign Lookup service, which is a different thing
 from the QRZ Logbook API key used for uploading contacts.
 

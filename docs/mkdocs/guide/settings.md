@@ -330,7 +330,7 @@ TX line: in v1.20.1 entering Relay mode pulled that line from **3 V p-p down to
 pad — and held it there for as long as Relay mode was selected. With this
 setting ticked in v1.20.2 the line is untouched in either mode.
 
-The same control is in the web UI's **Miscellaneous** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
+The same control is in the web UI's **Misc** menu, above the remote relay row — the relay row greys out and says why whenever Unit GPS owns PORT.A. See [Web UI](web-ui.md).
 
 ## Transmitting outside the band plan
 
@@ -803,7 +803,7 @@ setup, your callsign and grid, CQ messages, FT8 filters, memory channels.
 
 Any key wakes the display again afterwards.
 
-**Changing them.** The web page has a shortcuts editor — **Miscellaneous ▸
+**Changing them.** The web page has a shortcuts editor — **Misc ▸
 Keyboard shortcuts**. There are 25 actions to choose from, including zoom,
 brightness, releasing the radio to its own front panel, and every setup window.
 **Alt** is left completely unused so you can put your own bindings there without
@@ -918,7 +918,7 @@ Two buttons in the settings drawer:
     **The radio is put back into receive first.** The robot is stood down,
     transmit is disarmed, `TA0;` then `RX;` go to the radio, and settings are
     flushed - so a transmission in progress cannot be left keyed by shutting the
-    Tab5 down. The same control is in the browser, under Miscellaneous.
+    Tab5 down. The same control is in the browser, under Misc.
 
     ⚠ The **power button** on the case cuts power in hardware. No firmware runs,
     so none of the above happens. Use the screen button if the radio might be
@@ -1088,7 +1088,7 @@ receiving side alone it looks exactly like a dead band.
 for it — the answer is a list of stations with distances and bearings, which
 wants a screen you are already sitting in front of. In the web UI open
 **Settings -> Spots & reporting** and tick **Who has heard me (last 24 h)**,
-then **Miscellaneous -> Who has heard me (24 h)** for the list: receiver,
+then **Misc -> Who has heard me (24 h)** for the list: receiver,
 country, distance, bearing and the signal report they gave you, sorted by
 distance.
 
@@ -1208,7 +1208,7 @@ Use this to:
 
 **These two live in the browser, not in the drawer** — a reset you can trigger by
 mistake on a touchscreen in the field is a worse idea than one that needs a
-computer. Both are in the web UI's **Miscellaneous ▲** menu.
+computer. Both are in the web UI's **Misc ▲** menu.
 
 **Reset settings** — Erases the stored settings and memory channels, returning
 everything to defaults, and reboots. Use if something is stuck in a state you
