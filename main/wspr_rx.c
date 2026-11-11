@@ -2361,7 +2361,13 @@ static void wspr_tx_sched_task(void *arg)
     }
     ESP_LOGI(TAG, "TX schedule task exiting");
     s_tx_sched_task = NULL;
-    vTaskDelete(NULL);
+    /* ⛔ PARK, NOT vTaskDelete. This task is created reapable, so its 16 KB
+     * PSRAM stack is ours: vTaskDelete() leaked it on EVERY WSPR visit.
+     * Measured on bench1 2026-11-11: PSRAM left after page entry fell
+     * 1186 -> 1171 -> 1155 KB over three visits, and each start logged
+     * "reaped 2 parked task(s)" for the three it creates.
+     * tools/check_psram_tasks.py now refuses the build on this. */
+    psram_task_park();
 }
 
 static void wspr_rx_task(void *arg)

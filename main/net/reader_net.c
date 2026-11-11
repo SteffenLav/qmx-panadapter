@@ -89,7 +89,10 @@ static void fetch_task(void *arg)
     }
 
     s_busy = false;
-    vTaskDelete(NULL);
+    /* ⛔ PARK, NOT vTaskDelete: the stack is PSRAM we own, and vTaskDelete()
+     * leaked 4 KB per page fetch (found 2026-11-11 with the same fault in
+     * wspr_tx_sched_task). The next fetch reaps it. */
+    psram_task_park();
 }
 
 void reader_net_fetch(const char *page_rel, bool with_toc)
@@ -99,7 +102,8 @@ void reader_net_fetch(const char *page_rel, bool with_toc)
     snprintf(s_job_path, sizeof(s_job_path), "%s",
              (page_rel && page_rel[0]) ? page_rel : "index.md");
     s_job_toc = with_toc;
-    if (!psram_task_create(fetch_task, "reader_net", 4096, NULL, 4, tskNO_AFFINITY)) {
+    psram_task_reap();   /* the previous fetch's parked task, if any */
+    if (!psram_task_create_reapable(fetch_task, "reader_net", 4096, NULL, 4, tskNO_AFFINITY)) {
         s_busy = false;
     }
 }

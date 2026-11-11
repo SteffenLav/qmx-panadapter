@@ -1585,14 +1585,15 @@ static void wifi_set_enabled_task(void *arg)
         esp_wifi_disconnect();
         ESP_LOGI(TAG, "disable: WiFi disconnected (radio left started for fast re-enable)");
     }
-    vTaskDelete(NULL);
+    psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
 }
 
 void panadapter_wifi_set_enabled(bool enabled)
 {
     settings_set_wifi_enabled(enabled);   // persist the boot preference regardless
     if (!s_events) return;                // subsystem not up yet; NVS flag applies at boot
-    psram_task_create(wifi_set_enabled_task, "wifi_en", 4096,
+    psram_task_reap();   /* the previous toggle's parked task, if any */
+    psram_task_create_reapable(wifi_set_enabled_task, "wifi_en", 4096,
                       (void *)(intptr_t)enabled, 5, tskNO_AFFINITY);
 }
 
@@ -1609,7 +1610,7 @@ static void wifi_scan_task(void *arg)
         if (st != ESP_OK) {
             ESP_LOGE(TAG, "scan FAILED: esp_wifi_start (%s)", esp_err_to_name(st));
             s_scan_state = WIFI_SCAN_FAILED;
-            vTaskDelete(NULL);
+            psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
             return;
         }
         s_wifi_started = true;
@@ -1639,7 +1640,7 @@ static void wifi_scan_task(void *arg)
             if (!s_wifi_user_disabled) esp_wifi_connect();
         }
     }
-    vTaskDelete(NULL);
+    psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
 }
 
 void panadapter_wifi_scan_start(void)
@@ -1655,7 +1656,8 @@ void panadapter_wifi_scan_start(void)
     s_scan_state = WIFI_SCAN_RUNNING;
     s_scan_auto_retried = false;   // each user press gets one free retry
     s_scan_stale_logged = false;   // and one stale-scan complaint if it hangs
-    psram_task_create(wifi_scan_task, "wifi_scan", 4096, NULL, 5, tskNO_AFFINITY);
+    psram_task_reap();   /* the previous scan's parked task, if any */
+    psram_task_create_reapable(wifi_scan_task, "wifi_scan", 4096, NULL, 5, tskNO_AFFINITY);
 }
 
 wifi_scan_state_t panadapter_wifi_scan_state(void)

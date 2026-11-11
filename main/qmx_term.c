@@ -360,7 +360,7 @@ static void idle_task(void *arg)
         break;
     }
     s_idle_task = NULL;
-    vTaskDelete(NULL);
+    psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
 }
 
 bool qmx_term_open(void)
@@ -504,7 +504,8 @@ bool qmx_term_open(void)
     /* Background housekeeping, and the strings it writes are literals rather
      * than stack buffers, so a PSRAM stack is safe here. */
     if (!s_idle_task) {
-        s_idle_task = psram_task_create(idle_task, "qmx_term_idle", 3072, NULL, 2,
+        psram_task_reap();   /* the last session's parked idle task */
+        s_idle_task = psram_task_create_reapable(idle_task, "qmx_term_idle", 3072, NULL, 2,
                                         tskNO_AFFINITY);
     }
     ESP_LOGI(TAG, "terminal session open on interface %d", QMX_TERM_INTERFACE);

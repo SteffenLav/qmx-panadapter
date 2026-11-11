@@ -1283,7 +1283,7 @@ static void bt_start_task(void *arg)
                           "NOT starting BLE this boot; nimble_port_init() would "
                           "assert rather than fail", (unsigned)have, MEM_WAIT_S,
                      (unsigned)NEED);
-            vTaskDelete(NULL);
+            psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
             return;
         }
     }
@@ -1293,7 +1293,7 @@ static void bt_start_task(void *arg)
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init failed: %s - BLE unavailable this boot",
                  esp_err_to_name(e));
-        vTaskDelete(NULL);
+        psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
         return;
     }
 
@@ -1315,7 +1315,7 @@ static void bt_start_task(void *arg)
     s_started = true;
     log_heap("after NimBLE init");
     ESP_LOGI(TAG, "BLE mouse up - scanning, will pair and connect automatically");
-    vTaskDelete(NULL);
+    psram_task_park();   /* park, not vTaskDelete: a PSRAM stack we own leaks on delete (2026-11-11, tools/check_psram_tasks.py) */
 }
 
 void bt_hid_mouse_init(void)
@@ -1339,7 +1339,8 @@ void bt_hid_mouse_init(void)
     // not compete with the audio/FFT pipeline.
     // 6144 -> 9216: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
-    psram_task_create(bt_start_task, "bt_start", 11264, NULL, 2, tskNO_AFFINITY);
+    psram_task_reap();
+    psram_task_create_reapable(bt_start_task, "bt_start", 11264, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "BLE mouse enabled - waiting for the C6 link before starting NimBLE");
 }
 

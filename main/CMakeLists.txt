@@ -329,6 +329,17 @@ add_custom_command(
     VERBATIM
 )
 
+# Refuse to build if a PSRAM-stack task can leak its stack: vTaskDelete() on a
+# psram_task_create*() task frees nothing (psram_task.h, #279). 2026-11-11:
+# six tasks did it, one of them 16 KB on every WSPR visit. The rule had been in
+# the header for months; tools/check_psram_tasks.py is the authority now.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_psram_tasks.py"
+    COMMENT "Checking no PSRAM-stack task ends with vTaskDelete"
+    VERBATIM
+)
+
 # Refuse to build settings.c with two settings sharing one dirty bit.
 #
 # The indices are hand-written #defines, so two features developed on separate
