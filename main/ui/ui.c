@@ -6338,6 +6338,7 @@ static void build_top_bar(lv_obj_t *parent)
             lv_obj_set_style_border_width(t, 0, 0);
             lv_obj_set_style_radius(t, 0, 0);
             lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);   /* see the bar below */
         }
 
         /* ⭐ THE S-METER IS THE AUDIO PANEL'S "HOT AREA" (Samuel W7STF).
@@ -6359,6 +6360,13 @@ static void build_top_bar(lv_obj_t *parent)
 
         // Moving level bar underneath the scale (half the original height).
         s_smeter_bar = lv_bar_create(smeter_cont);
+        /* ⛔ NOT CLICKABLE. lv_bar and lv_obj are clickable by default, and
+         * LVGL hit-tests the topmost clickable child - so a tap ON the bar or
+         * a tick mark was consumed there and never reached smeter_cont's
+         * handler. Only the overhang right of the bar opened the panel
+         * (operator on the Waveshare port, 2026-11-11: "only open when i tap
+         * the right side"). Verified there after the fix. */
+        lv_obj_clear_flag(s_smeter_bar, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_size(s_smeter_bar, smeter_w, 11);
         lv_obj_set_pos(s_smeter_bar, smeter_off, 34);
         lv_bar_set_range(s_smeter_bar, 0, 68);
