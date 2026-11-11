@@ -48,19 +48,32 @@ Sizes are exact for `CAP_SAMPLES` = 1,440,000 (120 s at 12 kHz).
 |---|---|---|
 | `cap` float capture | 5,760,000 | no longer freed per cycle |
 | `s_pcm[0]` int16 window | 2,880,000 | unchanged |
-| decoder arena (`wspr_decode_scratch_init`) | 2,817,472 in 4 blocks, largest 1,311,008 | each block shared by one search buffer and one stage buffer |
+| decoder arena (`wspr_decode_scratch_init`) | 3,111,008 in 4 blocks, largest 1,311,008 | R0 = search cfg, built once; R1-R3 each shared by one search buffer and one stage buffer |
 | waterfall | ~340,000 | now first allocated at entry |
 | task stacks | 65,536 | unchanged |
 | Fano work arrays | ~1,000 | static, PSRAM `.bss` - no runtime allocation |
-| **Total** | **~11.86 MB** | measured free before entry on bench1, 2026-11-11: 12,869 KB |
+| **Total** | **~12.15 MB** | measured free before entry on bench1, 2026-11-11: 12,869 KB |
 
 The total is the same peak the old code needed whenever a decode overlapped a
 capture. The difference: it is taken once, while the heap is clean, and either
 fits or the page says so at entry with the numbers.
 
-Cost: the search rebuilds its 131072-point kiss_fftr twiddles in place every
-search (about 98,000 cos/sin pairs in double precision, software on the P4).
-Not yet measured on the device; check the time in the first bench run.
+## Second version cost 11 s per search (28891b06)
+
+28891b06 shared R0 between the search cfg and stage-1 I, so every search
+rebuilt the 131072-point twiddles. Measured on bench1, 2026-11-11: search
+14.9 s and 15.4 s, against 3.0-3.7 s in every earlier build. Earlier builds
+took the same 14-17 s on their FIRST search after page entry, which is where
+the figure comes from: about 11 s of double-precision cos/sin in software.
+Two searches per cycle = about 22 s of the 115 s decode budget.
+
+The memory part of that run was good: page entry allocated everything with
+1256 KB PSRAM left (largest free 1184 KB), and cycle 1 decoded 2.
+
+Fix: R0 holds the cfg alone, built once in `wspr_decode_scratch_init`.
+Stage-1 I/Q move to R1/R2, stage-2 to R3. About 0.3 MB more arena, same
+largest block. `test/wspr_noalloc_harness.c` now also fails on any
+`kiss_fftr_alloc` build inside a cycle (mutation-tested: 6 builds, FAIL).
 
 ## First version failed on the bench (6d110df2)
 
@@ -73,8 +86,8 @@ fails if the largest block grows past 1,400,000 B.
 ## Proof
 
 - `test/wspr_noalloc_harness.c`: real decoder, malloc/calloc/realloc/free
-  wrapped, three full cycles on the WSJT reference recording. 0 allocations,
-  6/6/6 decodes. Mutation-tested: one malloc added to the decode path gives
+  and kiss_fftr_alloc wrapped, three full cycles on the WSJT reference
+  recording. 0 allocations, 0 cfg builds, 6/6/6 decodes. Mutation-tested: one malloc added to the decode path gives
   120 counted allocations and FAIL.
 - All 10 WSPR host programs produce output identical to v1.26.0 (timing
   figures excluded).
@@ -86,9 +99,9 @@ fails if the largest block grows past 1,400,000 B.
 
 1. Everything the receiver needs is allocated ONCE, at page entry, and freed at page
    exit. Nothing inside a cycle calls malloc, calloc or free.
-2. The search scratch and the stage-1/stage-2 scratch are never used at the same
-   moment, so they share ONE region (a union). The search rebuilds its FFT twiddles
-   in place at the start of each search; that is computation, not allocation.
+2. The search scratch and the stage-1/stage-2 scratch are never used at the
+   same moment, so they share blocks. The search's FFT cfg is NOT shared: its
+   twiddles cost 11 s to build on the P4, so they are built once at entry.
 3. If the page-entry allocation does not fit, the page says so once, with the
    numbers. It does not fail silently each cycle.
 4. A host test fails if any allocation happens between page entry and page exit.

@@ -10,12 +10,16 @@
  * WSJT reference recording - search, decode, subtract, search again, decode -
  * and fails on a single allocation between page entry and page exit.
  *
+ * It also fails if the search rebuilds its kiss_fftr cfg inside a cycle: that
+ * is computation, not allocation, but 11 s of it per search on the P4
+ * (28891b06, measured on bench1 2026-11-11).
+ *
  * It also checks the arena is the ONLY source: with it detached the search
  * must say WSPR_CANDS_NOMEM, not quietly fall back to malloc.
  *
  * Build (from the repo root):
  *   gcc -O2 -Wall -I main -I components/ft8_lib \
- *       -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free \
+ *       -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=kiss_fftr_alloc \
  *       -o wspr_noalloc_harness test/wspr_noalloc_harness.c \
  *       main/wspr_proto.c main/wspr_fano.c main/wspr_decode.c \
  *       main/wspr_subtract.c \
@@ -42,6 +46,15 @@ void *__wrap_malloc(size_t n)            { if (g_gate) g_allocs++; return __real
 void *__wrap_calloc(size_t a, size_t b)  { if (g_gate) g_allocs++; return __real_calloc(a, b); }
 void *__wrap_realloc(void *p, size_t n)  { if (g_gate) g_allocs++; return __real_realloc(p, n); }
 void  __wrap_free(void *p)               { if (g_gate && p) g_frees++; __real_free(p); }
+
+#include "fft/kiss_fftr.h"
+static int g_cfg_builds;    /* kiss_fftr_alloc() calls that BUILD (mem given) */
+kiss_fftr_cfg __real_kiss_fftr_alloc(int nfft, int inv, void *mem, size_t *lenmem);
+kiss_fftr_cfg __wrap_kiss_fftr_alloc(int nfft, int inv, void *mem, size_t *lenmem)
+{
+    if (g_gate && mem) g_cfg_builds++;
+    return __real_kiss_fftr_alloc(nfft, inv, mem, lenmem);
+}
 
 static int g_fail;
 #define CHECK(cond, ...) do { if (cond) { printf("  PASS  "); } else { printf("  FAIL  "); g_fail++; } \
@@ -101,13 +114,13 @@ int main(void)
      * The LARGEST BLOCK is the one that decides on the device: bench1's PSRAM
      * never offered more than 2304 KB contiguous with the page's buffers in
      * place, and a single 2.56 MB arena never fitted (2026-11-11). */
-    CHECK(need <= 2900000, "arena %zu B is within the 2,900,000 B budget", need);
+    CHECK(need <= 3150000, "arena %zu B is within the 3,150,000 B budget", need);
     CHECK(big <= 1400000, "largest block %zu B is within 1,400,000 B (device ceiling 2304 KB)", big);
 
     /* Page entry: the ONE allocation. */
     CHECK(wspr_decode_scratch_init(n), "arena allocated at page entry");
 
-    g_gate = 1; g_allocs = g_frees = 0;
+    g_gate = 1; g_allocs = g_frees = 0; g_cfg_builds = 0;
     int per_cycle[3];
     for (int cyc = 0; cyc < 3; cyc++) {
         memcpy(pcm, orig, (size_t)n * sizeof(int16_t));   /* a new capture */
@@ -118,6 +131,8 @@ int main(void)
 
     CHECK(g_allocs == 0 && g_frees == 0,
           "%d allocation(s) and %d free(s) inside three cycles - must be 0", g_allocs, g_frees);
+    CHECK(g_cfg_builds == 0,
+          "%d kiss_fftr cfg build(s) inside three cycles - must be 0 (built at page entry)", g_cfg_builds);
     CHECK(per_cycle[0] >= 6, "cycle 1 decoded %d (the reference window gives >= 6)", per_cycle[0]);
     CHECK(per_cycle[0] == per_cycle[1] && per_cycle[1] == per_cycle[2],
           "every cycle decodes the same: %d / %d / %d", per_cycle[0], per_cycle[1], per_cycle[2]);
