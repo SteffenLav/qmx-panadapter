@@ -18,6 +18,31 @@ static void set_step(float f_hz, float fs, float *c, float *s)
     *s = (float)sin(w);
 }
 
+/* Mark and space steps from centre + AFC offset. */
+static void retune(rtty_demod_t *d)
+{
+    float half = d->cfg.shift_hz * 0.5f;
+    float c = d->cfg.centre_hz + d->afc_off;
+    float fm  = c + (d->cfg.reverse ? -half : half);
+    float fsp = c + (d->cfg.reverse ? half : -half);
+    set_step(fm,  d->cfg.fs_hz, &d->mstep_c, &d->mstep_s);
+    set_step(fsp, d->cfg.fs_hz, &d->sstep_c, &d->sstep_s);
+}
+
+/* Once per bit: apply the discriminator. Frozen while unlocked. */
+static void afc_update(rtty_demod_t *d)
+{
+    float r = d->afc_r, i = d->afc_i;
+    d->afc_r = d->afc_i = 0.0f;
+    if (d->cfg.afc_hz <= 0.0f || !d->g_lock || !d->afc_ok || (r == 0.0f && i == 0.0f)) return;
+    float e = atan2f(i, r) * d->cfg.fs_hz / (float)(2.0 * M_PI);
+    float o = d->afc_off + RTTY_AFC_MU * e;
+    if (o >  d->cfg.afc_hz) o =  d->cfg.afc_hz;
+    if (o < -d->cfg.afc_hz) o = -d->cfg.afc_hz;
+    d->afc_off = o;
+    retune(d);
+}
+
 bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
 {
     memset(d, 0, sizeof(*d));
@@ -27,11 +52,7 @@ bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
     d->L = (int)lroundf(d->T);
     if (d->L < 4 || d->L > RTTY_MAX_BIT_SAMPLES) return false;
 
-    float half = cfg->shift_hz * 0.5f;
-    float fm = cfg->centre_hz + (cfg->reverse ? -half : half);
-    float fsp = cfg->centre_hz + (cfg->reverse ? half : -half);
-    set_step(fm,  cfg->fs_hz, &d->mstep_c, &d->mstep_s);
-    set_step(fsp, cfg->fs_hz, &d->sstep_c, &d->sstep_s);
+    retune(d);
     d->mc = 1.0f; d->ms = 0.0f;
     d->sc = 1.0f; d->ss = 0.0f;
     d->g_bits = 7.5f;
@@ -90,6 +111,7 @@ static void emit(rtty_demod_t *d, double t0, double Tb, float score,
     for (int b = 1; b <= 5; b++)
         if (hist_at(d, t0 + (double)b * Tb) > 0.0f) code |= (uint8_t)(1u << (b - 1));
     rtty_char_t ch = { code, score / 7.0f, t0 + (double)d->L - d->T };
+    d->afc_ok = ch.conf >= RTTY_AFC_MIN_CONF;
     if (d->cfg.squelch > 0.0f && ch.conf < d->cfg.squelch) { d->n_squelched++; return; }
     d->n_chars++;
     if (cb) cb(&ch, user);
@@ -164,6 +186,7 @@ static void eval_slot(rtty_demod_t *d, rtty_char_cb cb, void *user)
         return;
     }
     d->g_ref = pred;
+    d->afc_ok = false;
     if (++d->g_miss >= RTTY_GRID_MAX_MISS) {
         d->g_lock = false;
         d->in_char = false;
@@ -222,14 +245,24 @@ void rtty_demod_feed(rtty_demod_t *d, const float *re, const float *im, int n,
         d->smr += a_r - d->mr[p]; d->smi += a_i - d->mi[p];
         d->ssr += b_r - d->sr[p]; d->ssi += b_i - d->si[p];
         d->mr[p] = a_r; d->mi[p] = a_i; d->sr[p] = b_r; d->si[p] = b_i;
-        if (++d->pos >= d->L) { d->pos = 0; refresh(d); }
-        if (d->filled < d->L) { d->filled++; continue; }
+        float zmr = d->smr, zmi = d->smi, zsr = d->ssr, zsi = d->ssi;
+        if (++d->pos >= d->L) { d->pos = 0; refresh(d); afc_update(d); }
+        if (d->filled < d->L) { d->filled++; d->pmr = zmr; d->pmi = zmi; d->psr = zsr; d->psi = zsi; continue; }
 
-        float am = sqrtf(d->smr * d->smr + d->smi * d->smi) / L;
-        float as = sqrtf(d->ssr * d->ssr + d->ssi * d->ssi) / L;
+        float am = sqrtf(zmr * zmr + zmi * zmi) / L;
+        float as = sqrtf(zsr * zsr + zsi * zsi) / L;
         d->mark_lvl  += 0.002f * (am - d->mark_lvl);
         d->space_lvl += 0.002f * (as - d->space_lvl);
         float dv = (am - as) / (am + as + 1e-20f);
+        /* AFC discriminator: z[n] * conj(z[n-1]) of the tone that is on */
+        if (dv > RTTY_AFC_GATE) {
+            d->afc_r += zmr * d->pmr + zmi * d->pmi;
+            d->afc_i += zmi * d->pmr - zmr * d->pmi;
+        } else if (dv < -RTTY_AFC_GATE) {
+            d->afc_r += zsr * d->psr + zsi * d->psi;
+            d->afc_i += zsi * d->psr - zsr * d->psi;
+        }
+        d->pmr = zmr; d->pmi = zmi; d->psr = zsr; d->psi = zsi;
         framer(d, dv, cb, user);
     }
 }

@@ -564,17 +564,28 @@ device.
 - Baud error up to +/-2 %: no loss.
 - ⚠ **Tuning error:** +/-10 Hz -> CER 3 % at -6 dB (about 2 dB lost);
   +/-20 Hz -> 17-20 %. **AFC is needed**, against the June "out of scope".
+- **AFC added** (`cfg.afc_hz`, lag-1 discriminator on the dominant tone,
+  steers only while locked and the last character conf >= 0.5). At -6 dB:
+  +/-30 Hz CER <= 2.5 %, 0 Hz no cost (12 000 chars: 0.6 % both),
+  0.2 Hz/s drift 0.9 %. +/-40 Hz pulls in slowly (12-16 % over 1500 chars;
+  3 % at -4 dB). On noise the offset wanders 11 Hz rms (peak 27 Hz in 60 s,
+  20 runs); without the conf gate it was 37 Hz rms.
 - ⚠ **Squelch:** noise alone prints 275 chars/min unsquelched, 79 at the
   confidence threshold 0.4. Needs a real signal-presence measure.
 - ⚠ The generator uses our own ITA2 encoder. A real recording, compared with
   fldigi or MMTTY on the same audio, is the arbiter. The harness reads a WAV
   (`--wav f.wav --centre <Hz> [--lsb]`).
 
+### Decisions
+
+- 2026-11-12, operator: **own RTTY page**, modelled on the CW page (not a mode inside the CW page).
+- 2026-11-12, operator: **bench2 is the RTTY bench**; flash it when needed. `tools/bench.json` (main checkout) updated.
+
 ### Plan
 
 | Phase | Work | Blocked on |
 |---|---|---|
-| R1 (rest) | AFC; signal-presence squelch; decode a real recording | a recording |
-| R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench1 | layout decision; a flash |
+| R1 (rest) | signal-presence squelch (also freezes AFC); decode a real recording | a recording |
+| R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench1 | a flash |
 | R4 | `TA<freq>;` at 22 ms, dummy load, fldigi as arbiter | operator at the bench |
 | R5 | TX: encoder exists; sequencer, macros, keyboard; band guard + inventory | R4 result |

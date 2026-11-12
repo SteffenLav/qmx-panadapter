@@ -144,13 +144,16 @@ typedef struct {
     float snr_db;      /* in 2500 Hz; > 90 = no noise */
 } gen_t;
 
+static float g_drift;        /* sender drift, Hz/s, from t = 0 */
+
 /* Continuous-phase FSK: unit amplitude, mark = centre + shift/2. */
 static void gen_elements(sig_t *s, const gen_t *g, const int *bits, const float *len,
                          int nel, double *phase, double *tacc)
 {
     double T = g->fs / (g->baud * (1.0 + g->baud_err));
     for (int e = 0; e < nel; e++) {
-        double f = g->centre + g->f_off + (bits[e] ? 0.5 : -0.5) * g->shift;
+        double f = g->centre + g->f_off + g_drift * (*tacc / g->fs)
+                 + (bits[e] ? 0.5 : -0.5) * g->shift;
         double w = 2.0 * M_PI * f / g->fs;
         *tacc += len[e] * T;
         while ((double)s->n < *tacc) {
@@ -242,12 +245,13 @@ static size_t lev(const char *a, const char *b)
 typedef struct { double cer; rtty_demod_t st; char *text; } res_t;
 
 static rtty_demod_t g_dem;   /* 8 KB: keep it off the stack */
+static float g_afc;          /* cfg.afc_hz for run(); 0 = off */
 
 static double run(const gen_t *g, const char *text, bool rx_reverse, float rx_centre_err,
                   float squelch, rtty_demod_t *stats_out)
 {
     sig_t s = make_signal(g, text);
-    rtty_demod_cfg_t cfg = { g->fs, 45.45f, 170.0f, g->centre + rx_centre_err, rx_reverse, squelch };
+    rtty_demod_cfg_t cfg = { g->fs, 45.45f, 170.0f, g->centre + rx_centre_err, rx_reverse, squelch, g_afc };
     if (!rtty_demod_init(&g_dem, &cfg)) { printf("init failed\n"); exit(2); }
     sink_t k = {0};
     rtty_baudot_init(&k.b, false);
@@ -327,6 +331,56 @@ static void suite(void)
         printf("  tuning error %+3.0f Hz: CER %.3f\n", offs[i], cer);
         if (fabsf(offs[i]) <= 10) CHECK(cer < 0.05, "CER %.3f at %+.0f Hz", cer, offs[i]);
     }
+    printf("\nAFC on (+/-60 Hz) at SNR -6 dB:\n");
+    g_afc = 60.0f;
+    {
+        gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, -6 };
+        rtty_demod_t st;
+        double cer = run(&g, text, false, 0, 0, &st);
+        printf("  tuning error   0 Hz: CER %.3f (AFC off %.3f) offset end %+5.1f Hz\n", cer, cer_m6, st.afc_off);
+        CHECK(cer < cer_m6 + 0.01, "AFC costs at 0 Hz: CER %.3f vs %.3f", cer, cer_m6);
+    }
+    const float offa[] = { -40, -30, -20, -10, 10, 20, 30, 40 };
+    for (int i = 0; i < 8; i++) {
+        gen_t g = { 6000, 45.45f, 170.0f, 0, 0, offa[i], -6 };
+        rtty_demod_t st;
+        double cer = run(&g, text, false, 0, 0, &st);
+        printf("  tuning error %+3.0f Hz: CER %.3f offset end %+5.1f Hz\n", offa[i], cer, st.afc_off);
+        if (fabsf(offa[i]) <= 20) CHECK(cer < 0.02, "AFC: CER %.3f at %+.0f Hz", cer, offa[i]);
+    }
+    {
+        /* drift 0.2 Hz/s from -25 Hz: about +25 Hz at the end of the text */
+        g_drift = 0.2f;
+        gen_t g = { 6000, 45.45f, 170.0f, 0, 0, -25, -6 };
+        rtty_demod_t st;
+        double cer = run(&g, text, false, 0, 0, &st);
+        g_drift = 0.0f;
+        printf("  drift 0.2 Hz/s from -25 Hz: CER %.3f offset end %+5.1f Hz\n", cer, st.afc_off);
+        CHECK(cer < 0.02, "AFC: CER %.3f with drift", cer);
+    }
+    {
+        /* 60 s of noise first, then the signal on 0 Hz, same demodulator:
+         * where did the offset wander, and does it come back? */
+        sig_t n = {0};
+        for (int i = 0; i < 6000 * 60; i++) sig_push(&n, (float)grand(), (float)grand());
+        gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, -6 };
+        sig_t s = make_signal(&g, text);
+        rtty_demod_cfg_t cfg = { 6000, 45.45f, 170.0f, 0, false, 0, g_afc };
+        rtty_demod_init(&g_dem, &cfg);
+        sink_t k = {0}; rtty_baudot_init(&k.b, false);
+        rtty_demod_feed(&g_dem, n.re, n.im, (int)n.n, NULL, NULL);
+        float wander = g_dem.afc_off;
+        rtty_demod_feed(&g_dem, s.re, s.im, (int)s.n, on_char, &k);
+        /* the noise prints junk before the signal: score the tail only */
+        const char *got = k.buf ? k.buf : "";
+        size_t lt = strlen(text), lg = strlen(got);
+        double cer = (double)lev(text, lg > lt ? got + (lg - lt) : got) / (double)lt;
+        printf("  60 s noise first: offset after noise %+5.1f Hz, then CER %.3f offset end %+5.1f Hz\n",
+               wander, cer, g_dem.afc_off);
+        CHECK(cer < 0.03, "AFC after noise: CER %.3f", cer);
+        free(n.re); free(n.im); free(s.re); free(s.im); free(k.buf);
+    }
+    g_afc = 0.0f;
     const float berr[] = { -0.02f, -0.01f, 0.01f, 0.02f };
     for (int i = 0; i < 4; i++) {
         gen_t g = { 6000, 45.45f, 170.0f, 0, berr[i], 0, -6 };
@@ -346,7 +400,7 @@ static void suite(void)
         static const float sq[] = { 0.0f, 0.2f, 0.3f, 0.4f };
         sig_t s = {0};
         for (int i = 0; i < 6000 * 60; i++) sig_push(&s, (float)grand(), (float)grand());
-        rtty_demod_cfg_t cfg = { 6000, 45.45f, 170.0f, 0, false, sq[q] };
+        rtty_demod_cfg_t cfg = { 6000, 45.45f, 170.0f, 0, false, sq[q], g_afc };
         rtty_demod_init(&g_dem, &cfg);
         sink_t k = {0}; rtty_baudot_init(&k.b, false);
         rtty_demod_feed(&g_dem, s.re, s.im, (int)s.n, on_char, &k);
@@ -402,15 +456,15 @@ static int decode_wav(const char *path, float centre, bool lsb, float squelch, b
 
     /* Real audio: mark is the higher RF frequency. In USB audio that is the
      * higher tone; in LSB audio the lower one, so LSB = reverse. */
-    rtty_demod_cfg_t cfg = { (float)rate, 45.45f, 170.0f, centre, lsb, squelch };
+    rtty_demod_cfg_t cfg = { (float)rate, 45.45f, 170.0f, centre, lsb, squelch, g_afc };
     if (!rtty_demod_init(&g_dem, &cfg)) { printf("init failed for %u Hz\n", rate); return 2; }
     sink_t k = {0}; rtty_baudot_init(&k.b, usos);
     rtty_demod_feed(&g_dem, x, NULL, (int)frames, on_char, &k);
     printf("%s: %u Hz, %.1f s, centre %.0f Hz %s\n", path, rate, frames / (double)rate,
            centre, lsb ? "(LSB: mark low)" : "(USB: mark high)");
-    printf("chars %u, framing errors %u, false starts %u, squelched %u, mark %.4f space %.4f\n",
+    printf("chars %u, framing errors %u, false starts %u, squelched %u, mark %.4f space %.4f, AFC %+.1f Hz\n",
            (unsigned)g_dem.n_chars, (unsigned)g_dem.n_framing, (unsigned)g_dem.n_false_start,
-           (unsigned)g_dem.n_squelched, g_dem.mark_lvl, g_dem.space_lvl);
+           (unsigned)g_dem.n_squelched, g_dem.mark_lvl, g_dem.space_lvl, g_dem.afc_off);
     printf("---\n%s\n---\n", k.buf ? k.buf : "");
     free(x); free(k.buf);
     return 0;
@@ -425,6 +479,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--lsb")) lsb = true;
         else if (!strcmp(argv[i], "--no-usos")) usos = false;
         else if (!strcmp(argv[i], "--squelch") && i + 1 < argc) sq = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--afc") && i + 1 < argc) g_afc = (float)atof(argv[++i]);
     }
     if (wav) return decode_wav(wav, centre, lsb, sq, usos);
     suite();
