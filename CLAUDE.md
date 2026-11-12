@@ -13,8 +13,7 @@ a session HERE for RTTY work; start one in `C:\dev\qmx-panadapter` for main.
   branch needs in committed files, not only in memory.
 - Nothing on this branch is pushed or released until the operator says so.
 - ⭐ **AT SESSION START, unasked:** read `TODO-RTTY.md`, then do every open item
-  that needs no operator (today: removing the detached `.claude/worktrees/frosty-feistel-c073f7`
-  worktree of the main checkout). Items that key the radio or need him at the
+  that needs no operator (today: R012, host only). Items that key the radio or need him at the
   bench (R009) - say what is ready and ask; never key without his go.
 
 ESP-IDF firmware for M5Stack Tab5 (ESP32-P4). Real-time panadapter for the QRP Labs QMX/QMX+ HF transceiver: USB host captures IQ audio (UAC) + CAT (CDC-ACM), FFT runs on-device, spectrum + waterfall rendered on the 5" touch display (landscape 1280×720).
