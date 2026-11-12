@@ -22,7 +22,6 @@ needed; every flash wedges its QMX and needs his power cycle.
 | R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2. | Small | R005 + a flash | - |
 | R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. | Small | operator at the bench | - |
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
-| R011 | **Defaults**: 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Proposed, not yet agreed. | Minutes | operator's answer | - |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
 
 ## Done
@@ -30,4 +29,5 @@ needed; every flash wedges its QMX and needs his power cycle.
 | ID | Item | Commit |
 |---|---|---|
 | R001 | ITA2 codec + FSK demod (per-tone boxcar, character clock with flywheel) + host harness. CER 0.4 % at -6 dB SNR/2500 Hz, theory 0.3 %. Host only, never run on a device. | `a81bacb3` |
+| R011 | Defaults 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Operator: "yes, those defaults - but really you are the one to judge" (2026-11-12). Not yet wired to a setting: lands with R006. | - |
 | R002 | AFC, gated on lock + character conf. -6 dB: +/-30 Hz CER <= 2.5 %, 0 Hz no cost, 0.2 Hz/s drift 0.9 %. Host only. | `5ceffd37` |
