@@ -4664,6 +4664,63 @@ void settings_band_db_set(uint32_t center_hz, int db_min, int db_max)
                   (unsigned long)center_hz, db_min, db_max);
 }
 
+/* ---- RTTY page dial per band - see settings.h --------------------------- */
+#define KEY_BAND_RTTY "bandrtty"
+typedef struct { uint32_t center_hz, freq_hz; } band_rtty_t;
+static band_rtty_t s_band_rtty[BAND_MEM_N];
+static bool        s_band_rtty_loaded = false;
+
+static void band_rtty_load_locked(void)
+{
+    if (s_band_rtty_loaded) return;
+    size_t sz = sizeof(s_band_rtty);
+    if (nvs_get_blob(s_nvs, KEY_BAND_RTTY, s_band_rtty, &sz) != ESP_OK || sz != sizeof(s_band_rtty))
+        memset(s_band_rtty, 0, sizeof(s_band_rtty));
+    s_band_rtty_loaded = true;
+}
+
+bool settings_band_rtty_get(uint32_t center_hz, uint32_t *freq_hz)
+{
+    if (freq_hz) *freq_hz = 0;
+    if (!s_ready || !center_hz) return false;
+    bool found = false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    band_rtty_load_locked();
+    for (int i = 0; i < BAND_MEM_N; i++) {
+        if (s_band_rtty[i].center_hz != center_hz || !s_band_rtty[i].freq_hz) continue;
+        if (freq_hz) *freq_hz = s_band_rtty[i].freq_hz;
+        found = true;
+        break;
+    }
+    xSemaphoreGive(s_mutex);
+    return found;
+}
+
+void settings_band_rtty_set(uint32_t center_hz, uint32_t freq_hz)
+{
+    if (!s_ready || !center_hz || !freq_hz) return;
+    band_rtty_t copy[BAND_MEM_N];
+    bool write = false;
+    int slot = -1;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    band_rtty_load_locked();
+    for (int i = 0; i < BAND_MEM_N; i++) if (s_band_rtty[i].center_hz == center_hz) { slot = i; break; }
+    if (slot < 0) for (int i = 0; i < BAND_MEM_N; i++) if (s_band_rtty[i].center_hz == 0) { slot = i; break; }
+    if (slot >= 0 && (s_band_rtty[slot].center_hz != center_hz || s_band_rtty[slot].freq_hz != freq_hz)) {
+        s_band_rtty[slot].center_hz = center_hz;
+        s_band_rtty[slot].freq_hz   = freq_hz;
+        memcpy(copy, s_band_rtty, sizeof(copy));
+        write = true;
+    }
+    xSemaphoreGive(s_mutex);
+    if (!write) return;                       /* unchanged, or all 16 slots taken */
+    nvs_set_blob(s_nvs, KEY_BAND_RTTY, copy, sizeof(copy));
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (RTTY band dial) failed: 0x%x", err);
+    else ESP_LOGI(TAG, "RTTY band dial: %lu Hz band -> %lu Hz",
+                  (unsigned long)center_hz, (unsigned long)freq_hz);
+}
+
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask)
 {

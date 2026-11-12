@@ -1752,6 +1752,13 @@ void settings_band_mem_set(uint32_t center_hz, uint32_t freq_hz, const char *mod
  *   _set: ignored for a range under 10 dB, as ui_set_db_range() does. */
 bool settings_band_db_get(uint32_t center_hz, int *db_min, int *db_max);
 void settings_band_db_set(uint32_t center_hz, int db_min, int db_max);
+/* RTTY page dial per band (operator, 2026-11-12: "whenever a specific rtty
+ * Freq has been chosen ... make that Freq persistent per band"). Keyed like
+ * band memory, own blob for the same reason as T195's. Separate from band
+ * memory so the panadapter's recall is untouched.
+ *   _get: false if the band was never stored.  _set: freq_hz 0 is ignored. */
+bool settings_band_rtty_get(uint32_t center_hz, uint32_t *freq_hz);
+void settings_band_rtty_set(uint32_t center_hz, uint32_t freq_hz);
 
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask);

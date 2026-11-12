@@ -428,10 +428,35 @@ static bool rtty_digi_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
  * A band with no DiGi segment keeps the recall. */
 uint32_t ui_band_change_target_hz(uint32_t center_hz, uint32_t recalled_hz)
 {
-    uint32_t lo, hi;
-    if (ui_mode_get() == UI_MODE_RTTY && rtty_digi_range_hz(center_hz, &lo, &hi))
+    if (ui_mode_get() != UI_MODE_RTTY) return recalled_hz;
+    /* First the dial he last used on this band on the RTTY page (operator,
+     * 2026-11-12: "if i go away it will remember when i come back"), if it is
+     * still inside the band. Stored by rtty_band_dial_store(). */
+    uint32_t mem = 0, lo, hi;
+    if (settings_band_rtty_get(center_hz, &mem) &&
+        legal_band_edges(center_hz, &lo, &hi) && mem >= lo && mem <= hi)
+        return mem;
+    if (rtty_digi_range_hz(center_hz, &lo, &hi))
         return ((lo + (hi - lo) / 2) / 1000u) * 1000u;
     return recalled_hz;
+}
+
+/* Store the RTTY page's dial for the band it is on. Called when the RTTY page
+ * leaves a band and when the page itself is left - the two ways "go away"
+ * happens. The band is found by the same nearest-centre rule as
+ * ui_update_frequency(), so the key is the band list's own centre. */
+static void rtty_band_dial_store(uint32_t freq_hz)
+{
+    if (!freq_hz) return;
+    int band_count = 0, best = -1;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    uint32_t bd = 1500000u + 1u;
+    for (int i = 0; i < band_count; i++) {
+        uint32_t d = freq_hz > bands[i].center_hz ? freq_hz - bands[i].center_hz
+                                                  : bands[i].center_hz - freq_hz;
+        if (d <= 1500000u && d < bd) { bd = d; best = i; }
+    }
+    if (best >= 0) settings_band_rtty_set(bands[best].center_hz, freq_hz);
 }
 
 static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
@@ -10195,6 +10220,9 @@ void ui_update_frequency(uint32_t freq_hz)
                 bool pan = ui_mode_get() == UI_MODE_PANADAPTER;
                 settings_band_mem_set(bands[s_last_band_idx].center_hz, s_band_last_hz[s_last_band_idx],
                                       (pan && band_mem_mode_ok(s_current_mode)) ? s_current_mode : NULL);
+                /* RTTY page: the band being left also keeps its RTTY dial. */
+                if (ui_mode_get() == UI_MODE_RTTY)
+                    settings_band_rtty_set(bands[s_last_band_idx].center_hz, s_band_last_hz[s_last_band_idx]);
             }
             /* T195: the dB range goes with the band. The band being LEFT keeps
              * the range on screen now; the band entered gets its own back, in
@@ -21305,6 +21333,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
          * decoder on top, so it reads and writes the panadapter's. Hiding the
          * page turns the decoder off. */
         rtty_screen_view_hide();
+        rtty_band_dial_store(s_last_qmx_freq_hz);   /* leaving the page = going away */
         ui_save_snapshot(&s_pan_snapshot);
     } else if (cur == UI_MODE_WSPR) {
         wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
