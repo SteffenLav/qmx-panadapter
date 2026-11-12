@@ -81,6 +81,17 @@ of what is removed there is that noise. On a test voice with a 20 dB
 signal-to-noise ratio, High made the result worse than no processing. That is
 why Med is the default.
 
+!!! note "Why NR sounds quieter, and what is done about it"
+    Most of the level you lose with NR on is the noise itself. On a weak signal
+    the band noise is most of what you hear, so removing it makes the whole
+    stream quieter. That is the intended effect.
+
+    The voice also loses a little. Measured on the speech alone (speech-block
+    power minus pause power): about 1 dB with Spectral, and 1.5 / 2.7 / 3.4 dB
+    with the speech model at Low / Med / High. From the next release that loss
+    is added back after NR, so the voice keeps its loudness and only the
+    background goes down. CW gets no make-up: its note loses 0.3 dB.
+
 ## Spectral
 
 This is classic spectral noise reduction, written in plain JavaScript as part of

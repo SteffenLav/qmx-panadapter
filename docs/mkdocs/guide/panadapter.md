@@ -253,6 +253,11 @@ finer step for a narrow range. Before this they were fixed at −40 to −120 re
 so any range other than the default was described by labels that did not belong to it
 (found by Samuel W7STF running −118/−13). At the default range the labels are unchanged.
 
+**Each band keeps its own dB range** (from the next release; Samuel W7STF asked). When
+you leave a band, the Min and Max on screen are stored for it; when you come back, they
+are restored, on the Tab5 and in the browser. A band you have not visited yet keeps the
+range you arrive with. Outside the amateur bands the range does not change.
+
 The **frequency axis** shows absolute MHz labels across whatever span is on screen, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision. With **Still Spectrum** on — the default above ×1 — the axis stays put as you tune and the VFO marker moves along it; with it off, the axis is centred on the QMX VFO.
 
 The **waterfall** runs newest row at the top, in a thermal SDR palette (black -> dark blue -> teal -> green -> yellow -> red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
