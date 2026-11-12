@@ -4573,6 +4573,68 @@ void settings_band_mem_set(uint32_t center_hz, uint32_t freq_hz, const char *mod
                   (unsigned long)copy[slot].freq_hz, copy[slot].mode[0] ? copy[slot].mode : "(mode not set)");
 }
 
+/* ---- T195: per-band spectrum dB range - see settings.h --------------------
+ * Its own blob, not three more fields in band_mem_t: a blob of another size is
+ * read as empty (band_mem_load_locked), so growing that struct would have
+ * erased every operator's band memory on the first boot of this firmware. */
+#define KEY_BAND_DB   "banddb"
+typedef struct { uint32_t center_hz; int16_t db_min, db_max; } band_db_t;
+static band_db_t s_band_db[BAND_MEM_N];
+static bool      s_band_db_loaded = false;
+
+static void band_db_load_locked(void)
+{
+    if (s_band_db_loaded) return;
+    size_t sz = sizeof(s_band_db);
+    if (nvs_get_blob(s_nvs, KEY_BAND_DB, s_band_db, &sz) != ESP_OK || sz != sizeof(s_band_db))
+        memset(s_band_db, 0, sizeof(s_band_db));
+    s_band_db_loaded = true;
+}
+
+bool settings_band_db_get(uint32_t center_hz, int *db_min, int *db_max)
+{
+    if (!s_ready || !center_hz) return false;
+    bool found = false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    band_db_load_locked();
+    for (int i = 0; i < BAND_MEM_N; i++) {
+        if (s_band_db[i].center_hz != center_hz) continue;
+        if (db_min) *db_min = s_band_db[i].db_min;
+        if (db_max) *db_max = s_band_db[i].db_max;
+        found = true;
+        break;
+    }
+    xSemaphoreGive(s_mutex);
+    return found;
+}
+
+void settings_band_db_set(uint32_t center_hz, int db_min, int db_max)
+{
+    if (!s_ready || !center_hz || db_max - db_min < 10) return;
+    band_db_t copy[BAND_MEM_N];
+    bool write = false;
+    int slot = -1;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    band_db_load_locked();
+    for (int i = 0; i < BAND_MEM_N; i++) if (s_band_db[i].center_hz == center_hz) { slot = i; break; }
+    if (slot < 0) for (int i = 0; i < BAND_MEM_N; i++) if (s_band_db[i].center_hz == 0) { slot = i; break; }
+    if (slot >= 0) {
+        band_db_t *b = &s_band_db[slot];
+        if (b->center_hz != center_hz || b->db_min != db_min || b->db_max != db_max) {
+            b->center_hz = center_hz; b->db_min = (int16_t)db_min; b->db_max = (int16_t)db_max;
+            memcpy(copy, s_band_db, sizeof(copy));
+            write = true;
+        }
+    }
+    xSemaphoreGive(s_mutex);
+    if (!write) return;                       /* unchanged, or all 16 slots taken */
+    nvs_set_blob(s_nvs, KEY_BAND_DB, copy, sizeof(copy));
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (band dB range) failed: 0x%x", err);
+    else ESP_LOGI(TAG, "band dB range: %lu Hz band -> %d..%d dBm",
+                  (unsigned long)center_hz, db_min, db_max);
+}
+
 bool settings_get_cw_profile(int idx, char *name, size_t name_sz,
                              uint16_t *centre_hz, uint8_t *mask)
 {

@@ -4651,6 +4651,7 @@ static void drawer_db_sliders_set_live(bool live)
 
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
+static void db_band_restore_cb(lv_timer_t *t);   /* T195 */
 static void drawer_build(void);
 void ui_open_user_manual(void);
 // User Manual button: a short tap opens the Reader; holding >= 3 s resets the
@@ -4702,6 +4703,9 @@ static void iq_balance_toggle_cb(lv_event_t *e);
 // Phase 5.5: static defaults -- manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
 static float DB_MIN_DISPLAY = -130.0f;  /* dBm, calibrated scale */
+/* T195: centre of the band whose stored dB range db_band_restore_cb() has
+ * still to apply; 0 = nothing pending. Written by the CAT task, read by LVGL. */
+static volatile uint32_t s_db_restore_center = 0;
 static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
 // Forward decl so build_spectrum can call this
@@ -7808,6 +7812,7 @@ static void build_bottom_bar(lv_obj_t *parent)
          * over. The callback early-outs on an unchanged second, so the cost is
          * one time() call per tick. */
         lv_timer_create(bot_clock_tick_cb, 100, NULL);
+        lv_timer_create(db_band_restore_cb, 200, NULL);   /* T195 */
 
         // The WiFi zone lays itself out from the right edge leftward and must
         // stop here: the clock is CENTRED and stays centred, so it's the SSID
@@ -10128,6 +10133,18 @@ void ui_update_frequency(uint32_t freq_hz)
                 settings_band_mem_set(bands[s_last_band_idx].center_hz, s_band_last_hz[s_last_band_idx],
                                       (pan && band_mem_mode_ok(s_current_mode)) ? s_current_mode : NULL);
             }
+            /* T195: the dB range goes with the band. The band being LEFT keeps
+             * the range on screen now; the band entered gets its own back, in
+             * db_band_restore_cb() - an LVGL timer, because this runs on the
+             * CAT task and the drawer sliders are LVGL objects.
+             * ⚠ Not stored while that band's own restore is still pending:
+             * the screen would still show the PREVIOUS band's range, and
+             * storing it would overwrite this band's with it. */
+            if (s_last_band_idx >= 0 && s_last_band_idx < band_count &&
+                s_db_restore_center != bands[s_last_band_idx].center_hz)
+                settings_band_db_set(bands[s_last_band_idx].center_hz,
+                                     (int)lroundf(DB_MIN_DISPLAY), (int)lroundf(DB_MAX_DISPLAY));
+            s_db_restore_center = (current_band_idx >= 0) ? bands[current_band_idx].center_hz : 0;
             s_band_change_us = esp_timer_get_time();
         }
         if (current_band_idx >= 0) s_band_last_hz[current_band_idx] = freq_hz;
@@ -19347,13 +19364,13 @@ static void drawer_set_mode(ui_mode_t mode)
 // and Stan asked why we did not simply do this; there was no good answer.
 // === Phase 5.10D Stage 2b: drawer button + slider callbacks ===
 
-static void drawer_apply_preset(int db_min, int db_max, float alpha)
+/* The dB range on the drawer sliders, their labels, the live scale and the
+ * stored CURRENT range - one place, so a preset and a band restore (T195)
+ * cannot leave one of the four behind. LVGL context only. */
+static void drawer_show_db_range(int db_min, int db_max)
 {
     if (s_slider_db_min) lv_slider_set_value(s_slider_db_min, db_min, LV_ANIM_OFF);
     if (s_slider_db_max) lv_slider_set_value(s_slider_db_max, db_max, LV_ANIM_OFF);
-    /* The slider is SMOOTHING PERCENT; alpha is what the preset carries. */
-    if (s_slider_alpha)  lv_slider_set_value(s_slider_alpha, 100 - (int)(alpha * 100.0f + 0.5f), LV_ANIM_OFF);
-
     char buf[24];
     if (s_lbl_db_min) {
         snprintf(buf, sizeof(buf), "Min: %d dBm", db_min);
@@ -19363,17 +19380,41 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
         snprintf(buf, sizeof(buf), "Max: %d dBm", db_max);
         lv_label_set_text(s_lbl_db_max, buf);
     }
+    ui_set_db_range((float)db_min, (float)db_max);
+    settings_set_db_min((float)db_min);
+    settings_set_db_max((float)db_max);
+}
+
+static void drawer_apply_preset(int db_min, int db_max, float alpha)
+{
+    drawer_show_db_range(db_min, db_max);
+    /* The slider is SMOOTHING PERCENT; alpha is what the preset carries. */
+    if (s_slider_alpha)  lv_slider_set_value(s_slider_alpha, 100 - (int)(alpha * 100.0f + 0.5f), LV_ANIM_OFF);
     if (s_lbl_alpha) {
         char smbuf[40];
         smoothing_label(smbuf, sizeof(smbuf), 100 - (int)(alpha * 100.0f + 0.5f));
         lv_label_set_text(s_lbl_alpha, smbuf);
     }
-
-    ui_set_db_range((float)db_min, (float)db_max);
     render_set_ema_alpha(alpha);
-    settings_set_db_min((float)db_min);
-    settings_set_db_max((float)db_max);
     settings_set_ema_alpha(alpha);
+}
+
+/* T195: a band entered gets back the dB range it was left with - see the band
+ * change in ui_update_frequency(). A band never stored keeps the range on
+ * screen, and is stored with it when it is left. Runs inside lv_timer_handler(),
+ * so it holds the display lock and cannot drop the update. */
+static void db_band_restore_cb(lv_timer_t *t)
+{
+    (void)t;
+    uint32_t c = s_db_restore_center;
+    if (!c) return;
+    int mn, mx;
+    bool have = settings_band_db_get(c, &mn, &mx);
+    s_db_restore_center = 0;
+    if (!have || mx - mn < 10) return;
+    if (mn == (int)lroundf(DB_MIN_DISPLAY) && mx == (int)lroundf(DB_MAX_DISPLAY)) return;
+    ESP_LOGI(TAG, "band dB range restored: %lu Hz band -> %d..%d dBm", (unsigned long)c, mn, mx);
+    drawer_show_db_range(mn, mx);
 }
 
 /* Phase 5.12: flat-spectrum mode accessor + drawer callback */
