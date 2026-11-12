@@ -295,6 +295,33 @@ static char *random_text(size_t nchar)
     return t;
 }
 
+/* R012: mean locked period g_P against the sender's true period, sampled at
+ * every grid slot, as a fraction (0 = exact). *sd_out = slot-to-slot spread.
+ * The note "settles ~0.15 % short at -6 dB" was one reading of this jitter:
+ * sd is 0.12 % at -6 dB, the mean is within +/-0.001 % (4 seeds, 2026-11-12,
+ * same on the R001 code). Loop gains: steer() is type 2, so no bias is due. */
+static double period_bias(const gen_t *g, const char *text, double *sd_out)
+{
+    sig_t s = make_signal(g, text);
+    rtty_demod_cfg_t cfg = { g->fs, 45.45f, 170.0f, g->centre, false, 0, 0 };
+    if (!rtty_demod_init(&g_dem, &cfg)) { printf("init failed\n"); exit(2); }
+    double want = 1.0 / (1.0 + g->baud_err);
+    double sum = 0, sq = 0; long n = 0; uint32_t grid0 = 0;
+    for (size_t i = 0; i < s.n; i += 333) {
+        int m = (int)((s.n - i) < 333 ? (s.n - i) : 333);
+        rtty_demod_feed(&g_dem, &s.re[i], &s.im[i], m, NULL, NULL);
+        if (g_dem.g_lock && g_dem.n_grid != grid0) {
+            grid0 = g_dem.n_grid;
+            double r = g_dem.g_P / (g_dem.g_bits * g_dem.T) / want - 1.0;
+            sum += r; sq += r * r; n++;
+        }
+    }
+    free(s.re); free(s.im);
+    double mu = n ? sum / n : 1.0;
+    if (sd_out) *sd_out = n ? sqrt(sq / n - mu * mu) : 0.0;
+    return mu;
+}
+
 static double theory_cer(double snr_db, double baud)
 {
     double ebn0 = pow(10.0, snr_db / 10.0) * 2500.0 / baud;
@@ -353,6 +380,20 @@ static void suite(void)
         if (snr == -6) cer_m6 = cer;
     }
     CHECK(cer_m6 < 0.03, "CER at -6 dB is %.3f, want < 0.03", cer_m6);
+
+    printf("\ncharacter clock period vs sender, SNR -6 dB (R012):\n");
+    {
+        char *pt = random_text(6000);
+        const float errs[] = { 0.0f, +0.003f, -0.003f };
+        for (int i = 0; i < 3; i++) {
+            gen_t g = { 6000, 45.45f, 170.0f, 1500, errs[i], 0, -6 };
+            double sd, mu = period_bias(&g, pt, &sd);
+            printf("  sender %+.1f %%: mean %+.4f %%, slot sd %.3f %%\n", errs[i] * 100, mu * 100, sd * 100);
+            /* standard error ~0.01 %: slots correlate over ~1/beta = 20 */
+            CHECK(fabs(mu) < 0.0003, "clock period off by %+.4f %% (sender %+.1f %%)", mu * 100, errs[i] * 100);
+        }
+        free(pt);
+    }
 
     printf("\nimpairments at SNR -6 dB:\n");
     const float offs[] = { -20, -10, 10, 20 };
