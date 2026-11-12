@@ -2656,7 +2656,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 httpd_resp_set_type(req, "application/json");
                 httpd_resp_set_status(req, "400 Bad Request");
                 httpd_resp_sendstr(req,
-                    "{\"ok\":false,\"error\":\"screen must be pan, cw, ft8, ft4, js8 or wspr\"}");
+                    "{\"ok\":false,\"error\":\"screen must be pan, cw, rtty, ft8, ft4, js8 or wspr\"}");
                 return ESP_OK;
             }
         } else {
@@ -2664,7 +2664,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_set_type(req, "application/json");
             httpd_resp_set_status(req, "400 Bad Request");
             httpd_resp_sendstr(req,
-                "{\"ok\":false,\"error\":\"screen required (pan, cw, ft8, ft4, js8 or wspr)\"}");
+                "{\"ok\":false,\"error\":\"screen required (pan, cw, rtty, ft8, ft4, js8 or wspr)\"}");
             return ESP_OK;
         }
     } else if (action && strcmp(action, "reply") == 0) {
