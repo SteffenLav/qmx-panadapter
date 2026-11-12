@@ -583,9 +583,11 @@ device.
 
 ### Plan
 
+The work items are tracked as R001-R012 in `TODO-RTTY.md`.
+
 | Phase | Work | Blocked on |
 |---|---|---|
 | R1 (rest) | signal-presence squelch (also freezes AFC); decode a real recording | a recording |
-| R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench1 | a flash |
+| R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench2 | a flash |
 | R4 | `TA<freq>;` at 22 ms, dummy load, fldigi as arbiter | operator at the bench |
 | R5 | TX: encoder exists; sequencer, macros, keyboard; band guard + inventory | R4 result |
