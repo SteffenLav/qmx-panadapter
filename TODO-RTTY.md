@@ -14,8 +14,8 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2; no CPU instrument exists for it yet. | Small | - | - |
-| R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. | Small | operator at the bench | - |
+| R008 | **RAM and CPU on device**: MEASURED (`2d15d857`): demod 18552 B PSRAM, static ~3.0 KB internal; 4.0-6.1 % of core 1 (921 s), call max p50 13 ms = the 0.5 s acquisition DFT. LEFT: the on/off A/B on bench2 (decoder off at uptime 1002.9 s = 21:40:46, on 21:45:46, to 21:50:46) - compare rx_audio `LATE` and `idle1` per window in capture-bench2.txt, then close. | Minutes | - | - |
+| R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. Burst BUILT + flashed bench2 (`2d15d857`): `{"action":"rtty_tx_test","centre_hz":1500,"seconds":20}`, DiGi, dial 14.080.00, dummy load; PC receiver + fldigi. Not yet keyed. | Small | operator at the bench | - |
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
 
