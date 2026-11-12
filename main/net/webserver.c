@@ -863,7 +863,8 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "screen",
         ui_mode_get() == UI_MODE_FT8  ? "ft8"  :
         ui_mode_get() == UI_MODE_WSPR ? "wspr" :
-        ui_mode_get() == UI_MODE_CW   ? "cw"   : "panadapter");
+        ui_mode_get() == UI_MODE_CW   ? "cw"   :
+        ui_mode_get() == UI_MODE_RTTY ? "rtty" : "panadapter");
     /* ⚠ ALSO IN /api/settings, AND BOTH ARE NEEDED. The web UI shows or hides
      * the whole WSPR card from THIS field, on the 1 Hz status poll - it never
      * reads /api/settings. Adding it only there (which is what shipped first)
@@ -2637,6 +2638,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 }
                 ui_request_base_mode_m(UI_MODE_CW);
             }
+            else if (!strcmp(scr, "rtty")) {
+                /* R006. RX only, so no gate: the page cannot key the radio. */
+                ui_request_base_mode_m(UI_MODE_RTTY);
+            }
             else if (!strcmp(scr, "pan") || !strcmp(scr, "panadapter")) {
                 ui_request_base_mode_m(UI_MODE_PANADAPTER);
             }
@@ -3550,30 +3555,37 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, body);
         return ESP_OK;
     } else if (action && strcmp(action, "rtty") == 0) {
-        /* RTTY receive, R005 (TODO-RTTY.md). RX only - nothing here keys.
-         *   {"action":"rtty","on":true,"offset_hz":1423,"reverse":false}
+        /* RTTY receive, R005/R006 (TODO-RTTY.md). RX only - nothing here keys.
+         *   {"action":"rtty","on":true,"offset_hz":1423,"reverse":false,
+         *    "baud":45.45,"shift":170,"afc":true,"squelch":true}
          *   {"action":"rtty"}             -> status + the last decoded text
          * offset_hz is the tone centre as it sounds in USB audio, i.e. its RF
          * offset from the dial. Omitted fields keep their current value. */
-        cJSON *jo = cJSON_GetObjectItem(root, "on");
-        if (cJSON_IsBool(jo)) {
-            rtty_rx_status_t cur;
-            rtty_rx_status(&cur);
-            cJSON *jf = cJSON_GetObjectItem(root, "offset_hz");
-            cJSON *jr = cJSON_GetObjectItem(root, "reverse");
-            int off = cJSON_IsNumber(jf) ? jf->valueint : (cur.offset_hz ? cur.offset_hz : 2210);
-            bool rev = cJSON_IsBool(jr) ? cJSON_IsTrue(jr) : cur.reverse;
-            rtty_rx_set(cJSON_IsTrue(jo), off, rev);
-        }
+        rtty_rx_cfg_t c;
+        rtty_rx_get_cfg(&c);
+        bool touched = false;
+        cJSON *j;
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "on")))        { c.on = cJSON_IsTrue(j); touched = true; }
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "offset_hz"))) { c.offset_hz = j->valueint; touched = true; }
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "reverse")))   { c.reverse = cJSON_IsTrue(j); touched = true; }
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "baud")))    { c.baud = (float)j->valuedouble; touched = true; }
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "shift")))   { c.shift_hz = (float)j->valuedouble; touched = true; }
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
+        if (touched) rtty_rx_apply(&c);
         cJSON_Delete(root);
         rtty_rx_status_t st;
         rtty_rx_status(&st);
         static char text[513];
         rtty_rx_text_tail(text, sizeof(text));
         cJSON *o = cJSON_CreateObject();
-        cJSON_AddBoolToObject(o, "on", st.on);
-        cJSON_AddNumberToObject(o, "offset_hz", st.offset_hz);
-        cJSON_AddBoolToObject(o, "reverse", st.reverse);
+        cJSON_AddBoolToObject(o, "on", st.cfg.on);
+        cJSON_AddNumberToObject(o, "offset_hz", st.cfg.offset_hz);
+        cJSON_AddBoolToObject(o, "reverse", st.cfg.reverse);
+        cJSON_AddNumberToObject(o, "baud", (int)(st.cfg.baud * 100.0f + 0.5f) / 100.0);
+        cJSON_AddNumberToObject(o, "shift", (int)st.cfg.shift_hz);
+        cJSON_AddBoolToObject(o, "afc", st.cfg.afc);
+        cJSON_AddBoolToObject(o, "squelch", st.cfg.squelch);
         cJSON_AddNumberToObject(o, "fs_hz", st.fs_hz);
         cJSON_AddNumberToObject(o, "sig_lvl", (int)(st.sig_lvl * 100.0f + 0.5f) / 100.0);
         cJSON_AddBoolToObject(o, "present", st.present);

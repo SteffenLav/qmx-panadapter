@@ -9,27 +9,43 @@
  * higher RF tone unless `reverse`. This does not depend on the radio's mode -
  * the QMX streams the same I/Q whatever mode it is in.
  *
- * Output: decoded text in a ring (rtty_rx_text_tail) and on the serial log,
- * one "rtty:" line per received line. RX only - nothing here can key. */
+ * Output: decoded text in a ring and on the serial log, one "rtty: rx:" line
+ * per received line. RX only - nothing here can key. */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
-    bool     on;
-    int      offset_hz;     /* tone centre, RF offset from the dial */
-    bool     reverse;
-    float    sig_lvl;       /* smoothed conf, 0..1; squelch opens at 0.48 */
+    bool  on;
+    int   offset_hz;     /* tone centre, RF offset from the dial */
+    bool  reverse;
+    float baud;          /* 45.45 default (R011) */
+    float shift_hz;      /* 170 default */
+    bool  afc;           /* AFC + acquisition, +/-150 Hz */
+    bool  squelch;
+} rtty_rx_cfg_t;
+
+typedef struct {
+    rtty_rx_cfg_t cfg;
+    float    sig_lvl;       /* smoothed conf, 0..1; squelch opens at RTTY_SQ_OPEN */
+    float    sq_open_lvl;   /* that threshold, for drawing the tick */
     bool     present;
+    float    mark_lvl, space_lvl;   /* tone envelopes, arbitrary units */
     float    afc_hz;        /* AFC + acquisition offset in force */
-    uint32_t chars;         /* characters printed since rtty_rx_set(on) */
+    uint32_t chars;         /* characters printed since the decoder (re)started */
     uint32_t acq_jumps;
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */
 } rtty_rx_status_t;
 
-/* Turn the decoder on/off and set the signal. Safe from any task; the audio
- * task applies it on its next frame. */
+/* The current settings (defaults before the first apply). */
+void rtty_rx_get_cfg(rtty_rx_cfg_t *c);
+
+/* Apply settings. Safe from any task; the audio task restarts the decoder on
+ * its next frame. Turning on wakes the audio chain. */
+void rtty_rx_apply(const rtty_rx_cfg_t *c);
+
+/* Shorthand kept for the web API's first form. */
 void rtty_rx_set(bool on, int offset_hz, bool reverse);
 
 bool rtty_rx_is_on(void);
@@ -39,6 +55,17 @@ void rtty_rx_status(rtty_rx_status_t *st);
 /* Copy the last up to n-1 decoded characters into buf, NUL-terminated.
  * Returns the length. */
 size_t rtty_rx_text_tail(char *buf, size_t n);
+
+/* Incremental read: characters written since *cursor (a running count),
+ * at most n. Advances *cursor; if the ring overran, skips to what is held.
+ * Returns the number copied (not NUL-terminated). */
+size_t rtty_rx_text_read(uint32_t *cursor, char *buf, size_t n);
+
+/* Forget the text held (the page's Clear). Does not touch the decoder. */
+void rtty_rx_text_clear(void);
+
+/* Running count of characters ever written - a reader's cursor starts here. */
+uint32_t rtty_rx_text_count(void);
 
 /* Called by rx_audio_task with the stage-1 output. nco_hz is the RF offset
  * from the dial that sits at baseband 0 (rx_audio's NCO1 minus the IF). */

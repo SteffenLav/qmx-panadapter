@@ -28,7 +28,19 @@ typedef enum {
      * Taking 3 here costs nothing and avoids a merge that silently makes two
      * different screens the same number. */
     UI_MODE_WSPR       = 3,
+    /* RTTY page (R006, branch qmx-panadapter-rtty): like CW, the panadapter
+     * keeps running underneath and only the LVGL overlay differs. */
+    UI_MODE_RTTY       = 4,
 } ui_mode_t;
+
+/* Pages that put a CW_PANE_W pane on the left of a LIVE panadapter (CW, RTTY):
+ * the spectrum mapping narrows to the right of the pane, the band-plan strip
+ * starts at it, and the panadapter's gestures stay on. One test, so a third
+ * such page is one line here instead of six scattered comparisons. */
+static inline bool ui_mode_has_left_pane(ui_mode_t m)
+{
+    return m == UI_MODE_CW || m == UI_MODE_RTTY;
+}
 
 /* True for the modes that need the FT8-style capture pipeline: the +12 kHz IF
  * mixed to DC, decimated /4 to 12 kHz mono, and appended to the continuous

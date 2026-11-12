@@ -11,24 +11,26 @@
 
 static const char *TAG = "rtty";
 
-/* Defaults agreed 2026-11-12 (R011): 45.45 Bd, 170 Hz, USOS, AFC +/-150. */
-#define RTTY_RX_BAUD     45.45f
-#define RTTY_RX_SHIFT    170.0f
 #define RTTY_RX_AFC_HZ   150.0f
-#define RTTY_RX_SQUELCH  RTTY_SQ_OPEN
 
 #define TEXT_RING 2048          /* power of two */
 #define LOG_LINE  96
 
-/* Requested by rtty_rx_set (any task), applied by the feed (audio task). */
-static volatile bool s_want_on;
-static volatile int  s_want_off_hz;
-static volatile bool s_want_rev;
-static volatile uint32_t s_want_seq;     /* bumped on every set */
+/* Requested by rtty_rx_apply (any task), applied by the feed (audio task).
+ * The seq is bumped after the struct is written; a torn read only means the
+ * next frame restarts once more. */
+static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
+static rtty_rx_cfg_t s_cfg = {
+    /* Defaults agreed 2026-11-12 (R011): 45.45 Bd, 170 Hz, AFC and squelch on. */
+    .on = false, .offset_hz = 1500, .reverse = false,
+    .baud = 45.45f, .shift_hz = 170.0f, .afc = true, .squelch = true,
+};
+static volatile uint32_t s_want_seq;
 
 /* Owned by the audio task. */
-static rtty_demod_t *s_dem;              /* PSRAM, ~22 KB, allocated once */
+static rtty_demod_t *s_dem;              /* PSRAM, ~18 KB, allocated once */
 static rtty_baudot_t s_bd;
+static rtty_rx_cfg_t s_run_cfg;
 static uint32_t s_have_seq;
 static float    s_have_fs;
 static int      s_have_nco;
@@ -40,28 +42,50 @@ static int      s_line_n;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static char     s_text[TEXT_RING];
 static uint32_t s_text_w;
+static uint32_t s_text_floor;            /* Clear moves this; readers never go below */
 static rtty_rx_status_t s_st;
+
+void rtty_rx_get_cfg(rtty_rx_cfg_t *c)
+{
+    portENTER_CRITICAL(&s_cfg_mux);
+    *c = s_cfg;
+    portEXIT_CRITICAL(&s_cfg_mux);
+}
+
+void rtty_rx_apply(const rtty_rx_cfg_t *c)
+{
+    rtty_rx_cfg_t n = *c;
+    if (!(n.baud >= 20.0f && n.baud <= 300.0f)) n.baud = 45.45f;
+    if (!(n.shift_hz >= 50.0f && n.shift_hz <= 1000.0f)) n.shift_hz = 170.0f;
+    if (n.offset_hz < -3000) n.offset_hz = -3000;
+    if (n.offset_hz >  4500) n.offset_hz =  4500;
+    portENTER_CRITICAL(&s_cfg_mux);
+    s_cfg = n;
+    portEXIT_CRITICAL(&s_cfg_mux);
+    s_want_seq++;
+    ESP_LOGI(TAG, "%s offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d", n.on ? "ON" : "off",
+             n.offset_hz, (double)n.baud, (double)n.shift_hz, n.reverse ? " reverse" : "",
+             (int)n.afc, (int)n.squelch);
+    if (n.on) rx_audio_wake();   /* the chain may be asleep with no listener */
+}
 
 void rtty_rx_set(bool on, int offset_hz, bool reverse)
 {
-    s_want_off_hz = offset_hz;
-    s_want_rev = reverse;
-    s_want_on = on;
-    s_want_seq++;
-    if (on) rx_audio_wake();   /* the chain may be asleep with no listener */
-    ESP_LOGI(TAG, "%s offset %d Hz%s", on ? "ON" : "off", offset_hz, reverse ? " reverse" : "");
+    rtty_rx_cfg_t c;
+    rtty_rx_get_cfg(&c);
+    c.on = on; c.offset_hz = offset_hz; c.reverse = reverse;
+    rtty_rx_apply(&c);
 }
 
-bool rtty_rx_is_on(void) { return s_want_on; }
+bool rtty_rx_is_on(void) { return s_cfg.on; }
 
 void rtty_rx_status(rtty_rx_status_t *st)
 {
     portENTER_CRITICAL(&s_mux);
     *st = s_st;
     portEXIT_CRITICAL(&s_mux);
-    st->on = s_want_on;
-    st->offset_hz = s_want_off_hz;
-    st->reverse = s_want_rev;
+    rtty_rx_get_cfg(&st->cfg);
+    st->sq_open_lvl = RTTY_SQ_OPEN;
 }
 
 size_t rtty_rx_text_tail(char *buf, size_t n)
@@ -69,13 +93,38 @@ size_t rtty_rx_text_tail(char *buf, size_t n)
     if (!buf || n == 0) return 0;
     portENTER_CRITICAL(&s_mux);
     uint32_t w = s_text_w;
-    size_t len = w < TEXT_RING ? w : TEXT_RING;
+    uint32_t held = w - s_text_floor;
+    size_t len = held < TEXT_RING ? held : TEXT_RING;
     if (len > n - 1) len = n - 1;
     for (size_t i = 0; i < len; i++) buf[i] = s_text[(w - len + i) & (TEXT_RING - 1)];
     portEXIT_CRITICAL(&s_mux);
     buf[len] = 0;
     return len;
 }
+
+size_t rtty_rx_text_read(uint32_t *cursor, char *buf, size_t n)
+{
+    if (!cursor || !buf || n == 0) return 0;
+    portENTER_CRITICAL(&s_mux);
+    uint32_t w = s_text_w, c = *cursor;
+    if ((int32_t)(c - s_text_floor) < 0) c = s_text_floor;
+    if (w - c > TEXT_RING) c = w - TEXT_RING;
+    size_t len = w - c;
+    if (len > n) len = n;
+    for (size_t i = 0; i < len; i++) buf[i] = s_text[(c + i) & (TEXT_RING - 1)];
+    *cursor = c + (uint32_t)len;
+    portEXIT_CRITICAL(&s_mux);
+    return len;
+}
+
+void rtty_rx_text_clear(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_text_floor = s_text_w;
+    portEXIT_CRITICAL(&s_mux);
+}
+
+uint32_t rtty_rx_text_count(void) { return s_text_w; }
 
 static void flush_line(void)
 {
@@ -109,47 +158,55 @@ static bool start(float fs_hz, int nco_hz)
         if (!s_dem) { ESP_LOGE(TAG, "no PSRAM for the demodulator (%u B)", (unsigned)sizeof(*s_dem)); return false; }
     }
     rtty_demod_cfg_t cfg = {
-        .fs_hz = fs_hz, .baud = RTTY_RX_BAUD, .shift_hz = RTTY_RX_SHIFT,
+        .fs_hz = fs_hz, .baud = s_run_cfg.baud, .shift_hz = s_run_cfg.shift_hz,
         /* the tone centre's RF offset, moved to where NCO1 put baseband 0 */
-        .centre_hz = (float)(s_want_off_hz - nco_hz),
-        .reverse = s_want_rev, .squelch = RTTY_RX_SQUELCH, .afc_hz = RTTY_RX_AFC_HZ,
+        .centre_hz = (float)(s_run_cfg.offset_hz - nco_hz),
+        .reverse = s_run_cfg.reverse,
+        .squelch = s_run_cfg.squelch ? RTTY_SQ_OPEN : 0.0f,
+        .afc_hz = s_run_cfg.afc ? RTTY_RX_AFC_HZ : 0.0f,
     };
     if (!rtty_demod_init(s_dem, &cfg)) {
-        ESP_LOGE(TAG, "demod init refused fs %.0f", (double)fs_hz);
+        ESP_LOGE(TAG, "demod init refused fs %.0f baud %.2f", (double)fs_hz, (double)cfg.baud);
         return false;
     }
     rtty_baudot_init(&s_bd, true);
     s_line_n = 0;
     ESP_LOGI(TAG, "demod at %.0f Hz, baseband centre %+.0f Hz (offset %d, nco %d), %u B",
-             (double)fs_hz, (double)cfg.centre_hz, s_want_off_hz, nco_hz, (unsigned)sizeof(*s_dem));
+             (double)fs_hz, (double)cfg.centre_hz, s_run_cfg.offset_hz, nco_hz, (unsigned)sizeof(*s_dem));
     return true;
 }
 
 void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_hz)
 {
     uint32_t seq = s_want_seq;
-    if (!s_want_on) {
+    if (seq != s_have_seq) rtty_rx_get_cfg(&s_run_cfg);
+    if (!s_run_cfg.on) {
+        s_have_seq = seq;
         if (s_running) { flush_line(); s_running = false; ESP_LOGI(TAG, "stopped"); }
         return;
     }
-    /* (Re)start on a new request, a new rate (decimation follows the mode)
-     * or a retune of rx_audio's first mix (mode or CW offset changed). */
+    /* (Re)start on new settings, a new rate (decimation follows the mode) or
+     * a retune of rx_audio's first mix (mode or CW offset changed). */
     if (!s_running || seq != s_have_seq || fs_hz != s_have_fs || nco_hz != s_have_nco) {
-        bool fresh = !s_running || seq != s_have_seq;
         s_have_seq = seq; s_have_fs = fs_hz; s_have_nco = nco_hz;
         s_running = start(fs_hz, nco_hz);
-        if (!s_running) { s_want_on = false; return; }
-        if (fresh) {
-            portENTER_CRITICAL(&s_mux);
-            s_st.chars = 0;
-            portEXIT_CRITICAL(&s_mux);
+        if (!s_running) {
+            portENTER_CRITICAL(&s_cfg_mux);
+            s_cfg.on = false;
+            portEXIT_CRITICAL(&s_cfg_mux);
+            return;
         }
+        portENTER_CRITICAL(&s_mux);
+        s_st.chars = 0;
+        portEXIT_CRITICAL(&s_mux);
     }
     rtty_demod_feed(s_dem, re, im, n, on_char, NULL);
 
     portENTER_CRITICAL(&s_mux);
     s_st.sig_lvl = s_dem->sig_lvl;
     s_st.present = s_dem->present;
+    s_st.mark_lvl = s_dem->mark_lvl;
+    s_st.space_lvl = s_dem->space_lvl;
     s_st.afc_hz = s_dem->afc_off;
     s_st.acq_jumps = s_dem->n_acq;
     s_st.fs_hz = fs_hz;

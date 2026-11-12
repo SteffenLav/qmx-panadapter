@@ -167,6 +167,7 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
  * grid, and those draw on it exactly as the strip does. */
 #define UI_COLOR_MODE_CW_TEXT   0x5CB4F0  /* CW blue,  for text on a dark button */
 #define UI_COLOR_MODE_WSPR_TEXT 0x5CC060  /* WSPR green, same */
+#define UI_COLOR_MODE_RTTY_TEXT 0xE08AE0  /* RTTY pink, text on a dark button and the page title (R006) */
 #define UI_COLOR_MODE_AM   0x1F8A8A  /* teal      — no bandplan analogue either (AM lives inside
                                         the Phone segments), and the five mode
                                         colours have to be told apart at a glance

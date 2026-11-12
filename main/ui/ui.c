@@ -85,6 +85,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "js8_alt.h"       /* T132 alternate-submode decode (RX only) */
 #include "ft8_screen_view.h"
 #include "cw_screen_view.h"
+#include "rtty_screen_view.h"
 #include "wspr_screen_view.h"
 #include "wspr_rx.h"
 #include "net/reader_net.h"
@@ -2674,7 +2675,7 @@ void ui_screen_view_hz(int64_t *lo_out, int32_t *span_out)
  * covers them anyway. */
 int ui_spec_x0(void)
 {
-    return (ui_mode_get() == UI_MODE_CW) ? CW_PANE_W : 0;
+    return ui_mode_has_left_pane(ui_mode_get()) ? CW_PANE_W : 0;
 }
 
 int ui_spec_w(void)
@@ -5781,7 +5782,9 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
              * request, so the log denied a switch that had just happened. */
             ESP_LOGI(TAG, "web requested view: %s",
                      want == UI_MODE_FT8  ? "FT8" :
-                     want == UI_MODE_WSPR ? "WSPR" : "Panadapter");
+                     want == UI_MODE_WSPR ? "WSPR" :
+                     want == UI_MODE_CW   ? "CW" :
+                     want == UI_MODE_RTTY ? "RTTY" : "Panadapter");
             // No animation: nobody is looking at the Tab5 when the request came
             // from a browser in another room, and the slide costs frames.
             ui_set_base_mode(want, false);
@@ -6907,7 +6910,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
     // 320 px left pane - full-width ran under the panel and covered its
     // status text (operator, 2026-08-01). Everywhere else: full width.
     // (LVGL no-ops unchanged coords, so re-asserting per tick is cheap.)
-    const int strip_x = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
+    const int strip_x = ui_mode_has_left_pane(ui_mode_get()) ? 320 : 0;
     const int W = DISPLAY_H_RES - strip_x;
     /* ⛔ DISPLAY_V_RES, not a literal 720. This said 720 - the Tab5's height -
      * and on the Waveshare's 600 px panel that is y=672, i.e. the whole strip
@@ -8706,7 +8709,7 @@ static bool mouse_pan_tick(void)
          * window to move - with the still view off the spectrum follows the
          * dial and a pan has no meaning. Same three conditions the API's
          * set_pan refuses on. */
-        if (ui_mode_get() != UI_MODE_PANADAPTER && ui_mode_get() != UI_MODE_CW) return false;
+        if (ui_mode_get() != UI_MODE_PANADAPTER && !ui_mode_has_left_pane(ui_mode_get())) return false;
         if (!mouse_over_spectrum(lx, ly))        return false;
         if (!ui_pan_is_available())              return false;
         s_mouse_pan_active   = true;
@@ -8990,6 +8993,7 @@ void ui_init(lv_display_t *disp)
 
     ft8_screen_view_init(scr);
     cw_screen_view_init(scr);   // CW page overlays (hidden until UI_MODE_CW)
+    rtty_screen_view_init(scr); // RTTY page overlays (hidden until UI_MODE_RTTY) - R006
     wspr_screen_view_init(scr);   // WSPR page overlay (hidden until UI_MODE_WSPR)
 
     // Docs Reader page (third page of the left-swipe cycle). Built here, BEFORE
@@ -9613,7 +9617,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         static uint8_t s_prev_npts = 0;
         if (npts > 0 && s_prev_npts == 0) {
             int first_x = (int)s_tp->data.coords[0].y;   // landscape x = panel y
-            s_touch_on_cw_pane = (ui_mode_get() == UI_MODE_CW) && (first_x < CW_PANE_W);
+            s_touch_on_cw_pane = ui_mode_has_left_pane(ui_mode_get()) && (first_x < CW_PANE_W);
         } else if (npts == 0) {
             s_touch_on_cw_pane = false;
         }
@@ -9793,7 +9797,7 @@ static void pinch_poll_cb(lv_timer_t *t)
     // spectrum entirely, so a horizontal swipe there must still not start a
     // pan of it (and a two-finger pinch must not zoom it) - the sleep
     // double-tap above stays global on purpose regardless of mode.
-    if (ui_mode_get() != UI_MODE_PANADAPTER && ui_mode_get() != UI_MODE_CW) {
+    if (ui_mode_get() != UI_MODE_PANADAPTER && !ui_mode_has_left_pane(ui_mode_get())) {
         stroll_cancel();
         s_pinch_active = false;
         return;
@@ -10551,7 +10555,7 @@ static void top_bar_apply_mode(void)
      * not set at the mode transition: a per-mode state applied at the
      * transition is NOT applied on the path that has no transition, and a
      * board that BOOTS into CW has none (the v1.12.1 finding). */
-    const bool inert = owned || (m != UI_MODE_PANADAPTER && m != UI_MODE_CW);
+    const bool inert = owned || (m != UI_MODE_PANADAPTER && !ui_mode_has_left_pane(m));
 
     /* ⭐ FREQ STAYS LIVE ON THE WSPR PAGE, and nothing else does (operator,
      * 2026-09-08: "from the top bar i should not be able to activate any of the
@@ -14457,6 +14461,14 @@ static void touch_event_cb(lv_event_t *e)
         // Still armed afterwards, deliberately: running a frequency means a new
         // caller with a new offset every time, so the next tap should move RIT onto
         // them too. The pill is the way out.
+        /* RTTY page (R006): a tap puts the DECODER on what was tapped and
+         * leaves the dial alone, like tap-to-RIT below - acquisition pulls in
+         * the remaining +/-150 Hz. Before RIT: on this page RIT is not what a
+         * tap means. */
+        if (ui_mode_get() == UI_MODE_RTTY) {
+            rtty_screen_view_tap_hz(target_hz, s_last_qmx_freq_hz);
+            return;
+        }
         if (s_rit_armed) {
             int32_t delta = (int32_t)((int64_t)target_hz - (int64_t)s_last_qmx_freq_hz);
             int32_t want  = delta;
@@ -20958,6 +20970,24 @@ void ui_apply_saved_mode_view(void)
         return;
     }
 
+    /* RTTY resumes (operator, 2026-11-12: "please boot up in this mode").
+     * No gate: the page is RX only. View half only - the decoder is turned
+     * on by the show, and rx_audio_task checks rtty_rx_is_on() when it
+     * starts, so nothing waits on CAT here. */
+    if (s_saved_ui_mode == UI_MODE_RTTY) {
+        ui_mode_set(UI_MODE_RTTY);
+        drawer_set_mode(UI_MODE_RTTY);
+        if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
+        recompute_zoom_pan();
+        draw_label_ticks();
+        if (s_last_qmx_freq_hz) update_freq_axis_labels(s_last_qmx_freq_hz);
+        rtty_screen_view_show();
+        top_bar_apply_mode();
+        apply_edge_grips_for_mode(UI_MODE_RTTY);
+        ESP_LOGI(TAG, "UI mode restored from NVS: RTTY");
+        return;
+    }
+
     /* WSPR resumes too, as of the 2026-08-28 launch. It used to fall through to
      * Panadapter on purpose - "a mode that ships dark should not be sticky
      * across a reboot" - and that reason ended when the page joined the swipe
@@ -21099,6 +21129,7 @@ static const char *mode_name(ui_mode_t m)
     return m == UI_MODE_FT8  ? "FT8"
          : m == UI_MODE_WSPR ? "WSPR"
          : m == UI_MODE_CW   ? "CW"
+         : m == UI_MODE_RTTY ? "RTTY"
                              : "Panadapter";
 }
 
@@ -21109,7 +21140,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     // CW transitions are instant: the CW page shares the panadapter's live
     // widgets as its backdrop, so there is nothing meaningful to slide. The
     // animated path below stays exactly as it was for the P<->FT8 pair.
-    if (cur == UI_MODE_CW || next == UI_MODE_CW) animate = false;
+    if (ui_mode_has_left_pane(cur) || ui_mode_has_left_pane(next)) animate = false;
     /* ⛔ CHOOSING THE PAGE IS WHAT ENABLES IT. wspr_en began life as a master
      * unlock for a page that was not finished (default off, plus the hidden
      * unlock in ota_modal.c). Once WSPR has a button in the left drawer and a
@@ -21178,6 +21209,12 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             cat_request_sidetone_absolute(false);
             s_cw_sidetone_managing = false;
         }
+    } else if (cur == UI_MODE_RTTY) {
+        /* R006: RTTY has no snapshot of its own - it is the panadapter with a
+         * decoder on top, so it reads and writes the panadapter's. Hiding the
+         * page turns the decoder off. */
+        rtty_screen_view_hide();
+        ui_save_snapshot(&s_pan_snapshot);
     } else if (cur == UI_MODE_WSPR) {
         wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
         wspr_screen_view_hide();
@@ -21306,6 +21343,27 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
          * it looked like it worked. The panadapter branch below does the same. */
         spots_lane_set_visible(true);
         cw_screen_view_show();
+        return;
+    }
+
+    if (next == UI_MODE_RTTY) {
+        /* R006. The panadapter's widgets are the backdrop, as on the CW page,
+         * and so is its state: the dial, mode and zoom are not changed on
+         * entry. From another overlay page the panadapter comes back first. */
+        if (cur == UI_MODE_FT8) {
+            ft8_screen_view_hide();
+            if (ft8) lv_obj_set_x(ft8, 0);
+        }
+        if (cur != UI_MODE_PANADAPTER) {
+            show_panadapter_widgets_instant();
+            if (s_pan_snapshot.valid) ui_restore_snapshot(&s_pan_snapshot);
+        }
+        if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
+        recompute_zoom_pan();
+        draw_label_ticks();
+        if (s_last_qmx_freq_hz) update_freq_axis_labels(s_last_qmx_freq_hz);
+        spots_lane_set_visible(true);   /* see the CW branch: SHOWN, not re-positioned */
+        rtty_screen_view_show();
         return;
     }
 
@@ -21610,6 +21668,7 @@ static lv_obj_t *left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
  * drawn is a bug that looks like a font problem. */
 static const char *LD_LABELS[] = {
     "PANADAPTER", "MODE: CW", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
+    "MODE: RTTY",   /* R006, last so the CW gate keeps index 1 */
 };
 
 /* The buttons in LD_LABELS order, so the layout pass below can reach them.
@@ -21641,15 +21700,24 @@ static void left_drawer_layout(void)
         if (show[i]) n_show++;
     }
 
-    const int stack_h = n_show * LD_BTN_H + (n_show - 1) * LD_BTN_GAP;
+    /* Seven doors at 104 px are 800 px on a 720 px screen. The height gives
+     * way, not the 48 pt label: (720 - 2*16 - 6*12) / 7 = 88 px, still well
+     * above the 72 px a 48 pt line was measured to need. Six doors keep 104. */
+    int btn_h = LD_BTN_H;
+    if (n_show > 0) {
+        int fit = (DISPLAY_V_RES - 2 * LD_PAD - (n_show - 1) * LD_BTN_GAP) / n_show;
+        if (fit < btn_h) btn_h = fit;
+    }
+    const int stack_h = n_show * btn_h + (n_show - 1) * LD_BTN_GAP;
     int y = (DISPLAY_V_RES - stack_h) / 2 - LD_PAD;
     if (y < 0) y = 0;
     for (int i = 0; i < n_all; i++) {
         if (!s_ld_btn[i]) continue;
         if (!show[i]) { lv_obj_add_flag(s_ld_btn[i], LV_OBJ_FLAG_HIDDEN); continue; }
         lv_obj_clear_flag(s_ld_btn[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_height(s_ld_btn[i], btn_h);
         lv_obj_set_y(s_ld_btn[i], y);
-        y += LD_BTN_H + LD_BTN_GAP;
+        y += btn_h + LD_BTN_GAP;
     }
 }
 
@@ -21748,6 +21816,8 @@ static void left_drawer_build(void)
     /* _TEXT for the same reason CW uses it - see the constants. */
     s_ld_btn[5] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR_TEXT,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
+    s_ld_btn[6] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[6], UI_COLOR_MODE_RTTY_TEXT,
+                        LD_DEST(UI_MODE_RTTY, 0xFF));
     left_drawer_layout();
 }
 
