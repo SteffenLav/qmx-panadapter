@@ -462,3 +462,65 @@ Sources: [QMX product page](https://qrp-labs.com/qmx.html) ·
 **RX-only remains the right first deliverable.** It is self-contained, it has
 abundant live signals to test against, and it is useful on its own as an RTTY
 monitor even if the R4 gate closes and TX never happens.
+
+---
+
+## Update 2026-11-12 — the 2026-11-10 revisit, and what landed since 10-08
+
+This section carries the revisit of 2026-11-10 (it lived only in a session
+transcript) into the branch `qmx-panadapter-rtty`, so the RTTY work does not
+start again from the June study. Everything above still stands unless this
+section says otherwise.
+
+### Flash and RAM budget (revisit 2026-11-10, re-measured 2026-11-12)
+
+| Item | Size | Source |
+|---|---|---|
+| Free in the smaller OTA slot (`ota_1`, 0x6D0000) | **1.14 MB** (1,192,176 B) | build of `529b754e`; it was 1.39 MB on 11-10, before web NR |
+| Whole CW mode (decoder, screen, QSO, callsign, TX queue) | ~47 KB | object sizes, 11-10 |
+| Whole WSPR mode (RX, decode, TX, screen, spots) | ~140 KB | object sizes, 11-10 |
+| RTTY, estimated from CW (same structure) | ~50–80 KB firmware + ~10–20 KB gz in the web page | estimate, NOT measured |
+
+Flash is not the limit. On the Tab5, **internal RAM and core 0 CPU** are the
+tighter limits. RTTY RX needs a few KB of buffers and should run only while its
+page is open, as CW and WSPR do. Measure it with the module running.
+
+### Gaps in this document (found 2026-11-10)
+
+- No RX algorithm detail: bit-clock recovery method, tuning-aid design, and
+  where the decoder takes its samples.
+- No UI layout for the Tab5 page or the web page.
+- The order "JS8 first, RTTY after" was agreed 2026-10-08. JS8 has shipped, so
+  that order is settled.
+
+### What landed since 10-08 that RTTY must use
+
+- ⚠ **The CW page does NOT demodulate on the Tab5.** Its text comes from the
+  QMX's own decoder over CAT (`TB;`, `main/cat/cat.c`). RTTY has no such radio
+  decoder over CAT, so RTTY RX is the first Tab5-side text demodulator. Its
+  sample source is the I/Q path that FT8 and WSPR use (`main/dsp/dsp.c`,
+  `main/wspr_rx.c`) - check which tap fits before designing the demod.
+- **UI model:** the CW page (`main/ui/cw_screen_view.c`): keyer pane, decode
+  ticker (`CW_TICKER_COLS`), station card, macros, the band-plan strip kept
+  visible. The port patch `main-10` (2026-11-12) made the ticker opaque and
+  redraws only the visible waterfall - copy that, not the old pattern.
+- **TX rules (all enforced by PRE_BUILD checkers):**
+  every keying site through `tx_band_guard_allows()` (`tools/check_tx_guard.py`);
+  every arming site in `docs/unattended-tx-inventory.md`
+  (`tools/check_unattended_tx.py`); no PSRAM-stack task ended with
+  `vTaskDelete` (`tools/check_psram_tasks.py`).
+- **Abort:** the CW work proved `KY` cannot be aborted. RTTY TX over
+  `TA<freq>;` toggling stops when the Tab5 stops sending, so a STOP must be
+  immediate - keep that property; do not route RTTY through a radio buffer.
+- **Web audio holes (T177):** the browser stream has 1–3 exact-zero holes a
+  second (the Tab5's gap frames). A web-side decoder must conceal them, as the
+  web NR does (`nrPlc` in `main/net/www/index.html`). A Tab5-side decoder on
+  the I/Q path is not affected.
+- **Keyboard:** Tab5 keyboard (I2C) and a Bluetooth keyboard both work, as on
+  the CW page.
+
+### Next step (unchanged)
+
+RX-only first (R1, R2), proven on a host harness against a known RTTY
+recording before anything touches hardware. R4 (can the QMX follow `TA<freq>;`
+at ~45/s while keyed) gates TX and needs the operator at the bench.
