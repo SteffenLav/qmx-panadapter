@@ -456,6 +456,28 @@ static int decode_wav(const char *path, float centre, bool lsb, float squelch, b
     for (long i = 0; i < frames; i++) x[i] = pcm[i * ch] / 32768.0f;   /* left channel */
     free(pcm);
 
+    /* rxcap WAVs are 48 kHz: one bit is 1056 samples, past the demod's ring.
+     * Low-pass (windowed sinc, 2.8 kHz, 127 taps) and decimate to 6 kHz -
+     * the rate the firmware tap will run at. */
+    if (rate > 12000 && rate % 6000 == 0) {
+        int D = (int)(rate / 6000), NT = 127;
+        float h[127]; double fc = 2800.0 / rate, hs = 0;
+        for (int i = 0; i < NT; i++) {
+            double m = i - (NT - 1) / 2.0;
+            double s = m == 0 ? 2 * fc : sin(2 * M_PI * fc * m) / (M_PI * m);
+            h[i] = (float)(s * (0.42 - 0.5 * cos(2 * M_PI * i / (NT - 1)) + 0.08 * cos(4 * M_PI * i / (NT - 1))));
+            hs += h[i];
+        }
+        long fo = (frames - NT) / D;
+        float *y = malloc((size_t)(fo > 0 ? fo : 1) * sizeof(float));
+        for (long o = 0; o < fo; o++) {
+            double a = 0; const float *p = &x[o * D];
+            for (int i = 0; i < NT; i++) a += h[i] * p[i];
+            y[o] = (float)(a / hs);
+        }
+        free(x); x = y; frames = fo; rate = 6000;
+    }
+
     /* Real audio: mark is the higher RF frequency. In USB audio that is the
      * higher tone; in LSB audio the lower one, so LSB = reverse. */
     rtty_demod_cfg_t cfg = { (float)rate, 45.45f, 170.0f, centre, lsb, squelch, g_afc };

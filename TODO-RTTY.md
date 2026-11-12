@@ -14,7 +14,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R004 | **Decode a real recording**, checked against fldigi or MMTTY on the same audio. The harness generator uses our own encoder, so only real audio is the arbiter. `test/rtty_harness.c --wav f.wav --centre Hz [--lsb] [--afc 60]`. | Minutes once a recording exists | a recording: from the operator with fldigi text, or `rxcap` on bench2 (retunes his radio) | - |
+| R004 | **Check the real recording against fldigi.** First real decode 2026-11-12 (bench2, 40 m, rxcap): `CQ CQ CQ DE YU65..YU65AEC` stable over a 100 Hz centre range; squelch kept only the clean part. Recording + our text: `test/wav_rtty/`. Missing: fldigi's text for the same WAV, so the CER is unknown. Four more recordings (fading 40 m, 30 m) held no decodable RTTY. | Minutes | fldigi on the PC | - |
 | R005 | **rx_audio tap.** Stage-1 complex baseband, 6 kHz, core 1. An open RTTY page counts as an rx_audio consumer. New `UI_MODE_RTTY` treated like CW, so the panadapter FFT keeps running (NOT the FT8/WSPR capture branch: `ui_mode_uses_iq_capture()` stops the waterfall). | Moderate | - | - |
 | R006 | **RTTY page on the Tab5**, its own page modelled on the CW page (operator decision 2026-11-12): RX text, mark/space tuning aid, AFC offset, reverse. | Moderate | - | - |
 | R007 | **Web RTTY panel**: RX text + tuning aid. | Moderate | R005 | - |
@@ -23,6 +23,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
 | R013 | **Coarse acquisition beyond +/-30 Hz.** AFC pulls in +/-30 Hz at -6 dB; at 40 Hz the signal's conf stays under the AFC gate and it never starts. A tone-pair search (FFT of the baseband for two peaks 170 Hz apart) on a tap or on squelch-closed would extend it. Only if a real tap-to-tune shows larger errors. | Small | R006 tap-to-tune measured | - |
+| R014 | **Squelch opens on 'E'/'T' junk at the audio passband edge** (centre 2600-2700 Hz with a 2500-2700 Hz filter): only one tone has noise, so single-bit codes pass at high conf. Seen in all 5 rxcap WAVs. The firmware tap is I/Q baseband with no such edge, so it may not occur on the device - check there before fixing. | Investigation | R005 | - |
 
 ## Done
 

@@ -1,0 +1,11 @@
+Recorded 2026-11-12 16:33 local, bench2, QMX 7.046510 MHz USB, 2700 Hz
+passband. rxcap = codec output after AGC and audio filters, 48 kHz mono, 30 s.
+Signal: tones ~1335 / ~1511 Hz (centre ~1423), 45.45 Bd / 170 Hz, USB = mark high.
+
+Our decode (test/rtty_harness.c --centre 1420 --afc 60 --squelch 0.48):
+  VGYQ YU650-3;!6765AEI YU65AECEFJEHSBGECQ CQ CQ DE YU65WYKHYU65AEC Y
+Stable over centre 1360-1460 Hz. "-3:" style runs look like a lost LTRS
+after "65" (A->-, E->3, C->:).
+
+NOT YET CHECKED AGAINST fldigi/MMTTY. The true text is unknown; the call
+YU65AEC is the only part read the same way in every pass.
