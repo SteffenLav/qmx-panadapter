@@ -106,9 +106,12 @@ static void refresh_buttons(void)
 {
     rtty_rx_cfg_t c;
     rtty_rx_get_cfg(&c);
-    style_toggle(s_btn_rev, s_lbl_rev, c.reverse ? "Reverse: on" : "Reverse", c.reverse);
-    style_toggle(s_btn_afc, s_lbl_afc_btn, c.afc ? "AFC: on" : "AFC: off", c.afc);
-    style_toggle(s_btn_sq, s_lbl_sq, c.squelch ? "Squelch: on" : "Squelch: off", c.squelch);
+    /* Words only, green = on. At montserrat_26 "Squelch: off" is wider than
+     * the 145 px button, and the pane cannot widen (CW_PANE_W is shared with
+     * the spectrum mapping). Operator 2026-11-12: fonts "far too small". */
+    style_toggle(s_btn_rev, s_lbl_rev, "Reverse", c.reverse);
+    style_toggle(s_btn_afc, s_lbl_afc_btn, "AFC", c.afc);
+    style_toggle(s_btn_sq, s_lbl_sq, "Squelch", c.squelch);
     char b[24];
     if (c.baud == 45.45f) snprintf(b, sizeof b, "45.45/%d", (int)c.shift_hz);
     else snprintf(b, sizeof b, "%d/%d", (int)(c.baud + 0.5f), (int)c.shift_hz);
@@ -136,8 +139,8 @@ static void clear_cb(lv_event_t *e)
     text_render();
 }
 
-static lv_obj_t *mk_btn(lv_obj_t *parent, int x, int y, int w, int h,
-                        const char *txt, lv_event_cb_t cb, void *ud, lv_obj_t **lbl_out)
+static lv_obj_t *mk_btn_f(lv_obj_t *parent, int x, int y, int w, int h, const lv_font_t *f,
+                          const char *txt, lv_event_cb_t cb, void *ud, lv_obj_t **lbl_out)
 {
     lv_obj_t *b = lv_btn_create(parent);
     lv_obj_set_size(b, w, h);
@@ -147,13 +150,16 @@ static lv_obj_t *mk_btn(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_style_radius(b, 6, 0);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(l, f, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0xE8E8E8), 0);
     lv_obj_center(l);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
     if (lbl_out) *lbl_out = l;
     return b;
 }
+
+#define BTN_FONT (&lv_font_montserrat_26)
+#define mk_btn(p, x, y, w, h, t, cb, ud, lo) mk_btn_f(p, x, y, w, h, BTN_FONT, t, cb, ud, lo)
 
 /* ---- speed / shift picker ------------------------------------------------ */
 
@@ -204,7 +210,7 @@ static void speed_open_cb(lv_event_t *e)
     rtty_rx_get_cfg(&c);
     lv_obj_t *t1 = lv_label_create(p);
     lv_label_set_text(t1, "Speed (baud)");
-    lv_obj_set_style_text_font(t1, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_font(t1, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(t1, lv_color_hex(0xC8CCD2), 0);
     lv_obj_set_pos(t1, 0, 0);
     for (int i = 0; i < 3; i++) {
@@ -215,9 +221,9 @@ static void speed_open_cb(lv_event_t *e)
     }
     lv_obj_t *t2 = lv_label_create(p);
     lv_label_set_text(t2, "Shift (Hz)");
-    lv_obj_set_style_text_font(t2, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_font(t2, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(t2, lv_color_hex(0xC8CCD2), 0);
-    lv_obj_set_pos(t2, 0, 110);
+    lv_obj_set_pos(t2, 0, 108);
     for (int i = 0; i < 5; i++) {
         char b[12];
         snprintf(b, sizeof b, "%d", SHIFTS[i]);
@@ -360,36 +366,39 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_obj_t *box = mk_rect(s_pane, 10, 70, 300, 104, 0x0d1116);
     lv_obj_set_style_border_width(box, 1, 0);
     lv_obj_set_style_border_color(box, lv_color_hex(0x2a313b), 0);
-    mk_label(box, 8, 8, &lv_font_montserrat_18, 0xC8CCD2, "M");
+    mk_label(box, 8, 4, &lv_font_montserrat_24, 0xC8CCD2, "M");
     mk_rect(box, 50, 10, BAR_W, 18, 0x252b34);
     s_bar_m = mk_rect(box, 50, 10, 0, 18, COL_MARK);
-    mk_label(box, 8, 40, &lv_font_montserrat_18, 0xC8CCD2, "S");
+    mk_label(box, 8, 36, &lv_font_montserrat_24, 0xC8CCD2, "S");
     mk_rect(box, 50, 42, BAR_W, 18, 0x252b34);
     s_bar_s = mk_rect(box, 50, 42, 0, 18, COL_MARK);
-    mk_label(box, 8, 72, &lv_font_montserrat_18, 0xC8CCD2, "Sig");
+    mk_label(box, 4, 68, &lv_font_montserrat_24, 0xC8CCD2, "Sig");
     mk_rect(box, 50, 74, BAR_W, 18, 0x252b34);
     s_bar_sig = mk_rect(box, 50, 74, 0, 18, 0x5F6670);
     s_sig_tick = mk_rect(box, 50 + (int)(0.48f * BAR_W) - 1, 70, 2, 26, 0xFFFFFF);
 
-    s_lbl_afc = mk_label(s_pane, 14, 192, &lv_font_montserrat_22, 0xE8E8E8, "AFC");
-    lv_obj_t *sp = mk_btn(s_pane, 165, 182, 145, 44, "45.45/170", speed_open_cb, NULL, &s_lbl_speed);
+    s_lbl_afc = mk_label(s_pane, 12, 190, &lv_font_montserrat_26, 0xE8E8E8, "AFC");
+    /* 24, not 26: "45.45/170" has to fit 130 px beside an "AFC +150 Hz"
+     * readout that ends near x = 171. */
+    lv_obj_t *sp = mk_btn_f(s_pane, 180, 182, 130, 44, &lv_font_montserrat_24, "45.45/170",
+                            speed_open_cb, NULL, &s_lbl_speed);
     lv_obj_set_style_text_color(s_lbl_speed, lv_color_hex(0x5FD4FF), 0);
     (void)sp;
 
     s_btn_rev = mk_btn(s_pane, 10, 236, 145, 56, "Reverse", toggle_cb, (void *)0, &s_lbl_rev);
-    s_btn_afc = mk_btn(s_pane, 165, 236, 145, 56, "AFC: on", toggle_cb, (void *)1, &s_lbl_afc_btn);
-    s_btn_sq  = mk_btn(s_pane, 10, 302, 145, 56, "Squelch: on", toggle_cb, (void *)2, &s_lbl_sq);
+    s_btn_afc = mk_btn(s_pane, 165, 236, 145, 56, "AFC", toggle_cb, (void *)1, &s_lbl_afc_btn);
+    s_btn_sq  = mk_btn(s_pane, 10, 302, 145, 56, "Squelch", toggle_cb, (void *)2, &s_lbl_sq);
     mk_btn(s_pane, 165, 302, 145, 56, "Clear text", clear_cb, NULL, NULL);
 
     /* Reserved for TX (R010) - left empty on purpose so the pane does not
      * reflow when TX lands. */
-    lv_obj_t *tx = mk_rect(s_pane, 10, 372, 300, 180, 0x14181e);
+    lv_obj_t *tx = mk_rect(s_pane, 10, 372, 300, 168, 0x14181e);
     lv_obj_set_style_border_width(tx, 1, 0);
     lv_obj_set_style_border_color(tx, lv_color_hex(0x3a414c), 0);
-    lv_obj_t *txl = mk_label(tx, 0, 0, &lv_font_montserrat_18, 0x6b727c, "TX not built yet");
+    lv_obj_t *txl = mk_label(tx, 0, 0, &lv_font_montserrat_24, 0x6b727c, "TX not built yet");
     lv_obj_center(txl);
 
-    s_lbl_status = mk_label(s_pane, 14, MID_H - 64, &lv_font_montserrat_20, 0xC8CCD2, "");
+    s_lbl_status = mk_label(s_pane, 12, MID_H - 76, &lv_font_montserrat_26, 0xC8CCD2, "");
     lv_obj_set_style_text_line_space(s_lbl_status, 2, 0);
 
     /* Decoded text, 8 rows, above the band-plan strip. */
