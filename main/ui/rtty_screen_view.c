@@ -25,10 +25,18 @@ static const char *TAG = "rtty_screen";
 #define BANDPLAN_H    22
 
 #define TXT_ROWS      8
-/* (MID_W - PANE_W) = 960 px at qmx_mono_25's 15 px advance, minus one - the
- * same arithmetic as the CW ticker's CW_TICKER_COLS. */
-#define TXT_COLS      63
 #define TXT_PAD       8
+/* The text box ENDS LEFT OF THE OPERATOR WATERMARK, box and text both
+ * (operator, 2026-11-12, for the CW page and then this one: "the greyed box
+ * is covering it - i want it clear of that box even if the decoded text is not
+ * covering it"). Same rule and constants as the CW ticker (CW_TICKER_X2 in
+ * cw_screen_view.c): x 1243, so 923 px wide and (923 - 16) / 15 = 60 columns
+ * at qmx_mono_25's 15 px advance. Was 960 px and 63 columns. */
+#define TXT_BOX_X2    (UI_WATERMARK_X - UI_WATERMARK_GAP)
+#define TXT_BOX_W     (TXT_BOX_X2 - PANE_W)
+#define TXT_COLS      ((TXT_BOX_W - 2 * TXT_PAD) / 15)
+_Static_assert(PANE_W + TXT_PAD + TXT_COLS * 15 <= TXT_BOX_X2 - TXT_PAD,
+               "RTTY text runs into the watermark gap");
 
 #define COL_NEW       0x30E0E0   /* current line, cyan - as the CW ticker */
 #define COL_OLD       0x30E060   /* earlier lines, green */
@@ -407,7 +415,7 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_line_space(s_lbl_status, 2, 0);
 
     /* Decoded text, 8 rows, above the band-plan strip. */
-    s_text_box = mk_rect(s_container, PANE_W, s_txt_top, MID_W - PANE_W,
+    s_text_box = mk_rect(s_container, PANE_W, s_txt_top, TXT_BOX_W,
                          MID_H - BANDPLAN_H - s_txt_top, 0x0d1116);
     lv_obj_set_style_border_width(s_text_box, 1, 0);
     lv_obj_set_style_border_color(s_text_box, lv_color_hex(0x2a313b), 0);
@@ -418,7 +426,7 @@ void rtty_screen_view_init(lv_obj_t *parent)
     for (int r = 0; r < TXT_ROWS; r++) {
         s_row[r] = mk_label(s_text_box, TXT_PAD, TXT_PAD + r * pitch, &qmx_mono_25, COL_OLD, "");
         lv_label_set_long_mode(s_row[r], LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(s_row[r], MID_W - PANE_W - 2 * TXT_PAD);
+        lv_obj_set_width(s_row[r], TXT_BOX_W - 2 * TXT_PAD);
     }
     text_clear();
     text_render();
@@ -455,3 +463,24 @@ void rtty_screen_view_hide(void)
 }
 
 lv_obj_t *rtty_screen_view_get_container(void) { return s_container; }
+
+/* The part of the waterfall NOT under the pane or the text box, for ui.c's
+ * carpet shift - the CW page's rule (cw_screen_view_carpet_visible), for the
+ * reason measured there: invalidating the whole carpet on every shift also
+ * redraws the opaque pane and text box on top of it (CW: 57-62 ms frames
+ * against 16 ms). Until this existed the RTTY page took that whole-carpet
+ * path. [1] is the strip right of the text box, under the watermark: the box
+ * stops short of it, so the carpet shows there and must move with the rest. */
+bool rtty_screen_view_carpet_visible(lv_area_t a[2])
+{
+    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return false;
+    a[0].x1 = PANE_W;
+    a[0].x2 = MID_W - 1;
+    a[0].y1 = MID_Y;
+    a[0].y2 = MID_Y + s_txt_top - 1;
+    a[1].x1 = TXT_BOX_X2;
+    a[1].x2 = MID_W - 1;
+    a[1].y1 = MID_Y + s_txt_top;
+    a[1].y2 = MID_Y + MID_H - BANDPLAN_H - 1;
+    return true;
+}

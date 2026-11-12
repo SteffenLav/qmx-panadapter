@@ -18,6 +18,11 @@ void      rtty_screen_view_show(void);
 void      rtty_screen_view_hide(void);
 lv_obj_t *rtty_screen_view_get_container(void);
 
+/* The waterfall area left visible by the pane and the text box (2 rects), for
+ * ui.c's carpet shift; false while the page is not shown. See the CW page's
+ * cw_screen_view_carpet_visible() for why. */
+bool      rtty_screen_view_carpet_visible(lv_area_t a[2]);
+
 /* A tap on the spectrum/waterfall while this page is up: put the decoder's
  * tone centre on the tapped frequency. The dial does not move. LVGL thread. */
 void      rtty_screen_view_tap_hz(uint32_t tapped_hz, uint32_t dial_hz);
