@@ -421,6 +421,22 @@ static bool rtty_digi_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
     return false;
 }
 
+/* The radio's band-list centre for any frequency in that band (nearest centre
+ * within 1.5 MHz, ui_update_frequency()'s rule), 0 if none. The RTTY band
+ * dial is keyed by it. ⚠ The recall must map too: the first bench test sent
+ * set_band with 14175000, the key was 14074000, and an exact match missed. */
+static uint32_t band_list_centre_hz(uint32_t hz)
+{
+    int band_count = 0, best = -1;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    uint32_t bd = 1500000u + 1u;
+    for (int i = 0; i < band_count; i++) {
+        uint32_t d = hz > bands[i].center_hz ? hz - bands[i].center_hz : bands[i].center_hz - hz;
+        if (d <= 1500000u && d < bd) { bd = d; best = i; }
+    }
+    return best >= 0 ? bands[best].center_hz : 0;
+}
+
 /* Operator, 2026-11-12: "I want those band changes i make to let the Freq
  * land in the middle of those allocated rtty ranges". The dial goes to the
  * middle of the DiGi segment, on a whole kHz, in place of the per-band
@@ -433,7 +449,7 @@ uint32_t ui_band_change_target_hz(uint32_t center_hz, uint32_t recalled_hz)
      * 2026-11-12: "if i go away it will remember when i come back"), if it is
      * still inside the band. Stored by rtty_band_dial_store(). */
     uint32_t mem = 0, lo, hi;
-    if (settings_band_rtty_get(center_hz, &mem) &&
+    if (settings_band_rtty_get(band_list_centre_hz(center_hz), &mem) &&
         legal_band_edges(center_hz, &lo, &hi) && mem >= lo && mem <= hi)
         return mem;
     if (rtty_digi_range_hz(center_hz, &lo, &hi))
@@ -447,16 +463,8 @@ uint32_t ui_band_change_target_hz(uint32_t center_hz, uint32_t recalled_hz)
  * ui_update_frequency(), so the key is the band list's own centre. */
 static void rtty_band_dial_store(uint32_t freq_hz)
 {
-    if (!freq_hz) return;
-    int band_count = 0, best = -1;
-    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
-    uint32_t bd = 1500000u + 1u;
-    for (int i = 0; i < band_count; i++) {
-        uint32_t d = freq_hz > bands[i].center_hz ? freq_hz - bands[i].center_hz
-                                                  : bands[i].center_hz - freq_hz;
-        if (d <= 1500000u && d < bd) { bd = d; best = i; }
-    }
-    if (best >= 0) settings_band_rtty_set(bands[best].center_hz, freq_hz);
+    uint32_t c = band_list_centre_hz(freq_hz);
+    if (freq_hz && c) settings_band_rtty_set(c, freq_hz);
 }
 
 static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
