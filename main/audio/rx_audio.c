@@ -1224,7 +1224,8 @@ static inline float cw_peak_step(int ear, float x)
     return x;
 }
 
-/* RF offset from the dial that NCO1 puts at stage-1 baseband 0. */
+/* NCO1's frequency above the QMX's 12 kHz IF (stage-1 baseband 0). Equal to
+ * the RF offset from the dial only outside CW - rtty_rx_feed's caller converts. */
 static int s_nco1_hz = 0;
 
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
@@ -1299,7 +1300,7 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
     s_nco_r.re = 1.0f; s_nco_r.im = 0.0f;
     s_nco_pre.re = 1.0f; s_nco_pre.im = 0.0f;
     s_center_hz = center_hz;
-    s_nco1_hz = center_hz + if_cal;   /* RF offset at baseband 0 - rtty_rx reads it */
+    s_nco1_hz = center_hz + if_cal;   /* NCO1 above the 12 kHz IF; NOT the RF offset in CW - see the rtty_rx_feed call */
 }
 
 // Rotate the phasor one sample forward and hand back this sample's (cos,sin).
@@ -1843,9 +1844,22 @@ static void rx_audio_task(void *arg)
         if (n_out > 0) {
             dsps_fird_f32(&s_dec_fir_re, s_mix_re, s_filt_re, n_out);
             dsps_fird_f32(&s_dec_fir_im, s_mix_im, s_filt_im, n_out);
-            if (rtty)
+            if (rtty) {
+                /* rtty_rx wants the RF offset FROM THE DIAL at baseband 0, in
+                 * the display's coordinates, so a tap on a signal is where the
+                 * decoder listens. s_nco1_hz is NCO1's offset above the 12 kHz
+                 * IF, which is NOT that in CW: the QMX moves its LO by the CW
+                 * pitch, so the dial lands at IF + pitch + trim
+                 * (ui_get_if_offset_hz(), which also holds RIT). Passing
+                 * s_nco1_hz as it was put the decoder one pitch (550 Hz) below
+                 * the orange lines in CW - measured 2026-11-12 on ON8FAB: lines
+                 * on the pair, sig 0.35, nothing; offset +550 Hz copied it.
+                 * Same function the spectrum uses, read every frame because RIT
+                 * moves it without a retune(). */
+                int rf0 = s_nco1_hz - (ui_get_if_offset_hz() - 12000);
                 rtty_rx_feed(s_filt_re, s_filt_im, n_out,
-                             (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, s_nco1_hz);
+                             (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, rf0);
+            }
             // Stage 2: the actual mode-width selectivity, at the now-
             // decimated rate - see the FIR_LEN comment above for why this
             // has to be a second, non-decimating pass rather than folded
