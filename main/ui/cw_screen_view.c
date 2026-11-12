@@ -68,10 +68,15 @@ static const char *TAG = "cw_screen";
  * what clipped the drawer captions on 2026-11-02 - so if the font ever changes,
  * this changes with it. */
 #define TICKER_H      124
-/* Columns the ticker fits: (MID_W - PANE_W) = 960 px at qmx_mono_25's 15 px
- * advance, minus one so the rightmost glyph is not flush against the border.
+/* Columns the ticker fits. Text starts at PANE_W + 1 px border + 8 px pad and
+ * must END LEFT OF THE OPERATOR WATERMARK (UI_WATERMARK_X, ui.h) - operator,
+ * 2026-11-12: at 63 columns the text ran to x 1274, through "Stef OZ1LAV".
+ * Derived, so it cannot drift from the watermark again: 60 at 15 px.
  * ⛔ This is the grid's WRAP MODULUS while this page is up, not a draw width. */
-#define CW_TICKER_COLS 63
+#define CW_TICKER_TEXT_X (PANE_W + 1 + 8)
+#define CW_TICKER_COLS ((UI_WATERMARK_X - UI_WATERMARK_GAP - CW_TICKER_TEXT_X) / 15)
+_Static_assert(CW_TICKER_COLS >= 8 && CW_TICKER_COLS <= CW_LINE_COLS,
+               "CW_TICKER_COLS out of cw_decode_set_cols' range");
 // The band-plan strip (BANDPLAN_H in ui.c) sits directly above the bottom
 // bar and MUST stay visible and touchable on the CW page - it is how the
 // operator sees they are inside the CW segment and drags along it. The pane
@@ -2447,7 +2452,9 @@ void cw_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(s_ticker);
             *layer[i].obj = l;
             lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-            lv_obj_set_width(l, MID_W - PANE_W - 16);
+            /* Clip at the grid, not the box: the box runs under the
+             * watermark, the text must not. */
+            lv_obj_set_width(l, CW_TICKER_COLS * 15);
             lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(layer[i].colour), 0);
             lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);

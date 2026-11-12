@@ -5400,12 +5400,16 @@ static unsigned  s_cw_seen;          /* change detector - repaint only on new te
  * two labels quietly overlapping on screen. */
 _Static_assert(sizeof("CW ~08wpm:") - 1 + 2 == CW_PREFIX_COLS,
                "CW_PREFIX_COLS must match CW_PREFIX_FMT rendered with two digits");
-/* CW_LINE_COLS comes from cw_decode.h now: the browser draws the same line, so
- * the grid it wraps on cannot live in the Tab5's UI file. 71 columns is what is
- * left of 84 after this header - 72 since the header lost its space. */
-_Static_assert(84 - CW_PREFIX_COLS == CW_LINE_COLS,
-               "the Tab5 header and cw_decode's line width must still add up");
 #define CW_COL_PX       15
+/* CW_LINE_COLS comes from cw_decode.h now: the browser draws the same line, so
+ * the grid it wraps on cannot live in the Tab5's UI file.
+ *
+ * ⛔ The line must END LEFT OF THE WATERMARK (operator, 2026-11-12). The full
+ * 84 columns (prefix 12 + line 72) ran to x 1264, through "Stef OZ1LAV" at
+ * x 1251. 70 columns end at x 1234. The strip starts 4 px in (cw_strip_init). */
+_Static_assert(4 + (CW_PREFIX_COLS + CW_LINE_COLS) * CW_COL_PX + UI_WATERMARK_GAP
+                   <= UI_WATERMARK_X,
+               "the panadapter CW line runs into the operator watermark");
 /* Half a line of clear air above the band-plan strip, so the text is not
  * sitting on the bar below it (operator). */
 #define CW_LIFT_PX      15
@@ -8018,8 +8022,16 @@ static void build_signature(lv_obj_t *scr)
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_coord_t margin = 4;
-    lv_obj_set_pos(img, DISPLAY_H_RES - margin - g_watermark_img.header.w,
+    /* UI_WATERMARK_X (ui.h), not the image's own width: the CW decode grids
+     * are static-asserted clear of that x, so the two must be one number. */
+    if (g_watermark_img.header.w != UI_WATERMARK_W) {
+        ESP_LOGE(TAG, "watermark is %u px wide, UI_WATERMARK_W says %d - the "
+                 "CW grids are sized from the constant",
+                 (unsigned)g_watermark_img.header.w, UI_WATERMARK_W);
+    }
+    _Static_assert(UI_WATERMARK_X == DISPLAY_H_RES - UI_WATERMARK_MARGIN - UI_WATERMARK_W,
+                   "UI_WATERMARK_X assumes a 1280 px wide display");
+    lv_obj_set_pos(img, UI_WATERMARK_X,
                    DISPLAY_V_RES - 75 - g_watermark_img.header.h);
     s_signature_img = img;
 }

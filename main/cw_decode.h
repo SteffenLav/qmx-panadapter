@@ -137,15 +137,18 @@ unsigned cw_decode_total(void);
 // character go" would drift the moment one of them changed, and the operator
 // asked for them to be identical.
 //
-// 72 columns is what the Tab5 has left after the green "CW ~08wpm:" header at
-// 15 px per character across 1280 px. The browser uses the same number so the
+// 70 columns: what the Tab5 has left after the green "CW ~08wpm:" header at
+// 15 px per character, ending clear of the watermark. The browser uses the same number so the
 // two wrap in the same places.
 //
 // 71 until the header lost its space before "wpm" (operator, 2026-09-06). This
 // is NOT a free choice: ui.c static-asserts that the header width and this add
 // up to the 84 columns the display has, so narrowing the header WIDENS the
 // line by the same column. That assert is what caught it.
-#define CW_LINE_COLS 72
+// ⛔ 72 -> 70 on 2026-11-12: at 72 the line ran to x 1264, through the
+// operator watermark at x 1251 (operator). The constraint is now that
+// static assert in ui.c, against UI_WATERMARK_X - not "84 columns".
+#define CW_LINE_COLS 70
 
 /* FOUR display lines (Sam W7STF; two since 2026-09-07). Text fills the first, then
  * wraps DOWN to the second; when that is full it starts overwriting the first
@@ -217,8 +220,9 @@ void cw_decode_clear(void);
 int  cw_decode_rows(void);
 void cw_decode_set_rows(int rows);
 
-/* How many COLUMNS the grid wraps at. The panadapter fits 72 of qmx_mono_25
- * across 1280 px; the CW page's ticker sits beside a 320 px pane and fits 64.
+/* How many COLUMNS the grid wraps at. The panadapter fits 70 of qmx_mono_25
+ * (CW_LINE_COLS) clear of the watermark; the CW page's ticker beside its 320 px
+ * pane fits CW_TICKER_COLS (60).
  * Whichever screen is up sets it, and like a row change the grid is wiped
  * rather than re-wrapped - see the definition for why that is the honest
  * choice while the ring cannot carry the TX mask. Clamped to [8, CW_LINE_COLS];
