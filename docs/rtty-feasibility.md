@@ -524,3 +524,57 @@ page is open, as CW and WSPR do. Measure it with the module running.
 RX-only first (R1, R2), proven on a host harness against a known RTTY
 recording before anything touches hardware. R4 (can the QMX follow `TA<freq>;`
 at ~45/s while keyed) gates TX and needs the operator at the bench.
+
+---
+
+## R1 started 2026-11-12 (T196)
+
+### Sample tap - decided
+
+- ⛔ **Not the FT8/WSPR capture branch.** In those modes `fft_task` skips the
+  panadapter FFT (`main/dsp/dsp.c`, the `ui_mode_uses_iq_capture()` branch),
+  so the waterfall stops. RTTY is tuned on the waterfall.
+- **The RX-audio chain.** `rx_audio_task` (`main/audio/rx_audio.c`) already
+  mixes the tuned signal to complex baseband and decimates by 8, giving 6 kHz
+  complex. It runs on core 1 at a priority below `fft_task`. RTTY takes that
+  stage-1 output. The demod is tested at 6 kHz for this reason.
+- Integration work: `rx_audio` runs only for CW/USB/LSB/AM and only when a
+  listener is present. An open RTTY page must count as a third consumer.
+  `UI_MODE_RTTY` behaves as `UI_MODE_CW` does: the panadapter keeps running.
+
+### Demod - measured on the host
+
+`main/rtty_baudot.c`, `main/rtty_demod.c`, harness `test/rtty_harness.c`
+(build line in its header). Not in `main/CMakeLists.txt` yet, never run on a
+device.
+
+| SNR (2500 Hz) | CER measured | non-coherent FSK theory |
+|---|---|---|
+| -10 dB | 33.8 % | 20.3 % |
+| -8 dB | 6.7 % | 4.4 % |
+| -6 dB | 0.4 % | 0.3 % |
+| -4 dB | 0.0 % | 0.0 % |
+
+- With oracle timing the filter matches theory exactly (BER 0.0005 at
+  -6 dB). The remaining loss is timing.
+- Two framers were measured and rejected (reasons in `rtty_demod.h/.c`):
+  first-crossing timing (CER 5.4 % at -6 dB) and a half-bit grid that
+  slipped. The kept design locks a character clock and decodes at the
+  predicted slot (flywheel).
+- Baud error up to +/-2 %: no loss.
+- ⚠ **Tuning error:** +/-10 Hz -> CER 3 % at -6 dB (about 2 dB lost);
+  +/-20 Hz -> 17-20 %. **AFC is needed**, against the June "out of scope".
+- ⚠ **Squelch:** noise alone prints 275 chars/min unsquelched, 79 at the
+  confidence threshold 0.4. Needs a real signal-presence measure.
+- ⚠ The generator uses our own ITA2 encoder. A real recording, compared with
+  fldigi or MMTTY on the same audio, is the arbiter. The harness reads a WAV
+  (`--wav f.wav --centre <Hz> [--lsb]`).
+
+### Plan
+
+| Phase | Work | Blocked on |
+|---|---|---|
+| R1 (rest) | AFC; signal-presence squelch; decode a real recording | a recording |
+| R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench1 | layout decision; a flash |
+| R4 | `TA<freq>;` at 22 ms, dummy load, fldigi as arbiter | operator at the bench |
+| R5 | TX: encoder exists; sequencer, macros, keyboard; band guard + inventory | R4 result |

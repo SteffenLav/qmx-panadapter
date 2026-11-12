@@ -16,6 +16,7 @@ v1.24.2 groups.io feedback, logged not reconciled. None started.
 
 | ID | Item | Who |
 |---|---|---|
+| T196 | **RTTY mode, RX first (branch `qmx-panadapter-rtty`, NOT on main).** Was 10b. R1 core on the branch: `main/rtty_baudot.c` (ITA2) + `main/rtty_demod.c` (2-tone matched filter, character clock with flywheel). Host harness `test/rtty_harness.c` at theory: CER 0.4 % at -6 dB SNR/2500 Hz (theory 0.3 %). Measured gaps: +/-10 Hz tuning costs ~2 dB, so AFC is needed; the noise squelch still prints 79 chars/min at 0.4. NOT in the firmware build, never run on a device, no real recording decoded yet. Plan + open questions: `docs/rtty-feasibility.md` "R1 started". | — |
 | T195 | **dB range per band (Samuel W7STF, v1.26.1).** Was one global pair. Each band now stores the range it is left with and gets it back on entry (`settings_band_db_*`, `db_band_restore_cb`). Out of band: range unchanged. BUILT, NOT FLASHED, not tested on a band change. | Samuel W7STF |
 | T194 | **Web NR made the voice quieter (Samuel W7STF, v1.26.1).** Not a scaling bug: measured on 3 real SSB clips, the speech component loses 0.8-1.5 dB (spectral) and 1.5/2.7/3.4 dB (RNNoise Low/Med/High); most of the drop he hears is removed noise. Make-up gain per engine/level added (`NR_LEVELS.mkRn/mkSn`), voice modes only. BUILT, harnesses pass, NOT FLASHED, not heard. | Samuel W7STF |
 | T193 | **SHIPPED v1.26.1 (2026-11-11).** **FIXED + VERIFIED ON bench1 2026-11-11: WSPR search took 12.5-16 s, now 8.3 s.** Cause measured with `cpu_owners` 5 s into a search: `render` (prio 3, core 1) drew the HIDDEN panadapter at full rate on the WSPR page - its gate excluded FT8 only - and took 36.5 % of core 1; wspr_dec got 51.8 %. WSPR added to the gate in `render.c`: wspr_dec 90.4 %, search 8.27/8.31 s. | — |
@@ -120,6 +121,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
+| T196 | **RTTY mode, RX first (branch `qmx-panadapter-rtty`, NOT on main).** Was 10b. R1 core on the branch: `main/rtty_baudot.c` (ITA2) + `main/rtty_demod.c` (2-tone matched filter, character clock with flywheel). Host harness `test/rtty_harness.c` at theory: CER 0.4 % at -6 dB SNR/2500 Hz (theory 0.3 %). Measured gaps: +/-10 Hz tuning costs ~2 dB, so AFC is needed; the noise squelch still prints 79 chars/min at 0.4. NOT in the firmware build, never run on a device, no real recording decoded yet. Plan + open questions: `docs/rtty-feasibility.md` "R1 started". | — |
 | T195 | **dB range per band (Samuel W7STF, v1.26.1).** Was one global pair. Each band now stores the range it is left with and gets it back on entry (`settings_band_db_*`, `db_band_restore_cb`). Out of band: range unchanged. BUILT, NOT FLASHED, not tested on a band change. | Samuel W7STF |
 | T194 | **Web NR made the voice quieter (Samuel W7STF, v1.26.1).** Not a scaling bug: measured on 3 real SSB clips, the speech component loses 0.8-1.5 dB (spectral) and 1.5/2.7/3.4 dB (RNNoise Low/Med/High); most of the drop he hears is removed noise. Make-up gain per engine/level added (`NR_LEVELS.mkRn/mkSn`), voice modes only. BUILT, harnesses pass, NOT FLASHED, not heard. | Samuel W7STF |
 | T193 | **SHIPPED v1.26.1 (2026-11-11).** **FIXED + VERIFIED ON bench1 2026-11-11: WSPR search took 12.5-16 s, now 8.3 s.** Cause measured with `cpu_owners` 5 s into a search: `render` (prio 3, core 1) drew the HIDDEN panadapter at full rate on the WSPR page - its gate excluded FT8 only - and took 36.5 % of core 1; wspr_dec got 51.8 %. WSPR added to the gate in `render.c`: wspr_dec 90.4 %, search 8.27/8.31 s. | — |
@@ -799,7 +801,7 @@ it — which is the real open item, and is why they are not simply ticked.
 | # | What | Verdict |
 |---|---|---|
 | 10 | JS8 mode | DECISION_OR_NOT_STARTED |
-| 10b | RTTY mode | DECISION_OR_NOT_STARTED |
+| 10b | RTTY mode | → T196, started 2026-11-12 on branch `qmx-panadapter-rtty` |
 | 11 | DSP polish (noise reduction, auto-notch) | DECISION_OR_NOT_STARTED |
 | 114 | The per-bin adaptive noise floor has never run - audio.c re-seeds it 17 ti | DECISION_OR_NOT_STARTED |
 | 128 | Show the QMX CW decode buffer - layout (Samuel W7STF) | PARKED — deferred to feat/cw-page |
@@ -1291,7 +1293,7 @@ measurements and the dead ends, which are still worth reading.
 | 8 | Extended waterfall history | ❌ Not started | Medium | PSRAM has room for several minutes of scrollback; two-finger drag to scrub through |
 | 9 | QMX (small) support | ❌ Not started | Medium | Same UI, different USB endpoint config and band table |
 | 10 | JS8 mode | ❌ Not started | Large | Heavily reuses `ft8_lib` per feasibility doc; has 10/15/30/60s slot variants. Do after FT4 (#5) to reuse its slot-abstraction work. See `docs/js8-feasibility.md` |
-| 10b | RTTY mode | ❌ Not started | Large | Fully separate pipeline — no LDPC, no block structure. Unrelated to FT4/JS8 work. See `docs/rtty-feasibility.md` |
+| 10b | RTTY mode | → **T196**, RX core started 2026-11-12 on branch `qmx-panadapter-rtty` | Large | Fully separate pipeline — no LDPC, no block structure. Unrelated to FT4/JS8 work. See `docs/rtty-feasibility.md` |
 | 11 | DSP polish (noise reduction, auto-notch) | ❌ Not started | Medium | New algorithms, no design started |
 | 31 | FT8 weak-signal rescue — Stage 2 residual subtraction (offline research, **NOT released**) | ⏸️ Research done, modest gain proven; next lever identified | Large (next phase) | **Offline test-harness only** (`test/ft8_stage2.c` + `ft8_test_harness.c`), on a **local-only branch — NOT on GitHub** (2026-07-07). Rewrote the residual decoder to operate on the real `uint8_t` waterfall (notch each decoded signal's tone cells toward the local noise floor). **Correction:** the prior session's "700 candidates / mask removal proven" was a `uint8`↔`float` **heap-corruption artifact** (140 = MAX_CANDIDATES ceiling from a corrupted waterfall), not real unmasking. Real result: rescues +1 on websdr_test1 (13/18→14/18, `CQ DX Z33Z KN11`), +1–2 ground-truth-verified decodes on 4/8 test files; a `scale=0.00` control proves the gain is the subtraction (not a wider heap); optimal scale 0.80–0.95 (1.00 over-notches). **Ceiling of magnitude-domain notching:** cannot recover deeply-weak (<~−6 dB) co-located signals — 4/5 websdr_test1 targets stay unrescued. **Next lever = coherent time-domain subtraction** (re-synth each decoded signal's complex waveform — GFSK synth already exists in `ft8_stage2.c` — phase-align, subtract from audio, re-STFT; the WSJT-X approach). Findings: `docs/ft8-stage2-findings.md`; memory `stage2_complete_checkpoint`. Local commit `2dcfcee` (unpushed) |
 | **Closed Investigations** | | | | |
