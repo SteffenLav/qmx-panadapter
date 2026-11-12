@@ -72,8 +72,17 @@ if ($content -match "PATCHED \(qmx-panadapter, 2026-08-16\)") {
     exit 0
 }
 
+# ⚠ 2026-10-09: THE MATCH DELIBERATELY STARTS BELOW THE "Cancel polling" COMMENT.
+#
+# This block has now broken the build twice, both times over the same two lines:
+#     cdc_dev->data.in_polling   = false;
+#     cdc_dev->notif.xfer_polling = false;
+# 2.4.0 deleted them (patch re-fitted 2026-09-21 to drop them), and 2.4.1 PUT THEM
+# BACK. Matching from `if (cdc_dev->data.in_xfer)` instead of from the comment
+# makes the patch blind to whether they are there: either way they stay where
+# upstream put them, above the replacement, and the retry logic below is
+# unaffected. Do not "tidy" the comment line back into this block.
 $original = @'
-    // Cancel polling of BULK IN and INTERRUPT IN
     if (cdc_dev->data.in_xfer) {
         ESP_ERROR_CHECK(cdc_acm_reset_transfer_endpoint(cdc_dev->dev_hdl, cdc_dev->data.in_xfer));
     }
@@ -97,12 +106,16 @@ $patched = @'
     // (that is the real fix - the window is simply too short), then log and
     // carry on so the device object is always freed.
     //
-    // 2026-09-21: upstream deleted cdc_dev->data.in_polling and
+    // 2026-09-21: upstream (2.4.0) deleted cdc_dev->data.in_polling and
     // notif.xfer_polling from the struct - polling is now cancelled by
     // cdc_acm_reset_transfer_endpoint() alone, and the in_cb/notif.cb nulling
     // above covers callback suppression. Assigning them here no longer
     // compiles, so both blocks dropped them. The patch's own purpose is
     // unchanged.
+    //
+    // 2026-10-09: 2.4.1 PUT THEM BACK. This block still does not assign them,
+    // because the match now starts below them and leaves whatever upstream
+    // wrote in place. That is why this patch applies to 2.4.0 and 2.4.1 alike.
     if (cdc_dev->data.in_xfer) {
         esp_err_t e = cdc_acm_reset_transfer_endpoint(cdc_dev->dev_hdl, cdc_dev->data.in_xfer);
         if (e != ESP_OK) {
