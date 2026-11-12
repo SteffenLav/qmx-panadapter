@@ -12196,6 +12196,17 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * the one drawn over the signal he is dragging. */
     const float DRAG_PASSBAND_OPA = 0.35f;
 
+    /* RTTY page: no passband tint, no edges, no amber dial line (operator,
+     * 2026-11-12: "what is the old centre freq yellow line in middle of the
+     * passband doing here?" -> "hide them"). The decoder reads the wide I/Q at
+     * the orange tone lines; the QMX's own filter and the dial set nothing it
+     * hears, so both read as the receiver's target when they are not. The
+     * off-view arrow stays - it still says where the dial went and takes you
+     * back. Bring them back with RTTY TX (R010): audio FSK goes out at dial +
+     * tone, through that passband. */
+    const bool pb_hidden = (ui_mode_get() == UI_MODE_RTTY);
+    SPEC_SIG(pb_hidden);
+
     // Dim, never hide, while panning and while the pan settles
     if (s_stroll_active) {
         fade_opacity = DRAG_PASSBAND_OPA;
@@ -12337,7 +12348,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             b = (uint16_t)(b * fade_opacity);
             band_color = (r << 11) | (g << 5) | b;
         }
-        for (int x = edge_x_lo; x <= edge_x_hi; x++) {
+        for (int x = edge_x_lo; x <= edge_x_hi && !pb_hidden; x++) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + x] = band_color;
             }
@@ -12793,7 +12804,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
         for (int side = 0; side < 2; side++) {
             int edge_x = pb_x[side];
-            if (edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
+            if (pb_hidden || edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
                 if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
@@ -12822,7 +12833,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Drawing the marker at +residual puts it on the signal rather than up to
         // ~23 Hz beside it, and keeps it agreeing with where a tap now tunes.
         int cx = X0 + (int)((int64_t)(ui_get_if_residual_hz() - pan_hz_vfo) * VW / span_hz_vfo) + VW / 2;
-        if (cx >= X0 && cx < DISPLAY_H_RES) {
+        if (!pb_hidden && cx >= X0 && cx < DISPLAY_H_RES) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
             }

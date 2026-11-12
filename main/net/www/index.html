@@ -12691,6 +12691,11 @@ function specPassbandOpa() {
    be added twice and the second copy would have been the one that got missed.
    Behind the trace, which is why it is a separate call from the edges below. */
 function drawPassbandTint(sctx, W, H) {
+  /* RTTY page: no passband box and no dial line, as on the Tab5 (ui.c,
+     pb_hidden; operator 2026-11-12). The decoder listens at the orange tone
+     lines; the radio's filter and the dial set nothing it hears. Back with
+     RTTY TX (R010). */
+  if (lastScreen === "rtty") return;
   const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
@@ -12742,8 +12747,12 @@ function drawVfoMarker(sctx, W, H) {
     pbOff = (hi < 0 || lo >= W);
   }
   if (onScreen) {
-    sctx.fillStyle = "#ffb95a";
-    sctx.fillRect(vfoX - 1, 0, 2, H);
+    /* Not on the RTTY page - see drawPassbandTint. The off-view arrow below
+       stays, as on the Tab5. */
+    if (lastScreen !== "rtty") {
+      sctx.fillStyle = "#ffb95a";
+      sctx.fillRect(vfoX - 1, 0, 2, H);
+    }
     vfoArrowBox = null;
     return;
   }
@@ -12770,6 +12779,7 @@ function drawVfoMarker(sctx, W, H) {
                   left: left };
 }
 function drawPassbandEdges(sctx, W, H) {
+  if (lastScreen === "rtty") return;   /* see drawPassbandTint */
   const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
