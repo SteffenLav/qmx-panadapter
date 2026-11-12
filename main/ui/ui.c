@@ -21476,8 +21476,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
 
     if (next == UI_MODE_RTTY) {
         /* R006. The panadapter's widgets are the backdrop, as on the CW page,
-         * and so is its state: the dial, mode and zoom are not changed on
-         * entry. From another overlay page the panadapter comes back first. */
+         * and so is its state: mode and zoom are not changed on entry (the
+         * dial is - see R021 below). From another overlay page the panadapter
+         * comes back first. */
         if (cur == UI_MODE_FT8) {
             ft8_screen_view_hide();
             if (ft8) lv_obj_set_x(ft8, 0);
@@ -21485,6 +21486,23 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (cur != UI_MODE_PANADAPTER) {
             show_panadapter_widgets_instant();
             if (s_pan_snapshot.valid) ui_restore_snapshot(&s_pan_snapshot);
+        }
+        /* R021: the DIAL does change on entry now (operator, 2026-11-12: "Yes,
+         * jump on entry"). It goes to this band's stored RTTY dial, else the
+         * DiGi middle - the band-change rule. Without it, entering on 40 m at
+         * 7.100 (phone) and then changing band stored 7.100 as the RTTY dial
+         * for 40 m, which nobody chose on this page. Mode and zoom still stay.
+         * Boot restore does not jump: the radio comes back on the dial this
+         * page last left it on. */
+        {
+            uint32_t c = band_list_centre_hz(s_last_qmx_freq_hz);
+            uint32_t f = c ? ui_band_change_target_hz(c, s_last_qmx_freq_hz) : 0;
+            if (f && f != s_last_qmx_freq_hz) {
+                ESP_LOGI(TAG, "RTTY entry: %lu Hz -> %lu Hz",
+                         (unsigned long)s_last_qmx_freq_hz, (unsigned long)f);
+                cat_set_frequency_forced(f);
+                ui_update_frequency(f);
+            }
         }
         if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
         recompute_zoom_pan();
