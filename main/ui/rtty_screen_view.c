@@ -66,6 +66,11 @@ static bool     s_text_dirty;
 static uint32_t s_clear_seen;   /* rtty_rx_text_clear_gen() last acted on */
 
 #define BAR_W 230
+#define RTTY_BAR_DB 30.0f   /* M/S bars: full scale, dB over the noise floor */
+/* ...and their zero. The peak of 5 bins over their median reads ~4 dB on pure
+ * noise (harness, YU65AEC rxcap 780 Hz off the signal: 4.2 / 3.8 dB; on the
+ * signal 23.1 / 12.6 dB), so 0 dB would leave the bars a sixth full on noise. */
+#define RTTY_BAR_DB0 3.0f
 
 /* ---- text ---------------------------------------------------------------- */
 
@@ -290,9 +295,11 @@ static void timer_cb(lv_timer_t *t)
 
     rtty_rx_status_t st;
     rtty_rx_status(&st);
-    float big = st.mark_lvl > st.space_lvl ? st.mark_lvl : st.space_lvl;
-    set_bar(s_bar_m, big > 0 ? st.mark_lvl / big : 0);
-    set_bar(s_bar_s, big > 0 ? st.space_lvl / big : 0);
+    /* dB over the noise floor, full scale RTTY_BAR_DB. They were each tone
+     * over the LARGER tone, so on noise both sat near full and said nothing
+     * (operator, 2026-11-12: "almost fully extended on the noise floor"). */
+    set_bar(s_bar_m, (st.mark_db - RTTY_BAR_DB0) / (RTTY_BAR_DB - RTTY_BAR_DB0));
+    set_bar(s_bar_s, (st.space_db - RTTY_BAR_DB0) / (RTTY_BAR_DB - RTTY_BAR_DB0));
     set_bar(s_bar_sig, st.sig_lvl);
     lv_obj_set_style_bg_color(s_bar_sig, lv_color_hex(st.present ? 0x30E060 : 0x5F6670), 0);
 

@@ -78,12 +78,27 @@ static void acq_block(rtty_demod_t *d)
         d->acq_pow[b] = d->acq_blocks ? 0.5f * d->acq_pow[b] + 0.5f * p : p;
     }
     d->acq_blocks++;
-    if (d->acq_blocks < 2 || d->cfg.afc_hz <= 0.0f || AFC_PRESENT(d)) return;
 
     float sorted[RTTY_ACQ_BINS];
     memcpy(sorted, d->acq_pow, (size_t)d->acq_nb * sizeof(float));
     qsort(sorted, (size_t)d->acq_nb, sizeof(float), cmp_float);
-    float thr = RTTY_ACQ_SNR * sorted[d->acq_nb / 2];
+    float med = sorted[d->acq_nb / 2];
+
+    /* Tuning aid: each tone over the floor. Runs whether or not the
+     * acquisition below may move anything - the bars are always live. */
+    for (int t = 0; t < 2; t++) {
+        float half = d->cfg.shift_hz * 0.5f;
+        float f = d->afc_off + ((t == 0) != d->cfg.reverse ? half : -half);  /* t 0 = mark */
+        int b0 = (int)lroundf((f - d->acq_f0) / RTTY_ACQ_STEP_HZ);
+        float pk = 0.0f;
+        for (int b = b0 - RTTY_SNR_BINS; b <= b0 + RTTY_SNR_BINS; b++)
+            if (b >= 0 && b < d->acq_nb && d->acq_pow[b] > pk) pk = d->acq_pow[b];
+        float db = (med > 0.0f && pk > 0.0f) ? 10.0f * log10f(pk / med) : 0.0f;
+        if (t == 0) d->mark_snr_db = db; else d->space_snr_db = db;
+    }
+
+    if (d->acq_blocks < 2 || d->cfg.afc_hz <= 0.0f || AFC_PRESENT(d)) return;
+    float thr = RTTY_ACQ_SNR * med;
 
     int h = (int)lroundf(d->cfg.shift_hz * 0.5f / RTTY_ACQ_STEP_HZ);
     float best = 0.0f, best_off = 0.0f;

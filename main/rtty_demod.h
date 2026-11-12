@@ -106,6 +106,8 @@ extern "C" {
 #define RTTY_ACQ_SNR        6.0f
 #endif
 #define RTTY_ACQ_MIN_MOVE   10.0f     /* Hz; smaller errors are AFC's job */
+/* M/S bars: each tone's peak within +/-2 acquisition bins (+/-10 Hz). */
+#define RTTY_SNR_BINS       2
 /* Band prefilter (R015): mix the pair's centre to 0 Hz and low-pass it
  * (Butterworth, RTTY_PF_ORDER poles, cutoff shift/2 + RTTY_PF_K * baud)
  * before the tone filters, so a strong neighbour outside the pair does not
@@ -176,6 +178,11 @@ typedef struct {
     float    cfg_alpha, cfg_beta;     /* loop gains; init sets the defaults */
     /* tuning aid: smoothed tone envelopes */
     float mark_lvl, space_lvl;
+    /* Each tone's power over the noise floor, dB: peak of acq_pow within
+     * +/-RTTY_SNR_BINS of the tone over the median bin, every 0.5 s. This is
+     * what the M/S bars show; mark_lvl/space_lvl only compare the two tones
+     * with each other, so on noise both read "full" (operator, 2026-11-12). */
+    float mark_snr_db, space_snr_db;
     /* AFC: previous boxcar sums, discriminator for this bit, offset applied */
     float pmr, pmi, psr, psi;
     float afc_r, afc_i;

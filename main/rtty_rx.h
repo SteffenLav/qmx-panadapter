@@ -32,6 +32,7 @@ typedef struct {
     float    sq_open_lvl;   /* that threshold, for drawing the tick */
     bool     present;
     float    mark_lvl, space_lvl;   /* tone envelopes, arbitrary units */
+    float    mark_db, space_db;     /* each tone over the noise floor, dB */
     float    afc_hz;        /* AFC + acquisition offset in force */
     uint32_t chars;         /* characters printed since the decoder (re)started */
     uint32_t acq_jumps;

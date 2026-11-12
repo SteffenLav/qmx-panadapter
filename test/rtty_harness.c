@@ -530,6 +530,8 @@ static int decode_wav(const char *path, float centre, bool lsb, float squelch, b
     printf("chars %u, framing errors %u, false starts %u, squelched %u, mark %.4f space %.4f, AFC %+.1f Hz\n",
            (unsigned)g_dem.n_chars, (unsigned)g_dem.n_framing, (unsigned)g_dem.n_false_start,
            (unsigned)g_dem.n_squelched, g_dem.mark_lvl, g_dem.space_lvl, g_dem.afc_off);
+    printf("tones over floor (last 0.5 s block): mark %.1f dB, space %.1f dB\n",
+           g_dem.mark_snr_db, g_dem.space_snr_db);
     printf("---\n%s\n---\n", k.buf ? k.buf : "");
     free(x); free(k.buf);
     return 0;
