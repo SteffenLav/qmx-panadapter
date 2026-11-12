@@ -30,7 +30,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 |---|---|---|
 | R001 | ITA2 codec + FSK demod (per-tone boxcar, character clock with flywheel) + host harness. CER 0.4 % at -6 dB SNR/2500 Hz, theory 0.3 %. Host only, never run on a device. | `a81bacb3` |
 | R011 | Defaults 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Operator: "yes, those defaults - but really you are the one to judge" (2026-11-12). Not yet wired to a setting: lands with R006. | - |
-| R004 | Real-signal check: VE3NEA's 5 GRITTY demo WAVs scored against MMTTY/GRITTY (`test/wav_rtty/README.md`): equal on 3, behind on the 2 contest files (R015). | (this commit) |
-| R013 | Coarse acquisition: 0.5 s DFT at 750 Hz over +/-(range + shift/2), jumps AFC to the pair when no signal is present. Synthetic -6 dB: +/-140 Hz CER <= 2.9 %; noise: 0 jumps in 20 min. Real: II1SAP (80 Hz off) went from nothing to a full copy. | (this commit) |
+| R004 | Real-signal check: VE3NEA's 5 GRITTY demo WAVs scored against MMTTY/GRITTY (`test/wav_rtty/README.md`): equal on 3, behind on the 2 contest files (R015). | `91a08926` |
+| R013 | Coarse acquisition: 0.5 s DFT at 750 Hz over +/-(range + shift/2), jumps AFC to the pair when no signal is present. Synthetic -6 dB: +/-140 Hz CER <= 2.9 %; noise: 0 jumps in 20 min. Real: II1SAP (80 Hz off) went from nothing to a full copy. | `91a08926` |
 | R003 | Squelch: conf smoothed over ~5 chars, open 0.48 / close 0.44, fast close after 3 chars < 0.5, 5-char hold buffer. Noise: 0 chars in 30 min (was 79/min). -6 dB signal CER 0.3 %; ~2 junk chars after a transmission ends. AFC now also needs smoothed conf >= 0.42: noise wander 2.5 Hz rms (was 11); +/-30 Hz CER <= 4.5 %, +/-40 Hz no longer pulls in (R013). Host only. | `6a321b57` |
 | R002 | AFC, gated on lock + character conf. -6 dB: +/-30 Hz CER <= 2.5 %, 0 Hz no cost, 0.2 Hz/s drift 0.9 %. Host only. | `5ceffd37` |
