@@ -79,6 +79,7 @@
 #include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
+#include "rtty_rx.h"           // /api/cmd "rtty" - R005
 #include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
@@ -3547,6 +3548,44 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  (unsigned long)n, (unsigned long)cap, DSP_SAMPLE_RATE_HZ);
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    } else if (action && strcmp(action, "rtty") == 0) {
+        /* RTTY receive, R005 (TODO-RTTY.md). RX only - nothing here keys.
+         *   {"action":"rtty","on":true,"offset_hz":1423,"reverse":false}
+         *   {"action":"rtty"}             -> status + the last decoded text
+         * offset_hz is the tone centre as it sounds in USB audio, i.e. its RF
+         * offset from the dial. Omitted fields keep their current value. */
+        cJSON *jo = cJSON_GetObjectItem(root, "on");
+        if (cJSON_IsBool(jo)) {
+            rtty_rx_status_t cur;
+            rtty_rx_status(&cur);
+            cJSON *jf = cJSON_GetObjectItem(root, "offset_hz");
+            cJSON *jr = cJSON_GetObjectItem(root, "reverse");
+            int off = cJSON_IsNumber(jf) ? jf->valueint : (cur.offset_hz ? cur.offset_hz : 2210);
+            bool rev = cJSON_IsBool(jr) ? cJSON_IsTrue(jr) : cur.reverse;
+            rtty_rx_set(cJSON_IsTrue(jo), off, rev);
+        }
+        cJSON_Delete(root);
+        rtty_rx_status_t st;
+        rtty_rx_status(&st);
+        static char text[513];
+        rtty_rx_text_tail(text, sizeof(text));
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "on", st.on);
+        cJSON_AddNumberToObject(o, "offset_hz", st.offset_hz);
+        cJSON_AddBoolToObject(o, "reverse", st.reverse);
+        cJSON_AddNumberToObject(o, "fs_hz", st.fs_hz);
+        cJSON_AddNumberToObject(o, "sig_lvl", (int)(st.sig_lvl * 100.0f + 0.5f) / 100.0);
+        cJSON_AddBoolToObject(o, "present", st.present);
+        cJSON_AddNumberToObject(o, "afc_hz", (int)(st.afc_hz * 10.0f) / 10.0);
+        cJSON_AddNumberToObject(o, "chars", st.chars);
+        cJSON_AddNumberToObject(o, "acq_jumps", st.acq_jumps);
+        cJSON_AddStringToObject(o, "text", text);
+        char *body = cJSON_PrintUnformatted(o);
+        cJSON_Delete(o);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body ? body : "{\"ok\":false}");
+        free(body);
         return ESP_OK;
     } else if (action && strcmp(action, "cw_clear") == 0) {
         /* Wipe the decoded-CW window (Bryan N0LUF, 2026-10-16: "it might be

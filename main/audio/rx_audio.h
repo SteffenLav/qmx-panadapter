@@ -204,6 +204,9 @@ void rx_audio_apply_settings(void);
  * the AGC and writes the codec. It costs the same and produces silence. */
 void     rx_audio_suspend(bool on);
 bool     rx_audio_is_suspended(void);
+/* Wake the task out of its idle block - a consumer that is not the speaker
+ * or the browser (rtty_rx) has just turned on. */
+void     rx_audio_wake(void);
 
 void     rx_audio_set_cw_peak_hz(uint16_t bw_hz);
 uint16_t rx_audio_get_cw_peak_hz(void);

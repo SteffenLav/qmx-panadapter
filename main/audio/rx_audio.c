@@ -1,4 +1,5 @@
 #include "rx_audio.h"
+#include "rtty_rx.h"
 
 #include <string.h>
 #include <math.h>
@@ -1223,6 +1224,9 @@ static inline float cw_peak_step(int ear, float x)
     return x;
 }
 
+/* RF offset from the dial that NCO1 puts at stage-1 baseband 0. */
+static int s_nco1_hz = 0;
+
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
     /* D FIRST: everything below is computed against fs/D, so the factor has to
@@ -1295,6 +1299,7 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
     s_nco_r.re = 1.0f; s_nco_r.im = 0.0f;
     s_nco_pre.re = 1.0f; s_nco_pre.im = 0.0f;
     s_center_hz = center_hz;
+    s_nco1_hz = center_hz + if_cal;   /* RF offset at baseband 0 - rtty_rx reads it */
 }
 
 // Rotate the phasor one sample forward and hand back this sample's (cos,sin).
@@ -1566,7 +1571,11 @@ static void rx_audio_task(void *arg)
          * of its own: "nobody is listening" and "the operator told us nobody
          * is listening" want identical behaviour, and two sleep paths would
          * be two things to keep in step. The web listener still wins. */
-        if ((!s_enabled || s_suspended) && !s_web_en) {
+        /* RTTY (R005) is a THIRD consumer of the chain: it reads stage 1 and
+         * plays nothing. It is NOT a listener for rx_audio_any_listener() -
+         * the background feeds gate on someone hearing audio. */
+        bool rtty = rtty_rx_is_on();
+        if ((!s_enabled || s_suspended) && !s_web_en && !rtty) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Fully asleep - zero wakeups, zero cost - until
             // rx_audio_set_enabled(true) gives this notification. This is the
@@ -1584,8 +1593,12 @@ static void rx_audio_task(void *arg)
          * it back on disconnect. Nothing is persisted, so a reboot restores
          * whatever he set. */
         bool codec_out = (s_enabled && s_codec_ready && !s_web_en);
-        rxaud_mode_t mode = (codec_out || s_web_en) ? mode_from_cat_str(cat_get_mode_str())
-                                                    : RXAUD_MODE_NONE;
+        rxaud_mode_t mode = (codec_out || s_web_en || rtty) ? mode_from_cat_str(cat_get_mode_str())
+                                                            : RXAUD_MODE_NONE;
+        /* The QMX streams the same I/Q in every mode, so RTTY needs no
+         * particular one; in a mode the audio path does not demodulate
+         * (DIGI) it runs on the USB setup, D=8 = 6 kHz. */
+        if (mode == RXAUD_MODE_NONE && rtty) mode = RXAUD_MODE_SSB;
         bool active = (mode != RXAUD_MODE_NONE);
 
         if (!active) {
@@ -1830,6 +1843,9 @@ static void rx_audio_task(void *arg)
         if (n_out > 0) {
             dsps_fird_f32(&s_dec_fir_re, s_mix_re, s_filt_re, n_out);
             dsps_fird_f32(&s_dec_fir_im, s_mix_im, s_filt_im, n_out);
+            if (rtty)
+                rtty_rx_feed(s_filt_re, s_filt_im, n_out,
+                             (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, s_nco1_hz);
             // Stage 2: the actual mode-width selectivity, at the now-
             // decimated rate - see the FIR_LEN comment above for why this
             // has to be a second, non-decimating pass rather than folded
@@ -3016,6 +3032,8 @@ void rx_audio_suspend(bool on)
 }
 
 bool rx_audio_is_suspended(void) { return s_suspended; }
+
+void rx_audio_wake(void) { if (s_task) xTaskNotifyGive(s_task); }
 
 void rx_audio_set_enabled(bool en)
 {

@@ -2,6 +2,9 @@ idf_component_register(
     SRCS
         "main.c"
         "cw_decode.c"
+        "rtty_baudot.c"
+        "rtty_demod.c"
+        "rtty_rx.c"
         "cw_txq.c"
         "display/display.c"
         "ui/ui.c"

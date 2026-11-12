@@ -421,6 +421,8 @@ static void suite(void)
 }
 
 /* ---------- real recording ---------- */
+static float g_baud = 45.45f, g_shift = 170.0f;
+
 static int decode_wav(const char *path, float centre, bool lsb, float squelch, bool usos)
 {
     FILE *f = fopen(path, "rb");
@@ -480,7 +482,7 @@ static int decode_wav(const char *path, float centre, bool lsb, float squelch, b
 
     /* Real audio: mark is the higher RF frequency. In USB audio that is the
      * higher tone; in LSB audio the lower one, so LSB = reverse. */
-    rtty_demod_cfg_t cfg = { (float)rate, 45.45f, 170.0f, centre, lsb, squelch, g_afc };
+    rtty_demod_cfg_t cfg = { (float)rate, g_baud, g_shift, centre, lsb, squelch, g_afc };
     if (!rtty_demod_init(&g_dem, &cfg)) { printf("init failed for %u Hz\n", rate); return 2; }
     sink_t k = {0}; rtty_baudot_init(&k.b, usos);
     rtty_demod_feed(&g_dem, x, NULL, (int)frames, on_char, &k);
@@ -504,6 +506,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--no-usos")) usos = false;
         else if (!strcmp(argv[i], "--squelch") && i + 1 < argc) sq = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--afc") && i + 1 < argc) g_afc = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--baud") && i + 1 < argc) g_baud = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--shift") && i + 1 < argc) g_shift = (float)atof(argv[++i]);
     }
     if (wav) return decode_wav(wav, centre, lsb, sq, usos);
     suite();

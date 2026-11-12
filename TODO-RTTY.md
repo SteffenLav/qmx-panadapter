@@ -14,7 +14,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R005 | **rx_audio tap.** Stage-1 complex baseband, 6 kHz, core 1. An open RTTY page counts as an rx_audio consumer. New `UI_MODE_RTTY` treated like CW, so the panadapter FFT keeps running (NOT the FT8/WSPR capture branch: `ui_mode_uses_iq_capture()` stops the waterfall). | Moderate | - | - |
+| R005 | **rx_audio tap - BUILT, FLASHED bench2 2026-11-12, NOT YET SEEN DECODE A SIGNAL.** `main/rtty_rx.c` reads stage-1 baseband in rx_audio_task (6 kHz, core 1); RTTY is a third consumer of the chain, not an audio listener. `{"action":"rtty","on":true,"offset_hz":N}` + status/text. On the device: runs at 6000 Hz, follows CW/USB retunes, noise sig_lvl 0.36-0.38, 0 chars. Owed: one real signal, to prove the dial-offset mapping and polarity (no RTTY on 40 m, no DWD on 30 m that evening). | Small | an RTTY signal | - |
 | R006 | **RTTY page on the Tab5**, its own page modelled on the CW page (operator decision 2026-11-12): RX text, mark/space tuning aid, AFC offset, reverse. | Moderate | - | - |
 | R007 | **Web RTTY panel**: RX text + tuning aid. | Moderate | R005 | - |
 | R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2. | Small | R005 + a flash | - |
