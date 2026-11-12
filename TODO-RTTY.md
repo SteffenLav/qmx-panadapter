@@ -14,7 +14,6 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R008 | **RAM and CPU on device**: MEASURED (`2d15d857`): demod 18552 B PSRAM, static ~3.0 KB internal; 4.0-6.1 % of core 1 (921 s), call max p50 13 ms = the 0.5 s acquisition DFT. LEFT: the on/off A/B on bench2 (decoder off at uptime 1002.9 s = 21:40:46, on 21:45:46, to 21:50:46) - compare rx_audio `LATE` and `idle1` per window in capture-bench2.txt, then close. | Minutes | - | - |
 | R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. Burst BUILT + flashed bench2 (`2d15d857`): `{"action":"rtty_tx_test","centre_hz":1500,"seconds":20}`, DiGi, dial 14.080.00, dummy load; PC receiver + fldigi. Not yet keyed. | Small | operator at the bench | - |
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
@@ -23,6 +22,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Commit |
 |---|---|---|
+| R008 | RAM/CPU on bench2. RAM: demod 18552 B PSRAM, ~3.0 KB internal static. CPU: feed timer 4.0-6.1 % of core 1 (921 s); A/B same boot, 5 min each: idle1 39.1 % on / 42.7 % off / 39.0 % on = 3.6 points. Worst call ~13 ms = the 0.5 s acquisition DFT (host: 53 % of cost). rx_audio LATE not tied to the decoder: 14 / 7 / 0-for-200-s then ~14 per window after one 172 ms frame stall at uptime ~1520 s (POTA fetch + diag rotate, decoder untouched) - unexplained, not RTTY. | `2d15d857` |
 | R001 | ITA2 codec + FSK demod (per-tone boxcar, character clock with flywheel) + host harness. CER 0.4 % at -6 dB SNR/2500 Hz, theory 0.3 %. Host only, never run on a device. | `a81bacb3` |
 | R011 | Defaults 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Operator: "yes, those defaults - but really you are the one to judge" (2026-11-12). Not yet wired to a setting: lands with R006. | - |
 | R015 | Band prefilter (centre to 0 Hz, 8-pole Butterworth at shift/2 + 0.6 baud) before the tone filters. Synthetic, wanted at 0 dB: a +20 dB station 250 Hz off 88 % -> 7 % CER, 300 Hz 54 % -> 0 %. No cost at -6/-8 dB (12000 chars). VE3NEA set 44 -> 61 exchange words; DL2AL 3 -> 15. PA4PS still behind GRITTY (3 -> 4) - not explained. | `fac3516e` |

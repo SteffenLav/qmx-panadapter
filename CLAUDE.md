@@ -13,7 +13,7 @@ a session HERE for RTTY work; start one in `C:\dev\qmx-panadapter` for main.
   branch needs in committed files, not only in memory.
 - Nothing on this branch is pushed or released until the operator says so.
 - ⭐ **AT SESSION START, unasked:** read `TODO-RTTY.md`, then do every open item
-  that needs no operator (today: the R008 A/B analysis, a build check in this
+  that needs no operator (today: a build check in this
   folder, removing the detached `.claude/worktrees/frosty-feistel-c073f7`
   worktree of the main checkout). Items that key the radio or need him at the
   bench (R009) - say what is ready and ask; never key without his go.
