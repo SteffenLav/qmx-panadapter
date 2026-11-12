@@ -14,11 +14,12 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2. | Small | R005 + a flash | - |
+| R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2; no CPU instrument exists for it yet. | Small | - | - |
 | R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. | Small | operator at the bench | - |
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
-| R014 | **Squelch opens on 'E'/'T' junk at the audio passband edge** (centre 2600-2700 Hz with a 2500-2700 Hz filter): only one tone has noise, so single-bit codes pass at high conf. Seen in all 5 rxcap WAVs. The firmware tap is I/Q baseband with no such edge, so it may not occur on the device - check there before fixing. **Seen on the device 2026-11-12**: a narrow non-RTTY signal (~50 Hz, 7.04813 MHz) under ONE line - M full, S empty - opened the squelch (sig 0.62) and printed `IXFYUVLH ODKXZV`. One observation. Squelch on noise alone, by contrast: 0 chars in 600 s on an empty offset (bench2, 40 m faded, sig max 0.42 < open 0.48). | Investigation | - | - |
+| R014 | **Squelch opens on 'E'/'T' junk at the audio passband edge** (centre 2600-2700 Hz with a 2500-2700 Hz filter): only one tone has noise, so single-bit codes pass at high conf. Seen in all 5 rxcap WAVs. The firmware tap is I/Q baseband with no such edge, so it may not occur on the device - check there before fixing. **Seen on the device 2026-11-12**: a narrow non-RTTY signal (~50 Hz, 7.04813 MHz) under ONE line - M full, S empty - opened the squelch (sig 0.62) and printed `IXFYUVLH ODKXZV`. One observation. Squelch on noise alone, by contrast: 0 chars in 600 s on an empty offset (bench2, 40 m faded, sig max 0.42 < open 0.48). Candidate fix: hold the squelch shut while one tone is near the floor (`mark_snr_db`/`space_snr_db` exist since `579b63fe`). | Small | - | - |
+| R019 | **RTTY settings do not survive a reboot**: offset, reverse, baud/shift, AFC, squelch return to defaults (no NVS or config-file use in `rtty_rx.c`); R011's defaults were never wired to a setting. Seen 2026-11-12: -1960 Hz came back as +1500 after a flash. | Small | - | - |
 
 ## Done
 
