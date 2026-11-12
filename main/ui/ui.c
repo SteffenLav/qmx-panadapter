@@ -405,6 +405,35 @@ static bool cw_page_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
     return true;
 }
 
+/* RTTY page: the band's DiGi segment - the FIRST BP_DIGI one, because that
+ * is the one update_bandplan_strip() draws and the strip drag maps onto on
+ * this page. A band change has to land on the strip it is shown with. */
+static bool rtty_digi_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
+{
+    uint8_t bp_region; char bp_grid[8];
+    settings_get_bandplan(&bp_region, bp_grid);   /* NOT settings_load_all - see settings.h */
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(hz,
+                bandplan_effective_region((bandplan_region_t)bp_region,
+                                          bp_grid), &segs);
+    for (int i = 0; segs && i < n; i++)
+        if (segs[i].type == BP_DIGI) { *lo = segs[i].lo_hz; *hi = segs[i].hi_hz; return true; }
+    return false;
+}
+
+/* Operator, 2026-11-12: "I want those band changes i make to let the Freq
+ * land in the middle of those allocated rtty ranges". The dial goes to the
+ * middle of the DiGi segment, on a whole kHz, in place of the per-band
+ * recall - the same choice the CW page made for its own segment (band_preset_cb).
+ * A band with no DiGi segment keeps the recall. */
+uint32_t ui_band_change_target_hz(uint32_t center_hz, uint32_t recalled_hz)
+{
+    uint32_t lo, hi;
+    if (ui_mode_get() == UI_MODE_RTTY && rtty_digi_range_hz(center_hz, &lo, &hi))
+        return ((lo + (hi - lo) / 2) / 1000u) * 1000u;
+    return recalled_hz;
+}
+
 static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
 {
     if (!legal_band_edges(center_hz, lo, hi)) return false;
@@ -454,6 +483,7 @@ static void band_preset_cb(lv_event_t *e)
         uint32_t c = cw_segment_center_hz(center_hz);
         if (c) target = c;
     }
+    target = ui_band_change_target_hz(center_hz, target);   /* RTTY: mid DiGi */
     // Changing band with auto-answer running would transmit into an antenna
     // that is almost certainly not tuned for the new band - few operators have
     // an auto-ATU, and the robot arms within a cycle or two. Roy KI0ER: "that's

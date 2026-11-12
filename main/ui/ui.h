@@ -115,6 +115,10 @@ bool ui_page_range_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
 // target through this first, or the CW page can be walked out of its own band
 // segment via a spot tap.
 uint32_t ui_cw_tune_clamp_hz(uint32_t hz);
+/* Where a band change lands on the current page, given the dial it would
+ * otherwise use. RTTY page: the middle of the band's DiGi segment. Every
+ * other page: `recalled_hz` unchanged. Tab5 band popup and web set_band. */
+uint32_t ui_band_change_target_hz(uint32_t center_hz, uint32_t recalled_hz);
 int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS

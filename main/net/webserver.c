@@ -1966,6 +1966,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // band preset recalled while on the CW page must land inside its
             // CW+Digi range exactly like every other tune on this page.
             uint32_t want = ui_cw_tune_clamp_hz(target ? target : center_hz);
+            /* RTTY page: the middle of the band's DiGi segment, exactly as
+             * the Tab5's band popup does - one function, both paths. */
+            want = ui_band_change_target_hz(center_hz, want);
             /* Forced, exactly as the Tab5's own band button does (ui.c
              * band_preset_cb). A band change is a deliberate one-shot, and the
              * plain call is droppable: tune, then change band within 200 ms,
