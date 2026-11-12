@@ -22,5 +22,11 @@ Results 2026-11-12 (R013 acquisition, AFC +/-150, squelch 0.48):
 | SX150ITU | strong | 3 of 3 CQ lines, one with 3 errors | equal |
 | II1SAP | strong, QSB nulls | 3 CQ lines + "SPECIAL STATION ON BOARD THE HISZRIC SUBMARINSANDREA PROVANA ... MORE INFO WWW.QRZ.CO" | equal to GRITTY (before R013: nothing - signal 80 Hz off) |
 | R120RB | weak, deep QSB | UR5XMM 599, UR9XMM TU R120RB QRZ, CQ R120RB R120RB | better than MMTTY, near GRITTY |
-| PA4PS | contest, QRM | PA4PS ~5x, much garbage | worse than GRITTY (~8x) - R015 |
-| DL2AL | contest, clipped | "DL2AL", "DLALT PSE AGAIN", "R3BT" | partial; misses "599 247-1711 TNX/73" that both copy - R015 |
+| PA4PS | contest, QRM | PA4PS ~5x, much garbage | worse than GRITTY (~8x); R015 band filter did not help this one (3 -> 4 exchange words) |
+| DL2AL | contest, clipped | after R015: "PSE AGAIN /TIME??? DE R3BT ... DL2AL DL2AL DL2AL ... 247-1711" | better than MMTTY, near GRITTY (before R015: "DLALT PSE AGAIN" only) |
+
+Score used for R015 (`$TMP/score.sh` in the session; reproduce by counting the
+exchange words below in each decode): SX150ITU {SX150ITU CQ BK}, II1SAP
+{II1SAP CQ SPECIAL STATION BOARD SUBMARIN PROVANA INFO QRZ}, R120RB {R120RB
+UR5XMM 599 QRZ TU}, PA4PS {PA4PS BARTG}, DL2AL {DL2AL 599 247 1711 TNX 73 R3BT
+PSE AG}. Before the band filter 11/18/9/3/3 = 44; after 12/19/11/4/15 = 61.

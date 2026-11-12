@@ -106,6 +106,17 @@ extern "C" {
 #define RTTY_ACQ_SNR        6.0f
 #endif
 #define RTTY_ACQ_MIN_MOVE   10.0f     /* Hz; smaller errors are AFC's job */
+/* Band prefilter (R015): mix the pair's centre to 0 Hz and low-pass it
+ * (Butterworth, RTTY_PF_ORDER poles, cutoff shift/2 + RTTY_PF_K * baud)
+ * before the tone filters, so a strong neighbour outside the pair does not
+ * leak in through the boxcar's -13 dB sidelobes. 0 = off. */
+#ifndef RTTY_PF_ORDER
+#define RTTY_PF_ORDER       8
+#endif
+#ifndef RTTY_PF_K
+#define RTTY_PF_K           0.6f
+#endif
+#define RTTY_PF_MAXSEC      4
 /* Decision history: 8 bits at the longest bit. */
 #define RTTY_HIST (8 * RTTY_MAX_BIT_SAMPLES)
 
@@ -135,6 +146,12 @@ typedef struct {
     /* phasors and their per-sample steps */
     float mc, ms, mstep_c, mstep_s;   /* mark */
     float sc, ss, sstep_c, sstep_s;   /* space */
+    /* band prefilter: centre mixer + biquads (same coefficients on I and Q) */
+    float pc, ps, pstep_c, pstep_s;
+    int   pf_n;                       /* sections in use */
+    float pf_b0[RTTY_PF_MAXSEC], pf_b1[RTTY_PF_MAXSEC], pf_b2[RTTY_PF_MAXSEC];
+    float pf_a1[RTTY_PF_MAXSEC], pf_a2[RTTY_PF_MAXSEC];
+    float pf_z[RTTY_PF_MAXSEC][2][2]; /* [section][I/Q][state] */
     /* boxcar rings and running sums */
     float mr[RTTY_MAX_BIT_SAMPLES], mi[RTTY_MAX_BIT_SAMPLES];
     float sr[RTTY_MAX_BIT_SAMPLES], si[RTTY_MAX_BIT_SAMPLES];

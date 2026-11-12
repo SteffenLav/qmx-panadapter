@@ -28,6 +28,12 @@ static void retune(rtty_demod_t *d)
 {
     float half = d->cfg.shift_hz * 0.5f;
     float c = d->cfg.centre_hz + d->afc_off;
+    if (d->pf_n > 0) {
+        /* The prefilter's mixer moves the centre to 0 Hz; the tones are then
+         * at +/-half whatever the AFC does. */
+        set_step(c, d->cfg.fs_hz, &d->pstep_c, &d->pstep_s);
+        c = 0.0f;
+    }
     float fm  = c + (d->cfg.reverse ? -half : half);
     float fsp = c + (d->cfg.reverse ? half : -half);
     set_step(fm,  d->cfg.fs_hz, &d->mstep_c, &d->mstep_s);
@@ -110,6 +116,26 @@ static void acq_feed(rtty_demod_t *d, float xr, float xi)
     if (++d->acq_n >= d->acq_N) { d->acq_n = 0; acq_block(d); }
 }
 
+/* Butterworth low-pass as RBJ biquads: section k has Q = 1/(2 sin((2k+1)pi/2n)). */
+static void pf_design(rtty_demod_t *d)
+{
+    d->pf_n = RTTY_PF_ORDER / 2;
+    if (d->pf_n > RTTY_PF_MAXSEC) d->pf_n = RTTY_PF_MAXSEC;
+    if (d->pf_n <= 0) { d->pf_n = 0; return; }
+    double fc = d->cfg.shift_hz * 0.5 + RTTY_PF_K * d->cfg.baud;
+    double w0 = 2.0 * M_PI * fc / d->cfg.fs_hz, cw = cos(w0), sw = sin(w0);
+    int n = 2 * d->pf_n;
+    for (int k = 0; k < d->pf_n; k++) {
+        double q = 1.0 / (2.0 * sin((2.0 * k + 1.0) * M_PI / (2.0 * n)));
+        double al = sw / (2.0 * q), a0 = 1.0 + al;
+        d->pf_b0[k] = (float)((1.0 - cw) * 0.5 / a0);
+        d->pf_b1[k] = (float)((1.0 - cw) / a0);
+        d->pf_b2[k] = d->pf_b0[k];
+        d->pf_a1[k] = (float)(-2.0 * cw / a0);
+        d->pf_a2[k] = (float)((1.0 - al) / a0);
+    }
+}
+
 bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
 {
     memset(d, 0, sizeof(*d));
@@ -119,6 +145,8 @@ bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
     d->L = (int)lroundf(d->T);
     if (d->L < 4 || d->L > RTTY_MAX_BIT_SAMPLES) return false;
 
+    pf_design(d);
+    d->pc = 1.0f; d->ps = 0.0f;
     retune(d);
     d->mc = 1.0f; d->ms = 0.0f;
     d->sc = 1.0f; d->ss = 0.0f;
@@ -151,6 +179,10 @@ static void refresh(rtty_demod_t *d)
     d->mc *= g; d->ms *= g;
     g = 1.0f / sqrtf(d->sc * d->sc + d->ss * d->ss);
     d->sc *= g; d->ss *= g;
+    if (d->pf_n > 0) {
+        g = 1.0f / sqrtf(d->pc * d->pc + d->ps * d->ps);
+        d->pc *= g; d->ps *= g;
+    }
 }
 
 /* d at absolute (fractional) time t, linear interpolation. Caller keeps t
@@ -342,6 +374,23 @@ void rtty_demod_feed(rtty_demod_t *d, const float *re, const float *im, int n,
     for (int k = 0; k < n; k++) {
         float xr = re[k], xi = im ? im[k] : 0.0f;
         if (d->cfg.afc_hz > 0.0f) acq_feed(d, xr, xi);
+        if (d->pf_n > 0) {
+            /* centre to 0 Hz, then the low-pass on both legs (TDF-II) */
+            float yr = xr * d->pc + xi * d->ps, yi = xi * d->pc - xr * d->ps;
+            float tt = d->pc * d->pstep_c - d->ps * d->pstep_s;
+            d->ps = d->pc * d->pstep_s + d->ps * d->pstep_c; d->pc = tt;
+            for (int k = 0; k < d->pf_n; k++) {
+                float *zr = d->pf_z[k][0], *zi = d->pf_z[k][1];
+                float or_ = d->pf_b0[k] * yr + zr[0];
+                zr[0] = d->pf_b1[k] * yr - d->pf_a1[k] * or_ + zr[1];
+                zr[1] = d->pf_b2[k] * yr - d->pf_a2[k] * or_;
+                float oi = d->pf_b0[k] * yi + zi[0];
+                zi[0] = d->pf_b1[k] * yi - d->pf_a1[k] * oi + zi[1];
+                zi[1] = d->pf_b2[k] * yi - d->pf_a2[k] * oi;
+                yr = or_; yi = oi;
+            }
+            xr = yr; xi = yi;
+        }
 
         /* x * conj(phasor): mixes the tone at the phasor frequency to DC */
         float a_r = xr * d->mc + xi * d->ms, a_i = xi * d->mc - xr * d->ms;

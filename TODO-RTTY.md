@@ -21,7 +21,6 @@ needed; every flash wedges its QMX and needs his power cycle.
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
 | R012 | **Period bias**: the character clock settles ~0.15 % short at -6 dB. No CER cost measured; cause not found. | Investigation | - | - |
 | R014 | **Squelch opens on 'E'/'T' junk at the audio passband edge** (centre 2600-2700 Hz with a 2500-2700 Hz filter): only one tone has noise, so single-bit codes pass at high conf. Seen in all 5 rxcap WAVs. The firmware tap is I/Q baseband with no such edge, so it may not occur on the device - check there before fixing. | Investigation | R005 | - |
-| R015 | **Contest QRM and clipping.** On VE3NEA's PA4PS (BARTG, several signals) we copy PA4PS ~5x vs GRITTY ~8x; on DL2AL (clipped) we miss "599 247-1711 TNX/73" that MMTTY and GRITTY both get. The per-tone boxcar has -13 dB sidelobes, so a strong neighbour leaks in. Candidate: a band filter around the pair before the tone filters. Measure on these two files first. | Moderate | - | - |
 
 ## Done
 
@@ -29,6 +28,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 |---|---|---|
 | R001 | ITA2 codec + FSK demod (per-tone boxcar, character clock with flywheel) + host harness. CER 0.4 % at -6 dB SNR/2500 Hz, theory 0.3 %. Host only, never run on a device. | `a81bacb3` |
 | R011 | Defaults 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Operator: "yes, those defaults - but really you are the one to judge" (2026-11-12). Not yet wired to a setting: lands with R006. | - |
+| R015 | Band prefilter (centre to 0 Hz, 8-pole Butterworth at shift/2 + 0.6 baud) before the tone filters. Synthetic, wanted at 0 dB: a +20 dB station 250 Hz off 88 % -> 7 % CER, 300 Hz 54 % -> 0 %. No cost at -6/-8 dB (12000 chars). VE3NEA set 44 -> 61 exchange words; DL2AL 3 -> 15. PA4PS still behind GRITTY (3 -> 4) - not explained. | (this commit) |
 | R016 | Pane fonts 18/20/22 -> 24/26 (picker 28), buttons word-only with green = on. Operator: "it actually looks good"; decoded text stays qmx_mono_25, 8 rows (his choice over 30 px / 6 rows). | `f0f760e5` |
 | R006 | RTTY page: own page on the CW grid, 8 text rows, tuning bars, tone markers, tap moves the decoder (dial stays), speed/shift picker, MODE: RTTY in the left drawer (7 doors at 88 px), set_screen "rtty", restored at boot. Operator on the glass: "looks right for now" (fonts: R016). Not yet seen with a real signal. | `20cfea0b` |
 | R004 | Real-signal check: VE3NEA's 5 GRITTY demo WAVs scored against MMTTY/GRITTY (`test/wav_rtty/README.md`): equal on 3, behind on the 2 contest files (R015). | `91a08926` |
