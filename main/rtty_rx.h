@@ -61,8 +61,11 @@ size_t rtty_rx_text_tail(char *buf, size_t n);
  * Returns the number copied (not NUL-terminated). */
 size_t rtty_rx_text_read(uint32_t *cursor, char *buf, size_t n);
 
-/* Forget the text held (the page's Clear). Does not touch the decoder. */
+/* Forget the text held (the page's Clear). Does not touch the decoder.
+ * Bumps rtty_rx_text_clear_gen(), so every surface showing the text can clear
+ * its own copy too - a web Clear empties the Tab5 grid and the other way round. */
 void rtty_rx_text_clear(void);
+uint32_t rtty_rx_text_clear_gen(void);
 
 /* Running count of characters ever written - a reader's cursor starts here. */
 uint32_t rtty_rx_text_count(void);

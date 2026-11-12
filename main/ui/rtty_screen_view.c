@@ -55,6 +55,7 @@ static char     s_lines[TXT_ROWS][TXT_COLS + 1];
 static int      s_col;
 static uint32_t s_cursor;
 static bool     s_text_dirty;
+static uint32_t s_clear_seen;   /* rtty_rx_text_clear_gen() last acted on */
 
 #define BAR_W 230
 
@@ -133,10 +134,7 @@ static void toggle_cb(lv_event_t *e)
 static void clear_cb(lv_event_t *e)
 {
     (void)e;
-    rtty_rx_text_clear();
-    s_cursor = rtty_rx_text_count();
-    text_clear();
-    text_render();
+    rtty_rx_text_clear();   /* the timer sees the new generation and clears the grid */
 }
 
 static lv_obj_t *mk_btn_f(lv_obj_t *parent, int x, int y, int w, int h, const lv_font_t *f,
@@ -269,6 +267,13 @@ static void timer_cb(lv_timer_t *t)
     (void)t;
     if (!s_shown) return;
 
+    /* A Clear from either surface (this pane or the web page). */
+    uint32_t g = rtty_rx_text_clear_gen();
+    if (g != s_clear_seen) {
+        s_clear_seen = g;
+        s_cursor = rtty_rx_text_count();
+        text_clear();
+    }
     char buf[128];
     size_t n;
     while ((n = rtty_rx_text_read(&s_cursor, buf, sizeof buf)) > 0)

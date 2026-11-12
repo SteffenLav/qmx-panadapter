@@ -117,12 +117,17 @@ size_t rtty_rx_text_read(uint32_t *cursor, char *buf, size_t n)
     return len;
 }
 
+static volatile uint32_t s_clear_gen;
+
 void rtty_rx_text_clear(void)
 {
     portENTER_CRITICAL(&s_mux);
     s_text_floor = s_text_w;
     portEXIT_CRITICAL(&s_mux);
+    s_clear_gen++;
 }
+
+uint32_t rtty_rx_text_clear_gen(void) { return s_clear_gen; }
 
 uint32_t rtty_rx_text_count(void) { return s_text_w; }
 

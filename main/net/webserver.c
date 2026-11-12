@@ -1546,6 +1546,9 @@ static esp_err_t status_handler(httpd_req_t *req)
                         sp[i].mode == SPOT_MODE_CW   ? "cw"   :
                         sp[i].mode == SPOT_MODE_SSB  ? "ssb"  :
                         sp[i].mode == SPOT_MODE_DIGI ? "digi" : "");
+                    /* R007: the feed said RTTY. "m" stays "digi" so every
+                     * existing filter is unchanged; the RTTY page keys on this. */
+                    if (sp[i].rtty) cJSON_AddNumberToObject(o, "ry", 1);
                     // The browser only asks "is this RBN?" (anything else gets the
                     // activation colour), so naming SOTA here needs no browser
                     // change - but calling a summit "pota" in the API would be a
@@ -3573,6 +3576,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
         if (touched) rtty_rx_apply(&c);
+        /* "clear":true - the web page's Clear. Empties the shared text ring;
+         * the Tab5 grid follows rtty_rx_text_clear_gen(). */
+        if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) rtty_rx_text_clear();
         cJSON_Delete(root);
         rtty_rx_status_t st;
         rtty_rx_status(&st);
