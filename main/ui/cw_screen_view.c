@@ -68,10 +68,19 @@ static const char *TAG = "cw_screen";
  * what clipped the drawer captions on 2026-11-02 - so if the font ever changes,
  * this changes with it. */
 #define TICKER_H      124
-/* Columns the ticker fits: (MID_W - PANE_W) = 960 px at qmx_mono_25's 15 px
- * advance, minus one so the rightmost glyph is not flush against the border.
+/* Columns the ticker fits. Text starts at PANE_W + 1 px border + 8 px pad and
+ * must END LEFT OF THE OPERATOR WATERMARK (UI_WATERMARK_X, ui.h) - operator,
+ * 2026-11-12: at 63 columns the text ran to x 1274, through "Stef OZ1LAV".
+ * Derived, so it cannot drift from the watermark again: 60 at 15 px.
  * ⛔ This is the grid's WRAP MODULUS while this page is up, not a draw width. */
-#define CW_TICKER_COLS 63
+#define CW_TICKER_TEXT_X (PANE_W + 1 + 8)
+/* The ticker BOX ends here too, not only its text (operator, 2026-11-12: "the
+ * greyed box is covering it - i want it clear of that box"). Right of it the
+ * waterfall shows; cw_screen_view_carpet_visible() keeps that strip live. */
+#define CW_TICKER_X2     (UI_WATERMARK_X - UI_WATERMARK_GAP)
+#define CW_TICKER_COLS ((UI_WATERMARK_X - UI_WATERMARK_GAP - CW_TICKER_TEXT_X) / 15)
+_Static_assert(CW_TICKER_COLS >= 8 && CW_TICKER_COLS <= CW_LINE_COLS,
+               "CW_TICKER_COLS out of cw_decode_set_cols' range");
 // The band-plan strip (BANDPLAN_H in ui.c) sits directly above the bottom
 // bar and MUST stay visible and touchable on the CW page - it is how the
 // operator sees they are inside the CW segment and drags along it. The pane
@@ -2178,13 +2187,21 @@ static lv_obj_t *make_pane_btn(lv_obj_t *parent, int x, int y, int w, int h,
  *     only the visible carpet invalidated 16 ms (26 fps, core 0 25-39 % idle)
  * The panadapter page, with no overlay, draws 22 ms. The ticker is OPAQUE for
  * the same reason: at 90 % the carpet under it would show through, frozen. */
-bool cw_screen_view_carpet_visible(lv_area_t *a)
+bool cw_screen_view_carpet_visible(lv_area_t a[2])
 {
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return false;
-    a->x1 = PANE_W;
-    a->x2 = MID_W - 1;
-    a->y1 = MID_Y;
-    a->y2 = MID_Y + MID_H - TICKER_H - BANDPLAN_H - 1;
+    /* [0]: everything above the ticker. */
+    a[0].x1 = PANE_W;
+    a[0].x2 = MID_W - 1;
+    a[0].y1 = MID_Y;
+    a[0].y2 = MID_Y + MID_H - TICKER_H - BANDPLAN_H - 1;
+    /* [1]: the strip RIGHT of the ticker, under the operator watermark. The
+     * ticker stops short of it (CW_TICKER_X2), so the carpet shows there and
+     * must move with the rest, or it freezes under "Stef OZ1LAV". */
+    a[1].x1 = CW_TICKER_X2;
+    a[1].x2 = MID_W - 1;
+    a[1].y1 = a[0].y2 + 1;
+    a[1].y2 = MID_Y + MID_H - BANDPLAN_H - 1;
     return true;
 }
 
@@ -2421,7 +2438,7 @@ void cw_screen_view_init(lv_obj_t *parent)
     // Decode ticker across the bottom, to the right of the pane, ending
     // above the band-plan strip so the strip stays visible and draggable.
     s_ticker = lv_obj_create(s_container);
-    lv_obj_set_size(s_ticker, MID_W - PANE_W, TICKER_H);
+    lv_obj_set_size(s_ticker, CW_TICKER_X2 - PANE_W, TICKER_H);
     lv_obj_set_pos(s_ticker, PANE_W, MID_H - TICKER_H - BANDPLAN_H);
     lv_obj_set_style_bg_color(s_ticker, lv_color_hex(0x101418), 0);
     /* COVER, not 90 %: the carpet under the ticker is no longer repainted on
@@ -2447,7 +2464,9 @@ void cw_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(s_ticker);
             *layer[i].obj = l;
             lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-            lv_obj_set_width(l, MID_W - PANE_W - 16);
+            /* Clip at the grid, not the box: the box runs under the
+             * watermark, the text must not. */
+            lv_obj_set_width(l, CW_TICKER_COLS * 15);
             lv_obj_set_style_text_font(l, &qmx_mono_25, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(layer[i].colour), 0);
             lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);

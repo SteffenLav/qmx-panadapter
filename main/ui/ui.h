@@ -6,6 +6,17 @@
 #include <stdint.h>
 #include "util/pan_view.h"
 
+/* The operator watermark ("Stef OZ1LAV", g_watermark_img in watermark_img.c):
+ * a 25 x 178 px vertical image, 4 px from the right edge, bottom 75 px above
+ * the screen bottom - so x 1251..1275, y 467..644. Text that scrolls on this
+ * screen must end UI_WATERMARK_GAP px left of UI_WATERMARK_X (operator,
+ * 2026-11-12: both CW decode surfaces ran through it). The CW grids are
+ * static-asserted against these; if the image changes, change them here. */
+#define UI_WATERMARK_W       25
+#define UI_WATERMARK_MARGIN  4
+#define UI_WATERMARK_X       (1280 - UI_WATERMARK_MARGIN - UI_WATERMARK_W)
+#define UI_WATERMARK_GAP     8
+
 void ui_init(lv_display_t *disp);
 
 // Create the LVGL pointer (mouse) input device + on-screen cursor. Call once,

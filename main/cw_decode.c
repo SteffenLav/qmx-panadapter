@@ -299,8 +299,8 @@ static int              s_rows = CW_LINE_ROWS;
 /* ⛔ AND THE COLUMN COUNT IS A WRAP MODULUS TOO, for exactly the reason given
  * above about the rows. It became runtime on 2026-11-02 because the two screens
  * that draw this grid are not the same width: the panadapter has the whole
- * 1280 px and fits 72 columns of qmx_mono_25 (15 px advance), while the CW
- * page's ticker sits to the right of a 320 px pane and fits 64. Before this
+ * 1280 px and fits CW_LINE_COLS (70) columns of qmx_mono_25 (15 px advance), while the CW
+ * page's ticker sits to the right of a 320 px pane and fits 60. Before this
  * they could not share the grid at all - the CW page kept its own 512-byte
  * ring and its own squelch instance, which is two models of one stream and the
  * fault that file's own comment warns about one layer up. */
