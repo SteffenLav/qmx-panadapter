@@ -570,6 +570,7 @@ device.
   0.2 Hz/s drift 0.9 %. +/-40 Hz pulls in slowly (12-16 % over 1500 chars;
   3 % at -4 dB). On noise the offset wanders 11 Hz rms (peak 27 Hz in 60 s,
   20 runs); without the conf gate it was 37 Hz rms.
+- **Squelch (R003) added:** smoothed conf with hysteresis + fast close + hold buffer; 0 noise characters in 30 min, ~2 junk characters after a transmission, no cost at -6 dB. AFC gated on it (0.42): wander 2.5 Hz rms, pull-in +/-30 Hz. Measurements in `rtty_demod.h` items 5-6. The line below is the state BEFORE it.
 - ⚠ **Squelch:** noise alone prints 275 chars/min unsquelched, 79 at the
   confidence threshold 0.4. Needs a real signal-presence measure.
 - ⚠ The generator uses our own ITA2 encoder. A real recording, compared with
@@ -587,7 +588,7 @@ The work items are tracked as R001-R012 in `TODO-RTTY.md`.
 
 | Phase | Work | Blocked on |
 |---|---|---|
-| R1 (rest) | signal-presence squelch (also freezes AFC); decode a real recording | a recording |
+| R1 (rest) | decode a real recording (R004) | a recording |
 | R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench2 | a flash |
 | R4 | `TA<freq>;` at 22 ms, dummy load, fldigi as arbiter | operator at the bench |
 | R5 | TX: encoder exists; sequencer, macros, keyboard; band guard + inventory | R4 result |

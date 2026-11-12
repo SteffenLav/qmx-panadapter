@@ -18,6 +18,10 @@ static void set_step(float f_hz, float fs, float *c, float *s)
     *s = (float)sin(w);
 }
 
+#ifndef AFC_PRESENT   /* harness override for measuring the gate */
+#define AFC_PRESENT(d) ((d)->sig_lvl >= RTTY_AFC_MIN_LVL)
+#endif
+
 /* Mark and space steps from centre + AFC offset. */
 static void retune(rtty_demod_t *d)
 {
@@ -34,7 +38,7 @@ static void afc_update(rtty_demod_t *d)
 {
     float r = d->afc_r, i = d->afc_i;
     d->afc_r = d->afc_i = 0.0f;
-    if (d->cfg.afc_hz <= 0.0f || !d->g_lock || !d->afc_ok || (r == 0.0f && i == 0.0f)) return;
+    if (d->cfg.afc_hz <= 0.0f || !d->g_lock || !d->afc_ok || !AFC_PRESENT(d) || (r == 0.0f && i == 0.0f)) return;
     float e = atan2f(i, r) * d->cfg.fs_hz / (float)(2.0 * M_PI);
     float o = d->afc_off + RTTY_AFC_MU * e;
     if (o >  d->cfg.afc_hz) o =  d->cfg.afc_hz;
@@ -112,7 +116,39 @@ static void emit(rtty_demod_t *d, double t0, double Tb, float score,
         if (hist_at(d, t0 + (double)b * Tb) > 0.0f) code |= (uint8_t)(1u << (b - 1));
     rtty_char_t ch = { code, score / 7.0f, t0 + (double)d->L - d->T };
     d->afc_ok = ch.conf >= RTTY_AFC_MIN_CONF;
-    if (d->cfg.squelch > 0.0f && ch.conf < d->cfg.squelch) { d->n_squelched++; return; }
+
+    /* Signal presence: conf smoothed over ~5 characters, with hysteresis.
+     * Always computed - AFC uses it even when the squelch is off. */
+    d->sig_lvl += RTTY_SQ_ALPHA * (ch.conf - d->sig_lvl);
+    if (!d->present && d->sig_lvl >= RTTY_SQ_OPEN) d->present = true;
+    else if (d->present && d->sig_lvl < RTTY_SQ_OPEN - RTTY_SQ_HYST) d->present = false;
+
+    if (d->cfg.squelch <= 0.0f) { d->n_chars++; if (cb) cb(&ch, user); return; }
+
+    /* Fast close: RTTY_SQ_LOW_RUN characters in a row below RTTY_SQ_LOW.
+     * The smoothed level alone left 6-11 noise characters after every
+     * transmission (once 124, measured 2026-11-12). Per character, noise is
+     * below 0.5 96 % of the time, a -6 dB signal 1 %. */
+    d->low_run = ch.conf < RTTY_SQ_LOW ? d->low_run + 1 : 0;
+    if (!d->sq_open && d->sig_lvl >= d->cfg.squelch && d->low_run == 0) d->sq_open = true;
+    else if (d->sq_open && (d->sig_lvl < d->cfg.squelch - RTTY_SQ_HYST ||
+                            d->low_run >= RTTY_SQ_LOW_RUN)) {
+        d->sq_open = false;
+        d->sig_lvl = d->cfg.squelch - RTTY_SQ_HYST;   /* re-open needs fresh evidence */
+    }
+    if (!d->sq_open) {
+        /* Hold the last few: they are the characters the average was still
+         * rising through, and they are printed if the gate opens next. */
+        if (d->n_pend == RTTY_SQ_PENDING) {
+            memmove(&d->pend[0], &d->pend[1], (RTTY_SQ_PENDING - 1) * sizeof(d->pend[0]));
+            d->n_pend--;
+            d->n_squelched++;
+        }
+        d->pend[d->n_pend++] = ch;
+        return;
+    }
+    for (int i = 0; i < d->n_pend; i++) { d->n_chars++; if (cb) cb(&d->pend[i], user); }
+    d->n_pend = 0;
     d->n_chars++;
     if (cb) cb(&ch, user);
 }

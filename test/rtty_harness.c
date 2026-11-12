@@ -397,23 +397,25 @@ static void suite(void)
 
     printf("\nnoise only, 60 s, fs=6000 - characters printed:\n");
     for (int q = 0; q < 4; q++) {
-        static const float sq[] = { 0.0f, 0.2f, 0.3f, 0.4f };
+        static const float sq[] = { 0.0f, 0.4f, 0.44f, 0.48f };
         sig_t s = {0};
         for (int i = 0; i < 6000 * 60; i++) sig_push(&s, (float)grand(), (float)grand());
         rtty_demod_cfg_t cfg = { 6000, 45.45f, 170.0f, 0, false, sq[q], g_afc };
         rtty_demod_init(&g_dem, &cfg);
         sink_t k = {0}; rtty_baudot_init(&k.b, false);
         rtty_demod_feed(&g_dem, s.re, s.im, (int)s.n, on_char, &k);
-        printf("  squelch %.1f: %u chars (%u framing, %u squelched)\n", sq[q],
+        printf("  squelch %.2f: %u chars (%u framing, %u squelched)\n", sq[q],
                (unsigned)g_dem.n_chars, (unsigned)g_dem.n_framing, (unsigned)g_dem.n_squelched);
+        if (q == 3) CHECK(g_dem.n_chars <= 5, "squelch 0.48 prints %u noise chars in 60 s", (unsigned)g_dem.n_chars);
         free(s.re); free(s.im); free(k.buf);
     }
     printf("\nsquelch cost on signal at SNR -6 dB:\n");
     for (int q = 1; q < 4; q++) {
-        static const float sq[] = { 0.0f, 0.2f, 0.3f, 0.4f };
+        static const float sq[] = { 0.0f, 0.4f, 0.44f, 0.48f };
         gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, -6 };
         double cer = run(&g, text, false, 0, sq[q], NULL);
-        printf("  squelch %.1f: CER %.3f\n", sq[q], cer);
+        printf("  squelch %.2f: CER %.3f\n", sq[q], cer);
+        if (q == 3) CHECK(cer < 0.02, "squelch 0.48 costs CER %.3f on signal", cer);
     }
     free(text);
 }

@@ -34,15 +34,24 @@
  *      rotates at the tuning error. Sum z[n]*conj(z[n-1]) of the dominant
  *      tone (|d| > RTTY_AFC_GATE) over one bit; its angle is the error.
  *      Move both tones by RTTY_AFC_MU of it per bit, ONLY while the
- *      character clock is locked AND the last character had conf >=
- *      RTTY_AFC_MIN_CONF.
+ *      character clock is locked, the last character had conf >=
+ *      RTTY_AFC_MIN_CONF AND smoothed conf >= RTTY_AFC_MIN_LVL.
  *      Measured 2026-11-12 (harness, -6 dB): +/-30 Hz CER <= 2.5 %, 0 Hz no
  *      cost, 0.2 Hz/s drift 0.9 %. +/-40 Hz pulls in slowly: 12-16 % over
  *      1500 chars at -6 dB, 3 % at -4 dB.
  *   ⛔ Lock alone is NOT a signal gate: noise locks the clock ~200 slots/min
  *      and walked the offset 37 Hz rms (peak 60) in 60 s. The conf gate 0.5
  *      cuts that to 11 Hz rms (peak 27); 0.6 gives 3.5 Hz but loses +/-40 Hz
- *      pull-in. A real signal-presence squelch should replace this gate.
+ *      pull-in. Adding the smoothed-conf gate (squelch, below) at 0.42:
+ *      2.5 Hz rms (peak 6) on noise; +/-30 Hz CER <= 4.5 %; +/-40 Hz lost
+ *      at -6 dB. At 0.48 (= squelch open) noise wander was 0 but +30 Hz cost
+ *      6.9 %; at 0.40, 6 Hz rms. Pull-in beyond +/-30 Hz needs a coarse
+ *      acquisition, not a looser gate.
+ *   6. Squelch: per-character conf on noise is 0.2-0.5, so a per-character
+ *      threshold cannot separate it (0.4 still printed 79 chars/min). Conf
+ *      smoothed over ~5 characters can: noise p95 0.40, signal p5 0.62 at
+ *      -6 dB and 0.48 at -10 dB. Open 0.48 / close 0.44: 0 noise chars in
+ *      30 min, 5-char hold buffer recovers the ramp-up.
  *
  * Not in this version: ATC for selective fading, bit-clock tracking inside a
  * character. Add them only if the harness or a recording shows the need.
@@ -71,6 +80,19 @@ extern "C" {
 #ifndef RTTY_AFC_MIN_CONF
 #define RTTY_AFC_MIN_CONF   0.5f
 #endif
+/* Signal presence: per-character conf smoothed by RTTY_SQ_ALPHA; present at
+ * RTTY_SQ_OPEN, gone below RTTY_SQ_OPEN - RTTY_SQ_HYST. cfg.squelch uses the
+ * same smoothing and hysteresis with its own open threshold. Up to
+ * RTTY_SQ_PENDING characters are held while closed and printed on opening. */
+#define RTTY_SQ_ALPHA       0.2f
+#define RTTY_SQ_OPEN        0.48f
+#define RTTY_SQ_HYST        0.04f
+#define RTTY_SQ_PENDING     5
+#define RTTY_SQ_LOW         0.5f
+#define RTTY_SQ_LOW_RUN     3
+/* AFC steers only while smoothed conf >= this. Lower than RTTY_SQ_OPEN on
+ * purpose: a signal 30-40 Hz off reads lower conf until AFC has pulled it in. */
+#define RTTY_AFC_MIN_LVL    0.42f
 /* Decision history: 8 bits at the longest bit. */
 #define RTTY_HIST (8 * RTTY_MAX_BIT_SAMPLES)
 
@@ -80,7 +102,8 @@ typedef struct {
     float shift_hz;   /* 170 */
     float centre_hz;  /* midpoint of mark and space in the baseband */
     bool  reverse;    /* swap mark and space */
-    float squelch;    /* 0 = off; else drop characters with conf below this */
+    float squelch;    /* 0 = off; else print only while smoothed conf has
+                         reached this (RTTY_SQ_OPEN is the measured choice) */
     float afc_hz;     /* 0 = off; else track the signal up to +/- this far */
 } rtty_demod_cfg_t;
 
@@ -128,6 +151,13 @@ typedef struct {
     float afc_r, afc_i;
     float afc_off;                    /* Hz added to centre_hz; read for display */
     bool  afc_ok;                     /* last character confident enough to steer */
+    /* signal presence + squelch */
+    float sig_lvl;                    /* smoothed conf; read for display */
+    bool  present;                    /* RTTY_SQ_OPEN gate, drives AFC */
+    bool  sq_open;                    /* cfg.squelch gate, drives output */
+    int   low_run;                    /* characters in a row below RTTY_SQ_LOW */
+    int   n_pend;
+    rtty_char_t pend[RTTY_SQ_PENDING];
     /* counters */
     uint32_t n_chars, n_framing, n_false_start, n_squelched, n_grid, n_unlock;
 } rtty_demod_t;
