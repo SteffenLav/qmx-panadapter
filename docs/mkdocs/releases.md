@@ -4,28 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.26.1** - 2026-11-11
+**v1.26.2** - 2026-11-12
 
-**WSPR decodes every cycle again: from v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after it opened and then nothing. The WSPR search is a third faster. The web spectrum follows your dB range, TX power is a slider in the Radio menu, and the web top and bottom bars are cleaned up.**
+**Each band keeps its own dB range. Web noise reduction keeps the voice at its level. The bottom-bar clock no longer freezes, the whole S-meter opens the audio panel, and CW text stays clear of the watermark.**
+
+**Tab5 and web**
+
+- **Each band keeps its own dB range** *(Samuel W7STF)*. Min/Max was one setting for all bands. When you leave a band, the range on screen is stored for it, and you get it back when you return - on the Tab5 and in the browser. A band you have not visited yet starts with the range you arrive with.
+- **Web noise reduction keeps the voice at its level** *(Samuel W7STF)*. On real SSB, the voice itself lost about 1 dB with Spectral and 1.5 / 2.7 / 3.4 dB with the speech model at Low / Med / High. That gain is now added back after NR, so only the background goes down. CW is not changed. See [Web DSP](guide/web-dsp.md).
 
 **Fixes**
 
-- ⛔ **WSPR decodes every cycle again** *(Samuel W7STF)*. From v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after you opened it, then logged `NO MEMORY for the candidate search` for every cycle after that, so it looked like a bad antenna or a dead band. The receiver now takes all the memory it needs once, when you open the page, and allocates nothing during a cycle. If the memory is not there, the page says so once, with the numbers. On the bench: 22 cycles and repeated page re-entries with no failure, against 4 failures in 4 cycles on v1.26.0.
-- **The WSPR search is a third faster: 8.3 s instead of 12.8 s.** While the WSPR page was showing, the Tab5 kept drawing the hidden panadapter behind it and took about a third of the processor the decoder runs on. That time now goes to decoding, two searches per cycle.
-- **A memory leak on every visit to the WSPR page is fixed** (16 KB a visit). The same fault, smaller, is fixed in the WiFi scan, WiFi on/off, the Reader page, the QMX terminal and the Bluetooth start. The firmware build now refuses this fault.
-- **The web spectrum follows the dB range** *(Samuel W7STF)*. The browser drew the spectrum on its own fixed scale and ignored the floor and ceiling set on the Tab5. It now uses them (with **F** off, as on the Tab5).
-- **The web WSPR page shows only the controls that work there.** Mode, BW, Zoom, Tune and RIT did nothing on the WSPR page, or were refused, and are no longer shown. **Band** stays and lists the WSPR bands: a pick does what the WSPR page's own band button does.
-- **The FT8 boot self-test says SKIPPED, not FAIL, when it cannot get memory** - for example when the Tab5 starts straight into the WSPR page. It used to report that as a decoding fault.
-
-**Web page**
-
-- **TX power moved from the top bar to the Radio menu**, as a slider with one stop per level your Calibrate Power sweep measured - 0.1 W steps where the radio has them. The top bar no longer scrolls sideways.
-- The top bar's frequency and S-meter, and the bottom bar's clock, are smaller. The bottom bar shows the WiFi network name; the signal strength is in its tooltip. **Miscellaneous** is now **Misc**.
-- The bottom-bar menus are never taller than the window; on a short window a menu scrolls instead of losing its top.
-
-**Documentation**
-
-- The [Web DSP](guide/web-dsp.md) chapter link on tab5.lav.dk works again, and the site now publishes itself on every release.
+- **The bottom-bar UTC clock no longer stops for up to 11 seconds and then jumps.** It was worst on the CW page.
+- **A tap anywhere on the S-meter opens the audio panel.** Before, only the space to the right of the bar did.
+- **The CW page redraws less.** The CW pane and the decode box are no longer redrawn on every waterfall step. The decode box is now solid instead of 90 % see-through.
+- **CW decode text, and the CW page's decode box, end before the watermark** at the right edge of the screen.
+- A small memory leak on some web commands is fixed.
 
 **Known, not fixed**
 
@@ -33,6 +27,15 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
 
 ## Previous Releases
+
+### v1.26.1 - 2026-11-11
+
+**WSPR decodes every cycle again, and the WSPR search is a third faster.**
+
+- WSPR decoded only the first cycle after the page opened (v1.24.2 to v1.26.0); fixed.
+- WSPR search 8.3 s instead of 12.8 s; a 16 KB memory leak per WSPR page visit fixed.
+- The web spectrum follows the dB range; TX power is a slider in the Radio menu.
+- The web WSPR page shows only the controls that work there; web top and bottom bars cleaned up.
 
 ### v1.26.0 - 2026-11-10
 
@@ -1296,7 +1299,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

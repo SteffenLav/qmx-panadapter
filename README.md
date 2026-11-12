@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.26.1.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.26.1 makes WSPR decode every cycle again** (from v1.24.2 it decoded only the first cycle after the page opened), makes the WSPR search a third faster, and has the web spectrum follow your dB range. **v1.26.0 gave the browser noise reduction and an auto-notch**: a speech model for SSB and AM voice, a spectral noise reduction that also works on CW, and a notch that finds a carrier by itself. They run in the browser and cost the Tab5 nothing - see [Web DSP](#web-dsp). **Each band now remembers its frequency and its mode across a restart.** The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser, and a band guard on every CW send - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.25.0 put the **MODE: CW page** on the web; v1.24.0 added it on the Tab5 (beta) with an internet **Web Radio** player.
+> **Release — v1.26.2.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.26.1 makes WSPR decode every cycle again** (from v1.24.2 it decoded only the first cycle after the page opened), makes the WSPR search a third faster, and has the web spectrum follow your dB range. **v1.26.0 gave the browser noise reduction and an auto-notch**: a speech model for SSB and AM voice, a spectral noise reduction that also works on CW, and a notch that finds a carrier by itself. They run in the browser and cost the Tab5 nothing - see [Web DSP](#web-dsp). **Each band now remembers its frequency and its mode across a restart.** The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser, and a band guard on every CW send - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.25.0 put the **MODE: CW page** on the web; v1.24.0 added it on the Tab5 (beta) with an internet **Web Radio** player.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.26.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.26.2.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -1263,7 +1263,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.26.1 is here.** Next on the bench:
+**v1.26.2 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.

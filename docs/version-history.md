@@ -4585,6 +4585,28 @@ Audio graduating out of beta does not include the 3.5 mm line-in path, which is 
 - One capture showed the first CW message after a QMX power cycle held by the radio for 33 seconds and then sent ahead of the next one. It has not been reproduced and the cause is not known.
 - The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
 
+### Shipped in v1.26.2 — 2026-11-12
+
+**Each band keeps its own dB range. Web noise reduction keeps the voice at its level. The bottom-bar clock no longer freezes, the whole S-meter opens the audio panel, and CW text stays clear of the watermark.**
+
+**Tab5 and web**
+
+- **Each band keeps its own dB range** *(Samuel W7STF)*. Min/Max was one setting for all bands. When you leave a band, the range on screen is stored for it, and you get it back when you return - on the Tab5 and in the browser. A band you have not visited yet starts with the range you arrive with. Stored in its own NVS record, so band memory is not reset by this upgrade.
+- **Web noise reduction keeps the voice at its level** *(Samuel W7STF)*. Measured on three real SSB recordings as the loss of the speech alone (speech power minus pause power): about 1 dB with Spectral, and 1.5 / 2.7 / 3.4 dB with the speech model at Low / Med / High. That gain is now added back after NR, so only the background goes down. The noise that NR removes is not made up. CW is not changed: the note lost only 0.3 dB.
+
+**Fixes**
+
+- **The bottom-bar UTC clock no longer stops for up to 11 seconds and then jumps.** The second was dropped whenever the display was busy for more than 20 ms, which happened most on the CW page. The clock is now drawn by the display itself. The same fault could leave the I/Q-mode warning hidden for a whole session; that is fixed too.
+- **A tap anywhere on the S-meter opens the audio panel.** The bar and its tick marks took the tap, so only the space to the right of the bar worked.
+- **The CW page redraws less.** The CW pane and the decode box are no longer redrawn on every waterfall step; only the waterfall that shows is. The decode box is now solid instead of 90 % see-through.
+- **CW decode text, and the CW page's decode box, end before the watermark** at the right edge of the screen. The panadapter's CW line is 70 characters (was 72) and the CW page's is 60 (was 63). The build checks both against the watermark's position.
+- A memory leak on eight web commands that returned early is fixed (about 100-200 bytes a call).
+
+**Known, not fixed**
+
+- One capture showed the first CW message after a QMX power cycle held by the radio for 33 seconds and then sent ahead of the next one. It has not been reproduced and the cause is not known.
+- The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
+
 ### Shipped in v1.26.1 — 2026-11-11
 
 **WSPR decodes every cycle again: from v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after it opened and then nothing. The WSPR search is a third faster. The web spectrum follows your dB range, TX power is a slider in the Radio menu, and the web top and bottom bars are cleaned up.**
