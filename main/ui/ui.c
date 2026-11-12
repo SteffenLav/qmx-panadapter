@@ -21727,9 +21727,18 @@ static lv_obj_t *left_drawer_add_btn(lv_obj_t *parent, int y, const char *txt,
  * measuring pass and the building pass cannot disagree about what is on the
  * drawer - a width measured over a different set of strings than the one
  * drawn is a bug that looks like a font problem. */
-static const char *LD_LABELS[] = {
-    "PANADAPTER", "MODE: CW", "MODE: FT8", "MODE: FT4", "MODE: JS8", "MODE: WSPR",
-    "MODE: RTTY",   /* R006, last so the CW gate keeps index 1 */
+/* Door order is the operator's: MODE: RTTY directly under MODE: CW
+ * (2026-11-12). Named indices, so the CW gate in left_drawer_layout() and the
+ * build below cannot drift apart when a door moves. */
+enum { LD_I_PAN, LD_I_CW, LD_I_RTTY, LD_I_FT8, LD_I_FT4, LD_I_JS8, LD_I_WSPR, LD_N };
+static const char *LD_LABELS[LD_N] = {
+    [LD_I_PAN]  = "PANADAPTER",
+    [LD_I_CW]   = "MODE: CW",
+    [LD_I_RTTY] = "MODE: RTTY",
+    [LD_I_FT8]  = "MODE: FT8",
+    [LD_I_FT4]  = "MODE: FT4",
+    [LD_I_JS8]  = "MODE: JS8",
+    [LD_I_WSPR] = "MODE: WSPR",
 };
 
 /* The buttons in LD_LABELS order, so the layout pass below can reach them.
@@ -21755,9 +21764,9 @@ static void left_drawer_layout(void)
     bool show[sizeof(LD_LABELS) / sizeof(LD_LABELS[0])];
     int  n_show = 0;
     for (int i = 0; i < n_all; i++) {
-        /* Index 1 is MODE: CW - gated, default off. Everything else is a
+        /* LD_I_CW is MODE: CW - gated (default ON since v1.24.0). Everything else is a
          * finished page and always has a door. */
-        show[i] = (i == 1) ? settings_get_cw_page_en() : true;
+        show[i] = (i == LD_I_CW) ? settings_get_cw_page_en() : true;
         if (show[i]) n_show++;
     }
 
@@ -21844,7 +21853,7 @@ static void left_drawer_build(void)
     /* y is settled by left_drawer_layout() at the end, which knows which
      * buttons are shown. Everything is created at 0 and then placed. */
     int y = 0;
-    s_ld_btn[0] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[0], 0xFFFFFF,
+    s_ld_btn[LD_I_PAN] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_PAN], 0xFFFFFF,
                         LD_DEST(UI_MODE_PANADAPTER, 0xFF));
     /* CW takes no sub-mode: 0xFF is "leave the dial alone", the same value
      * PANADAPTER and WSPR pass. The page itself picks up the band-plan CW
@@ -21854,19 +21863,22 @@ static void left_drawer_build(void)
      * 2.9:1 as a label on this button and was the dimmest of the six. The
      * fill is unchanged - see the note on the constant for why brightening
      * the shared one only moves the problem onto the band-plan strip. */
-    s_ld_btn[1] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[1], UI_COLOR_MODE_CW_TEXT,
+    s_ld_btn[LD_I_CW] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_CW], UI_COLOR_MODE_CW_TEXT,
                         LD_DEST(UI_MODE_CW, 0xFF));
+    /* RTTY: the page title's own colour (rtty_screen_view.c), as for CW. */
+    s_ld_btn[LD_I_RTTY] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_RTTY], UI_COLOR_MODE_RTTY_TEXT,
+                        LD_DEST(UI_MODE_RTTY, 0xFF));
     /* UI_COLOR_ACCENT_GOLD, not the 0xFFDD00 that was written here: the FT8
      * page's title is the theme constant (0xFFD700) and this button is meant
      * to BE that title seen from outside. Six units of green apart is nothing
      * on the glass, but it is a hand-copied colour in a block whose own
      * comment says the colours are read out of the code - which is how the
      * other three would have drifted too. */
-    s_ld_btn[2] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[2], UI_COLOR_ACCENT_GOLD,
+    s_ld_btn[LD_I_FT8] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_FT8], UI_COLOR_ACCENT_GOLD,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT8));
-    s_ld_btn[3] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[3], FT4_ACCENT_HEX,
+    s_ld_btn[LD_I_FT4] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_FT4], FT4_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_FT4));
-    s_ld_btn[4] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[4], JS8_ACCENT_HEX,
+    s_ld_btn[LD_I_JS8] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_JS8], JS8_ACCENT_HEX,
                         LD_DEST(UI_MODE_FT8, FT8_OP_MODE_JS8));
     /* ⛔ NO wspr_feature_enabled() GATE HERE, and the old cycle's gate was not
      * a reason to copy one. I wrote that WSPR was gated "because the page is
@@ -21875,10 +21887,8 @@ static void left_drawer_build(void)
      * finished page from the operator who fixed it. WSPR is a peer mode and
      * gets a door like the rest. */
     /* _TEXT for the same reason CW uses it - see the constants. */
-    s_ld_btn[5] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[5], UI_COLOR_MODE_WSPR_TEXT,
+    s_ld_btn[LD_I_WSPR] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[LD_I_WSPR], UI_COLOR_MODE_WSPR_TEXT,
                         LD_DEST(UI_MODE_WSPR, 0xFF));
-    s_ld_btn[6] = left_drawer_add_btn(s_left_drawer, y, LD_LABELS[6], UI_COLOR_MODE_RTTY_TEXT,
-                        LD_DEST(UI_MODE_RTTY, 0xFF));
     left_drawer_layout();
 }
 

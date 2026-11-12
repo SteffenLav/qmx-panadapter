@@ -453,7 +453,12 @@ void rtty_screen_view_show(void)
     s_cursor = rtty_rx_text_count();   /* only what arrives from now on */
     refresh_buttons();
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_container);
+    /* ⛔ NOT foregrounded - the CW page's rule (cw_screen_view_show). Raising
+     * the container put it over the left-edge strip, so neither the swipe nor
+     * the grip tap reached left_drawer_open(): bench2 booted into RTTY and
+     * could not leave the page (operator, 2026-11-12, "stuck there"). The
+     * container is built after the spectrum/waterfall in ui_init(), so it
+     * already sits above them, and below the strips ui_init() raises last. */
     s_shown = true;
 }
 
