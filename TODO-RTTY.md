@@ -14,7 +14,6 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R005 | **rx_audio tap - BUILT, FLASHED bench2 2026-11-12, NOT YET SEEN DECODE A SIGNAL.** `main/rtty_rx.c` reads stage-1 baseband in rx_audio_task (6 kHz, core 1); RTTY is a third consumer of the chain, not an audio listener. `{"action":"rtty","on":true,"offset_hz":N}` + status/text. On the device: runs at 6000 Hz, follows CW/USB retunes, noise sig_lvl 0.36-0.38, 0 chars. Owed: one real signal, to prove the dial-offset mapping and polarity (no RTTY on 40 m, no DWD on 30 m that evening). | Small | an RTTY signal | - |
 | R008 | **RAM and CPU on device**: demod state ~14.5 KB; core-1 load at 6 kHz. Measure on bench2. | Small | R005 + a flash | - |
 | R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. | Small | operator at the bench | - |
 | R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
@@ -30,6 +29,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 | R015 | Band prefilter (centre to 0 Hz, 8-pole Butterworth at shift/2 + 0.6 baud) before the tone filters. Synthetic, wanted at 0 dB: a +20 dB station 250 Hz off 88 % -> 7 % CER, 300 Hz 54 % -> 0 %. No cost at -6/-8 dB (12000 chars). VE3NEA set 44 -> 61 exchange words; DL2AL 3 -> 15. PA4PS still behind GRITTY (3 -> 4) - not explained. | `fac3516e` |
 | R007 | Web RTTY panel: menu link, MODE: RTTY, 8 rows over the waterfall (measured width), controls row, tone markers, click moves the decoder; same page rules as the Tab5 (pills, DiGi band plan, RTTY spots, no CW line). Previewed via an /api proxy; markers need the WS and are unseen. | `e59a2432` |
 | R018 | Text box clear of the watermark (60 cols), carpet shift like CW. /ss.bmp: border x 1242, watermark clear. Frame time not measured. | `31ac6638` |
+| R005 | Device tap decodes a real signal: "CQ CQ DE ON8FAB" on bench2, 40 m, radio in CW, 2026-11-12. First try failed: in CW the decoder sat one pitch (550 Hz) below the lines; fixed. | `1c0cf073` |
 | R017 | Top bar Mode/BW dimmed; band-plan strip DiGi-only (drag maps onto it, tuning not clamped); spots RTTY-only (tag RY); QMX-wait hint at the CW page's place. Operator on the glass: "looks right". | `4a811279` |
 | R016 | Pane fonts 18/20/22 -> 24/26 (picker 28), buttons word-only with green = on. Operator: "it actually looks good"; decoded text stays qmx_mono_25, 8 rows (his choice over 30 px / 6 rows). | `f0f760e5` |
 | R006 | RTTY page: own page on the CW grid, 8 text rows, tuning bars, tone markers, tap moves the decoder (dial stays), speed/shift picker, MODE: RTTY in the left drawer (7 doors at 88 px), set_screen "rtty", restored at boot. Operator on the glass: "looks right for now" (fonts: R016). Not yet seen with a real signal. | `20cfea0b` |
