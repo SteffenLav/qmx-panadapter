@@ -42,8 +42,9 @@ INVENTORY = os.path.join(REPO, "docs", "unattended-tx-inventory.md")
 
 # The functions that actually commit to transmitting. Their own
 # implementations are skipped - only callers are sites.
-ARMING_CALLS = ("ft8_tx_arm", "wspr_tx_arm")
-IMPL_FILES = ("main/ft8_tx.c", "main/wspr_tx.c")
+# rtty_tx_test_start: R009 bench test, operator-started over /api/cmd only.
+ARMING_CALLS = ("ft8_tx_arm", "wspr_tx_arm", "rtty_tx_test_start")
+IMPL_FILES = ("main/ft8_tx.c", "main/wspr_tx.c", "main/rtty_tx_test.c")
 
 SKIP_DIRS = {".git", "build", "managed_components", "graphify-out",
              ".claude", "__pycache__", "scratchpad", "node_modules", "test"}

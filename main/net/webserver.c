@@ -80,6 +80,7 @@
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
 #include "rtty_rx.h"           // /api/cmd "rtty" - R005
+#include "rtty_tx_test.h"      // /api/cmd "rtty_tx_test" - R009, keys the radio
 #include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
@@ -3324,6 +3325,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
         free(txt);
+        return ESP_OK;
+    } else if (action && strcmp(action, "rtty_tx_test") == 0) {
+        /* R009 (TODO-RTTY.md): ⛔ KEYS THE RADIO. Sends a fixed RTTY text by
+         * TA tone changes, one per bit, for `seconds`, so a receiver running
+         * fldigi can say whether the QMX follows TA at 22 ms/bit. Refusals and
+         * the band guard live in rtty_tx_test_start().
+         * {"action":"rtty_tx_test","centre_hz":1500,"shift_hz":170,"baud":45.45,"seconds":20} */
+        cJSON *cj = cJSON_GetObjectItem(root, "centre_hz");
+        cJSON *sj = cJSON_GetObjectItem(root, "shift_hz");
+        cJSON *bj = cJSON_GetObjectItem(root, "baud");
+        cJSON *tj = cJSON_GetObjectItem(root, "seconds");
+        rtty_tx_test_cfg_t tc = {
+            .centre_hz = cJSON_IsNumber(cj) ? cj->valueint : 1500,
+            .shift_hz  = cJSON_IsNumber(sj) ? sj->valueint : 170,
+            .baud      = cJSON_IsNumber(bj) ? (float)bj->valuedouble : 45.45f,
+            .seconds   = cJSON_IsNumber(tj) ? tj->valueint : 20,
+        };
+        cJSON_Delete(root);
+        char terr[160] = "";
+        esp_err_t terr_code = rtty_tx_test_start(&tc, terr, sizeof terr);
+        cJSON *res = cJSON_CreateObject();
+        cJSON_AddBoolToObject(res, "ok", terr_code == ESP_OK);
+        if (terr_code != ESP_OK) cJSON_AddStringToObject(res, "error", terr);
+        char *txt = cJSON_PrintUnformatted(res);
+        cJSON_Delete(res);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+        free(txt);
+        return ESP_OK;
+    } else if (action && strcmp(action, "rtty_tx_test_abort") == 0) {
+        cJSON_Delete(root);
+        rtty_tx_test_abort();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
     } else if (action && strcmp(action, "update_check") == 0) {
         // Force the periodic check to run now rather than waiting out the

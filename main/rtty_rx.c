@@ -6,6 +6,7 @@
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "rx_audio.h"
 #include "settings.h"
@@ -257,7 +258,33 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
         s_st.chars = 0;
         portEXIT_CRITICAL(&s_mux);
     }
+    /* R008: what the demodulator costs on core 1 (rx_audio's core). One
+     * 10 s window per log line: busy us per wall second = share of a core,
+     * and the worst single call, which is what eats into the 21.3 ms frame
+     * budget. The acquisition DFT runs every 0.5 s, so max sees it. */
+    static int64_t  s_cpu_win_us;
+    static uint64_t s_cpu_busy_us;
+    static uint32_t s_cpu_max_us, s_cpu_calls, s_cpu_smp;
+    int64_t t_a = esp_timer_get_time();
     rtty_demod_feed(s_dem, re, im, n, on_char, NULL);
+    int64_t t_b = esp_timer_get_time();
+    uint32_t d_us = (uint32_t)(t_b - t_a);
+    s_cpu_busy_us += d_us;
+    if (d_us > s_cpu_max_us) s_cpu_max_us = d_us;
+    s_cpu_calls++;
+    s_cpu_smp += (uint32_t)n;
+    if (s_cpu_win_us == 0) s_cpu_win_us = t_a;
+    else if (t_b - s_cpu_win_us >= 10000000) {
+        int64_t win = t_b - s_cpu_win_us;
+        uint32_t permille = (uint32_t)(s_cpu_busy_us * 1000ULL / (uint64_t)win);
+        ESP_LOGI(TAG, "cpu: %lu us/s = %lu.%lu%% of core 1, call avg %lu max %lu us, %lu calls, %lu smp/s at %.0f Hz",
+                 (unsigned long)(s_cpu_busy_us * 1000000ULL / (uint64_t)win),
+                 (unsigned long)(permille / 10), (unsigned long)(permille % 10),
+                 (unsigned long)(s_cpu_calls ? s_cpu_busy_us / s_cpu_calls : 0),
+                 (unsigned long)s_cpu_max_us, (unsigned long)s_cpu_calls,
+                 (unsigned long)((uint64_t)s_cpu_smp * 1000000ULL / (uint64_t)win), (double)fs_hz);
+        s_cpu_win_us = t_b; s_cpu_busy_us = 0; s_cpu_max_us = 0; s_cpu_calls = 0; s_cpu_smp = 0;
+    }
 
     portENTER_CRITICAL(&s_mux);
     s_st.sig_lvl = s_dem->sig_lvl;

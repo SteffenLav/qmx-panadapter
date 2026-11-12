@@ -5,6 +5,7 @@ idf_component_register(
         "rtty_baudot.c"
         "rtty_demod.c"
         "rtty_rx.c"
+        "rtty_tx_test.c"
         "cw_txq.c"
         "display/display.c"
         "ui/ui.c"
