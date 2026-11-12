@@ -13381,15 +13381,16 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     if (shift_now) {
         s_wf_pending_rows = 0;
         s_wf_shifts++;
-        lv_area_t vis;
-        if (cw_screen_view_carpet_visible(&vis)) {
+        lv_area_t vis[2];
+        if (cw_screen_view_carpet_visible(vis)) {
             /* CW page: lv_image_set_offset_y() would invalidate the WHOLE
              * carpet, and the pane + ticker on top were redrawn with it on
              * every shift - 57-62 ms frames against 16 ms with only the
              * visible carpet invalidated (measured, see
              * cw_screen_view_carpet_visible). Same field the setter writes. */
             ((lv_image_t *)s_wf_canvas)->offset.y = -(int32_t)s_wf_head;
-            lv_obj_invalidate_area(s_wf_canvas, &vis);
+            lv_obj_invalidate_area(s_wf_canvas, &vis[0]);
+            lv_obj_invalidate_area(s_wf_canvas, &vis[1]);
         } else {
             lv_image_set_offset_y(s_wf_canvas, -(int32_t)s_wf_head);
         }
