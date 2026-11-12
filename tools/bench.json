@@ -110,8 +110,8 @@
       "com": "COM16",
       "com_note": "⚠ BACK ON COM16, MEASURED 2026-11-01 23:48. The COM10 entry below it was operator-reported at 23:40 and never MAC-verified; eight minutes later COM10 DID NOT EXIST at all (no such port in the enumeration) while COM16 was carrying this board's live output - 971 s uptime, CAT answering MM600, 48035 pairs/s - into capture-bench2.txt, and its own boot header reads 80:f1:b2:d1:42:ca. ⛔ `bench verify` CANNOT SETTLE A COM NUMBER: it reads the CAPTURE FILE, not the port, so it answered 'Identity OK' for COM10 while COM10 did not exist. Verify a port by reading the MAC off it, or by the capture's own live tail. COM FOLLOWS THE SOCKET, NOT THE BOARD. Was COM16 from its first plug 2026-10-28, briefly recorded as COM10.",
       "radio": "QMX attached - CAT answering and IQ audio flowing, seen in capture-bench2.txt 2026-10-31 23:26 (MM600; replies, 48288 pairs/s). This line said 'none attached yet' until then, which would have let a flash go out without the power-cycle warning the radio always needs.",
-      "tree": "C:/dev/qmx-panadapter/.claude/worktrees/frosty-feistel-c073f7",
-      "branch": "qmx-panadapter-rtty - NOT main. Before 2026-11-12 the tree was C:/dev/qmx-panadapter-cw, detached at 90b8bf33.",
+      "tree": "C:/dev/qmx-panadapter-rtty",
+      "branch": "qmx-panadapter-rtty - NOT main. Tree moved 2026-11-12 night from .claude/worktrees/frosty-feistel-c073f7 (left detached, remove it) to its own top-level folder. Before that: C:/dev/qmx-panadapter-cw, detached at 90b8bf33.",
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-bench2.txt",
       "usb_flash": "yes",
       "usb_flash_history": "FIRST FLASH 2026-10-28: erase_flash then write_flash of v1.22.0-90-ge6cdf310 (feat/cw-page, carrying the esp_hosted sync-RPC table lock). MAC-verified 80:f1:b2:d1:42:ca before the erase, since a factory board has no boot header to check afterwards."
