@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "settings.h"
 #include "mem_channels.h"
+#include "rtty_rx.h"           // R019: rtty_rx_defaults() for the rtty_* keys
 #include "audio/rx_audio.h"     // rx_audio_apply_settings() - an import must be audible
 #include "adif/lotw_upload.h"   // lotw_read/store_cert/key_b64 for full backup
 
@@ -77,6 +78,14 @@ char *config_io_export(size_t *out_len)
     APP("spots_sota         = %s\n", yn(c.sota_en));
     APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
     APP("cw_page_enabled    = %s\n", yn(c.cw_page_en)); /* the CW page master switch - default OFF, see settings.h */
+    if (c.rtty.valid) {   /* R019: only once set - the defaults live in rtty_rx.c */
+        APP("rtty_offset_hz     = %d\n", (int)c.rtty.offset_hz);
+        APP("rtty_baud          = %.2f\n", c.rtty.baud_x100 / 100.0);
+        APP("rtty_shift_hz      = %u\n", (unsigned)c.rtty.shift_hz);
+        APP("rtty_reverse       = %s\n", yn(c.rtty.reverse));
+        APP("rtty_afc           = %s\n", yn(c.rtty.afc));
+        APP("rtty_squelch       = %s\n", yn(c.rtty.squelch));
+    }
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -448,6 +457,30 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
             else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
             else if (!strcasecmp(key, "cw_page_enabled"))  settings_set_cw_page_en(to_bool(val));
+            /* R019. Export writes all six together, but each line stands
+               alone. Ranges are clamped by rtty_rx_apply(), which reads these
+               at the next boot. */
+            else if (!strncasecmp(key, "rtty_", 5)) {
+                settings_rtty_t r;
+                settings_get_rtty(&r);
+                if (!r.valid) {   /* never set: start from rtty_rx.c's defaults */
+                    rtty_rx_cfg_t d;
+                    rtty_rx_defaults(&d);
+                    r.offset_hz = (int16_t)d.offset_hz;
+                    r.shift_hz  = (uint16_t)(d.shift_hz + 0.5f);
+                    r.baud_x100 = (uint16_t)(d.baud * 100.0f + 0.5f);
+                    r.reverse = d.reverse; r.afc = d.afc; r.squelch = d.squelch;
+                }
+                bool known = true;
+                if      (!strcasecmp(key, "rtty_offset_hz")) r.offset_hz = (int16_t)atoi(val);
+                else if (!strcasecmp(key, "rtty_baud"))      r.baud_x100 = (uint16_t)(strtof(val, NULL) * 100.0f + 0.5f);
+                else if (!strcasecmp(key, "rtty_shift_hz"))  r.shift_hz  = (uint16_t)atoi(val);
+                else if (!strcasecmp(key, "rtty_reverse"))   r.reverse   = to_bool(val);
+                else if (!strcasecmp(key, "rtty_afc"))       r.afc       = to_bool(val);
+                else if (!strcasecmp(key, "rtty_squelch"))   r.squelch   = to_bool(val);
+                else known = false;
+                if (known) { r.valid = 1; settings_set_rtty(&r); }
+            }
             /* ⛔ DEAD KEY, kept only so an old config file still imports without
                a surprise. The quiet auto-download was removed in v1.14.4 and
                settings_set_ota_autodl() now changes nothing that runs. It has

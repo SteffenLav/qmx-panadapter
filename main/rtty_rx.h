@@ -40,6 +40,8 @@ typedef struct {
 } rtty_rx_status_t;
 
 /* The current settings (defaults before the first apply). */
+/* The R011 defaults (the one copy) - config_io fills a fresh file from it. */
+void rtty_rx_defaults(rtty_rx_cfg_t *c);
 void rtty_rx_get_cfg(rtty_rx_cfg_t *c);
 
 /* Apply settings. Safe from any task; the audio task restarts the decoder on

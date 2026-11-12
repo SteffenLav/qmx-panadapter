@@ -171,6 +171,18 @@ static inline uint8_t line_in_gain_db_normalize(uint8_t raw)
     return (uint8_t)((raw / LINE_IN_GAIN_DB_STEP) * LINE_IN_GAIN_DB_STEP);
 }
 
+/* RTTY receive settings (R019). One blob; valid = 0 means "never set" and
+ * rtty_rx.c keeps its own defaults (45.45 Bd, 170 Hz, AFC + squelch on), so
+ * those live in one place. The decoder's on/off is not here - the page
+ * decides that. */
+typedef struct {
+    int16_t  offset_hz;     /* tone centre, RF offset from the dial */
+    uint16_t shift_hz;
+    uint16_t baud_x100;     /* 4545 = 45.45 Bd */
+    uint8_t  reverse, afc, squelch;
+    uint8_t  valid;
+} settings_rtty_t;
+
 typedef struct {
     bool incl_en[2];
     char incl_text[2][FT8_FILTER_TEXT_LEN];
@@ -440,6 +452,7 @@ typedef struct {
      * /api/cmd {"action":"cw_enable","on":false}, or cw_page_enabled = no in
      * an imported config file. */
     bool     cw_page_en;
+    settings_rtty_t rtty;   /* R019 - see the type */
     // FT8 Fox/Hound (DXpedition) mode - the HOUND side only. Fox is impossible on
     // this radio: it needs up to five simultaneous signals and we emit one CAT
     // "TA" tone per symbol. 0 = off, 1 = guided, 2 = automatic. See ft8_hound.h.
@@ -1102,6 +1115,10 @@ void settings_get_cw_park(char *out, size_t out_sz);
 // those stacks is the overflow this project has already paid for twice.
 void settings_set_cw_page_en(bool v);
 bool settings_get_cw_page_en(void);
+/* R019. Narrow, for the same stack reason as cw_page_en: rtty_rx calls these
+ * from the LVGL task and the httpd worker. */
+void settings_set_rtty(const settings_rtty_t *r);
+void settings_get_rtty(settings_rtty_t *out);
 
 // CW phantom-practice toggle. Deliberately its OWN flag, not sim_mode_en:
 // enabling CW practice must not arm the FT8 phantoms when swiping to that

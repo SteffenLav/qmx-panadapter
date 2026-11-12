@@ -80,6 +80,7 @@ static const char *TAG = "settings";
 #define KEY_CW_CONTEST "cw_contest"
 #define KEY_CW_SIM     "cw_sim"
 #define KEY_CW_PAGE_EN "cw_page_en"
+#define KEY_RTTY       "rtty_cfg"
 #define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
@@ -279,7 +280,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      5                        /* 160 bits; highest used 159, 0 spare - bump to 6 for the next one */
+#define DIRTY_WORDS      6                        /* 192 bits; highest used 160, 31 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -517,7 +518,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_MSG_SET      156
 #define DIRTY_CW_RST_CUT      157  /* active macro set toggle: 0 = General, 1 = Contest */
 #define DIRTY_CW_SERIAL        158  /* {SERIAL} macro - next contest serial to send */
-#define DIRTY_CW_CONTEST       159  /* contest name/ID - last free bit, see DIRTY_WORDS */
+#define DIRTY_CW_CONTEST       159  /* contest name/ID */
+#define DIRTY_RTTY             160  /* R019 RTTY receive settings blob - first bit of word 6 */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten by the continuous time-sync
@@ -553,6 +555,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
     DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
     DIRTY_CW_PAGE_EN,   /* same - config_io_export() prints cw_page_enabled */
+    DIRTY_RTTY,         /* config_io_export() prints the rtty_* lines */
     DIRTY_STILL_VIEW,   /* #298 - config_io_export() carries still_spectrum */
     /* RX audio: a level the operator set by ear belongs in a config backup for
      * the same reason the power calibration does - nobody can recreate it from
@@ -746,6 +749,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CW_CONTEST)) nvs_set_str(s_nvs, KEY_CW_CONTEST, snap->cw_contest_name);
         if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap->cw_sim_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_PAGE_EN)) nvs_set_u8(s_nvs, KEY_CW_PAGE_EN, snap->cw_page_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RTTY))       nvs_set_blob(s_nvs, KEY_RTTY, &snap->rtty, sizeof(snap->rtty));
         if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap->hound_mode);
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap->cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap->onboarded ? 1 : 0);
@@ -1330,6 +1334,11 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_CW_CONTEST, out->cw_contest_name, &sz);
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
     { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_PAGE_EN, &v8) == ESP_OK) out->cw_page_en = v8 != 0; }
+    /* R019. Exact size or nothing - the pwr_cal rule below: a blob of another
+     * shape would land its bytes on the wrong fields. valid stays 0 then and
+     * rtty_rx keeps its defaults. */
+    { settings_rtty_t r; size_t rsz = sizeof(r);
+      if (nvs_get_blob(s_nvs, KEY_RTTY, &r, &rsz) == ESP_OK && rsz == sizeof(r)) out->rtty = r; }
     nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
@@ -2185,6 +2194,26 @@ void settings_set_cw_page_en(bool v)
  * run on stacks that a 3.9 kB qmx_settings_t local would overflow. WSPR's
  * equivalent gate does use settings_load_all(), which is a hazard inherited
  * rather than copied - do not follow it here. */
+void settings_set_rtty(const settings_rtty_t *r)
+{
+    if (!s_ready || !r) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = memcmp(&s_pending.rtty, r, sizeof(*r)) == 0;
+    if (!same) s_pending.rtty = *r;
+    xSemaphoreGive(s_mutex);
+    if (!same) mark_dirty(DIRTY_RTTY);
+}
+
+void settings_get_rtty(settings_rtty_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    *out = s_pending.rtty;
+    xSemaphoreGive(s_mutex);
+}
+
 bool settings_get_cw_page_en(void)
 {
     if (!s_ready) return false;

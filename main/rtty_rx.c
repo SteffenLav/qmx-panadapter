@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "rx_audio.h"
+#include "settings.h"
 
 static const char *TAG = "rtty";
 
@@ -20,12 +21,60 @@ static const char *TAG = "rtty";
  * The seq is bumped after the struct is written; a torn read only means the
  * next frame restarts once more. */
 static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
-static rtty_rx_cfg_t s_cfg = {
-    /* Defaults agreed 2026-11-12 (R011): 45.45 Bd, 170 Hz, AFC and squelch on. */
+/* Defaults agreed 2026-11-12 (R011): 45.45 Bd, 170 Hz, AFC and squelch on.
+ * The one copy - config_io reads it through rtty_rx_defaults(). */
+static const rtty_rx_cfg_t RTTY_DEFAULTS = {
     .on = false, .offset_hz = 1500, .reverse = false,
     .baud = 45.45f, .shift_hz = 170.0f, .afc = true, .squelch = true,
 };
+static rtty_rx_cfg_t s_cfg = RTTY_DEFAULTS;
 static volatile uint32_t s_want_seq;
+static volatile bool s_loaded;           /* R019: saved settings read into s_cfg */
+
+void rtty_rx_defaults(rtty_rx_cfg_t *c) { *c = RTTY_DEFAULTS; }
+
+/* R019: the settings survive a reboot. Read once, on the first use - which is
+ * the page's show (boot restore included), long after settings_init(). Every
+ * rtty_rx_apply() writes them back; settings dedupes and debounces the NVS
+ * write, so a run of taps costs one write. `on` is not saved: the page owns it.
+ * Before this, offset/reverse/speed/AFC/squelch came back as the defaults
+ * after every boot (seen 2026-11-12: -1960 Hz returned as +1500). */
+static void load_once(void)
+{
+    if (s_loaded) return;
+    s_loaded = true;
+    settings_rtty_t r;
+    settings_get_rtty(&r);
+    if (!r.valid) return;
+    rtty_rx_cfg_t c = RTTY_DEFAULTS;
+    c.offset_hz = r.offset_hz;
+    c.shift_hz  = (float)r.shift_hz;
+    c.baud      = r.baud_x100 / 100.0f;
+    c.reverse   = r.reverse != 0;
+    c.afc       = r.afc != 0;
+    c.squelch   = r.squelch != 0;
+    if (!(c.baud >= 20.0f && c.baud <= 300.0f)) c.baud = RTTY_DEFAULTS.baud;
+    if (!(c.shift_hz >= 50.0f && c.shift_hz <= 1000.0f)) c.shift_hz = RTTY_DEFAULTS.shift_hz;
+    if (c.offset_hz < -3000 || c.offset_hz > 4500) c.offset_hz = RTTY_DEFAULTS.offset_hz;
+    portENTER_CRITICAL(&s_cfg_mux);
+    c.on = s_cfg.on;
+    s_cfg = c;
+    portEXIT_CRITICAL(&s_cfg_mux);
+    ESP_LOGI(TAG, "settings: offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d", c.offset_hz,
+             (double)c.baud, (double)c.shift_hz, c.reverse ? " reverse" : "", (int)c.afc, (int)c.squelch);
+}
+
+static void save(const rtty_rx_cfg_t *c)
+{
+    settings_rtty_t r = {
+        .offset_hz = (int16_t)c->offset_hz,
+        .shift_hz  = (uint16_t)(c->shift_hz + 0.5f),
+        .baud_x100 = (uint16_t)(c->baud * 100.0f + 0.5f),
+        .reverse = c->reverse, .afc = c->afc, .squelch = c->squelch,
+        .valid = 1,
+    };
+    settings_set_rtty(&r);
+}
 
 /* Owned by the audio task. */
 static rtty_demod_t *s_dem;              /* PSRAM, ~18 KB, allocated once */
@@ -47,6 +96,7 @@ static rtty_rx_status_t s_st;
 
 void rtty_rx_get_cfg(rtty_rx_cfg_t *c)
 {
+    load_once();
     portENTER_CRITICAL(&s_cfg_mux);
     *c = s_cfg;
     portEXIT_CRITICAL(&s_cfg_mux);
@@ -54,6 +104,7 @@ void rtty_rx_get_cfg(rtty_rx_cfg_t *c)
 
 void rtty_rx_apply(const rtty_rx_cfg_t *c)
 {
+    load_once();   /* or a later first get_cfg would overwrite this apply */
     rtty_rx_cfg_t n = *c;
     if (!(n.baud >= 20.0f && n.baud <= 300.0f)) n.baud = 45.45f;
     if (!(n.shift_hz >= 50.0f && n.shift_hz <= 1000.0f)) n.shift_hz = 170.0f;
@@ -63,6 +114,7 @@ void rtty_rx_apply(const rtty_rx_cfg_t *c)
     s_cfg = n;
     portEXIT_CRITICAL(&s_cfg_mux);
     s_want_seq++;
+    save(&n);
     ESP_LOGI(TAG, "%s offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d", n.on ? "ON" : "off",
              n.offset_hz, (double)n.baud, (double)n.shift_hz, n.reverse ? " reverse" : "",
              (int)n.afc, (int)n.squelch);
