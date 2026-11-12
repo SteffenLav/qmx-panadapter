@@ -106,6 +106,19 @@ extern "C" {
 #define RTTY_ACQ_SNR        6.0f
 #endif
 #define RTTY_ACQ_MIN_MOVE   10.0f     /* Hz; smaller errors are AFC's job */
+/* Acquisition window, each side, when AFC is off or narrower: see init. */
+#define RTTY_ACQ_FLOOR_HZ   150.0f
+/* Squelch: the weaker tone must stand this far over the floor (R014). */
+#ifndef RTTY_SQ_TONE_DB
+#define RTTY_SQ_TONE_DB     6.0f
+#endif
+/* 0: the tone gate only OPENS the squelch. 1 (a lost tone also closes it)
+ * cost DL2AL a 20-character stretch (15 -> 13 exchange words, the same at
+ * 4, 5 and 6 dB - one tone fades there) and bought nothing: with 0 the
+ * keyed carrier already prints 0 chars/min. Measured 2026-11-12. */
+#ifndef RTTY_SQ_TONE_CLOSE
+#define RTTY_SQ_TONE_CLOSE  0
+#endif
 /* M/S bars: each tone's peak within +/-2 acquisition bins (+/-10 Hz). */
 #define RTTY_SNR_BINS       2
 /* Band prefilter (R015): mix the pair's centre to 0 Hz and low-pass it

@@ -174,7 +174,12 @@ bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
     if (d->acq_D < 1) d->acq_D = 1;
     d->acq_N = (int)(cfg->fs_hz / (float)d->acq_D * 0.5f);
     if (d->acq_N > RTTY_ACQ_N) d->acq_N = RTTY_ACQ_N;
-    float span = cfg->afc_hz + cfg->shift_hz * 0.5f;
+    /* At least RTTY_ACQ_FLOOR_HZ either side even with AFC off: the median
+     * bin is the noise floor for the tone levels (M/S bars, R014's squelch
+     * gate), and a window only as wide as the pair would take it from the
+     * signal itself. The jump search below still keeps to +/-afc_hz. */
+    float span = (cfg->afc_hz > RTTY_ACQ_FLOOR_HZ ? cfg->afc_hz : RTTY_ACQ_FLOOR_HZ)
+               + cfg->shift_hz * 0.5f;
     d->acq_nb = 2 * (int)ceilf(span / RTTY_ACQ_STEP_HZ) + 1;
     if (d->acq_nb > RTTY_ACQ_BINS - 1) d->acq_nb = RTTY_ACQ_BINS - 1;   /* odd */
     d->acq_f0 = -RTTY_ACQ_STEP_HZ * (float)(d->acq_nb / 2);
@@ -251,8 +256,19 @@ static void emit(rtty_demod_t *d, double t0, double Tb, float score,
      * transmission (once 124, measured 2026-11-12). Per character, noise is
      * below 0.5 96 % of the time, a -6 dB signal 1 %. */
     d->low_run = ch.conf < RTTY_SQ_LOW ? d->low_run + 1 : 0;
-    if (!d->sq_open && d->sig_lvl >= d->cfg.squelch && d->low_run == 0) d->sq_open = true;
-    else if (d->sq_open && (d->sig_lvl < d->cfg.squelch - RTTY_SQ_HYST ||
+    /* R014: to OPEN, both tones must stand RTTY_SQ_TONE_DB over the floor. A
+     * tone keyed on and off on one side reads as clean mark/space to the
+     * decision - the other filter holds only noise - so conf alone opened on
+     * it (bench2 2026-11-12; harness: a keyed carrier printed 241 chars/min,
+     * now 0). The weaker tone of a real pair: 1st percentile 5.2 dB at -10 dB
+     * SNR, 7.9 at -6; the empty side of a single tone reads 1-4 dB. 5 dB left
+     * 13 chars/min, 6 left 0 at no cost, 7 cost CER at -10 dB (0.29 -> 0.31).
+     * Closing on a lost tone: see RTTY_SQ_TONE_CLOSE. Before 2 blocks (1 s)
+     * there is no level: stay shut, the hold buffer keeps those characters. */
+    bool tones = d->acq_blocks >= 2 &&
+                 fminf(d->mark_snr_db, d->space_snr_db) >= RTTY_SQ_TONE_DB;
+    if (!d->sq_open && d->sig_lvl >= d->cfg.squelch && d->low_run == 0 && tones) d->sq_open = true;
+    else if (d->sq_open && (d->sig_lvl < d->cfg.squelch - RTTY_SQ_HYST || (RTTY_SQ_TONE_CLOSE && !tones) ||
                             d->low_run >= RTTY_SQ_LOW_RUN)) {
         d->sq_open = false;
         d->sig_lvl = d->cfg.squelch - RTTY_SQ_HYST;   /* re-open needs fresh evidence */
@@ -388,7 +404,7 @@ void rtty_demod_feed(rtty_demod_t *d, const float *re, const float *im, int n,
     const float L = (float)d->L;
     for (int k = 0; k < n; k++) {
         float xr = re[k], xi = im ? im[k] : 0.0f;
-        if (d->cfg.afc_hz > 0.0f) acq_feed(d, xr, xi);
+        acq_feed(d, xr, xi);   /* always: the tone levels need it; jumps are gated inside */
         if (d->pf_n > 0) {
             /* centre to 0 Hz, then the low-pass on both legs (TDF-II) */
             float yr = xr * d->pc + xi * d->ps, yi = xi * d->pc - xr * d->ps;

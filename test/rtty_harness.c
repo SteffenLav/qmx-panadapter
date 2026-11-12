@@ -246,6 +246,10 @@ typedef struct { double cer; rtty_demod_t st; char *text; } res_t;
 
 static rtty_demod_t g_dem;   /* 8 KB: keep it off the stack */
 static float g_afc;          /* cfg.afc_hz for run(); 0 = off */
+/* min(mark, space) dB of every 0.5 s acquisition block in the last run() */
+static float g_tone_min[4096];
+static int   g_tone_n;
+static int cmpf(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return x < y ? -1 : x > y; }
 
 static double run(const gen_t *g, const char *text, bool rx_reverse, float rx_centre_err,
                   float squelch, rtty_demod_t *stats_out)
@@ -256,9 +260,15 @@ static double run(const gen_t *g, const char *text, bool rx_reverse, float rx_ce
     sink_t k = {0};
     rtty_baudot_init(&k.b, false);
     /* feed in odd-sized blocks: block boundaries must not matter */
+    g_tone_n = 0;
+    int blocks = 0;
     for (size_t i = 0; i < s.n; i += 333) {
         int n = (int)((s.n - i) < 333 ? (s.n - i) : 333);
         rtty_demod_feed(&g_dem, &s.re[i], &s.im[i], n, on_char, &k);
+        if (g_dem.acq_blocks != blocks && g_tone_n < 4096) {
+            blocks = g_dem.acq_blocks;
+            g_tone_min[g_tone_n++] = fminf(g_dem.mark_snr_db, g_dem.space_snr_db);
+        }
     }
     const char *got = k.buf ? k.buf : "";
     double cer = (double)lev(text, got) / (double)strlen(text);
@@ -455,6 +465,55 @@ static void suite(void)
          * 1.6-2.1 % in others with the SAME demod (the draws moved when the
          * QRM test was added before it). Over 12000 characters it is 0.5-0.9 %. */
         if (q == 3) CHECK(cer < 0.03, "squelch 0.48 costs CER %.3f on signal", cer);
+    }
+
+    /* R014: a signal on ONE tone. Seen on bench2 2026-11-12: a ~50 Hz wide
+     * non-RTTY signal under the mark line opened the squelch (sig 0.62) and
+     * printed junk. A tone keyed on and off looks like mark/space to the
+     * decision d = (|M|-|S|)/(|M|+|S|), because the space filter then holds
+     * only noise. Three shapes, all on the mark tone, 60 s, 10 dB over the
+     * 2500 Hz noise (strong, like the one seen). */
+    printf("\none tone only (R014), 60 s, squelch 0.48 - characters printed:\n");
+    for (int shape = 0; shape < 3; shape++) {
+        static const char *nm[] = { "steady carrier", "keyed carrier (CW-like)", "31 Hz FSK at the mark" };
+        const float fs = 6000.0f, fm = 85.0f, amp = sqrtf(powf(10.0f, 10.0f / 10.0f) * fs / 2500.0f);
+        sig_t s = {0};
+        double ph = 0.0; int left = 0; int on = 1; float df = 0.0f;
+        for (int i = 0; i < (int)fs * 60; i++) {
+            if (--left <= 0) {
+                if (shape == 1) { on = !on; left = (int)(fs * (0.05 + 0.10 * urand())); }
+                else if (shape == 2) { df = urand() < 0.5 ? -15.6f : 15.6f; left = (int)(fs / 31.25f); }
+                else left = 1 << 30;
+            }
+            float a = (shape == 1 && !on) ? 0.0f : amp;
+            ph += 2.0 * M_PI * (fm + df) / fs;
+            sig_push(&s, a * (float)cos(ph) + (float)(grand() * sqrt(0.5 * fs / 2500.0)),
+                         a * (float)sin(ph) + (float)(grand() * sqrt(0.5 * fs / 2500.0)));
+        }
+        rtty_demod_cfg_t cfg = { fs, 45.45f, 170.0f, 0, false, 0.48f, g_afc };
+        rtty_demod_init(&g_dem, &cfg);
+        sink_t k = {0}; rtty_baudot_init(&k.b, false);
+        rtty_demod_feed(&g_dem, s.re, s.im, (int)s.n, on_char, &k);
+        printf("  %-24s: %u chars (%u squelched), tones %.1f / %.1f dB\n", nm[shape],
+               (unsigned)g_dem.n_chars, (unsigned)g_dem.n_squelched,
+               g_dem.mark_snr_db, g_dem.space_snr_db);
+        CHECK(g_dem.n_chars <= 5, "one tone (%s) prints %u chars in 60 s", nm[shape], (unsigned)g_dem.n_chars);
+        free(s.re); free(s.im); free(k.buf);
+    }
+
+    /* ...and what the tone gate costs a real pair at the weak end. */
+    printf("\nsquelch 0.48 on signal, both tones present (R014 cost):\n");
+    for (int i = 0; i < 3; i++) {
+        static const float snr[] = { -6.0f, -8.0f, -10.0f };
+        gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, snr[i] };
+        rtty_demod_t st;
+        double c0 = run(&g, text, false, 0, 0.0f, NULL);
+        double c1 = run(&g, text, false, 0, 0.48f, &st);
+        qsort(g_tone_min, (size_t)g_tone_n, sizeof(float), cmpf);
+        printf("  SNR %3.0f dB: CER squelch off %.3f, on %.3f; weaker tone per 0.5 s: "
+               "p1 %.1f p5 %.1f p50 %.1f dB (%d blocks)\n", snr[i], c0, c1,
+               g_tone_min[g_tone_n / 100], g_tone_min[g_tone_n / 20], g_tone_min[g_tone_n / 2], g_tone_n);
+        (void)st;
     }
     free(text);
 }
