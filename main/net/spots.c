@@ -453,6 +453,7 @@ static int parse_pota(const char *json)
         if (cJSON_IsString(jc)) snprintf(sp.call, sizeof(sp.call), "%s", jc->valuestring);
         if (cJSON_IsString(jr)) snprintf(sp.ref,  sizeof(sp.ref),  "%s", jr->valuestring);
         sp.mode = mode_from_str(cJSON_IsString(jm) ? jm->valuestring : NULL);
+        sp.rtty = cJSON_IsString(jm) && strcasecmp(jm->valuestring, "RTTY") == 0;
         sp.heard_unix = cJSON_IsString(jt) ? parse_spot_time(jt->valuestring) : 0;
         if (!sp.call[0]) continue;
 
@@ -537,6 +538,7 @@ static int parse_sota(const char *json)
         const cJSON *jm  = cJSON_GetObjectItem(it, "mode");
         const cJSON *jmt = cJSON_GetObjectItem(it, "mode_type");
         sp.mode = mode_from_str(cJSON_IsString(jm) ? jm->valuestring : NULL);
+        sp.rtty = cJSON_IsString(jm) && strcasecmp(jm->valuestring, "RTTY") == 0;
         if (sp.mode == SPOT_MODE_OTHER && cJSON_IsString(jmt))
             sp.mode = mode_from_str(jmt->valuestring);
 
@@ -737,6 +739,7 @@ static int collect_spothole_source(cJSON *root, const char *want_source,
         const cJSON *jm  = cJSON_GetObjectItem(it, "mode");
         const cJSON *jmt = cJSON_GetObjectItem(it, "mode_type");
         sp.mode = mode_from_str(cJSON_IsString(jm) ? jm->valuestring : NULL);
+        sp.rtty = cJSON_IsString(jm) && strcasecmp(jm->valuestring, "RTTY") == 0;
         if (sp.mode == SPOT_MODE_OTHER && cJSON_IsString(jmt))
             sp.mode = mode_from_str(jmt->valuestring);
 

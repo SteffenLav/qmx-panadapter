@@ -394,6 +394,16 @@ static void repaint(void)
                 s_w->buf[keep++] = s_w->buf[i];
         n = keep;
     }
+    /* Same rule on the RTTY page (operator, 2026-11-12: "spots the same way
+     * if they exist"): only spots whose feed said RTTY. FT8/FT4 are DIGI too
+     * and would otherwise fill the lane with signals this page cannot read. */
+    if (ui_mode_get() == UI_MODE_RTTY) {
+        int keep = 0;
+        for (int i = 0; i < n; i++)
+            if (s_w->buf[i].rtty)
+                s_w->buf[keep++] = s_w->buf[i];
+        n = keep;
+    }
 
     hide_all();
     s_sel = -1;             // labels are about to be reassigned
@@ -504,6 +514,7 @@ static void repaint(void)
         // filter on, every label is your mode and a tag would be noise on every
         // single one - the sleekest indicator is the one that is not drawn.
         const char *tag = st.spots_mode_filter ? NULL : spot_mode_tag(sp->mode);
+        if (tag && sp->rtty) tag = "RY";   /* not "FT": the DIGI bucket also holds RTTY */
         lv_label_set_text(lb, sp->call);
         lv_obj_update_layout(lb);
         int call_w = lv_obj_get_width(lb);

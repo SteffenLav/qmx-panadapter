@@ -71,6 +71,9 @@ typedef struct {
     // than it being a self-spot typed in an hour ago. Set by the read path,
     // never by a producer; see spots_get_in_range().
     bool          rbn_confirmed;
+    // The feed said "RTTY" (R006). mode stays SPOT_MODE_DIGI, so every
+    // existing filter is unchanged; the RTTY page keeps only these.
+    bool          rtty;
 
     // Real position, when the source feed happens to carry one - POTA and
     // SOTA do (see parse_pota()/parse_sota() in spots.c), RBN and the DX

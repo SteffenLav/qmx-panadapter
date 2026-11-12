@@ -232,6 +232,7 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
  * other four, and the CW page does the reverse to MODE; see
  * top_bar_apply_mode(). */
 #define TOPBAR_ZONE_MODE   1
+#define TOPBAR_ZONE_BW     2
 #define TOPBAR_ZONE_FREQ   3
 static lv_obj_t *s_topbar_hit_zones[N_TOPBAR_HIT_ZONES] = {0};
 /* ⛔ THE DEEP DEPTH IS COMPUTED ONCE AND MUST BE REMEMBERED, NOT RE-STATED.
@@ -5892,8 +5893,13 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         static int s_cur_x = 0, s_cur_ly = 0, s_cur_hy = 90;
         static bool s_cur_wspr = false;
         const ui_mode_t m = ui_mode_get();
+        /* RTTY sits exactly where CW does (operator, 2026-11-12: "use MODE:
+         * CW as a template for the breathing text - its exactly the same
+         * place"): the same 320 px pane, so the same +150 px. A first cut
+         * centred it in the strip of waterfall above the 8-row text box; he
+         * corrected it before it was flashed. */
         const bool wspr = (m == UI_MODE_WSPR);
-        int want_x = (m == UI_MODE_FT8 || m == UI_MODE_CW) ? 150 : 0, want_ly = 0, want_hy = 90;
+        int want_x = (m == UI_MODE_FT8 || ui_mode_has_left_pane(m)) ? 150 : 0, want_ly = 0, want_hy = 90;
         if (wspr) {
             int cx, cy, w;
             wspr_screen_view_wf_geometry(&cx, &cy, &w);
@@ -6900,6 +6906,17 @@ static void update_bandplan_strip(uint32_t freq_hz)
             if (segs[i].type == BP_CW || segs[i].type == BP_DIGI)
                 cw_digi[cd++] = segs[i];
         if (cd > 0) { segs = cw_digi; n = cd; }
+    }
+    /* RTTY page (operator, 2026-11-12: "re-arrange the band plan to match
+     * what is needed for the RTTY caps on different bands"). RTTY lives in the
+     * DiGi segment of every IARU region's plan, and that segment is what this
+     * table carries - there is no RTTY-only row to show. Strip only: tuning
+     * is NOT clamped to it, because RTTY receive is unrestricted and contest
+     * RTTY spills outside the segment. */
+    bp_seg_t rtty_digi[1];
+    if (ui_mode_get() == UI_MODE_RTTY) {
+        for (int i = 0; i < n; i++)
+            if (segs[i].type == BP_DIGI) { rtty_digi[0] = segs[i]; segs = rtty_digi; n = 1; break; }
     }
 
     uint32_t band_lo = segs[0].lo_hz;
@@ -10581,7 +10598,14 @@ static void top_bar_apply_mode(void)
      * reason restated above: a board that BOOTS into CW has no transition.
      * Operator, 2026-10-31: "Mode on top bar should be dimmed as it cannot be
      * changed here". */
-    const bool mode_dead = (m == UI_MODE_CW);
+    const bool mode_dead = (m == UI_MODE_CW || m == UI_MODE_RTTY);
+
+    /* RTTY (operator, 2026-11-12: "inactivate the top bar features that we
+     * will not need in MODE: RTTY - just like the other pages"). The decoder
+     * reads the QMX's I/Q directly, so neither the radio's mode nor its audio
+     * filter width changes what it receives: Mode and BW are dead there.
+     * Band, Freq and Zoom stay live - it is a tuning page, like CW. */
+    const bool bw_dead = (m == UI_MODE_RTTY);
 
     /* Same order as the hit_zones[] table this indexes - Band, Mode, BW, Freq,
      * Zoom - so TOPBAR_ZONE_FREQ addresses the label and its zone together. */
@@ -10591,6 +10615,7 @@ static void top_bar_apply_mode(void)
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
         bool live = !inert || (i == TOPBAR_ZONE_FREQ && freq_live);
         if (i == TOPBAR_ZONE_MODE && mode_dead) live = false;
+        if (i == TOPBAR_ZONE_BW && bw_dead) live = false;
 
         /* The LABELS are clickable in their own right, with 90-110 px click
          * halos (ext_click_area, so they are hittable on glass) that between
@@ -14018,6 +14043,18 @@ static void touch_event_cb(lv_event_t *e)
                     s_bp_drag_band_lo = cl;
                     s_bp_drag_band_hi = ch;
                 }
+            }
+            /* RTTY page: the strip shows only the DiGi segment (see
+             * update_bandplan_strip), so a drag along it must map onto that
+             * same segment or the finger and the marker disagree. Only the
+             * drag - taps, the keypad and the knob stay unrestricted. */
+            if (ui_mode_get() == UI_MODE_RTTY) {
+                for (int i = 0; i < n; i++)
+                    if (segs[i].type == BP_DIGI) {
+                        s_bp_drag_band_lo = segs[i].lo_hz;
+                        s_bp_drag_band_hi = segs[i].hi_hz;
+                        break;
+                    }
             }
         } else {
             // Outside a known band: no absolute map exists, so this press drives
