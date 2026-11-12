@@ -2,6 +2,7 @@
 #include "rtty_demod.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #ifdef RTTY_DEBUG
 #include <stdio.h>
@@ -47,6 +48,68 @@ static void afc_update(rtty_demod_t *d)
     retune(d);
 }
 
+static int cmp_float(const void *a, const void *b)
+{
+    float x = *(const float *)a, y = *(const float *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* One 0.5 s block is in acq_br/bi: DFT it, smooth, and jump AFC to the best
+ * tone pair if no signal is being decoded. */
+static void acq_block(rtty_demod_t *d)
+{
+    const float rate = d->cfg.fs_hz / (float)d->acq_D;
+    for (int b = 0; b < d->acq_nb; b++) {
+        float c, s, pc = 1.0f, ps = 0.0f, xr = 0.0f, xi = 0.0f;
+        set_step(d->acq_f0 + RTTY_ACQ_STEP_HZ * (float)b, rate, &c, &s);
+        for (int n = 0; n < d->acq_N; n++) {
+            /* x * conj(p) */
+            xr += d->acq_br[n] * pc + d->acq_bi[n] * ps;
+            xi += d->acq_bi[n] * pc - d->acq_br[n] * ps;
+            float t = pc * c - ps * s; ps = pc * s + ps * c; pc = t;
+        }
+        float p = xr * xr + xi * xi;
+        d->acq_pow[b] = d->acq_blocks ? 0.5f * d->acq_pow[b] + 0.5f * p : p;
+    }
+    d->acq_blocks++;
+    if (d->acq_blocks < 2 || d->cfg.afc_hz <= 0.0f || AFC_PRESENT(d)) return;
+
+    float sorted[RTTY_ACQ_BINS];
+    memcpy(sorted, d->acq_pow, (size_t)d->acq_nb * sizeof(float));
+    qsort(sorted, (size_t)d->acq_nb, sizeof(float), cmp_float);
+    float thr = RTTY_ACQ_SNR * sorted[d->acq_nb / 2];
+
+    int h = (int)lroundf(d->cfg.shift_hz * 0.5f / RTTY_ACQ_STEP_HZ);
+    float best = 0.0f, best_off = 0.0f;
+    for (int b = h; b < d->acq_nb - h; b++) {
+        float off = d->acq_f0 + RTTY_ACQ_STEP_HZ * (float)b;
+        if (fabsf(off) > d->cfg.afc_hz) continue;
+        float lo = d->acq_pow[b - h], hi = d->acq_pow[b + h];
+        float m = lo < hi ? lo : hi;
+        if (m > thr && m > best) { best = m; best_off = off; }
+    }
+    if (best > 0.0f && fabsf(best_off - d->afc_off) >= RTTY_ACQ_MIN_MOVE) {
+        d->afc_off = best_off;
+        retune(d);
+        d->n_acq++;
+    }
+}
+
+static void acq_feed(rtty_demod_t *d, float xr, float xi)
+{
+    float ar = xr * d->acq_c + xi * d->acq_s, ai = xi * d->acq_c - xr * d->acq_s;
+    float t = d->acq_c * d->acq_step_c - d->acq_s * d->acq_step_s;
+    d->acq_s = d->acq_c * d->acq_step_s + d->acq_s * d->acq_step_c; d->acq_c = t;
+    d->acq_ar += ar; d->acq_ai += ai;
+    if (++d->acq_k < d->acq_D) return;
+    d->acq_k = 0;
+    float g = 1.0f / sqrtf(d->acq_c * d->acq_c + d->acq_s * d->acq_s);
+    d->acq_c *= g; d->acq_s *= g;
+    d->acq_br[d->acq_n] = d->acq_ar; d->acq_bi[d->acq_n] = d->acq_ai;
+    d->acq_ar = d->acq_ai = 0.0f;
+    if (++d->acq_n >= d->acq_N) { d->acq_n = 0; acq_block(d); }
+}
+
 bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
 {
     memset(d, 0, sizeof(*d));
@@ -63,6 +126,17 @@ bool rtty_demod_init(rtty_demod_t *d, const rtty_demod_cfg_t *cfg)
     d->g_P = 7.5 * d->T;
     d->cfg_alpha = RTTY_GRID_ALPHA;
     d->cfg_beta  = RTTY_GRID_BETA;
+
+    d->acq_D = (int)lroundf(cfg->fs_hz / RTTY_ACQ_RATE_HZ);
+    if (d->acq_D < 1) d->acq_D = 1;
+    d->acq_N = (int)(cfg->fs_hz / (float)d->acq_D * 0.5f);
+    if (d->acq_N > RTTY_ACQ_N) d->acq_N = RTTY_ACQ_N;
+    float span = cfg->afc_hz + cfg->shift_hz * 0.5f;
+    d->acq_nb = 2 * (int)ceilf(span / RTTY_ACQ_STEP_HZ) + 1;
+    if (d->acq_nb > RTTY_ACQ_BINS - 1) d->acq_nb = RTTY_ACQ_BINS - 1;   /* odd */
+    d->acq_f0 = -RTTY_ACQ_STEP_HZ * (float)(d->acq_nb / 2);
+    set_step(cfg->centre_hz, cfg->fs_hz, &d->acq_step_c, &d->acq_step_s);
+    d->acq_c = 1.0f;
     return true;
 }
 
@@ -267,6 +341,7 @@ void rtty_demod_feed(rtty_demod_t *d, const float *re, const float *im, int n,
     const float L = (float)d->L;
     for (int k = 0; k < n; k++) {
         float xr = re[k], xi = im ? im[k] : 0.0f;
+        if (d->cfg.afc_hz > 0.0f) acq_feed(d, xr, xi);
 
         /* x * conj(phasor): mixes the tone at the phasor frequency to DC */
         float a_r = xr * d->mc + xi * d->ms, a_i = xi * d->mc - xr * d->ms;

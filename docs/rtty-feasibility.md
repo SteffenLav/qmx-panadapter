@@ -588,7 +588,7 @@ The work items are tracked as R001-R012 in `TODO-RTTY.md`.
 
 | Phase | Work | Blocked on |
 |---|---|---|
-| R1 (rest) | decode a real recording (R004) | a recording |
+| R1 (rest) | done 2026-11-12: real-signal check vs MMTTY/GRITTY (R004), acquisition +/-150 Hz (R013). Open: contest QRM (R015) | - |
 | R2 | `rx_audio` tap + RTTY page + web panel; RAM and CPU measured on bench2 | a flash |
 | R4 | `TA<freq>;` at 22 ms, dummy load, fldigi as arbiter | operator at the bench |
 | R5 | TX: encoder exists; sequencer, macros, keyboard; band guard + inventory | R4 result |

@@ -93,6 +93,19 @@ extern "C" {
 /* AFC steers only while smoothed conf >= this. Lower than RTTY_SQ_OPEN on
  * purpose: a signal 30-40 Hz off reads lower conf until AFC has pulled it in. */
 #define RTTY_AFC_MIN_LVL    0.42f
+/* Coarse acquisition (R013): while no signal is present, find the tone pair
+ * within +/- cfg.afc_hz of the centre and put AFC on it. The band around the
+ * centre is mixed down, decimated to ~750 Hz, and DFT'd in 0.5 s blocks over
+ * RTTY_ACQ_STEP_HZ bins; a pair counts when BOTH tones exceed the median bin
+ * power by RTTY_ACQ_SNR. */
+#define RTTY_ACQ_RATE_HZ    750.0f
+#define RTTY_ACQ_N          400       /* block buffer, >= rate/2 */
+#define RTTY_ACQ_BINS       100       /* covers +/-(afc_hz + shift/2) */
+#define RTTY_ACQ_STEP_HZ    5.0f
+#ifndef RTTY_ACQ_SNR
+#define RTTY_ACQ_SNR        6.0f
+#endif
+#define RTTY_ACQ_MIN_MOVE   10.0f     /* Hz; smaller errors are AFC's job */
 /* Decision history: 8 bits at the longest bit. */
 #define RTTY_HIST (8 * RTTY_MAX_BIT_SAMPLES)
 
@@ -158,6 +171,14 @@ typedef struct {
     int   low_run;                    /* characters in a row below RTTY_SQ_LOW */
     int   n_pend;
     rtty_char_t pend[RTTY_SQ_PENDING];
+    /* coarse acquisition */
+    int   acq_D, acq_k, acq_n, acq_N, acq_nb, acq_blocks;
+    float acq_c, acq_s, acq_step_c, acq_step_s;   /* centre mixer */
+    float acq_ar, acq_ai;                         /* decimator accumulator */
+    float acq_br[RTTY_ACQ_N], acq_bi[RTTY_ACQ_N];
+    float acq_f0;                                 /* Hz of bin 0, rel. centre */
+    float acq_pow[RTTY_ACQ_BINS];
+    uint32_t n_acq;                               /* jumps made */
     /* counters */
     uint32_t n_chars, n_framing, n_false_start, n_squelched, n_grid, n_unlock;
 } rtty_demod_t;

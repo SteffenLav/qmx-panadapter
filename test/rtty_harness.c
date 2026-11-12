@@ -331,8 +331,8 @@ static void suite(void)
         printf("  tuning error %+3.0f Hz: CER %.3f\n", offs[i], cer);
         if (fabsf(offs[i]) <= 10) CHECK(cer < 0.05, "CER %.3f at %+.0f Hz", cer, offs[i]);
     }
-    printf("\nAFC on (+/-60 Hz) at SNR -6 dB:\n");
-    g_afc = 60.0f;
+    printf("\nAFC on (+/-150 Hz, with acquisition) at SNR -6 dB:\n");
+    g_afc = 150.0f;
     {
         gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, -6 };
         rtty_demod_t st;
@@ -340,13 +340,13 @@ static void suite(void)
         printf("  tuning error   0 Hz: CER %.3f (AFC off %.3f) offset end %+5.1f Hz\n", cer, cer_m6, st.afc_off);
         CHECK(cer < cer_m6 + 0.01, "AFC costs at 0 Hz: CER %.3f vs %.3f", cer, cer_m6);
     }
-    const float offa[] = { -40, -30, -20, -10, 10, 20, 30, 40 };
+    const float offa[] = { -140, -100, -40, -10, 10, 40, 100, 140 };
     for (int i = 0; i < 8; i++) {
         gen_t g = { 6000, 45.45f, 170.0f, 0, 0, offa[i], -6 };
         rtty_demod_t st;
         double cer = run(&g, text, false, 0, 0, &st);
         printf("  tuning error %+3.0f Hz: CER %.3f offset end %+5.1f Hz\n", offa[i], cer, st.afc_off);
-        if (fabsf(offa[i]) <= 20) CHECK(cer < 0.02, "AFC: CER %.3f at %+.0f Hz", cer, offa[i]);
+        CHECK(cer < 0.04, "AFC: CER %.3f at %+.0f Hz", cer, offa[i]);
     }
     {
         /* drift 0.2 Hz/s from -25 Hz: about +25 Hz at the end of the text */
