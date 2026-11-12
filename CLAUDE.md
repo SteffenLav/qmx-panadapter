@@ -1,5 +1,18 @@
 # CLAUDE.md — QMX Panadapter
 
+## ⛔ THIS FOLDER IS THE RTTY BRANCH (`qmx-panadapter-rtty`), NOT MAIN
+
+`C:\dev\qmx-panadapter-rtty` is its own git worktree (since 2026-11-12). Start
+a session HERE for RTTY work; start one in `C:\dev\qmx-panadapter` for main.
+- Open work and state: `TODO-RTTY.md`. Design and measurements: `docs/rtty-feasibility.md`.
+- Bench: **bench2** (`tools/bench.json` in the main checkout is the authority).
+  `bench flash bench2` builds from this folder. Every flash wedges its QMX.
+- Sessions here get their own (empty) memory folder. The project memory is at
+  C:/Users/Steffen/.claude/projects/C--dev-qmx-panadapter/memory/ - read
+  `project_handoff_20261112_rtty_device_decode.md` there. Keep anything the
+  branch needs in committed files, not only in memory.
+- Nothing on this branch is pushed or released until the operator says so.
+
 ESP-IDF firmware for M5Stack Tab5 (ESP32-P4). Real-time panadapter for the QRP Labs QMX/QMX+ HF transceiver: USB host captures IQ audio (UAC) + CAT (CDC-ACM), FFT runs on-device, spectrum + waterfall rendered on the 5" touch display (landscape 1280×720).
 
 **Detailed project truth has been moved to the memory system** (C:/Users/Steffen/.claude/projects/C--dev-qmx-panadapter/memory/) to keep sessions fast. This file contains only build essentials and the most critical operational rules.
