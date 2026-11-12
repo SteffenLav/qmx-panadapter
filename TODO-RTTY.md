@@ -21,7 +21,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Commit |
 |---|---|---|
-| R012 | ❌ RETRACTED - no period bias. Mean locked period at -6 dB within +/-0.001 % (4 seeds x ~6700 slots), -8 dB +/-0.006 %; sender +/-0.3 % tracked. Slot-to-slot sd is 0.12 %: the "0.15 % short" was one reading of that jitter. Same on the R001 code. Now a harness check (fails on a 0.1 % bias, mutation-tested). | (this commit) |
+| R012 | ❌ RETRACTED - no period bias. Mean locked period at -6 dB within +/-0.001 % (4 seeds x ~6700 slots), -8 dB +/-0.006 %; sender +/-0.3 % tracked. Slot-to-slot sd is 0.12 %: the "0.15 % short" was one reading of that jitter. Same on the R001 code. Now a harness check (fails on a 0.1 % bias, mutation-tested). | `0efbdcdf` |
 | R008 | RAM/CPU on bench2. RAM: demod 18552 B PSRAM, ~3.0 KB internal static. CPU: feed timer 4.0-6.1 % of core 1 (921 s); A/B same boot, 5 min each: idle1 39.1 % on / 42.7 % off / 39.0 % on = 3.6 points. Worst call ~13 ms = the 0.5 s acquisition DFT (host: 53 % of cost). rx_audio LATE not tied to the decoder: 14 / 7 / 0-for-200-s then ~14 per window after one 172 ms frame stall at uptime ~1520 s (POTA fetch + diag rotate, decoder untouched) - unexplained, not RTTY. | `2d15d857` |
 | R001 | ITA2 codec + FSK demod (per-tone boxcar, character clock with flywheel) + host harness. CER 0.4 % at -6 dB SNR/2500 Hz, theory 0.3 %. Host only, never run on a device. | `a81bacb3` |
 | R011 | Defaults 45.45 Bd, 170 Hz, USOS on, AFC on (+/-60 Hz). Operator: "yes, those defaults - but really you are the one to judge" (2026-11-12). Not yet wired to a setting: lands with R006. | - |
