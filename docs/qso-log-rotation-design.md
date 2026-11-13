@@ -9,6 +9,53 @@ Decided with the operator after Gyula HA3HZ described the same model on
 groups.io: *"log applications keep only the last few hundred QSOs visible and
 the rest in storage"*.
 
+## Status and where to start — 2026-11-13
+
+**The design below is settled. Nothing of it is implemented.** Start here.
+
+State of `main` (11 commits, **none pushed**, working tree clean):
+
+| commit | what |
+|---|---|
+| `c8e1c55a` | the safety fix this builds on - every SPIFFS write admitted, no `truncate` |
+| `35a9b0c5` | T198: 11 KB of web-radio `.bss` to PSRAM, DMA pool back |
+| `dd22a846` | `tools/dma_history.py` |
+| `8f66ebf0`, `f28ed852` | this document |
+
+First steps, in order:
+
+1. Read `main/util/spiffs_guard.h` and `tools/spiffs_host/README.md` before
+   writing a line. Every rule below came out of that harness rejecting three
+   earlier designs.
+2. Add the rotation to the harness FIRST (`tools/spiffs_host/sim.c`, a new
+   mode): rotation at the cap, an interrupted rotation, and a full partition
+   during the device-log rewrite, with the per-operation integrity check
+   `STEP=1` already uses. The pass bar is the T197 one: zero corrupt logs,
+   zero writes failing after a passed reserve check.
+3. Only then the firmware.
+
+⛔ Non-negotiable, each measured rather than reasoned:
+
+- Never `truncate()` on SPIFFS. It reports success and the next append breaks
+  files over ~330 KB. Copy to a temp file and rename.
+- No SPIFFS write without `spiffs_guard_reserve()` under `spiffs_guard_take()`.
+- Never report a QSO as logged unless `adif_log_record()` returned true.
+
+Bench and safety:
+
+- bench1 runs `35a9b0c5`, the release configuration. `ADIF_BENCH_FILL` is 0 and
+  must stay 0 in any commit.
+- Flashing bench1 costs the operator a QMX power cycle. Say so before flashing,
+  and bundle flashes.
+- bench1's QSO log is backed up at
+  `scratchpad/bench1-qso-backup-20261113.adi`, sha256 `ec73cd98…84bb21`,
+  36 records. Compare against it after any test that writes the log.
+- ⛔ No release without the operator saying "wrap-up".
+
+Still open elsewhere, not blocking this: ~6 KB of the v1.23.1 DMA cliff is
+unaccounted for, and a reply to Randy N4OPI is drafted but unsent at
+`scratchpad/reply_randy_n4opi_logging_20261113.md`.
+
 ## The problem this solves
 
 `/spiffs/qso.adi` lives on a 1 MB SPIFFS partition shared with the rolling
