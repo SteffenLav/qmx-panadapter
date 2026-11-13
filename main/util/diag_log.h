@@ -101,10 +101,14 @@ uint32_t diag_log_usb_enum_failures(void);
 size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_next);
 
 // Start the background task that persists the log to a small rolling file on
-// internal SPIFFS flash (256 KB), so it survives power-off even with no SD
+// internal SPIFFS flash (two generations of 128 KB), so it survives power-off even with no SD
 // card inserted (the PSRAM ring alone is wiped on reboot). Call once from
 // app_main AFTER SPIFFS is mounted (i.e. after adif_log_init()).
 void diag_log_persist_start(void);
+
+// Drop the previous flash generation (diag.0.log) and garbage-collect, to make
+// room for a QSO whose append failed. Safe while the persist task runs.
+void diag_log_flash_release(void);
 
 // Path to the flash-persisted log file (served by the web UI's /api/log/saved).
 const char *diag_log_persist_path(void);

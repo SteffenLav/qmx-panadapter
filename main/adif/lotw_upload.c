@@ -3,6 +3,7 @@
 // cert/key storage on SPIFFS, mbedtls RSA-SHA1 signing, gzip container,
 // multipart POST, and the batch/cursor logic.
 
+#include "file_commit.h"
 #include "lotw_upload.h"
 #include "lotw_tq8.h"
 #include "adif_log.h"
@@ -56,10 +57,9 @@ static esp_err_t store_line_file(const char *path, const char *line)
     size_t len = strlen(line);
     bool ok = fwrite(line, 1, len, f) == len;
     // fsync is mandatory for anything worth keeping on SPIFFS - fflush alone
-    // leaves the bytes in FS buffers if power is cut (see CLAUDE.md).
-    fflush(f);
-    fsync(fileno(f));
-    fclose(f);
+    // leaves the bytes in FS buffers if power is cut (see CLAUDE.md) - and
+    // its RETURN is the only report of a full partition (util/file_commit.h).
+    if (!file_commit_close(f)) ok = false;
     return ok ? ESP_OK : ESP_FAIL;
 }
 

@@ -29,10 +29,21 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <ctype.h>      // isspace
+#include <strings.h>    // strncasecmp
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "panic_hook.h"   // T138: mark the cache-off stretches
+#include "file_commit.h"  // the ONLY honest "did it land" on SPIFFS
+#include "diag_log.h"     // diag_log_flash_release(): a QSO outranks the diag log
 
 static const char *TAG      = "adif";
 static const char *FILE_PATH = "/spiffs/qso.adi";
+
+static long file_size(const char *path)
+{
+    struct stat st;
+    return (stat(path, &st) == 0) ? (long)st.st_size : -1;
+}
 
 static SemaphoreHandle_t s_lock;
 static int               s_count   = 0;
@@ -278,20 +289,85 @@ static void repair_legacy_submode_field(void)
         line = nl ? nl + 1 : NULL;
     }
     if (changed) {
-        FILE *out = fopen(FILE_PATH, "wb");
-        if (out) {
-            fwrite(buf, 1, strlen(buf), out);
-            fclose(out);
+        // Temp file + rename, never "wb" over the log: an in-place rewrite
+        // that fails partway (full partition) destroys the original.
+        const char *TMP_PATH = "/spiffs/qso.tmp";
+        FILE *out = fopen(TMP_PATH, "wb");
+        size_t len = strlen(buf);
+        bool ok = out && fwrite(buf, 1, len, out) == len;
+        if (out && !file_commit_close(out)) ok = false;
+        if (ok) { remove(FILE_PATH); ok = (rename(TMP_PATH, FILE_PATH) == 0); }
+        if (ok) {
             ESP_LOGI(TAG, "repaired legacy duplicate-SUBMODE field(s) in %s", FILE_PATH);
             sd_archive_mark_adif_dirty();   // re-mirror the repaired file to SD too
         } else {
-            ESP_LOGW(TAG, "could not rewrite %s for SUBMODE repair", FILE_PATH);
+            remove(TMP_PATH);
+            ESP_LOGW(TAG, "could not rewrite %s for SUBMODE repair - log left as it was", FILE_PATH);
         }
     }
     free(buf);
 }
 
 // ---------------------------------------------------------------------------
+
+// Cut a partial record off the end of the log.
+//
+// A write that failed partway leaves a record with no <EOR>, and the next
+// append then lands directly after it ("...<STATION_CALL<CALL:4>..."),
+// merging two records into one malformed one that the loader, QRZ, LoTW and
+// every other reader then trip over. Field case 2026-11-12 (N4OPI): the log
+// ended "<STATION_CALL" after a full partition cut the NU0Y record short.
+// append_record() now cuts back on failure, but a log written by v1.26.2 or
+// earlier, or one whose cut-back itself failed, still carries the fragment.
+//
+// Only ever removes bytes AFTER the last <EOR> (or <EOH>) in the last 2 KB,
+// and only when they are not whitespace. The cut text is logged in full, so
+// the contact it held can still be read from the diagnostic log.
+static void repair_partial_tail(void)
+{
+    long sz = file_size(FILE_PATH);
+    if (sz <= 0) return;
+    FILE *f = fopen(FILE_PATH, "rb");
+    if (!f) return;
+    static EXT_RAM_BSS_ATTR char tail[2048 + 1];   // PSRAM: app_main's stack is small
+    long win = (sz < 2048) ? sz : 2048;
+    size_t n = 0;
+    if (fseek(f, sz - win, SEEK_SET) == 0) n = fread(tail, 1, (size_t)win, f);
+    fclose(f);
+    tail[n] = '\0';
+
+    long cut = -1;
+    for (long i = (long)n - 5; i >= 0; i--) {
+        if (strncasecmp(tail + i, "<EOR>", 5) == 0 ||
+            strncasecmp(tail + i, "<EOH>", 5) == 0) { cut = i + 5; break; }
+    }
+    if (cut < 0) {
+        ESP_LOGW(TAG, "%s: no <EOR> or <EOH> in its last %ld B - end of file "
+                      "left as it is", FILE_PATH, win);
+        return;
+    }
+    bool junk = false;
+    for (size_t i = (size_t)cut; i < n; i++) {
+        if (!isspace((unsigned char)tail[i])) { junk = true; break; }
+    }
+    if (!junk) return;
+
+    bool has_nl = (tail[cut] == '\n');
+    long keep = sz - win + cut + (has_nl ? 1 : 0);
+    const char *frag = tail + cut + (has_nl ? 1 : 0);
+    ESP_LOGW(TAG, "%s ends in a partial record (%ld B after the last <EOR>), "
+                  "cutting it off. It was: %s", FILE_PATH, sz - keep, frag);
+    if (truncate(FILE_PATH, keep) != 0) {
+        ESP_LOGE(TAG, "could not cut the partial record (%s) - the next QSO "
+                      "will be appended after it", strerror(errno));
+        return;
+    }
+    if (!has_nl) {                         // "<EOR>junk" with no newline between
+        FILE *a = fopen(FILE_PATH, "a");
+        if (a) { fputc('\n', a); (void)file_commit_close(a); }
+    }
+    sd_archive_mark_adif_dirty();
+}
 
 void adif_log_init(void)
 {
@@ -416,21 +492,16 @@ void adif_log_init(void)
         else ESP_LOGE(TAG, "Cannot create %s", FILE_PATH);
     } else {
         fclose(f);
+        repair_partial_tail();
         repair_legacy_submode_field();
         load_from_file();
     }
 }
 
-void adif_log_record(const adif_qso_t *qso)
+// The fields of one record, in order, ending "<EOR>\n". Errors are left on
+// the stream for file_commit_close() to report.
+static void write_record(FILE *f, const adif_qso_t *qso)
 {
-    if (!s_mounted || !qso || !qso->their_call || !qso->their_call[0]) return;
-
-    FILE *f = fopen(FILE_PATH, "a");
-    if (!f) {
-        ESP_LOGE(TAG, "Cannot open %s for append", FILE_PATH);
-        return;
-    }
-
     // Frequency in MHz, 3 decimal places (ADIF convention for HF).
     char freq_str[16];
     snprintf(freq_str, sizeof(freq_str), "%.3f", (double)qso->freq_hz / 1e6);
@@ -559,32 +630,67 @@ void adif_log_record(const adif_qso_t *qso)
     write_field(f, "COMMENT", qso->comment);
 
     fprintf(f, "<EOR>\n");
+}
+
+// Append one record and commit it. On any failure the file is cut back to
+// `before`, so a failed append never leaves a partial record for the next one
+// to run into. Returns false with *err set to the errno of the failing step.
+static bool append_record(const adif_qso_t *qso, long before, int *err)
+{
+    // A previous failed attempt whose cut-back itself failed (a truncate is a
+    // write, and the partition was full) left a fragment. Remove it first.
+    if (before >= 0 && file_size(FILE_PATH) != before &&
+        truncate(FILE_PATH, before) != 0) {
+        *err = errno;
+        return false;
+    }
+    errno = 0;
+    FILE *f = fopen(FILE_PATH, "a");
+    if (!f) { *err = errno; return false; }
+    write_record(f, qso);
+    errno = 0;
+    if (file_commit_close(f)) return true;
+    *err = errno;
+    if (before >= 0 && truncate(FILE_PATH, before) != 0) {
+        ESP_LOGE(TAG, "could not cut %s back to %ld B after a failed append (%s)",
+                 FILE_PATH, before, strerror(errno));
+    }
+    return false;
+}
+
+void adif_log_record(const adif_qso_t *qso)
+{
+    if (!s_mounted || !qso || !qso->their_call || !qso->their_call[0]) return;
 
     // ⛔ A LOGGER MUST NOT CLAIM A CONTACT IT DID NOT WRITE.
     //
-    // None of the fprintf()s above were checked and neither was fclose(), so a
-    // full or failing filesystem lost the QSO in silence while the code went on
-    // to increment the count and log "Logged QSO #N" - the operator is told it
-    // is safe, and finds out when they come to upload. The `storage` partition
-    // is 1 MB shared between this log, the 256 KB rolling diagnostic log and its
-    // rotation, and the LoTW certificate and key, so filling it is a real
-    // prospect on a long trip rather than a theoretical one (Gyula HA3HZ asked
-    // how much the log holds, which is what turned this up).
+    // The `storage` partition is 1 MB shared between this log, the rolling
+    // diagnostic log and its previous generation, and the LoTW certificate
+    // and key. Filling it is a real case, not a theoretical one: N4OPI's log
+    // reached 511,846 B (2,715 QSOs) on 2026-11-12 and every later QSO failed.
     //
-    // fsync before fclose for the reason CLAUDE.md already gives about the SD
-    // log: fclose flushes to the filesystem, but a power cut immediately after
-    // can still lose it, and a QSO is not something to lose cheaply.
-    bool write_ok = (ferror(f) == 0);
-    if (write_ok) {
-        fflush(f);
-        fsync(fileno(f));
+    // Before v1.26.3 this path checked ferror() and fclose() but not fsync(),
+    // and a full SPIFFS reports the failure ONLY through fsync() - see
+    // file_commit_close() in util/file_commit.h. So those QSOs were counted,
+    // logged as "Logged QSO #N" and shown on the ticker, and never written.
+    //
+    // A QSO outranks diagnostics: on a failure, drop the diag log's previous
+    // generation (up to 128 KB), collect, and try once more before giving up.
+    long before = file_size(FILE_PATH);
+    int  err = 0;
+    bool write_ok = append_record(qso, before, &err);
+    if (!write_ok) {
+        ESP_LOGW(TAG, "QSO with %s: write failed (%s) - freeing the old diag "
+                      "log generation and retrying", qso->their_call,
+                 err ? strerror(err) : "no errno");
+        diag_log_flash_release();
+        write_ok = append_record(qso, before, &err);
     }
-    if (fclose(f) != 0) write_ok = false;
 
     if (!write_ok) {
-        ESP_LOGE(TAG, "FAILED to log QSO with %s - the log file could not be "
-                      "written (filesystem full?). The contact is NOT saved.",
-                 qso->their_call);
+        ESP_LOGE(TAG, "FAILED to log QSO with %s (%s) - the log file could not "
+                      "be written (filesystem full?). The contact is NOT saved.",
+                 qso->their_call, err ? strerror(err) : "no errno");
         char msg[96];
         snprintf(msg, sizeof(msg), "QSO with %s NOT logged - storage full?",
                  qso->their_call);
@@ -976,13 +1082,9 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
      * occasional report correction - it is how a Park-to-Park reference gets
      * added to a whole activation's worth of QSOs - so it gets the same
      * treatment rather than waiting to be reported. */
-    bool write_ok = (ferror(out) == 0);
-    if (write_ok) {
-        fflush(out);
-        fsync(fileno(out));
-        write_ok = (ferror(out) == 0);
-    }
-    if (fclose(out) != 0) write_ok = false;
+    // file_commit_close(): fsync()'s return is the only report of a full
+    // SPIFFS. Checking ferror() after it, as this did, never saw that failure.
+    bool write_ok = file_commit_close(out);
 
     if (!edited || !write_ok) {
         remove(TMP_PATH);
@@ -1073,13 +1175,9 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     }
     fclose(in);
 
-    bool write_ok = (ferror(out) == 0);
-    if (write_ok) {
-        fflush(out);
-        fsync(fileno(out));
-        write_ok = (ferror(out) == 0);
-    }
-    if (fclose(out) != 0) write_ok = false;
+    // file_commit_close(): fsync()'s return is the only report of a full
+    // SPIFFS. Checking ferror() after it, as this did, never saw that failure.
+    bool write_ok = file_commit_close(out);
 
     if (!write_ok) {
         remove(TMP_PATH);
@@ -1184,13 +1282,9 @@ bool adif_log_delete_record(int idx)
     // being left alone by the fixed code below, not with anything on the
     // read/index side (the confirm bar's own preview text, built from the
     // same index, was never reported wrong).
-    bool write_ok = (ferror(out) == 0);
-    if (write_ok) {
-        fflush(out);
-        fsync(fileno(out));
-        write_ok = (ferror(out) == 0);
-    }
-    if (fclose(out) != 0) write_ok = false;
+    // file_commit_close(): fsync()'s return is the only report of a full
+    // SPIFFS. Checking ferror() after it, as this did, never saw that failure.
+    bool write_ok = file_commit_close(out);
 
     if (!removed || !write_ok) {
         remove(TMP_PATH);
@@ -1331,6 +1425,7 @@ int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
         }
     }
 
+    long before = file_size(FILE_PATH);   // cut back here if the import fails
     FILE *f = fopen(FILE_PATH, "a");
     if (!f) {
         ESP_LOGE(TAG, "ADIF import: cannot open %s for append", FILE_PATH);
@@ -1412,13 +1507,21 @@ int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
         }
     }
 
-    bool write_ok = (ferror(f) == 0);
-    if (write_ok) { fflush(f); fsync(fileno(f)); }
-    if (fclose(f) != 0) write_ok = false;
+    bool write_ok = file_commit_close(f);
     if (existing) free(existing);
 
     if (!write_ok) {
-        ESP_LOGE(TAG, "ADIF import: write failed (storage full?), %d record(s) may be lost", added);
+        // All or nothing: a partial import would leave a cut-off record at
+        // the end for the next QSO to run into, and a count the operator
+        // cannot reconcile with the file they imported.
+        if (before >= 0 && truncate(FILE_PATH, before) != 0) {
+            ESP_LOGE(TAG, "ADIF import: write failed (storage full?) and the log "
+                          "could not be cut back (%s); some of the %d record(s) "
+                          "may have landed", strerror(errno), added);
+        } else {
+            ESP_LOGE(TAG, "ADIF import: write failed (storage full?) - none of the "
+                          "%d record(s) were added, log unchanged", added);
+        }
         load_from_file();   // resync count/cache to whatever actually landed on disk
         return -1;
     }
@@ -1690,9 +1793,7 @@ int adif_log_export_activation(const char *sig_info, char *out_path, size_t out_
     fclose(in);
     /* ⛔ fsync before the close is believed: a card pulled straight after an
      * activation ends is the normal case, not an edge one. */
-    fflush(out);
-    fsync(fileno(out));
-    fclose(out);
+    if (!file_commit_close(out)) write_failed = true;
     sd_archive_unlock();
 
     if (write_failed || n == 0) {

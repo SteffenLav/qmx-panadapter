@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>     // fsync
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -535,8 +536,53 @@ static void diag_persist_task(void *arg)
                 }
             }
         }
-        if (wrote) { fflush(f); fsync(fileno(f)); }     // commit to flash
+        if (wrote) {                                    // commit to flash
+            /* fsync()'s return is the only report of a full SPIFFS: on failure
+             * SPIFFS discards its cached last page and nothing else says so
+             * (util/file_commit.h). The cursor has already moved past those
+             * bytes, so they are gone from the flash copy - say so. The next
+             * tick's fwrite then meets the same full partition and takes the
+             * ENOSPC rotation above. */
+            errno = 0;
+            if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+                int cerr = errno;
+                clearerr(f);
+                ESP_LOGW(TAG, "flash-persist: commit failed (errno %d, %s) - "
+                              "the last tick's bytes are not on flash",
+                         cerr, cerr ? strerror(cerr) : "no errno set");
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(DIAG_FLASH_FLUSH_MS));
+    }
+}
+
+/* A QSO outranks the diagnostic log. Called by adif_log_record() when an
+ * append fails: drop the PREVIOUS generation (diag.0.log, up to
+ * DIAG_FLASH_MAX) and collect, so the QSO can be retried.
+ *
+ * Only diag.0.log: diag.log is held open by diag_persist_task. No lock is
+ * taken; each SPIFFS call holds the filesystem lock. The one interleaving is
+ * a cap rotation running at the same moment (remove .0, rename live -> .0):
+ * this remove then either finds nothing (ENOENT, harmless) or removes the
+ * generation that was just rotated, which is the space this call is for.
+ *
+ * Field case 2026-11-12 (N4OPI): qso.adi 511,846 B + diag.0.log 132,294 B
+ * filled the partition; diag.log could not even be opened at boot. */
+void diag_log_flash_release(void)
+{
+    struct stat st;
+    long sz = (stat(DIAG_FLASH_PATH_0, &st) == 0) ? (long)st.st_size : -1;
+    panic_hook_crumb_enter("spiffs:diag-release");
+    int r = (sz >= 0) ? remove(DIAG_FLASH_PATH_0) : -1;
+    esp_err_t gc = esp_spiffs_gc("storage", DIAG_GC_REQUEST);
+    panic_hook_crumb_exit();
+    if (sz < 0) {
+        ESP_LOGW(TAG, "flash-persist: no %s to drop for the QSO log (gc=%s)",
+                 DIAG_FLASH_PATH_0, esp_err_to_name(gc));
+    } else {
+        ESP_LOGW(TAG, "flash-persist: %s %s (%ld B) to make room for the QSO log (gc=%s)",
+                 r == 0 ? "dropped" : "could not drop", DIAG_FLASH_PATH_0, sz,
+                 esp_err_to_name(gc));
     }
 }
 
