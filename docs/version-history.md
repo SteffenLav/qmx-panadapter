@@ -4793,7 +4793,7 @@ v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT
 
 ### Shipped in v1.26.3 — 2026-11-13
 
-**A full QSO log no longer loses QSOs, and with an SD card in it no longer fills up: older QSOs move to the card. The SD file browser works with the web radio running.**
+**A full QSO log no longer loses QSOs, and with an SD card in it no longer fills up: older QSOs move to the card. The SD file browser works with the QMX connected.**
 
 **QSO log** *(Randy N4OPI, Gyula HA3HZ)*
 
@@ -4805,7 +4805,7 @@ v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT
 
 **SD card**
 
-- **The SD file browser and downloads work with the web radio running** *(Randy N4OPI)*. The web radio had taken memory the card needs.
+- **The SD file browser and downloads work with the QMX connected** *(Randy N4OPI)*. With the radio connected, the card was left too little memory and the browser failed.
 
 **Known, not fixed**
 
