@@ -36,7 +36,8 @@ static long cut_countdown = -1;      // -1 = off
 static long ops;                     // flash programs + erases + archive writes
 static jmp_buf cut_jmp;
 static int  in_run;
-static void maybe_cut(void) { ops++; if (cut_countdown > 0 && --cut_countdown == 0) { cut_countdown = -1; longjmp(cut_jmp, 1); } }
+static const char *phase = "-", *cut_phase = "-";
+static void maybe_cut(void) { ops++; if (cut_countdown > 0 && --cut_countdown == 0) { cut_countdown = -1; cut_phase = phase; longjmp(cut_jmp, 1); } }
 
 void spiffs_api_lock(struct spiffs_t *fs)   { (void)fs; }
 void spiffs_api_unlock(struct spiffs_t *fs) { (void)fs; }
@@ -68,6 +69,7 @@ static void mount(void)
     if (r == SPIFFS_ERR_NOT_A_FS) { SPIFFS_format(&fs); r = SPIFFS_mount(&fs, &c, work, fds, sizeof(fds), cache, sizeof(cache), NULL); }
     if (r) { printf("mount failed %d\n", r); exit(1); }
 }
+static const char *g_log = "qso.adi";
 static long fsize(const char *p) { spiffs_stat st; long r = SPIFFS_stat(&fs, p, &st) == 0 ? (long)st.size : -1; SPIFFS_clearerr(&fs); return r; }
 
 // ---- the archive: a RAM file, FAT semantics --------------------------------
@@ -212,16 +214,18 @@ static int make_rec(int seq, char *out)
 
 static void write_dev_header(void)
 {
-    spiffs_file f = SPIFFS_open(&fs, "qso.adi", SPIFFS_O_CREAT | SPIFFS_O_TRUNC | SPIFFS_O_WRONLY, 0);
+    spiffs_file f = SPIFFS_open(&fs, g_log, SPIFFS_O_CREAT | SPIFFS_O_TRUNC | SPIFFS_O_WRONLY, 0);
     const char *h = "<ADIF_VER:5>3.1.4 <PROGRAMID:13>QMX-Panadapter <EOH>\n";
     SPIFFS_write(&fs, f, (void *)h, (s32_t)strlen(h)); SPIFFS_fflush(&fs, f); SPIFFS_close(&fs, f); SPIFFS_clearerr(&fs);
 }
 // One QSO the way the firmware writes it: admitted, appended in 128 B chunks.
 static int append_rec(int seq)
 {
+    phase = "qso-reserve-gc";
     if (SPIFFS_gc(&fs, 1024 + 8192) != SPIFFS_OK) { SPIFFS_clearerr(&fs); return 0; }
+    phase = "qso-append";
     char r[1024]; int n = make_rec(seq, r);
-    spiffs_file f = SPIFFS_open(&fs, "qso.adi", SPIFFS_O_APPEND | SPIFFS_O_WRONLY, 0);
+    spiffs_file f = SPIFFS_open(&fs, g_log, SPIFFS_O_APPEND | SPIFFS_O_WRONLY, 0);
     if (f < 0) { SPIFFS_clearerr(&fs); return 0; }
     int ok = 1;
     for (int off = 0; off < n; off += 128) { int k = n - off > 128 ? 128 : n - off; if (SPIFFS_write(&fs, f, r + off, k) < 0) ok = 0; }
@@ -233,18 +237,20 @@ static int append_rec(int seq)
 static void diag_churn(int bytes)
 {
     static char b[2048]; memset(b, 'd', sizeof b);
+    phase = "diag-write";
     spiffs_file f = SPIFFS_open(&fs, "diag.log", SPIFFS_O_APPEND | SPIFFS_O_CREAT | SPIFFS_O_WRONLY, 0);
     for (int left = bytes; left > 0; left -= 2048) SPIFFS_write(&fs, f, b, left > 2048 ? 2048 : left);
     SPIFFS_close(&fs, f); SPIFFS_clearerr(&fs);
+    phase = "diag-rotate";
     if (fsize("diag.log") > 128 * 1024) { SPIFFS_remove(&fs, "diag.0.log"); SPIFFS_rename(&fs, "diag.log", "diag.0.log"); SPIFFS_clearerr(&fs); }
 }
 
 // ---- checks ----------------------------------------------------------------
 static char *slurp_dev(long *len)
 {
-    long n = fsize("qso.adi"); if (n < 0) { *len = -1; return NULL; }
+    long n = fsize(g_log); if (n < 0) { *len = -1; return NULL; }
     char *b = malloc((size_t)n + 1);
-    spiffs_file f = SPIFFS_open(&fs, "qso.adi", SPIFFS_O_RDONLY, 0);
+    spiffs_file f = SPIFFS_open(&fs, g_log, SPIFFS_O_RDONLY, 0);
     s32_t g = f >= 0 ? SPIFFS_read(&fs, f, b, n) : -1;
     SPIFFS_close(&fs, f); SPIFFS_clearerr(&fs);
     if (g != n) { free(b); *len = -2; return NULL; }       // unreadable: the T197 failure
@@ -398,38 +404,25 @@ static void sweep(const char *name, int total, int rotate_at, int diag, int stri
 // here is SPIFFS's own power-loss behaviour, which the rotation inherits but
 // does not cause. Result per cut: OK, LOST (a record committed before the
 // sweep started is gone), UNREADABLE, or MISSING (no qso.adi after boot).
-static void baseline(int stride)
+static const char *ph_name[8]; static int n_ph;
+static long ph_cuts[8], ph_missing[8], ph_unread[8], ph_prefix[8];
+static int tally_phase(const char *p)
 {
-    build(400, 0, 6000); boot();
-    snap_take();
-    ops = 0; in_run = 1;
-    for (int i = 0; i < 30; i++) { diag_churn(6000); append_rec(400 + i); }
-    in_run = 0;
-    long total_ops = ops, cuts = 0, lost = 0, unread = 0, missing = 0;
-    for (long k = 1; k <= total_ops; k += stride) {
-        snap_restore(); ops = 0; cut_countdown = k;
-        if (setjmp(cut_jmp) == 0) {
-            in_run = 1;
-            for (int i = 0; i < 30; i++) { diag_churn(6000); append_rec(400 + i); }
-            in_run = 0; cut_countdown = -1; continue;
-        }
-        in_run = 0; cut_countdown = -1; cuts++;
-        boot_cold();
-        long dl; char *d = slurp_dev(&dl);
-        if (dl == -1) { missing++; continue; }
-        if (dl == -2) { unread++; continue; }
-        const char *nl = memchr(d, '\n', (size_t)dl);
-        long hl = nl ? nl - d + 1 : dl, end = dl;
-        while (end > hl && d[end - 1] != '\n') end--;           // a torn last append is the firmware's boot repair's job
-        const char *err = ""; int n = parse_recs(d + hl, end - hl, seqbuf_d, 20000, &err);
-        free(d);
-        int ok = n >= 400;
-        for (int i = 0; ok && i < 400; i++) if (seqbuf_d[i] != i) ok = 0;
-        if (!ok) lost++;
-    }
-    printf("BASELINE (no rotation, %s): %ld ops, %ld cuts: lost %ld, unreadable %ld, missing %ld\n",
-           getenv("NOHALF") ? "clean cuts" : "torn page at the cut", total_ops, cuts, lost, unread, missing);
+    for (int i = 0; i < n_ph; i++) if (strcmp(ph_name[i], p) == 0) return i;
+    ph_name[n_ph] = p; return n_ph++;
 }
+// Bytes of qso.adi that read back before the first read error.
+static long readable_prefix(void)
+{
+    spiffs_file f = SPIFFS_open(&fs, "qso.adi", SPIFFS_O_RDONLY, 0);
+    if (f < 0) { SPIFFS_clearerr(&fs); return 0; }
+    static char b[256]; long got = 0;
+    for (;;) { s32_t g = SPIFFS_read(&fs, f, b, sizeof b); if (g <= 0) break; got += g; if (g < (s32_t)sizeof b) break; }
+    SPIFFS_close(&fs, f); SPIFFS_clearerr(&fs);
+    return got;
+}
+
+#include "baseline.inc"
 
 int main(int argc, char **argv)
 {

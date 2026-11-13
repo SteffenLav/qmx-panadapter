@@ -70,6 +70,24 @@ tick, QSO append, their gc) leaves qso.adi unreadable in ~17 % of cuts; boot
 the shipped firmware's behaviour, not the rotation's. Not yet seen in the
 field; the model (writes stop at the cut, RAM state lost) is the standard one.
 
+### Baseline by cause (`BASE=1`, stride 3, torn page; env RECS, DIAG, DUAL)
+
+| Write in progress at the cut | cuts | qso.adi missing after boot |
+|---|---|---|
+| diag log write (gc moves qso.adi pages) | 1,172 | 96 |
+| QSO reserve gc | 220 | 53 |
+| QSO append | 182 | 18 |
+| diag rotate | 356 | 1 |
+
+| Variant | cuts | log lost (missing) |
+|---|---|---|
+| as shipped | 1,930 | 168 |
+| no diag log on the partition (`DIAG=0`) | 183 | 8 (4 %) |
+| two copies, qso.adi + qso.bak (`DUAL=1`) | 2,163 | 0 |
+| two copies, no diag (`DUAL=1 DIAG=0`) | 366 | 6 - both copies gone together |
+
+Two copies on one SPIFFS can die together: not a guarantee.
+
 ## Results (2026-11-13)
 
 | What | Result |
