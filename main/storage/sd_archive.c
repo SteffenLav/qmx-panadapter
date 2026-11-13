@@ -1483,6 +1483,39 @@ static bool mirror_adif(void)
     return ok;
 }
 
+// Copy the flash-persisted diag logs (both generations) to the card's
+// history/ folder. For QSO log rotation at the wall, which then deletes them
+// from flash (adif_log_rotate): they hold EARLIER boots too - possibly boots
+// that ran without a card - so they are not on the card until copied here.
+// sd_archive's task only, card lock held. True only if every file that
+// exists was copied completely.
+bool sd_archive_save_flash_diag(void)
+{
+    if (!s_mounted) return false;
+    char dir[64], dst[112];
+    snprintf(dir, sizeof dir, "%s/history", SD_DIR);
+    ensure_dir(dir);
+    time_t now = time(NULL);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    char stamp[20];
+    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+    static const char *const src[2] = { "/spiffs/diag.0.log", "/spiffs/diag.log" };
+    bool ok = true;
+    for (int i = 0; i < 2; i++) {
+        struct stat st, dt;
+        if (stat(src[i], &st) != 0) continue;            // that generation does not exist
+        snprintf(dst, sizeof dst, "%s/flash-diag-%s-%d.txt", dir, stamp, i);
+        if (!copy_file(src[i], dst) || stat(dst, &dt) != 0 || dt.st_size != st.st_size) {
+            ESP_LOGE(TAG, "could not copy %s to the card - it stays on flash", src[i]);
+            ok = false;
+        } else {
+            ESP_LOGW(TAG, "copied %s (%ld B) to %s before it is dropped", src[i], (long)st.st_size, dst);
+        }
+    }
+    return ok;
+}
+
 bool sd_archive_archive_info(long *bytes, uint32_t *records)
 {
     if (!sd_archive_is_mounted() || !sd_archive_lock(5000)) return false;

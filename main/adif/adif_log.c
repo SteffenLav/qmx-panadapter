@@ -37,6 +37,7 @@
 #include "spiffs_guard.h"  // every write to qso.adi is admitted first
 #include "adif_rotate.h"   // older records move to the card
 #include "esp_timer.h"
+#include "diag_log.h"       // diag_log_persist_drop(): rotation at the wall
 #include "lotw_upload.h"   // lotw_cert_present(): is LoTW upload configured
 
 static const char *TAG      = "adif";
@@ -2230,6 +2231,33 @@ int adif_log_rotate(const char *arc_path)
         if (cut_pending_fragment(NULL)) rot_run(&io, maxr, &r);
         else { r.status = ROT_FULL; ESP_LOGW(TAG, "rotation: a partial record could not be cut first"); }
         spiffs_guard_give();
+        // ⛔ AT THE WALL THE REWRITE IS REFUSED AT EVERY BOOT. Measured
+        // (tools/spiffs_host, WALL=1): a 404 KB log with both diag logs on
+        // flash, refused 3 of 3 boots; dropping only diag.0.log did not help;
+        // dropping both + small gc passes made it succeed on the first boot,
+        // exact, with 50 of 50 QSOs logged after. Operator's decision
+        // 2026-11-13: the on-flash diag logs may go to make room - but only
+        // after both are copied to the card, since they hold EARLIER boots
+        // the card may never have seen. The moved records are already in the
+        // archive (ROT_FULL commits nothing), so the retry finishes the move.
+        if (r.status == ROT_FULL) {
+            if (!sd_archive_save_flash_diag()) {
+                ESP_LOGE(TAG, "rotation: refused, and the diag logs could not be copied to the card - left as they are");
+            } else {
+                diag_log_persist_drop();
+                int ok = 0;
+                for (int i = 0; i < 64; i++) {
+                    spiffs_guard_take();
+                    if (esp_spiffs_gc("storage", 32 * 1024) == ESP_OK) ok++;
+                    spiffs_guard_give();
+                }
+                ESP_LOGW(TAG, "rotation: refused at the wall - diag logs copied to the card and dropped, %d/64 gc passes; retrying", ok);
+                memset(&r, 0, sizeof r);
+                spiffs_guard_take();
+                if (cut_pending_fragment(NULL)) rot_run(&io, maxr, &r);
+                spiffs_guard_give();
+            }
+        }
         for (int i = 0; i < 4; i++) if (s_rio[i].f) { fclose(s_rio[i].f); s_rio[i].f = NULL; }
         free(buf);
         ESP_LOGI(TAG, "rotation: status %d, %lu moved, %lu held for uploads, %lu on the device, %lu on the card (%lld ms)",

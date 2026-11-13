@@ -104,6 +104,9 @@ char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len
 bool sd_archive_archive_info(long *bytes, uint32_t *records);
 // Does qso.adi (or qso.prev.adi) start with the archive's first arc_bytes?
 bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes);
+// Copy /spiffs/diag.0.log and diag.log to the card's history/ folder. For QSO
+// log rotation at the wall only (sd_archive's task, card lock held).
+bool sd_archive_save_flash_diag(void);
 
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);

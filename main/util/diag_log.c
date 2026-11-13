@@ -360,6 +360,11 @@ size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_ne
 
 
 static uint64_t s_flash_cursor = 0;   // position in s_total space
+// The persist task's file and its size. Static, not task locals, so
+// diag_log_persist_drop() can close them under the SPIFFS guard - the task
+// only touches either while it holds that guard.
+static FILE  *s_pf;
+static size_t s_pbytes;
 
 static void diag_persist_task(void *arg)
 {
@@ -370,15 +375,15 @@ static void diag_persist_task(void *arg)
      * admitted: in the replay their failures never damaged qso.adi, and the
      * ENOSPC rotation below is how this file makes room for itself. */
     spiffs_guard_take();
-    FILE *f = fopen(DIAG_FLASH_PATH, "a");
+    s_pf = fopen(DIAG_FLASH_PATH, "a");
     spiffs_guard_give();
-    if (!f) {
+    if (!s_pf) {
         ESP_LOGW(TAG, "flash-persist: cannot open %s (%s)", DIAG_FLASH_PATH, strerror(errno));
         vTaskDelete(NULL);
         return;
     }
-    long pos = ftell(f);
-    size_t bytes = (pos > 0) ? (size_t)pos : 0;
+    long pos = ftell(s_pf);
+    s_pbytes = (pos > 0) ? (size_t)pos : 0;
     /* PSRAM: a stdio read buffer for the diagnostic log, used when the
      * operator asks for the file. FATFS does its own DMA into its own
      * window; this is the destination of a plain fread. */
@@ -388,6 +393,14 @@ static void diag_persist_task(void *arg)
     for (;;) {
         bool wrote = false;
         spiffs_guard_take();
+        // diag_log_persist_drop() (QSO log rotation at the wall) may have
+        // closed the file; reopen it, or wait for the next tick.
+        if (!s_pf) {
+            s_pf = fopen(DIAG_FLASH_PATH, "a");
+            long p3 = s_pf ? ftell(s_pf) : 0;
+            s_pbytes = (p3 > 0) ? (size_t)p3 : 0;
+            if (!s_pf) { spiffs_guard_give(); vTaskDelay(pdMS_TO_TICKS(DIAG_FLASH_FLUSH_MS)); continue; }
+        }
         for (;;) {
             uint64_t next = s_flash_cursor;
             size_t got = diag_log_read_from(s_flash_cursor, buf, sizeof(buf), &next);
@@ -405,7 +418,7 @@ static void diag_persist_task(void *arg)
              * boot - nothing else can, because that reset never runs the panic
              * handler. */
             panic_hook_crumb_enter("spiffs:diag-write");
-            size_t wrote_n = fwrite(buf, 1, got, f);
+            size_t wrote_n = fwrite(buf, 1, got, s_pf);
             panic_hook_crumb_exit();
             if (wrote_n != got) {
                 // A failed write leaves the stream's ERROR FLAG SET, and every
@@ -419,7 +432,7 @@ static void diag_persist_task(void *arg)
                 // The SD mirror learned the same lesson (see CLAUDE.md); this
                 // path never got the fix.
                 int werr = errno;      /* before clearerr or any other call */
-                clearerr(f);
+                clearerr(s_pf);
                 /* Report at the streaks that MEAN something - 1, and each
                  * point where the next tick escalates. The old "1, then every
                  * 20th" hid streaks 4-8 and 10-14 entirely, so the log went
@@ -454,23 +467,23 @@ static void diag_persist_task(void *arg)
                 if (fail_streak == 3 || fail_streak == 9) {
                     ESP_LOGW(TAG, "flash-persist: reopening %s after %d failures",
                              DIAG_FLASH_PATH, fail_streak);
-                    fclose(f);
-                    f = fopen(DIAG_FLASH_PATH, "a");
-                    if (f) {
-                        long p2 = ftell(f);
-                        bytes = (p2 > 0) ? (size_t)p2 : 0;
+                    fclose(s_pf);
+                    s_pf = fopen(DIAG_FLASH_PATH, "a");
+                    if (s_pf) {
+                        long p2 = ftell(s_pf);
+                        s_pbytes = (p2 > 0) ? (size_t)p2 : 0;
                         break;                          /* try again next tick */
                     }
                     ESP_LOGW(TAG, "flash-persist: reopen failed (%s)", strerror(errno));
-                    /* fall through to the rotate below with f == NULL */
+                    /* fall through to the rotate below with s_pf == NULL */
                 }
 
                 /* Out of space is not transient, and neither is a handle that
                  * will not reopen: drop the older generation so the next tick
                  * has somewhere to go, rather than waiting for room that
                  * nothing will free. */
-                if (werr == ENOSPC || !f || fail_streak >= 15) {
-                    if (f) fclose(f);
+                if (werr == ENOSPC || !s_pf || fail_streak >= 15) {
+                    if (s_pf) fclose(s_pf);
                     /* ⛔ esp_spiffs_check() USED TO RUN HERE, BEFORE THE ROTATE,
                      * and it was a measured no-op 331 times out of 331. On a
                      * FULL filesystem the check has nowhere to write its
@@ -497,10 +510,10 @@ static void diag_persist_task(void *arg)
                     rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
                     esp_spiffs_gc("storage", DIAG_GC_REQUEST);
                     panic_hook_crumb_exit();
-                    f = fopen(DIAG_FLASH_PATH, "w");
-                    bytes = 0;
+                    s_pf = fopen(DIAG_FLASH_PATH, "w");
+                    s_pbytes = 0;
                     fail_streak = 0;
-                    if (!f) {
+                    if (!s_pf) {
                         ESP_LOGE(TAG, "flash-persist: rotate-on-full failed (%s) - "
                                       "giving up; /api/log/saved will be stale",
                                  strerror(errno));
@@ -515,10 +528,10 @@ static void diag_persist_task(void *arg)
             }
             fail_streak = 0;
             s_flash_cursor = next;
-            bytes += got;
+            s_pbytes += got;
             wrote = true;
-            if (bytes >= DIAG_FLASH_MAX) {              // rotate: keep one generation
-                fclose(f);
+            if (s_pbytes >= DIAG_FLASH_MAX) {              // rotate: keep one generation
+                fclose(s_pf);
                 panic_hook_crumb_enter("spiffs:rotate-cap");
                 remove(DIAG_FLASH_PATH_0);
                 rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
@@ -531,14 +544,14 @@ static void diag_persist_task(void *arg)
                  * cheap moment: whole blocks have just become free. */
                 esp_spiffs_gc("storage", DIAG_GC_REQUEST);
                 panic_hook_crumb_exit();
-                f = fopen(DIAG_FLASH_PATH, "w");
+                s_pf = fopen(DIAG_FLASH_PATH, "w");
                 /* This rotation was SILENT until 2026-10-12, which is why the
                  * capture could only count the ENOSPC ones. Saying which of
                  * the two happened is the instrument for the budget change. */
                 ESP_LOGI(TAG, "flash-persist: rotated at the %u KB cap",
                          (unsigned)(DIAG_FLASH_MAX / 1024));
-                bytes = 0;
-                if (!f) {
+                s_pbytes = 0;
+                if (!s_pf) {
                     ESP_LOGW(TAG, "flash-persist: reopen after rotate failed (%s)", strerror(errno));
                     spiffs_guard_give();
                     vTaskDelete(NULL);
@@ -554,9 +567,9 @@ static void diag_persist_task(void *arg)
              * tick's fwrite then meets the same full partition and takes the
              * ENOSPC rotation above. */
             errno = 0;
-            if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+            if (fflush(s_pf) != 0 || fsync(fileno(s_pf)) != 0) {
                 int cerr = errno;
-                clearerr(f);
+                clearerr(s_pf);
                 ESP_LOGW(TAG, "flash-persist: commit failed (errno %d, %s) - "
                               "the last tick's bytes are not on flash",
                          cerr, cerr ? strerror(cerr) : "no errno set");
@@ -565,6 +578,19 @@ static void diag_persist_task(void *arg)
         spiffs_guard_give();
         vTaskDelay(pdMS_TO_TICKS(DIAG_FLASH_FLUSH_MS));
     }
+}
+
+bool diag_log_persist_drop(void)
+{
+    spiffs_guard_take();
+    if (s_pf) { fclose(s_pf); s_pf = NULL; }
+    remove(DIAG_FLASH_PATH_0);
+    remove(DIAG_FLASH_PATH);
+    s_pf = fopen(DIAG_FLASH_PATH, "w");
+    s_pbytes = 0;
+    spiffs_guard_give();
+    ESP_LOGW(TAG, "flash-persist: both generations dropped to make room for the QSO log");
+    return true;
 }
 
 void diag_log_persist_start(void)

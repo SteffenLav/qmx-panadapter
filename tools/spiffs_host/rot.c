@@ -459,6 +459,17 @@ int main(int argc, char **argv)
                      (unsigned)(u / 1024), (int)fs.free_blocks, (int)fs.stats_p_deleted, (int)fs.stats_p_allocated); }
             rot_result_t r; quiet = 0;
             rot_status_t st = run(UINT32_MAX, &r);
+            // FALLBACK=1: exactly what adif_log_rotate() does on ROT_FULL -
+            // drop both diag generations, 64 gc(32K) passes, rotate again.
+            if (st == ROT_FULL && getenv("FALLBACK")) {
+                SPIFFS_remove(&fs, "diag.0.log"); SPIFFS_remove(&fs, "diag.log"); SPIFFS_clearerr(&fs);
+                spiffs_file nf = SPIFFS_open(&fs, "diag.log", SPIFFS_O_CREAT | SPIFFS_O_TRUNC | SPIFFS_O_WRONLY, 0);
+                SPIFFS_close(&fs, nf); SPIFFS_clearerr(&fs);
+                int ok = 0;
+                for (int i = 0; i < 64; i++) { if (SPIFFS_gc(&fs, 32 * 1024) == SPIFFS_OK) ok++; SPIFFS_clearerr(&fs); }
+                printf("  boot %d: FULL -> diag dropped, %d/64 gc ok, retry\n", b, ok);
+                st = run(UINT32_MAX, &r);
+            }
             printf("  boot %d: rotation %d (%s)\n", b, st, r.why);
             if (st == ROT_DONE) {
                 const char *e = check(made, 1, NULL);

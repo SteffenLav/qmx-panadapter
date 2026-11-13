@@ -106,6 +106,11 @@ size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_ne
 // app_main AFTER SPIFFS is mounted (i.e. after adif_log_init()).
 void diag_log_persist_start(void);
 
+// Delete both flash generations (diag.log, diag.0.log) and start an empty
+// diag.log. ONLY for QSO log rotation at the wall, after the caller has copied
+// both files to the card (adif_log_rotate). Takes the SPIFFS guard.
+bool diag_log_persist_drop(void);
+
 // Path to the flash-persisted log file (served by the web UI's /api/log/saved).
 const char *diag_log_persist_path(void);
 
