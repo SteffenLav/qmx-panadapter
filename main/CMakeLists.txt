@@ -94,6 +94,7 @@ idf_component_register(
         "util/dma_owners.c"   # TEMP INSTRUMENT #283 - delete with the diagnosis
         "util/task_stacks.c"  # on-demand stack headroom - /api/cmd {"action":"stacks"}
         "adif/adif_check.c"   # #263 "check my log" - portable, host-tested
+        "adif/adif_rotate.c"  # QSO log rotation to the card - portable, host-tested (tools/spiffs_host/rot.c)
         "util/format_freq.c"  # #302 one frequency format, portable
         "cat/cat.c"
         "cat/cat_keying_cmds.c"  # T64 does runtime CAT text key? host-tested

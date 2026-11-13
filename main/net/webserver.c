@@ -1291,6 +1291,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddStringToObject(root, "time_src", tsn);
     }
     cJSON_AddNumberToObject(root, "qso_count",   (double)adif_log_count());
+    cJSON_AddNumberToObject(root, "qso_archived", (double)adif_log_archived_count());   // on the SD card (rotation)
     {
         qmx_settings_t cfg;
         settings_load_all(&cfg);
@@ -9552,6 +9553,10 @@ static void upload_task(void *arg)
         dsp_set_transfer_quiet(true);
         webserver_ws_set_paused(true);
         bool sd_locked = sd_archive_lock(5000);
+        // A rotation renumbers every record; it never runs while this batch
+        // holds the lock (adif_log_rotate tries once and leaves it for the
+        // next boot).
+        adif_log_upload_lock();
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
@@ -9607,6 +9612,7 @@ static void upload_task(void *arg)
         // between the old simultaneous release and the SD task's next
         // write actually landing. Release SD first and give it a moment to
         // do that write while WS/DSP are still quiet, then resume those.
+        adif_log_upload_unlock();
         if (sd_locked) sd_archive_unlock();
         vTaskDelay(pdMS_TO_TICKS(1500));
         webserver_ws_set_paused(false);

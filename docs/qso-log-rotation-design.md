@@ -9,6 +9,28 @@ Decided with the operator after Gyula HA3HZ described the same model on
 groups.io: *"log applications keep only the last few hundred QSOs visible and
 the rest in storage"*.
 
+## Status 2026-11-13, evening - firmware wired, NOT flashed
+
+Operator decision: no LittleFS migration (a failed one-time conversion would
+hit every unit's log and LoTW key at once). Instead rotation + restore from
+the card. What is in the firmware now:
+
+- `adif_log_rotate()` in sd_archive's boot burst (boot-window mount only),
+  before the mirror; skipped while an upload holds `adif_log_upload_lock()`.
+- `qso-worked.idx` on the card, synced after rotation; pairs live at the front
+  of the worked cache and survive every device-log reload.
+- Card `qso.adi` = archive + device records; rewritten after the archive only
+  when its last 256 archive bytes match.
+- Lost log: a unit that had a log (NVS `qso_log_seen`) and boots without one
+  zeroes its cursors, restores from the card after the burst, and puts the
+  cursors back clamped to what was restored. A `qso.tmp` promoted at boot is
+  merged with the card too (it can be partial - harness).
+- Restore from SD skips the archive part of `qso.adi`; a log with no archive
+  of its own takes over the card's archive first.
+- `/api/status` has `qso_archived`. No Tab5 UI change.
+
+Not done: the Tab5 log viewer and web page do not show the archived count.
+
 ## Status 2026-11-13, later - core + harness done, firmware NOT wired
 
 - `main/adif/adif_rotate.c` is the rotation core, portable, behind `rot_io_t`.

@@ -35,6 +35,9 @@
 #include "panic_hook.h"   // T138: mark the cache-off stretches
 #include "file_commit.h"  // the ONLY honest "did it land" on SPIFFS
 #include "spiffs_guard.h"  // every write to qso.adi is admitted first
+#include "adif_rotate.h"   // older records move to the card
+#include "esp_timer.h"
+#include "lotw_upload.h"   // lotw_cert_present(): is LoTW upload configured
 
 static const char *TAG      = "adif";
 static const char *FILE_PATH = "/spiffs/qso.adi";
@@ -54,6 +57,23 @@ static bool cut_pending_fragment(int *err);
 static int               s_count   = 0;
 static bool              s_mounted = false;
 
+// Rotation state, from the device log's header line (adif_rotate.h): records
+// on the card, and the archive size this log last committed.
+static uint32_t s_archived  = 0;
+static uint32_t s_arc_bytes = 0;
+// The log was missing at boot on a unit that had one: SPIFFS power-cut damage
+// (tools/spiffs_host BASELINE: boot check deletes the file in ~9 % of cuts
+// that land in a write). The SD task restores it from the card.
+static bool     s_log_lost  = false;
+// Merge the card copy back in: s_log_lost, or a qso.tmp promoted at boot.
+static bool     s_repair_from_card = false;
+static bool     s_cursors_zeroed = false;
+static uint32_t s_lost_cursors[4];   // qrz, eqsl, lotw, cloudlog before the loss
+// Held by the web upload task for a whole batch. Rotation shifts every record
+// index, so it never runs while an upload is between reading its cursor and
+// writing it back.
+static SemaphoreHandle_t s_upload_mx;
+
 // Worked-call cache: unique (callsign, band) pairs from every logged QSO.
 // Band-aware so the same station on a new band counts as NOT worked before
 // (a fresh band-slot). ADIF_BAND_MAX fits "160M" + NUL.
@@ -66,11 +86,16 @@ static bool              s_mounted = false;
 // Deleting the log made it work again, which is how he found it. The table
 // now grows, and the ceiling is loud instead of silent.
 //
-// ADIF_WORKED_MAX is sized from the partition, not from taste: `storage` is
-// 1 MB of SPIFFS and a record is ~180 bytes, so a completely full log is
-// ~5800 records and cannot reach 8192 unique pairs.
+// ADIF_WORKED_MAX was 8192, sized from a 1 MB partition. With older records on
+// the card (rotation) the log has no such bound: 65,536 pairs is 1.8 MB of
+// PSRAM, grown in chunks only as needed. Measured on the host
+// (tools/spiffs_host/workedbench.c): 40,000 pairs scan in well under 1 ms.
+//
+// Layout: s_worked[0 .. s_idx_count) are the pairs from the card's index
+// (archived records, unique among themselves); the rest come from the device
+// log. Every reload of the device log keeps the first segment.
 #define ADIF_WORKED_CHUNK 1024
-#define ADIF_WORKED_MAX   8192
+#define ADIF_WORKED_MAX   65536
 #define ADIF_CALL_MAX     16
 #define ADIF_BAND_MAX     6
 typedef struct {
@@ -101,6 +126,7 @@ static uint32_t call_hash(const char *s)
 // reboots.
 static worked_entry_t *s_worked;
 static int            s_worked_count = 0;
+static int            s_idx_count    = 0;   // card-index segment at the front
 static int            s_worked_cap   = 0;
 static bool           s_worked_full  = false;  // ceiling hit; say so once
 
@@ -212,10 +238,19 @@ static void load_from_file(void)
 
     char line[512];
     int  count = 0;
+    bool first = true;
 
     // One record per line, terminated by <EOR>. Extract CALL + BAND together
     // and cache the pair (the header line has no <EOR> and is skipped).
     while (fgets(line, sizeof(line), f)) {
+        if (first) {
+            // The header line says how much of this log is on the card.
+            first = false;
+            rot_hdr_t h;
+            rot_hdr_parse(line, strlen(line), &h);
+            s_archived = h.archived;
+            s_arc_bytes = h.arc_bytes;
+        }
         if (!strstr(line, "<EOR>")) continue;
         count++;
         char call[ADIF_CALL_MAX], band[ADIF_BAND_MAX];
@@ -231,12 +266,14 @@ static void load_from_file(void)
 }
 
 // Write the ADIF file header to an open file (assumed empty / newly created).
+// It carries the rotation fields, so a clear keeps the link to the card's
+// archive: the archived records were not cleared, only the device's.
 static void write_header(FILE *f)
 {
-    fprintf(f,
-        "<ADIF_VER:5>3.1.4 "
-        "<PROGRAMID:13>QMX-Panadapter "
-        "<EOH>\n");
+    char hdr[160];
+    rot_hdr_t h = { s_archived, s_arc_bytes };
+    rot_hdr_format(hdr, sizeof hdr, &h);
+    fputs(hdr, f);
 }
 
 // One-time migration (2026-06-30): a prior version wrote a redundant
@@ -392,6 +429,7 @@ static void repair_partial_tail(void)
 void adif_log_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_upload_mx = xSemaphoreCreateMutex();
 
     // First chunk up front so a boot-time PSRAM shortage is reported here and
     // not on the first QSO. It then grows from load_from_file() as needed.
@@ -524,11 +562,19 @@ void adif_log_init(void)
         long tmp_sz = file_size(TMP_PATH);
         if (tmp_sz >= 0) {
             if (file_size(FILE_PATH) < 0) {
-                if (rename(TMP_PATH, FILE_PATH) == 0)
+                if (rename(TMP_PATH, FILE_PATH) == 0) {
                     ESP_LOGW(TAG, "recovered %s from %s (%ld B) - a rewrite was "
                                   "interrupted after the old log was removed",
                              FILE_PATH, TMP_PATH, tmp_sz);
-                else
+                    // ⚠ "qso.tmp is complete" assumed the log was gone because
+                    // the rewrite removed it. Measured (tools/spiffs_host/rot.c):
+                    // the boot SPIFFS check can also delete qso.adi while a
+                    // PARTIAL qso.tmp sits beside it, and then this promotes the
+                    // partial copy. So merge the card's copy back in after any
+                    // promotion: the import dedupes, a complete qso.tmp gains
+                    // nothing, a partial one gets its missing tail back.
+                    s_repair_from_card = true;
+                } else
                     ESP_LOGE(TAG, "%s is missing and %s (%ld B) could not be "
                                   "renamed (%s) - NOT creating an empty log",
                              FILE_PATH, TMP_PATH, tmp_sz, strerror(errno));
@@ -548,6 +594,29 @@ void adif_log_init(void)
     }
 
     FILE *f = fopen(FILE_PATH, "r");
+    if (!f && settings_qso_log_seen()) {
+        // ⛔ A UNIT THAT HAD A LOG AND NOW HAS NONE LOST IT.
+        // Measured on the real SPIFFS code (tools/spiffs_host, BASE=1): a
+        // power cut during ANY write to this partition - the diag log's most
+        // of all - leaves qso.adi unreadable in ~17 % of cuts, and the
+        // gc+check above then deletes it. Nothing here can bring it back; the
+        // card's copy can, and the SD task restores from it (adif_log_
+        // restore_lost_from_sd). Until then the upload cursors point into a
+        // log that no longer exists: they go to 0 now, so a QSO logged before
+        // the restore is not skipped, and are put back after it.
+        s_log_lost = true;
+        s_repair_from_card = true;
+        s_cursors_zeroed = true;
+        settings_get_upload_cursors(&s_lost_cursors[0], &s_lost_cursors[1],
+                                    &s_lost_cursors[2], &s_lost_cursors[3]);
+        settings_set_qrz_uploaded_n(0);
+        settings_set_eqsl_uploaded_n(0);
+        settings_set_lotw_uploaded_n(0);
+        settings_set_cloudlog_uploaded_n(0);
+        ESP_LOGE(TAG, "%s is GONE on a unit that had a log (storage damage at a "
+                      "power cut?) - a new log is started and the card's copy will "
+                      "be restored if a card is in", FILE_PATH);
+    }
     if (!f) {
         // A new file: nothing in it a failed write could damage, so it is
         // created even if the reservation fails (see adif_log_clear()).
@@ -563,6 +632,10 @@ void adif_log_init(void)
         repair_legacy_submode_field();
         load_from_file();
     }
+    if (file_size(FILE_PATH) >= 0) settings_mark_qso_log_seen();
+    // Shift the upload cursors if a rotation committed on a previous boot
+    // but the shift did not land (settings.c, settings_shift_upload_cursors).
+    if (!s_log_lost) settings_shift_upload_cursors(s_archived);
 }
 
 // The fields of one record, in order, ending "<EOR>\n". Errors are left on
@@ -1383,7 +1456,7 @@ static int delete_matching_admitted(bool (*want_gone)(int idx, const char *raw, 
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
-    s_worked_count = 0;
+    s_worked_count = s_idx_count;   // keep the card-index pairs
     if (s_lock) xSemaphoreGive(s_lock);
     load_from_file();
 
@@ -1501,7 +1574,7 @@ static bool delete_record_admitted(int idx)
     // record may have been the only QSO with that call/band).
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
-    s_worked_count = 0;
+    s_worked_count = s_idx_count;   // keep the card-index pairs
     if (s_lock) xSemaphoreGive(s_lock);
     load_from_file();
 
@@ -1515,7 +1588,7 @@ void adif_log_clear(void)
     s_fragment_at = -1;   // the whole file goes; nothing left to cut
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count       = 0;
-    s_worked_count = 0;
+    s_worked_count = s_idx_count;   // the archive is still on the card
     if (s_lock) xSemaphoreGive(s_lock);
 
     spiffs_guard_take();
@@ -1849,49 +1922,6 @@ static int import_update_guarded(const char *adif_text, adif_import_result_t *re
 // Restore from the card's own mirror. All the ADIF work is the existing
 // import; the only new part is getting the bytes off the card, which
 // sd_archive owns (it holds the mount, the paths and the lock).
-int adif_log_import_from_sd(adif_import_result_t *res)
-{
-    adif_import_result_t local;
-    if (!res) res = &local;
-    memset(res, 0, sizeof(*res));
-
-    // BOTH files on the card, not just qso.adi.
-    //
-    // Gyula HA3HZ renamed his own saved backups to qso.prev.adi, put them on the
-    // card, pressed this button and was told "nothing to restore" - because it
-    // only ever read qso.adi, which was simply the device's current log. He did
-    // nothing wrong: qso.prev.adi is the name the firmware itself writes, the
-    // docs called it recoverable, and the only route offered was a file upload
-    // from a PC. "Restore from the card" should mean everything the card knows.
-    //
-    // Safe to merge blind: both are our own files, the import already skips a
-    // contact that is present, and reading them oldest-last means the newer copy
-    // wins any tie. Neither present is the only real failure.
-    int total_added = 0;
-    bool read_any = false;
-
-    for (int pass = 0; pass < 2; pass++) {
-        size_t len = 0;
-        char *text = sd_archive_read_adif_file(pass == 1, &len);
-        if (!text) continue;
-        read_any = true;
-
-        adif_import_result_t r;
-        int added = adif_log_import_ex(text, &r);
-        free(text);
-
-        res->found      += r.found;
-        res->added      += r.added;
-        res->duplicate  += r.duplicate;
-        res->unreadable += r.unreadable;
-        if (added > 0) total_added += added;
-        else if (added < 0) return -1;   // the log could not be written - stop
-    }
-
-    if (!read_any) return -1;   // no card, or neither file on it
-    return total_added;
-}
-
 // ---- admitted rewrites ----------------------------------------------------
 // Each of these writes a full copy of the log (qso.tmp) or appends a batch, so
 // each is admitted for that much before it starts (util/spiffs_guard.h) and
@@ -2074,4 +2104,433 @@ int adif_log_export_activation(const char *sig_info, char *out_path, size_t out_
     if (out_path && out_sz) snprintf(out_path, out_sz, "%s", path);
     ESP_LOGI(TAG, "activation export: %d records -> %s", n, path);
     return n;
+}
+
+// ===========================================================================
+// Rotation to the SD card, the card's worked-before index, and restore.
+// docs/qso-log-rotation-design.md. The logic of a move is adif_rotate.c,
+// power-cut tested on the host; this is its stdio glue and bookkeeping.
+// Every function here that touches the card is called by sd_archive's task
+// with the card mounted, or takes the card lock itself (the restore path).
+// ===========================================================================
+
+int      adif_log_archived_count(void) { return (int)s_archived; }
+uint32_t adif_log_archive_bytes(void)  { return s_arc_bytes; }
+bool     adif_log_was_lost(void)       { return s_repair_from_card; }
+
+long adif_log_records_bytes(void)
+{
+    long sz = file_size(FILE_PATH);
+    if (sz <= 0) return 0;
+    FILE *f = fopen(FILE_PATH, "r");
+    if (!f) return 0;
+    char line[512];
+    long hl = 0;
+    // The header line is short; read until its newline.
+    while (fgets(line, sizeof line, f)) { hl += (long)strlen(line); if (strchr(line, '\n')) break; }
+    fclose(f);
+    return sz > hl ? sz - hl : 0;
+}
+
+void adif_log_upload_lock(void)   { if (s_upload_mx) xSemaphoreTake(s_upload_mx, portMAX_DELAY); }
+void adif_log_upload_unlock(void) { if (s_upload_mx) xSemaphoreGive(s_upload_mx); }
+
+// ---- stdio implementation of rot_io_t -------------------------------------
+typedef struct { FILE *f; bool wr; } rio_h_t;
+static rio_h_t     s_rio[4];
+static const char *s_rio_arc;
+static const char *TMP_LOG = "/spiffs/qso.tmp";
+
+static const char *rio_path(int w) { return w == ROT_DEV ? FILE_PATH : w == ROT_TMP ? TMP_LOG : s_rio_arc; }
+static void *rio_open(void *c, int w, const char *m)
+{
+    (void)c;
+    for (int i = 0; i < 4; i++) {
+        if (s_rio[i].f) continue;
+        FILE *f = fopen(rio_path(w), m);
+        if (!f) return NULL;
+        s_rio[i].f = f;
+        s_rio[i].wr = (m[0] != 'r');
+        return &s_rio[i];
+    }
+    return NULL;
+}
+static long rio_read(void *c, void *h, void *d, long n)
+{
+    (void)c; rio_h_t *x = h;
+    size_t g = fread(d, 1, (size_t)n, x->f);
+    return (g == 0 && ferror(x->f)) ? -1 : (long)g;
+}
+static long rio_write(void *c, void *h, const void *s, long n)
+{
+    (void)c; rio_h_t *x = h;
+    return fwrite(s, 1, (size_t)n, x->f) == (size_t)n ? n : -1;
+}
+static bool rio_seek(void *c, void *h, long off) { (void)c; return fseek(((rio_h_t *)h)->f, off, SEEK_SET) == 0; }
+static bool rio_close(void *c, void *h)
+{
+    (void)c; rio_h_t *x = h;
+    bool ok = x->wr ? file_commit_close(x->f) : (fclose(x->f) == 0);
+    x->f = NULL;
+    return ok;
+}
+static long rio_size(void *c, int w)               { (void)c; return file_size(rio_path(w)); }
+static bool rio_remove(void *c, int w)             { (void)c; return remove(rio_path(w)) == 0; }
+static bool rio_rename(void *c)                    { (void)c; return rename(TMP_LOG, FILE_PATH) == 0; }
+static bool rio_trunc(void *c, int w, long len)    { (void)c; return w == ROT_ARC && truncate(rio_path(w), len) == 0; }
+static bool rio_reserve(void *c, long need)        { (void)c; return spiffs_guard_reserve((size_t)need); }
+static void rio_log(void *c, bool warn, const char *m)
+{
+    (void)c;
+    if (warn) ESP_LOGW(TAG, "rotation: %s", m);
+    else      ESP_LOGI(TAG, "rotation: %s", m);
+}
+
+// The lowest cursor of every CONFIGURED upload: records below it have been
+// sent everywhere they will be sent. An upload with no credentials sends
+// nothing and holds nothing back.
+static uint32_t lowest_sent_cursor(void)
+{
+    qmx_settings_t *cfg = heap_caps_malloc(sizeof *cfg, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cfg) return 0;    // cannot tell: move nothing
+    settings_load_all(cfg);
+    uint32_t m = UINT32_MAX;
+    if (cfg->qrz_api_key[0] && cfg->qrz_uploaded_n < m) m = cfg->qrz_uploaded_n;
+    if (cfg->eqsl_user[0] && cfg->eqsl_pswd[0] && cfg->eqsl_uploaded_n < m) m = cfg->eqsl_uploaded_n;
+    if (cfg->cloudlog_url[0] && cfg->cloudlog_key[0] && cfg->cloudlog_uploaded_n < m) m = cfg->cloudlog_uploaded_n;
+    if (cfg->lotw_dxcc[0] && lotw_cert_present() && cfg->lotw_uploaded_n < m) m = cfg->lotw_uploaded_n;
+    free(cfg);
+    return m;
+}
+
+int adif_log_rotate(const char *arc_path)
+{
+    if (!s_mounted || s_repair_from_card || !arc_path) return 0;
+    // ⛔ Not while an upload is between reading its cursor and writing it back:
+    // every record index moves. Try once; the next boot rotates instead.
+    if (s_upload_mx && xSemaphoreTake(s_upload_mx, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "rotation: an upload is running - left for the next boot");
+        return 0;
+    }
+    uint32_t maxr = lowest_sent_cursor();
+    char *buf = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    rot_result_t r;
+    memset(&r, 0, sizeof r);
+    if (buf) {
+        rot_io_t io = { NULL, buf, 4096, rio_open, rio_read, rio_write, rio_seek, rio_close,
+                        rio_size, rio_remove, rio_rename, rio_trunc, rio_reserve, rio_log };
+        s_rio_arc = arc_path;
+        int64_t t0 = esp_timer_get_time();
+        spiffs_guard_take();
+        if (cut_pending_fragment(NULL)) rot_run(&io, maxr, &r);
+        else { r.status = ROT_FULL; ESP_LOGW(TAG, "rotation: a partial record could not be cut first"); }
+        spiffs_guard_give();
+        for (int i = 0; i < 4; i++) if (s_rio[i].f) { fclose(s_rio[i].f); s_rio[i].f = NULL; }
+        free(buf);
+        ESP_LOGI(TAG, "rotation: status %d, %lu moved, %lu held for uploads, %lu on the device, %lu on the card (%lld ms)",
+                 (int)r.status, (unsigned long)r.rotated, (unsigned long)r.held,
+                 (unsigned long)r.dev_records, (unsigned long)r.hdr.archived,
+                 (long long)((esp_timer_get_time() - t0) / 1000));
+    } else {
+        ESP_LOGE(TAG, "rotation: no memory for its buffer");
+    }
+    int moved = 0;
+    if (r.status == ROT_DONE) {
+        if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_count = 0;
+        s_worked_count = s_idx_count;
+        if (s_lock) xSemaphoreGive(s_lock);
+        load_from_file();                          // count, pairs, s_archived from the new header
+        settings_shift_upload_cursors(s_archived);
+        sd_archive_mark_adif_dirty();
+        moved = (int)r.rotated;
+    }
+    if (s_upload_mx) xSemaphoreGive(s_upload_mx);
+    return moved;
+}
+
+// ---- the card's worked-before index ---------------------------------------
+// qso-worked.idx: a 16-byte header, then one 26-byte entry per unique
+// (call, band) in the archive. Derived data: missing, damaged or not matching
+// this log's archive, it is rebuilt from the archive once.
+// Measured (tools/spiffs_host/workedbench.c): appending to an already-unique
+// index is linear; rebuilding by scanning is quadratic. So it is appended to,
+// and read at boot without a dedupe pass.
+#define WIDX_MAGIC "QMXWIDX1"
+typedef struct __attribute__((packed)) { char magic[8]; uint32_t covered; uint32_t count; } widx_hdr_t;
+typedef struct __attribute__((packed)) { char call[ADIF_CALL_MAX]; char band[ADIF_BAND_MAX]; uint32_t hash; } widx_ent_t;
+_Static_assert(sizeof(widx_ent_t) == 26, "index entry is 26 bytes on the card");
+
+// Insert n pairs at the end of the card-index segment, in one move of the
+// device segment. Returns how many fitted.
+static int index_segment_insert(const widx_ent_t *e, int n)
+{
+    if (n <= 0) return 0;
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    while (s_worked_count + n > s_worked_cap && cache_grow()) { }
+    if (s_worked_count + n > s_worked_cap) n = s_worked_cap - s_worked_count;
+    if (n > 0) {
+        memmove(&s_worked[s_idx_count + n], &s_worked[s_idx_count],
+                (size_t)(s_worked_count - s_idx_count) * sizeof(worked_entry_t));
+        for (int i = 0; i < n; i++) {
+            worked_entry_t *w = &s_worked[s_idx_count + i];
+            memcpy(w->call, e[i].call, ADIF_CALL_MAX); w->call[ADIF_CALL_MAX - 1] = '\0';
+            memcpy(w->band, e[i].band, ADIF_BAND_MAX); w->band[ADIF_BAND_MAX - 1] = '\0';
+            w->hash = call_hash(w->call);
+        }
+        s_idx_count += n;
+        s_worked_count += n;
+    }
+    if (s_lock) xSemaphoreGive(s_lock);
+    return n < 0 ? 0 : n;
+}
+
+static bool in_index(const char *call, const char *band, const widx_ent_t *batch, int nb)
+{
+    uint32_t h = call_hash(call);
+    for (int i = 0; i < s_idx_count; i++)
+        if (s_worked[i].hash == h && !strcmp(s_worked[i].call, call) && !strcmp(s_worked[i].band, band)) return true;
+    for (int i = 0; i < nb; i++)
+        if (batch[i].hash == h && !strcmp(batch[i].call, call) && !strcmp(batch[i].band, band)) return true;
+    return false;
+}
+
+void adif_log_worked_index_sync(const char *idx_path, const char *arc_path)
+{
+    if (s_arc_bytes == 0 || !idx_path || !arc_path) return;   // nothing of this log on the card
+    long arc_sz = file_size(arc_path);
+    if (arc_sz < (long)s_arc_bytes) {
+        ESP_LOGW(TAG, "worked index: the card's archive is not this log's - not used");
+        return;
+    }
+    int64_t t0 = esp_timer_get_time();
+    widx_hdr_t h = {0};
+    bool valid = false;
+    long idx_sz = file_size(idx_path);
+    FILE *f = fopen(idx_path, "rb");
+    if (f) {
+        valid = fread(&h, 1, sizeof h, f) == sizeof h && memcmp(h.magic, WIDX_MAGIC, 8) == 0 &&
+                h.covered <= s_arc_bytes &&
+                idx_sz == (long)(sizeof h + (size_t)h.count * sizeof(widx_ent_t));
+        if (valid && s_idx_count == 0 && h.count > 0) {
+            widx_ent_t *all = heap_caps_malloc((size_t)h.count * sizeof(widx_ent_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (all && fread(all, sizeof(widx_ent_t), h.count, f) == h.count) {
+                int got = index_segment_insert(all, (int)h.count);
+                if (got < (int)h.count)
+                    ESP_LOGE(TAG, "worked index: only %d of %lu pairs fit in memory", got, (unsigned long)h.count);
+            } else {
+                valid = false;
+            }
+            free(all);
+        }
+        fclose(f);
+    }
+    if (!valid) {
+        // Rebuild: start the file again and index the whole archive below.
+        ESP_LOGW(TAG, "worked index on the card missing or not matching the archive - rebuilding it (one slow boot)");
+        if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+        memmove(&s_worked[0], &s_worked[s_idx_count], (size_t)(s_worked_count - s_idx_count) * sizeof(worked_entry_t));
+        s_worked_count -= s_idx_count;
+        s_idx_count = 0;
+        if (s_lock) xSemaphoreGive(s_lock);
+        memset(&h, 0, sizeof h);
+        memcpy(h.magic, WIDX_MAGIC, 8);
+        f = fopen(idx_path, "wb");
+        bool ok = f && fwrite(&h, 1, sizeof h, f) == sizeof h;
+        if (f && !file_commit_close(f)) ok = false;
+        if (!ok) { ESP_LOGE(TAG, "worked index: cannot write %s", idx_path); return; }
+    }
+    if (h.covered >= s_arc_bytes) return;
+
+    // Catch up: index the archive from where the index stopped to where this
+    // log's part of it ends.
+    FILE *a = fopen(arc_path, "r");
+    if (!a) return;
+    char line[1024];
+    long pos = 0;
+    if (h.covered == 0) { if (fgets(line, sizeof line, a)) pos = (long)strlen(line); }   // archive header
+    else if (fseek(a, (long)h.covered, SEEK_SET) == 0) pos = (long)h.covered;
+    int cap = 1024, nb = 0;
+    widx_ent_t *batch = heap_caps_malloc((size_t)cap * sizeof *batch, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool ok = batch != NULL;
+    while (ok && pos < (long)s_arc_bytes && fgets(line, sizeof line, a)) {
+        pos += (long)strlen(line);
+        char call[ADIF_CALL_MAX], band[ADIF_BAND_MAX];
+        if (!adif_log_extract_field(line, "CALL", call, sizeof call)) continue;
+        if (!adif_log_extract_field(line, "BAND", band, sizeof band)) band[0] = '\0';
+        if (in_index(call, band, batch, nb)) continue;
+        if (nb == cap) {
+            widx_ent_t *p = heap_caps_realloc(batch, (size_t)cap * 2 * sizeof *batch, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!p) { ok = false; break; }
+            batch = p; cap *= 2;
+        }
+        memset(&batch[nb], 0, sizeof batch[nb]);
+        // memcpy of the bounded length: the entry was zeroed, so it stays terminated.
+        memcpy(batch[nb].call, call, strnlen(call, ADIF_CALL_MAX - 1));
+        memcpy(batch[nb].band, band, strnlen(band, ADIF_BAND_MAX - 1));
+        batch[nb].hash = call_hash(batch[nb].call);
+        nb++;
+    }
+    fclose(a);
+    if (ok && nb > 0) {
+        f = fopen(idx_path, "ab");
+        ok = f && fwrite(batch, sizeof *batch, (size_t)nb, f) == (size_t)nb;
+        if (f && !file_commit_close(f)) ok = false;
+    }
+    if (ok) {
+        h.covered = s_arc_bytes;
+        h.count += (uint32_t)nb;
+        f = fopen(idx_path, "r+b");
+        ok = f && fwrite(&h, 1, sizeof h, f) == sizeof h;
+        if (f && !file_commit_close(f)) ok = false;
+    }
+    if (ok) index_segment_insert(batch, nb);
+    free(batch);
+    ESP_LOGI(TAG, "worked index: %s, %d new pairs, %d on the card (%lld ms)",
+             ok ? "updated" : "update FAILED - rebuilt next boot", nb, s_idx_count,
+             (long long)((esp_timer_get_time() - t0) / 1000));
+}
+
+// ---- restore --------------------------------------------------------------
+
+// Rewrite the device log's header so it owns the card's archive. Records are
+// untouched. Caller holds nothing; this takes the guard.
+static bool adopt_archive(uint32_t archived, uint32_t arc_bytes)
+{
+    spiffs_guard_take();
+    bool ok = spiffs_guard_reserve(log_bytes() + 256) && cut_pending_fragment(NULL);
+    FILE *in = ok ? fopen(FILE_PATH, "r") : NULL;
+    FILE *out = in ? fopen(TMP_LOG, "w") : NULL;
+    ok = in && out;
+    if (ok) {
+        uint32_t keep_a = s_archived, keep_b = s_arc_bytes;
+        s_archived = archived; s_arc_bytes = arc_bytes;
+        write_header(out);
+        s_archived = keep_a; s_arc_bytes = keep_b;
+        static EXT_RAM_BSS_ATTR char buf[2048];
+        char line[512];
+        // Skip the old header line, copy the rest.
+        while (fgets(line, sizeof line, in)) if (strchr(line, '\n')) break;
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, in)) > 0) if (fwrite(buf, 1, n, out) != n) { ok = false; break; }
+        if (ferror(in)) ok = false;
+    }
+    if (in) fclose(in);
+    if (out && !file_commit_close(out)) ok = false;
+    if (ok) { remove(FILE_PATH); ok = rename(TMP_LOG, FILE_PATH) == 0; }
+    else remove(TMP_LOG);
+    spiffs_guard_give();
+    if (ok) {
+        s_archived = archived;
+        s_arc_bytes = arc_bytes;
+        settings_set_rot_base(archived);   // the cursors index the device log, which did not move
+        ESP_LOGI(TAG, "log now owns the card's archive: %lu records, %lu B",
+                 (unsigned long)archived, (unsigned long)arc_bytes);
+    } else {
+        ESP_LOGE(TAG, "could not take over the card's archive - restore reads the whole card file");
+    }
+    return ok;
+}
+
+int adif_log_import_from_sd(adif_import_result_t *res)
+{
+    adif_import_result_t local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof(*res));
+
+    // BOTH files on the card, not just qso.adi.
+    //
+    // Gyula HA3HZ renamed his own saved backups to qso.prev.adi, put them on the
+    // card, pressed this button and was told "nothing to restore" - because it
+    // only ever read qso.adi, which was simply the device's current log. He did
+    // nothing wrong: qso.prev.adi is the name the firmware itself writes, the
+    // docs called it recoverable, and the only route offered was a file upload
+    // from a PC. "Restore from the card" should mean everything the card knows.
+    //
+    // ⛔ WITH AN ARCHIVE, qso.adi IS archive + device log. The archived part is
+    // already on the card and must NOT come back into SPIFFS - that is the
+    // wall rotation exists to avoid. So the part of each file that is the
+    // archive, byte for byte, is skipped; a log that does not own the archive
+    // yet (a new or lost log) takes it over first.
+    long arc_sz = 0;
+    uint32_t arc_recs = 0;
+    bool have_arc = sd_archive_archive_info(&arc_sz, &arc_recs) && arc_sz > 0;
+    if (have_arc && s_arc_bytes == 0 && s_archived == 0 && sd_archive_adif_has_archive_prefix(false, arc_sz))
+        adopt_archive(arc_recs, (uint32_t)arc_sz);
+
+    int total_added = 0;
+    bool read_any = false;
+
+    for (int pass = 0; pass < 2; pass++) {
+        size_t skip = 0;
+        if (have_arc && s_arc_bytes > 0) {
+            if (sd_archive_adif_has_archive_prefix(pass == 1, arc_sz)) skip = (size_t)arc_sz;
+            else if (pass == 1) { ESP_LOGI(TAG, "restore: qso.prev.adi does not continue the archive - skipped"); continue; }
+        }
+        size_t len = 0;
+        char *text = sd_archive_read_adif_file_at(pass == 1, skip, &len);
+        if (!text) continue;
+        read_any = true;
+
+        adif_import_result_t r;
+        int added = adif_log_import_ex(text, &r);
+        free(text);
+
+        res->found      += r.found;
+        res->added      += r.added;
+        res->duplicate  += r.duplicate;
+        res->unreadable += r.unreadable;
+        if (added > 0) total_added += added;
+        else if (added < 0) return -1;   // the log could not be written - stop
+    }
+
+    if (!read_any) return -1;   // no card, or neither file on it
+    return total_added;
+}
+
+// Called by sd_archive's task when a card is mounted and the log was lost at
+// boot (adif_log_init). Puts the log back from the card's copy and the upload
+// cursors back to where they were, clamped to what was restored: the restore
+// keeps the records' order, so a cursor that had sent N records has sent the
+// same N now.
+void adif_log_restore_lost_from_sd(void)
+{
+    if (!s_repair_from_card) return;
+    s_repair_from_card = false;
+    bool was_lost = s_log_lost;
+    s_log_lost = false;
+    adif_import_result_t r;
+    int added = adif_log_import_from_sd(&r);
+    if (added < 0 || (was_lost && added == 0)) {
+        ESP_LOGE(TAG, "%s: nothing restored from the card (%d)",
+                 was_lost ? "lost log" : "recovered qso.tmp", added);
+        if (was_lost) ui_toast("QSO log was lost (storage damage) - the SD card had no copy");
+        return;
+    }
+    if (s_cursors_zeroed) {
+        s_cursors_zeroed = false;
+        uint32_t n = (uint32_t)adif_log_count();
+        settings_set_qrz_uploaded_n(s_lost_cursors[0] < n ? s_lost_cursors[0] : n);
+        settings_set_eqsl_uploaded_n(s_lost_cursors[1] < n ? s_lost_cursors[1] : n);
+        settings_set_lotw_uploaded_n(s_lost_cursors[2] < n ? s_lost_cursors[2] : n);
+        settings_set_cloudlog_uploaded_n(s_lost_cursors[3] < n ? s_lost_cursors[3] : n);
+        settings_flush();
+    }
+    ESP_LOGW(TAG, "%s: %d QSOs restored from the card, %d already present (%d on the card's archive)",
+             was_lost ? "lost log" : "recovered qso.tmp", added, r.duplicate, (int)s_archived);
+    if (added > 0) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "QSO log was damaged - restored %d QSOs from the SD card", added);
+        ui_toast(msg);
+    }
+}
+
+// No card in the boot window and the log was lost: say so once.
+void adif_log_report_lost_no_card(void)
+{
+    if (!s_repair_from_card) return;
+    s_repair_from_card = false;
+    if (!s_log_lost) return;     // a promoted qso.tmp with no card: the boot log says it
+    s_log_lost = false;
+    ui_toast("QSO log was lost (storage damage) - insert the SD card and use Restore from SD");
 }

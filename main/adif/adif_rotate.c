@@ -54,6 +54,9 @@ void rot_hdr_parse(const char *line, size_t len, rot_hdr_t *h)
 
 int rot_hdr_format(char *out, size_t sz, const rot_hdr_t *h)
 {
+    // A log that never rotated keeps the header every earlier release wrote.
+    if (h->archived == 0 && h->arc_bytes == 0)
+        return snprintf(out, sz, "%s", ROT_ARC_HEADER);
     char a[12], b[12];
     int al = snprintf(a, sizeof a, "%lu", (unsigned long)h->archived);
     int bl = snprintf(b, sizeof b, "%lu", (unsigned long)h->arc_bytes);

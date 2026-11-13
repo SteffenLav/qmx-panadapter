@@ -98,6 +98,12 @@ const char *sd_archive_log_path(void);
 // written on success. Pauses the spectrum stream for the duration, like every
 // other bulk SD read here. See adif_log_import_from_sd().
 char *sd_archive_read_adif_file(bool previous, size_t *out_len);
+// The same, from byte `offset` on (the part of qso.adi after the archive).
+char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len);
+// The card's QSO archive: size and record count. False: no card or no archive.
+bool sd_archive_archive_info(long *bytes, uint32_t *records);
+// Does qso.adi (or qso.prev.adi) start with the archive's first arc_bytes?
+bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes);
 
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);

@@ -4471,6 +4471,85 @@ void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw,
     xSemaphoreGive(s_mutex);
 }
 
+/* QSO log rotation (docs/qso-log-rotation-design.md). The upload cursors are
+ * indices into the DEVICE log; moving N records to the card shifts every
+ * record down N. The device log's header carries how many have moved
+ * (APP_QMXPAN_ARCHIVED); KEY_ROT_BASE is the value the cursors were last
+ * shifted to. adif_log reconciles the two, so the shift follows the log's own
+ * commit point and survives a reset at any moment.
+ *
+ * ⛔ Written synchronously, cursors FIRST, base LAST. A reset between the two
+ * leaves the cursors shifted and the base old, so the next boot shifts again:
+ * QSOs are uploaded twice (every service dedupes), never skipped. The other
+ * order would skip them. The cursors stay marked dirty too, so a flush_task
+ * pass holding an older snapshot is overwritten by the next one. */
+#define KEY_ROT_BASE  "qso_rot_base"
+#define KEY_LOG_SEEN  "qso_log_seen"
+
+uint32_t settings_get_rot_base(void)
+{
+    uint32_t v = 0;
+    if (s_ready) nvs_get_u32(s_nvs, KEY_ROT_BASE, &v);
+    return v;
+}
+
+void settings_shift_upload_cursors(uint32_t to_base)
+{
+    if (!s_ready) return;
+    uint32_t base = settings_get_rot_base();
+    if (to_base == base) return;
+    if (to_base > base) {
+        uint32_t d = to_base - base;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        uint32_t *c[4] = { &s_pending.qrz_uploaded_n, &s_pending.eqsl_uploaded_n,
+                           &s_pending.lotw_uploaded_n, &s_pending.cloudlog_uploaded_n };
+        for (int i = 0; i < 4; i++) *c[i] = (*c[i] > d) ? *c[i] - d : 0;
+        uint32_t q = s_pending.qrz_uploaded_n, e = s_pending.eqsl_uploaded_n,
+                 l = s_pending.lotw_uploaded_n, cl = s_pending.cloudlog_uploaded_n;
+        xSemaphoreGive(s_mutex);
+        nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, q);
+        nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, e);
+        nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, l);
+        nvs_set_u32(s_nvs, KEY_CL_UPLOADED, cl);
+        esp_err_t err = nvs_commit(s_nvs);
+        if (err != ESP_OK) { ESP_LOGW(TAG, "nvs_commit (upload cursors) failed: 0x%x - base left at %lu", err, (unsigned long)base); return; }
+        mark_dirty(DIRTY_QRZ_UPLOADED);
+        mark_dirty(DIRTY_EQSL_UPLOADED);
+        mark_dirty(DIRTY_LOTW_UPLOADED);
+        mark_dirty(DIRTY_CL_UPLOADED);
+        ESP_LOGI(TAG, "upload cursors shifted down %lu (log base %lu -> %lu): qrz %lu eqsl %lu lotw %lu cloudlog %lu",
+                 (unsigned long)d, (unsigned long)base, (unsigned long)to_base,
+                 (unsigned long)q, (unsigned long)e, (unsigned long)l, (unsigned long)cl);
+    }
+    /* to_base < base: the log was replaced (cleared by older firmware, a
+     * reinstall). Its cursors were reset with it; only the base follows. */
+    nvs_set_u32(s_nvs, KEY_ROT_BASE, to_base);
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (qso_rot_base) failed: 0x%x", err);
+}
+
+void settings_set_rot_base(uint32_t base)
+{
+    if (!s_ready) return;
+    nvs_set_u32(s_nvs, KEY_ROT_BASE, base);
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (qso_rot_base) failed: 0x%x", err);
+}
+
+bool settings_qso_log_seen(void)
+{
+    uint8_t v = 0;
+    if (s_ready) nvs_get_u8(s_nvs, KEY_LOG_SEEN, &v);
+    return v != 0;
+}
+
+void settings_mark_qso_log_seen(void)
+{
+    if (!s_ready || settings_qso_log_seen()) return;
+    nvs_set_u8(s_nvs, KEY_LOG_SEEN, 1);
+    nvs_commit(s_nvs);
+}
+
 void settings_get_spots_lane(uint8_t *region, bool *mode_filter,
                              char *grid_out, size_t grid_sz)
 {
