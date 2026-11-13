@@ -1,3 +1,4 @@
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR - see T198
 #include "wifi.h"
 #include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "util/hosted_watchdog.h"   // when the link is declared dead
@@ -734,7 +735,11 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         // the scan-hold fix re-kicked first and read back 0 APs every time -
         // the hold had given the scan its airtime and the harvest then threw
         // the results away.
-        static wifi_ap_record_t recs[WIFI_SCAN_MAX];
+        /* PSRAM, 2,208 B. esp_wifi_scan_get_ap_records() copies out of the
+         * driver's own storage into this - a memcpy on the event task, no DMA
+         * and no ISR, a few times per session. Internal RAM here is DMA-pool
+         * headroom that WiFi and SD both need (T198). */
+        static EXT_RAM_BSS_ATTR wifi_ap_record_t recs[WIFI_SCAN_MAX];
         uint16_t num = WIFI_SCAN_MAX;
         esp_err_t get_err = esp_wifi_scan_get_ap_records(&num, recs);
         // Empty result while holding: take the one free retry BEFORE releasing

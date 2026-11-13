@@ -1563,7 +1563,9 @@ static void toc_panel_set_open(bool open)
 }
 
 // Simple page-visit history so "Back" returns to the previous page.
-static char s_hist[16][96];
+/* PSRAM, 1,536 B: the reader's back-navigation history, touched when the
+ * operator follows or leaves a link. Nothing per-frame. See T198. */
+static EXT_RAM_BSS_ATTR char s_hist[16][96];
 static int  s_hist_n = 0;
 
 // Show "Back" only when it would actually do something. With no history and the
