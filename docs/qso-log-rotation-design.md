@@ -66,26 +66,48 @@ shifts all four down by N. The rotation count is therefore
 lags, the log grows past the cap and says so. A large log is a far smaller
 problem than QSOs that never reach a logbook.
 
-## Open: worked-before
+## Settled: worked-before reads an index, not the archive
 
-This is the part that needs measurement, not an opinion. The grey "worked
-before" marking reads a cache of unique (call, band) pairs built at boot from
-the device log. Archived calls must still count, or a station worked last year
-reads as new.
+Measured, not argued (`tools/spiffs_host/workedbench.c`, the real
+`cache_add`/`call_hash` from `adif_log.c`):
 
-Two candidates:
+| unique pairs | today's scan on insert | append to a unique index |
+|---|---|---|
+| 5,000 | 7.0 ms | 0.67 ms |
+| 10,000 | 25.3 ms | 1.67 ms |
+| 20,000 | 97.0 ms | 3.67 ms |
+| 40,000 | 393.0 ms | 8.33 ms |
 
-1. **Read the archive at boot.** Simple, and the parked branch did it. The
-   cost grows forever: at 5,000 archived records it is an SD read plus
-   ~25M uint32 compares in `cache_add`. `ADIF_WORKED_MAX` (8,192) would also
-   have to rise.
-2. **A worked-index on the card** - one short fixed-size record per unique
-   (call, band), appended when first seen. ~22 B per pair, so 5,000 pairs is
-   110 KB and the boot read is bounded and small.
+`cache_add()` scans every pair already held, so rebuilding from the archive is
+quadratic: four times the cost for each doubling. Appending to an index that is
+already unique needs no scan and is linear.
 
-Start with (1) because it is a tenth of the code, **but measure the boot cost
-on bench1 with a large archive before shipping it**. (2) is the fallback and
-the design must not make it hard to add.
+The I/O side says the same thing more loudly, and it is the larger term. The
+one device figure that exists - 2,715 records loaded in 1,028 ms on N4OPI's
+unit - is **not** this loop: the identical work takes 2.2 ms on the host, and
+three orders of magnitude is not a CPU difference. Boot cost here is dominated
+by reading and parsing the file, and the archive is the bigger file by a factor
+of seven:
+
+| unique pairs | archive to re-read | index to read |
+|---|---|---|
+| 10,000 | 1.79 MB | 254 KB |
+| 40,000 | 7.17 MB | 1016 KB |
+
+**So: `/sdcard/qmx-panadapter/qso-worked.idx`**, one fixed 26-byte record per
+unique (call, band), appended the first time a pair is seen. Read at boot
+straight into the cache with no deduplication pass. The archive itself is never
+re-read at boot.
+
+Consequences to carry into the implementation:
+
+- `ADIF_WORKED_MAX` (8,192) becomes the binding limit long before storage does
+  and must rise; at 26 B in PSRAM, 40,000 pairs is about 1 MB.
+- The index is derived data. If it is missing or its header does not match the
+  archive, rebuild it from the archive once and say so in the log - slow, but
+  only on that boot.
+- A pair must be appended to the index when it is first logged, not only at
+  rotation, or a station worked and then rotated would be missing from it.
 
 ## Risks, and what each is answered with
 
