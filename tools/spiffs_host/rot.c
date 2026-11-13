@@ -70,6 +70,9 @@ static void mount(void)
     if (r) { printf("mount failed %d\n", r); exit(1); }
 }
 static const char *g_log = "qso.adi";
+// esp_spiffs stores "/spiffs/x" as object "/x": a real image needs the slash.
+static const char *g_pfx = "";
+static const char *NM(const char *b) { static char r[4][40]; static int k; k = (k + 1) & 3; snprintf(r[k], sizeof r[k], "%s%s", g_pfx, b); return r[k]; }
 static long fsize(const char *p) { spiffs_stat st; long r = SPIFFS_stat(&fs, p, &st) == 0 ? (long)st.size : -1; SPIFFS_clearerr(&fs); return r; }
 
 // ---- the archive: a RAM file, FAT semantics --------------------------------
@@ -79,7 +82,7 @@ static long arc_len = -1;            // -1 = no file
 // ---- rot_io_t over SPIFFS + the RAM archive --------------------------------
 typedef struct { int which; spiffs_file fd; long pos; int wr; } hnd_t;
 static hnd_t hpool[8];
-static const char *name_of(int w) { return w == ROT_DEV ? "qso.adi" : "qso.tmp"; }
+static const char *name_of(int w) { return NM(w == ROT_DEV ? "qso.adi" : "qso.tmp"); }
 static long after_reserve_fail;      // writes that failed after a passed reserve
 static int  reserved_ok;
 
@@ -155,7 +158,7 @@ static bool h_remove(void *c, int which)
     if (which == ROT_ARC) { arc_len = -1; return true; }
     s32_t r = SPIFFS_remove(&fs, name_of(which)); SPIFFS_clearerr(&fs); return r == 0;
 }
-static bool h_rename(void *c) { (void)c; s32_t r = SPIFFS_rename(&fs, "qso.tmp", "qso.adi"); SPIFFS_clearerr(&fs); return r == 0; }
+static bool h_rename(void *c) { (void)c; s32_t r = SPIFFS_rename(&fs, NM("qso.tmp"), NM("qso.adi")); SPIFFS_clearerr(&fs); return r == 0; }
 static bool h_trunc(void *c, int which, long len) { (void)c; if (which != ROT_ARC || len > arc_len) return false; arc_len = len; return true; }
 static bool h_reserve(void *c, long need)
 {
@@ -176,9 +179,9 @@ static void reset_handles(void) { for (int i = 0; i < 8; i++) hpool[i].which = -
 // What adif_log_init() does with qso.tmp at boot.
 static void boot_recover(void)
 {
-    if (fsize("qso.tmp") >= 0) {
-        if (fsize("qso.adi") < 0) SPIFFS_rename(&fs, "qso.tmp", "qso.adi");
-        else SPIFFS_remove(&fs, "qso.tmp");
+    if (fsize(NM("qso.tmp")) >= 0) {
+        if (fsize(NM("qso.adi")) < 0) SPIFFS_rename(&fs, NM("qso.tmp"), NM("qso.adi"));
+        else SPIFFS_remove(&fs, NM("qso.tmp"));
         SPIFFS_clearerr(&fs);
     }
 }
@@ -429,6 +432,81 @@ int main(int argc, char **argv)
     int stride = argc > 1 ? atoi(argv[1]) : 1;
     reset_handles();
     if (getenv("BASE")) { baseline(stride); return 0; }
+
+    // WALL=1: build the log with diag churn until a QSO append is REFUSED
+    // (the N4OPI state), then boot and rotate, 3 boots max. DROPDIAG0=1 as
+    // below. REC-size records vary 150-600 B as everywhere here.
+    if (getenv("WALL")) {
+        int diag = getenv("DIAG") ? atoi(getenv("DIAG")) : 6000;
+        int made = build(6000, 0, diag);
+        u32_t t, u; SPIFFS_info(&fs, &t, &u);
+        printf("wall: append refused after %d records, qso.adi %ld B, used %u KB, diag %ld + %ld\n",
+               made, fsize("qso.adi"), (unsigned)(u / 1024), fsize("diag.log"), fsize("diag.0.log"));
+        for (int b = 1; b <= 3; b++) {
+            boot();
+            if (getenv("DROPDIAG0")) { SPIFFS_remove(&fs, "diag.0.log"); SPIFFS_clearerr(&fs); }
+            if (getenv("DROPDIAGALL")) { SPIFFS_remove(&fs, "diag.0.log"); SPIFFS_remove(&fs, "diag.log"); SPIFFS_clearerr(&fs); }
+            if (getenv("GCLOOP")) {
+                int ok = 0;
+                for (int i = 0; i < 64; i++) { if (SPIFFS_gc(&fs, 32 * 1024) == SPIFFS_OK) ok++; SPIFFS_clearerr(&fs); }
+                s32_t big = SPIFFS_gc(&fs, 110 * 1024); SPIFFS_clearerr(&fs);
+                SPIFFS_info(&fs, &t, &u);
+                printf("  gc loop: %d/64 small passes ok, then gc(110K)=%d, used %u KB, free_blocks %d deleted_pg %d\n",
+                       ok, (int)big, (unsigned)(u / 1024), (int)fs.free_blocks, (int)fs.stats_p_deleted);
+            }
+            { SPIFFS_info(&fs, &t, &u);
+              printf("  before rotation: used %u KB, free_blocks %d, deleted_pg %d, alloc_pg %d\n",
+                     (unsigned)(u / 1024), (int)fs.free_blocks, (int)fs.stats_p_deleted, (int)fs.stats_p_allocated); }
+            rot_result_t r; quiet = 0;
+            rot_status_t st = run(UINT32_MAX, &r);
+            printf("  boot %d: rotation %d (%s)\n", b, st, r.why);
+            if (st == ROT_DONE) {
+                const char *e = check(made, 1, NULL);
+                printf("  exact check: %s; writes failing after reserve %ld\n", e ? e : "OK", after_reserve_fail);
+                // and can it log again?
+                int ok = 0; for (int i = 0; i < 50; i++) ok += append_rec(made + i);
+                printf("  after rotation: %d of 50 new QSOs logged\n", ok);
+                break;
+            }
+        }
+        return 0;
+    }
+
+    // IMG=path: a real `storage` partition read off a Tab5 (esptool
+    // read_flash 0x820000 0x100000). Boot it the way the firmware does, then
+    // rotate - exactly what that unit did, on the PC.
+    // DROPDIAG0=1 removes diag.0.log first (already mirrored to the card).
+    if (getenv("IMG")) {
+        g_pfx = "/";
+        FILE *fi = fopen(getenv("IMG"), "rb");
+        if (!fi || fread(flash, 1, PART_SZ, fi) != PART_SZ) { printf("cannot read %s\n", getenv("IMG")); return 2; }
+        fclose(fi);
+        mount();
+        { spiffs_DIR dd; struct spiffs_dirent de, *pe; SPIFFS_opendir(&fs, "/", &dd);
+          while ((pe = SPIFFS_readdir(&dd, &de))) printf("  object '%s' %u B\n", (char *)pe->name, (unsigned)pe->size);
+          SPIFFS_closedir(&dd); }
+        u32_t t, u; SPIFFS_info(&fs, &t, &u);
+        printf("image mounted: used %u KB of %u KB, qso.adi %ld, diag.log %ld, diag.0.log %ld, free_blocks %d deleted_pg %d\n",
+               (unsigned)(u / 1024), (unsigned)(t / 1024), fsize(NM("qso.adi")), fsize(NM("diag.log")), fsize(NM("diag.0.log")),
+               (int)fs.free_blocks, (int)fs.stats_p_deleted);
+        s32_t g = SPIFFS_gc(&fs, 65536); SPIFFS_clearerr(&fs);
+        SPIFFS_check(&fs); SPIFFS_clearerr(&fs); boot_recover();
+        SPIFFS_info(&fs, &t, &u);
+        printf("after boot gc(64K)=%d + check: used %u KB, free_blocks %d deleted_pg %d\n", (int)g, (unsigned)(u / 1024),
+               (int)fs.free_blocks, (int)fs.stats_p_deleted);
+        if (getenv("DROPDIAG0")) {
+            SPIFFS_remove(&fs, NM("diag.0.log")); SPIFFS_clearerr(&fs);
+            SPIFFS_info(&fs, &t, &u);
+            printf("diag.0.log removed: used %u KB, free_blocks %d deleted_pg %d\n", (unsigned)(u / 1024),
+                   (int)fs.free_blocks, (int)fs.stats_p_deleted);
+        }
+        long before = fsize(NM("qso.adi"));
+        rot_result_t r; quiet = 0;
+        rot_status_t st = run(UINT32_MAX, &r);
+        printf("rotation: status %d (%s); qso.adi %ld -> %ld, archive %ld B, writes failing after reserve %ld\n",
+               st, r.why, before, fsize(NM("qso.adi")), arc_len, after_reserve_fail);
+        return 0;
+    }
 
     // Under the cap: nothing happens, no archive is created.
     sweep("under cap (100 recs)", 100, 0, 0, stride, UINT32_MAX);

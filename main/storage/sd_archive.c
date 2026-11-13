@@ -149,6 +149,11 @@ static volatile bool s_boot_probe_done = false;
 // runs (an SD write at an arbitrary moment with WiFi up is the #153 risk).
 static bool s_boot_mount = false;
 static bool s_rotation_tried = false;
+// What the card's qso.adi holds as "archive + device records", if THIS mount
+// wrote it that way: the archive size it was built with. Lets a later mirror
+// in the same mount rewrite only the part after the archive. 0 = unknown.
+static long s_card_full_ab = 0;
+
 static volatile bool s_adif_dirty   = true;   // mirror once on first mount
 static volatile bool s_config_dirty = true;
 static volatile bool s_lotw_dirty   = true;   // LoTW cert+key: mount + on import
@@ -1268,6 +1273,7 @@ static bool try_mount(void)
 
     s_log_rotate_tried = false;    // each mount gets one rotate-and-retry
     s_adif_dirty = true;           // force a full mirror right after mounting
+    s_card_full_ab = 0;            // nothing known about the card file yet
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
@@ -1348,6 +1354,25 @@ static long adif_full_log_bytes(long device_file_bytes)
     return archive_in_use() ? (long)adif_log_archive_bytes() + adif_log_records_bytes() : device_file_bytes;
 }
 
+// ⛔ ONE CARD FILE OPEN AT A TIME, PLUS qmx-log.txt.
+// The card is mounted with max_files = 2 (bsp_sdcard_init in try_mount), and
+// s_log_file holds qmx-log.txt open for the whole mount. A third fopen on the
+// card fails. The first version of this code held qso.adi AND the archive open
+// together: every mirror failed, each failure was read as a card removal, and
+// the card went through unmount/remount every ~40 s with WiFi up - and the
+// "wb" open had already emptied qso.adi (bench1, 2026-11-13). So: a file on
+// the card is opened, used and closed before the next one is opened. SPIFFS
+// files are a different VFS and do not count.
+
+// Read n bytes at off from a card file, open-read-close. False on any error.
+static bool card_read_at(const char *path, long off, void *dst, size_t n)
+{
+    FILE *f = fopen(path, "rb");
+    bool ok = f && fseek(f, off, SEEK_SET) == 0 && fread(dst, 1, n, f) == n;
+    if (f) fclose(f);
+    return ok;
+}
+
 // Does the card file (qso.adi, or qso.prev.adi) start with the first ab bytes
 // of the archive? Compared on the last 256 of them: the archive is append-
 // only, so a file that matches there was written from it. Card lock held.
@@ -1357,64 +1382,104 @@ static bool prefix_matches_locked(const char *path, long ab)
     struct stat st;
     if (ab <= 0 || stat(path, &st) != 0 || st.st_size < ab) return false;
     long n = ab < 256 ? ab : 256;
-    FILE *fa = fopen(SD_ARC_PATH, "rb"), *fb = fopen(path, "rb");
-    bool ok = fa && fb && fseek(fa, ab - n, SEEK_SET) == 0 && fseek(fb, ab - n, SEEK_SET) == 0 &&
-              fread(a, 1, (size_t)n, fa) == (size_t)n && fread(b, 1, (size_t)n, fb) == (size_t)n &&
-              memcmp(a, b, (size_t)n) == 0;
-    if (fa) fclose(fa);
-    if (fb) fclose(fb);
+    return card_read_at(SD_ARC_PATH, ab - n, a, (size_t)n) &&
+           card_read_at(path, ab - n, b, (size_t)n) &&
+           memcmp(a, b, (size_t)n) == 0;
+}
+
+// Copy the device log's records (everything after its header line) to the
+// open card file `out`. The device log is on SPIFFS - not a card file.
+static bool copy_device_records(FILE *out, char *buf, size_t bufsz, long *copied)
+{
+    FILE *d = fopen(adif_log_file_path(), "rb");
+    if (!d) return false;
+    int c;
+    while ((c = fgetc(d)) != EOF && c != '\n') { }   // header line
+    bool ok = !ferror(d);
+    size_t g;
+    *copied = 0;
+    while (ok && (g = fread(buf, 1, bufsz, d)) > 0) {
+        if (fwrite(buf, 1, g, out) != g) ok = false;
+        *copied += (long)g;
+    }
+    if (ferror(d)) ok = false;
+    fclose(d);
     return ok;
 }
 
-// Copy n bytes (n < 0: to EOF) between open files.
-static bool copy_stream(FILE *in, FILE *out, long n)
-{
-    static char buf[2048] SD_IO_ALIGNED;
-    while (n != 0) {
-        size_t want = (n < 0 || n > (long)sizeof buf) ? sizeof buf : (size_t)n;
-        size_t g = fread(buf, 1, want, in);
-        if (g == 0) return n < 0 && !ferror(in);
-        if (fwrite(buf, 1, g, out) != g) return false;
-        if (n > 0) n -= (long)g;
-    }
-    return true;
-}
+
+#define SD_ADIF_TMP SD_ADIF_PATH ".tmp"
+#define MIRROR_CHUNK (64 * 1024)
 
 // Mirror the QSO log to the card's qso.adi: the archive this log owns, then
 // the device log's records, so the card file is the whole log for a PC and for
-// "Restore from SD". When the card file already starts with the archive (the
-// usual case: it was written this way last time), only the device part after
-// it is rewritten - the archive can be megabytes. Card lock held.
+// "Restore from SD". Card lock held. A failure here is logged and NOT treated
+// as a card removal (see the caller): the card is fine, the next boot retries.
 static bool mirror_adif(void)
 {
-    if (!archive_in_use()) return copy_file(adif_log_file_path(), SD_ADIF_PATH);
+    if (!archive_in_use()) { s_card_full_ab = 0; return copy_file(adif_log_file_path(), SD_ADIF_PATH); }
     long ab = (long)adif_log_archive_bytes();
-    bool prefix = prefix_matches_locked(SD_ADIF_PATH, ab);
-    FILE *out = fopen(SD_ADIF_PATH, prefix ? "r+b" : "wb");
-    if (!out) { ESP_LOGW(TAG, "open %s failed: %s", SD_ADIF_PATH, strerror(errno)); return false; }
+    char *buf = sd_io_buf_alloc(MIRROR_CHUNK);
+    if (!buf) { ESP_LOGE(TAG, "QSO log mirror: no memory for its buffer"); return false; }
+    const char *step = "";
+    long recs = 0;
     bool ok = true;
-    if (prefix) ok = fseek(out, ab, SEEK_SET) == 0;
-    else {
-        FILE *a = fopen(SD_ARC_PATH, "rb");
-        ok = a && copy_stream(a, out, ab);
-        if (a) fclose(a);
+
+    // A qso.adi.tmp left by a cut between the remove and the rename below is
+    // the complete file: finish the rename first.
+    struct stat st;
+    if (stat(SD_ADIF_PATH, &st) != 0 && stat(SD_ADIF_TMP, &st) == 0) rename(SD_ADIF_TMP, SD_ADIF_PATH);
+
+    if (s_card_full_ab == ab && stat(SD_ADIF_PATH, &st) == 0 && st.st_size >= ab) {
+        // Same mount, same archive: rewrite the part after it, in place.
+        step = "open r+b";
+        FILE *out = fopen(SD_ADIF_PATH, "r+b");
+        ok = out != NULL;
+        if (ok) { step = "seek"; ok = fseek(out, ab, SEEK_SET) == 0; }
+        if (ok) { step = "device records"; ok = copy_device_records(out, buf, MIRROR_CHUNK, &recs); }
+        if (ok) { step = "truncate"; ok = fflush(out) == 0 && ftruncate(fileno(out), ab + recs) == 0; }
+        if (ok) { step = "fsync"; ok = fsync(fileno(out)) == 0; }
+        if (out && fclose(out) != 0 && ok) { step = "close"; ok = false; }
+    } else {
+        // Build qso.adi.tmp, then swap it in. Never truncate qso.adi first.
+        long done = 0;
+        bool first = true;
+        while (ok && done < ab) {
+            size_t n = (size_t)((ab - done) < MIRROR_CHUNK ? (ab - done) : MIRROR_CHUNK);
+            step = "read archive";
+            ok = card_read_at(SD_ARC_PATH, done, buf, n);
+            if (!ok) break;
+            step = "write tmp";
+            FILE *t = fopen(SD_ADIF_TMP, first ? "wb" : "ab");
+            ok = t && fwrite(buf, 1, n, t) == n && fflush(t) == 0 && fsync(fileno(t)) == 0;
+            if (t && fclose(t) != 0) ok = false;
+            first = false;
+            done += (long)n;
+        }
+        if (ok) {
+            step = "device records";
+            FILE *t = fopen(SD_ADIF_TMP, "ab");
+            ok = t && copy_device_records(t, buf, MIRROR_CHUNK, &recs) && fflush(t) == 0 && fsync(fileno(t)) == 0;
+            if (t && fclose(t) != 0) ok = false;
+        }
+        if (ok) { step = "size"; ok = stat(SD_ADIF_TMP, &st) == 0 && st.st_size == ab + recs; }
+        if (ok) {
+            step = "swap";
+            unlink(SD_ADIF_PATH);                  // FatFs rename does not replace
+            ok = rename(SD_ADIF_TMP, SD_ADIF_PATH) == 0;
+        }
+        if (!ok) unlink(SD_ADIF_TMP);
     }
-    FILE *d = ok ? fopen(adif_log_file_path(), "rb") : NULL;
+    int e = errno;
+    sd_io_buf_free(buf);
     if (ok) {
-        // The device log's header line is not part of the card file: the
-        // archive's own header is.
-        int c;
-        ok = d != NULL;
-        while (ok && (c = fgetc(d)) != EOF && c != '\n') { }
-        ok = ok && copy_stream(d, out, -1);
+        s_card_full_ab = ab;
+        ESP_LOGI(TAG, "mirrored QSO log: %ld B archive + %ld B device records", ab, recs);
+    } else {
+        s_card_full_ab = 0;
+        ESP_LOGE(TAG, "QSO log mirror FAILED at '%s' (errno %d %s) - qso.adi on the card left as it was; next boot retries",
+                 step, e, strerror(e));
     }
-    if (d) fclose(d);
-    long end = ok ? ftell(out) : -1;
-    if (ok && (fflush(out) != 0 || ftruncate(fileno(out), end) != 0 || fsync(fileno(out)) != 0)) ok = false;
-    if (fclose(out) != 0) ok = false;
-    if (ok) ESP_LOGI(TAG, "mirrored QSO log: %ld B archive%s + device records = %ld B", ab,
-                     prefix ? " (kept)" : "", end);
-    else ESP_LOGW(TAG, "QSO log mirror failed");
     return ok;
 }
 
@@ -1926,10 +1991,10 @@ static void sd_archive_task(void *arg)
         if (ok && s_adif_dirty && !adif_log_was_lost()) {
             s_adif_dirty = false;
             keep_previous_adif();
-            if (!mirror_adif()) {
-                s_adif_dirty = true;   // retry after remount
-                ok = false;
-            }
+            // ⛔ Not a card error: a mirror that fails for its own reasons
+            // must not put the card through unmount/remount with WiFi up.
+            // Logged inside; the next boot (dirty at mount) retries.
+            (void)mirror_adif();
         }
         if (ok && s_config_dirty) {
             s_config_dirty = false;
