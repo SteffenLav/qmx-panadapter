@@ -9,6 +9,30 @@ Decided with the operator after Gyula HA3HZ described the same model on
 groups.io: *"log applications keep only the last few hundred QSOs visible and
 the rest in storage"*.
 
+## Bench test 2026-11-13 (bench1, 01ac77b2 + 6b5bd324) - PASSED, one gap
+
+- 796 records (152 KB) -> 282 to the card, 514 left. First boot refused
+  (ROT_FULL right after a big import), the next boot finished the move from
+  the card ("282 finished"). Card qso.adi == archive + device records byte
+  for byte; archive + device == the 796 in order; the 36 real QSOs are the
+  first 36 archive records; qso-worked.idx 270 pairs covering the archive.
+- Found and fixed on the bench: the card mounts with max_files = 2 and
+  qmx-log.txt stays open - the mirror held 2 more and failed every time,
+  each failure counted as a card removal (remount loop with WiFi up) and
+  "wb" had emptied qso.adi. 6b5bd324: one card file at a time, tmp + swap.
+- Found and fixed while planning: a card with NO archive blocked rotation
+  for good (01ac77b2, relink as its own commit).
+- Cleanup verified: device log and card qso.adi == backup sha ec73cd98,
+  cursors back to qrz 33 / eqsl 25 / lotw 25 / cloudlog 0.
+- NOT verified: worked-before marking of an archived call on the device
+  (no API; index load writes no log line).
+
+⛔ OPEN, operator decision: at the append WALL (N4OPI's state) rotation is
+refused every boot - the rewrite needs ~104 KB that SPIFFS gc cannot
+guarantee (tools/spiffs_host `WALL=1`). Dropping both diag logs from SPIFFS
++ 64 gc(32K) passes made it succeed on boot 1, exact, 50/50 QSOs logged
+after. Dropping only diag.0.log did not.
+
 ## Status 2026-11-13, evening - firmware wired, NOT flashed
 
 Operator decision: no LittleFS migration (a failed one-time conversion would
