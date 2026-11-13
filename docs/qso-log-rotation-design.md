@@ -18,7 +18,7 @@ State of `main` (11 commits, **none pushed**, working tree clean):
 | commit | what |
 |---|---|
 | `c8e1c55a` | the safety fix this builds on - every SPIFFS write admitted, no `truncate` |
-| `35a9b0c5` | T198: 11 KB of web-radio `.bss` to PSRAM, DMA pool back |
+| `35a9b0c5`, `82584acd` | T198: 19 KB of `.bss` to PSRAM, DMA pool back |
 | `dd22a846` | `tools/dma_history.py` |
 | `8f66ebf0`, `f28ed852` | this document |
 
@@ -52,8 +52,10 @@ Bench and safety:
   36 records. Compare against it after any test that writes the log.
 - ⛔ No release without the operator saying "wrap-up".
 
-Still open elsewhere, not blocking this: ~6 KB of the v1.23.1 DMA cliff is
-unaccounted for, and a reply to Randy N4OPI is drafted but unsent at
+⚠ `82584acd` is **not flashed**: bundle it with the first bench1 flash and read
+`app_main entry` and T+600s with `tools/dma_history.py`.
+
+Still open elsewhere, not blocking this: a reply to Randy N4OPI is drafted but unsent at
 `scratchpad/reply_randy_n4opi_logging_20261113.md`.
 
 ## The problem this solves
