@@ -1,4 +1,5 @@
 // radio-browser.info client. See radio_browser.h for why this directory.
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR - see the `seen` table below
 #include "radio_browser.h"
 
 #include "storage/settings.h"
@@ -395,8 +396,16 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
         return -3;
     }
 
-    /* Normalised names of what we have kept, for the duplicate test. */
-    static char seen[RB_MAX_STATIONS][RB_NAME_LEN];
+    /* Normalised names of what we have kept, for the duplicate test.
+     *
+     * ⛔ PSRAM, 9,600 B - the single largest internal .bss symbol in the
+     * firmware and the biggest part of T198. Internal free at `app_main entry`
+     * fell 175 KB -> 159 KB between v1.23.1-10 and v1.23.1-134 (bench1
+     * capture), which took the settled DMA pool from 7 KB to under 100 B, and
+     * Randy N4OPI's web SD browser then failed on a 576 B DMA allocation.
+     * This table is touched only while parsing one HTTP reply, on the
+     * webradio task - no DMA, no ISR, nothing per-frame. */
+    static EXT_RAM_BSS_ATTR char seen[RB_MAX_STATIONS][RB_NAME_LEN];
     int n = 0;
 
     cJSON *it = NULL;
