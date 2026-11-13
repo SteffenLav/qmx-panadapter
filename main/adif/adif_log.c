@@ -2179,6 +2179,10 @@ static bool rio_remove(void *c, int w)             { (void)c; return remove(rio_
 static bool rio_rename(void *c)                    { (void)c; return rename(TMP_LOG, FILE_PATH) == 0; }
 static bool rio_trunc(void *c, int w, long len)    { (void)c; return w == ROT_ARC && truncate(rio_path(w), len) == 0; }
 static bool rio_reserve(void *c, long need)        { (void)c; return spiffs_guard_reserve((size_t)need); }
+// The card had no archive and the log's link to one was reset (adif_rotate.c):
+// the cursor base goes to 0 now, synchronously, without shifting - the records
+// did not move. The rotation that may follow shifts from 0.
+static void rio_relinked(void *c) { (void)c; settings_shift_upload_cursors(0); }
 static void rio_log(void *c, bool warn, const char *m)
 {
     (void)c;
@@ -2218,7 +2222,8 @@ int adif_log_rotate(const char *arc_path)
     memset(&r, 0, sizeof r);
     if (buf) {
         rot_io_t io = { NULL, buf, 4096, rio_open, rio_read, rio_write, rio_seek, rio_close,
-                        rio_size, rio_remove, rio_rename, rio_trunc, rio_reserve, rio_log };
+                        rio_size, rio_remove, rio_rename, rio_trunc, rio_reserve, rio_log,
+                        rio_relinked };
         s_rio_arc = arc_path;
         int64_t t0 = esp_timer_get_time();
         spiffs_guard_take();
@@ -2235,7 +2240,7 @@ int adif_log_rotate(const char *arc_path)
         ESP_LOGE(TAG, "rotation: no memory for its buffer");
     }
     int moved = 0;
-    if (r.status == ROT_DONE) {
+    if (r.status == ROT_DONE || r.relinked) {
         if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
         s_count = 0;
         s_worked_count = s_idx_count;

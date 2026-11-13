@@ -477,11 +477,94 @@ int main(int argc, char **argv)
         rot_status_t st = run(UINT32_MAX, &r); quiet = 1;
         if (st != ROT_MISMATCH || fsize("qso.adi") != before || arc_len != abefore) fail("foreign archive", "was touched");
         else printf("foreign archive: MISMATCH, nothing touched\n");
-        // And a card with no archive for a log that says it has one.
-        build(700, 400, 0); boot(); arc_len = -1; before = fsize("qso.adi");
+        // A card with NO archive for a log that says it moved records to one
+        // (new card, or archive deleted on a PC): a new archive is started and
+        // the link reset. Over the cap: the new archive holds the moved
+        // records and the header counts only those.
+        n_scen++;
+        build(700, 400, 0); boot(); arc_len = -1;
         st = run(UINT32_MAX, &r);
-        if (st != ROT_MISMATCH || fsize("qso.adi") != before || arc_len != -1) fail("missing archive", "was touched");
-        else printf("missing archive: MISMATCH, nothing touched\n");
+        {
+            rot_hdr_t h; const char *e = NULL;
+            long dl; char *d = slurp_dev(&dl);
+            const char *nl = memchr(d, '\n', (size_t)dl); long hl2 = nl - d + 1;
+            rot_hdr_parse(d, (size_t)hl2, &h);
+            int nd = parse_recs(d + hl2, dl - hl2, seqbuf_d, 20000, &e);
+            free(d);
+            long ahl = (long)strlen(ROT_ARC_HEADER);
+            int na = parse_recs(arc_buf + ahl, arc_len - ahl, seqbuf_a, 20000, &e);
+            int ok = st == ROT_DONE && r.relinked && nd > 0 && na > 0 && (int)h.archived == na && (long)h.arc_bytes == arc_len &&
+                     seqbuf_d[nd - 1] == 699 && seqbuf_a[na - 1] + 1 == seqbuf_d[0];
+            for (int i = 1; ok && i < na; i++) if (seqbuf_a[i] != seqbuf_a[i - 1] + 1) ok = 0;
+            for (int i = 1; ok && i < nd; i++) if (seqbuf_d[i] != seqbuf_d[i - 1] + 1) ok = 0;
+            if (!ok) fail("missing archive, over cap", r.why);
+            else printf("missing archive, over cap: new archive with %d records, header %lu/%lu, device %d - contiguous\n",
+                        na, (unsigned long)h.archived, (unsigned long)h.arc_bytes, nd);
+        }
+        // The relink under power cuts: build the same state, cut at every
+        // stride-th op, recover, check nothing was lost, run again, check the
+        // archive + device log are contiguous and end at 699 and the header
+        // agrees with the new archive.
+        {
+            n_scen++;
+            build(700, 400, 0); boot(); arc_len = -1;
+            long dl0; char *d0x = slurp_dev(&dl0);
+            const char *nlx = memchr(d0x, '\n', (size_t)dl0); const char *e0 = "";
+            int nd0 = parse_recs(nlx + 1, dl0 - (nlx - d0x + 1), seqbuf_d, 20000, &e0);
+            int first = seqbuf_d[0]; free(d0x); (void)nd0;
+            snap_take();
+            rot_result_t rr; ops = 0; run(UINT32_MAX, &rr); long tot = ops;
+            long cuts = 0, bad = 0, spiffs_lost = 0, full_retry = 0, full_stuck = 0;
+            for (long k = 1; k <= tot; k += stride) {
+                snap_restore(); ops = 0; cut_countdown = k;
+                rot_result_t r1;
+                if (setjmp(cut_jmp) == 0) { run(UINT32_MAX, &r1); cut_countdown = -1; continue; }
+                in_run = 0; cut_countdown = -1; cuts++;
+                boot_cold();
+                rot_result_t r2; run(UINT32_MAX, &r2);
+                int extra = 0;
+                while (r2.status == ROT_FULL && extra < 3) { extra++; boot(); run(UINT32_MAX, &r2); }
+                if (extra) { full_retry++; if (r2.status == ROT_FULL) full_stuck++; }
+                long dl; char *d = slurp_dev(&dl);
+                if (dl < 0) { spiffs_lost++; continue; }        // the SPIFFS class, counted apart
+                const char *nl = memchr(d, '\n', (size_t)dl); long hl2 = nl - d + 1;
+                rot_hdr_t h; rot_hdr_parse(d, (size_t)hl2, &h);
+                const char *e = ""; int nd = parse_recs(d + hl2, dl - hl2, seqbuf_d, 20000, &e);
+                free(d);
+                int na = 0; long ahl = (long)strlen(ROT_ARC_HEADER);
+                if (arc_len > 0) na = parse_recs(arc_buf + ahl, arc_len - ahl, seqbuf_a, 20000, &e);
+                int ok = nd > 0 && na >= 0 && (int)h.archived == na && (na == 0 ? h.arc_bytes == 0 : (long)h.arc_bytes == arc_len);
+                int expect = first;
+                for (int i = 0; ok && i < na; i++) if (seqbuf_a[i] != expect++) ok = 0;
+                for (int i = 0; ok && i < nd; i++) if (seqbuf_d[i] != expect++) ok = 0;
+                if (ok && expect != 700) ok = 0;
+                if (!ok) { bad++; if (bad <= 3) printf("  relink cut@%ld: second run %d (%s), dev %d arc %d hdr %lu/%lu\n", k, r2.status, r2.why, nd, na, (unsigned long)h.archived, (unsigned long)h.arc_bytes); }
+            }
+            if (bad) fail("relink under power cuts", "see above");
+            printf("relink under power cuts: %ld cuts, %ld wrong, %ld lost to SPIFFS itself; %ld refused (FULL) at first, %ld still refused after 3 more boots\n",
+                   cuts, bad, spiffs_lost, full_retry, full_stuck);
+        }
+        // Under the cap: only the header is reset; the records are untouched.
+        n_scen++;
+        build(700, 400, 0); boot();
+        { rot_result_t r0; for (int s = 0; s < 1; s++) run(UINT32_MAX, &r0); }
+        arc_len = -1;
+        long recs_before; char *d0 = slurp_dev(&recs_before);
+        const char *nl0 = memchr(d0, '\n', (size_t)recs_before); long body0 = recs_before - (nl0 - d0 + 1);
+        char *b0 = malloc((size_t)body0); memcpy(b0, nl0 + 1, (size_t)body0); free(d0);
+        st = run(UINT32_MAX, &r);
+        {
+            long dl; char *d = slurp_dev(&dl);
+            const char *nl = memchr(d, '\n', (size_t)dl); long hl2 = nl - d + 1;
+            rot_hdr_t h; rot_hdr_parse(d, (size_t)hl2, &h);
+            int ok = st == ROT_NOTHING && r.relinked && h.archived == 0 && h.arc_bytes == 0 && arc_len == -1 &&
+                     hl2 == (long)strlen(ROT_ARC_HEADER) && memcmp(d, ROT_ARC_HEADER, (size_t)hl2) == 0 &&
+                     dl - hl2 == body0 && memcmp(d + hl2, b0, (size_t)body0) == 0;
+            free(d);
+            if (!ok) fail("missing archive, under cap", r.why);
+            else printf("missing archive, under cap: header reset to plain, %ld B of records unchanged, no archive created\n", body0);
+        }
+        free(b0);
     }
 
     printf("\n%ld scenarios, %ld failures, writes failing after a passed reserve: %ld\n", n_scen, n_fail, after_reserve_fail);

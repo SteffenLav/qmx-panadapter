@@ -3398,6 +3398,43 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, body);
         }
         return ESP_OK;
+    } else if (action && strcmp(action, "upload_cursors") == 0) {
+        /* Read, and optionally set, how many device-log records each upload
+         * has sent: {"action":"upload_cursors"} reads; add any of "qrz",
+         * "eqsl", "lotw", "cloudlog" (a count, clamped to the log) to set.
+         * There was no way to see or put these back; the bench test of QSO
+         * log rotation (2026-11-13) needed both, and so does support - lower
+         * one and the next upload re-sends the records above it. Set values
+         * are flushed before the reply. */
+        uint32_t c[4];
+        settings_get_upload_cursors(&c[0], &c[1], &c[2], &c[3]);
+        static const char *const nm[4] = { "qrz", "eqsl", "lotw", "cloudlog" };
+        uint32_t n = (uint32_t)adif_log_count();
+        bool changed = false;
+        for (int i = 0; i < 4; i++) {
+            cJSON *v = cJSON_GetObjectItem(root, nm[i]);
+            if (!cJSON_IsNumber(v) || v->valuedouble < 0) continue;
+            uint32_t want = (uint32_t)v->valuedouble;
+            if (want > n) want = n;
+            if (i == 0) settings_set_qrz_uploaded_n(want);
+            if (i == 1) settings_set_eqsl_uploaded_n(want);
+            if (i == 2) settings_set_lotw_uploaded_n(want);
+            if (i == 3) settings_set_cloudlog_uploaded_n(want);
+            ESP_LOGW(TAG, "upload cursor %s set %lu -> %lu over the API", nm[i],
+                     (unsigned long)c[i], (unsigned long)want);
+            c[i] = want;
+            changed = true;
+        }
+        if (changed) settings_flush();
+        cJSON_Delete(root);
+        char body[200];
+        snprintf(body, sizeof body,
+                 "{\"ok\":true,\"qso_count\":%lu,\"qso_archived\":%d,\"qrz\":%lu,\"eqsl\":%lu,\"lotw\":%lu,\"cloudlog\":%lu}",
+                 (unsigned long)n, adif_log_archived_count(), (unsigned long)c[0], (unsigned long)c[1],
+                 (unsigned long)c[2], (unsigned long)c[3]);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "reboot") == 0) {
         /* Randy N4OPI, 2026-09-22: "is there a way to reboot the Tab5 from the
          * Web UI? The only means I see is when the next version comes out."

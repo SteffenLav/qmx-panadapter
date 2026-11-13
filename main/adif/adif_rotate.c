@@ -143,6 +143,37 @@ static bool copy_n(const rot_io_t *io, void *in, void *out, long n)
     return true;
 }
 
+// Rewrite the device log to qso.tmp: header h2, then everything after the
+// first `skip` bytes of records. Then swap it in. The commit point of every
+// change this file makes to the device log. False with r->status set.
+static bool commit_rewrite(const rot_io_t *io, rot_result_t *r, long dev_sz, long hdr_len,
+                           long skip, const rot_hdr_t *h2)
+{
+    char hdr[160];
+    int nh = rot_hdr_format(hdr, sizeof hdr, h2);
+    if (!io->reserve(io->ctx, dev_sz - hdr_len - skip + nh)) {
+        say(io, r, ROT_FULL, true, "storage cannot take the rewritten log - nothing removed from it, retried next boot");
+        return false;
+    }
+    void *in = io->open(io->ctx, ROT_DEV, "rb");
+    void *out = in ? io->open(io->ctx, ROT_TMP, "wb") : NULL;
+    bool ok = in && out && io->seek(io->ctx, in, hdr_len + skip) &&
+              io->write(io->ctx, out, hdr, nh) == nh && copy_n(io, in, out, -1);
+    if (out && !io->close(io->ctx, out)) ok = false;
+    if (in) io->close(io->ctx, in);
+    if (!ok) {
+        io->remove(io->ctx, ROT_TMP);
+        say(io, r, ROT_IO, true, "device log rewrite failed - log unchanged, retried next boot");
+        return false;
+    }
+    io->remove(io->ctx, ROT_DEV);
+    if (!io->rename_tmp(io->ctx)) {
+        say(io, r, ROT_IO, true, "rename qso.tmp -> qso.adi failed - boot recovers it");
+        return false;
+    }
+    return true;
+}
+
 // ---- the run ---------------------------------------------------------------
 
 void rot_run(const rot_io_t *io, uint32_t max_rotate, rot_result_t *r)
@@ -182,6 +213,33 @@ void rot_run(const rot_io_t *io, uint32_t max_rotate, rot_result_t *r)
     const long hl = (long)strlen(ROT_ARC_HEADER);
     long arc = r->arc_size;
     long base;
+    // The card has no archive at all, but the log says it moved records to
+    // one: a new card, or the archive was deleted on a PC. Those records are
+    // gone from THIS card whatever happens here, and refusing would block
+    // rotation for good (found 2026-11-13 planning the bench test). An
+    // archive that EXISTS but is not this log's is still never touched
+    // (MISMATCH below).
+    //
+    // ⛔ The relink is its OWN commit, before any new archive exists: the
+    // header goes back to plain with the records untouched, io->relinked()
+    // resets the cursor base, and only then does a normal first rotation
+    // run. Folding both into one commit was wrong twice: the cursor shift
+    // would be (new count - old count) instead of the records removed, and a
+    // cut after the new archive was created but before the commit left a
+    // header pointing at an archive of a different size - MISMATCH for ever.
+    if (h.arc_bytes != 0 && r->arc_size < 0) {
+        snprintf(msg, sizeof msg, "no archive on this card, but the log moved %lu records to one - starting again; those records are not on this card",
+                 (unsigned long)h.archived);
+        if (io->log) io->log(io->ctx, true, msg);
+        rot_hdr_t plain = {0, 0};
+        if (!commit_rewrite(io, r, dev_sz, hdr_len, 0, &plain)) return;
+        if (io->relinked) io->relinked(io->ctx);
+        uint32_t was = h.archived;
+        rot_run(io, max_rotate, r);          // header is plain now: no second relink
+        r->relinked = true;
+        r->relinked_from = was;
+        return;
+    }
     if (h.arc_bytes == 0) {
         if (h.archived != 0) { say(io, r, ROT_MISMATCH, true, "log header names archived records but no archive size"); return; }
         if (arc < 0) base = -1;
@@ -288,27 +346,9 @@ void rot_run(const rot_io_t *io, uint32_t max_rotate, rot_result_t *r)
 
     // 7. Rewrite the device log without the moved records. The commit point.
     rot_hdr_t h2 = { h.archived + R, (uint32_t)(base + rbytes) };
-    char hdr[160];
-    int nh = rot_hdr_format(hdr, sizeof hdr, &h2);
-    if (!io->reserve(io->ctx, dev_sz - hdr_len - rbytes + nh)) {
-        snprintf(msg, sizeof msg, "storage cannot take the rewritten log - %lu records stay on both, move finishes next boot",
-                 (unsigned long)R);
-        say(io, r, ROT_FULL, true, msg); return;
-    }
-    void *in = io->open(io->ctx, ROT_DEV, "rb");
-    void *out = in ? io->open(io->ctx, ROT_TMP, "wb") : NULL;
-    bool ok = in && out && io->seek(io->ctx, in, hdr_len + rbytes) &&
-              io->write(io->ctx, out, hdr, nh) == nh && copy_n(io, in, out, -1);
-    if (out && !io->close(io->ctx, out)) ok = false;
-    if (in) io->close(io->ctx, in);
-    if (!ok) {
-        io->remove(io->ctx, ROT_TMP);
-        say(io, r, ROT_IO, true, "device log rewrite failed - log unchanged, move finishes next boot");
-        return;
-    }
-    io->remove(io->ctx, ROT_DEV);
-    if (!io->rename_tmp(io->ctx)) {
-        say(io, r, ROT_IO, true, "rename qso.tmp -> qso.adi failed - boot recovers it");
+    if (!commit_rewrite(io, r, dev_sz, hdr_len, rbytes, &h2)) {
+        if (r->status == ROT_FULL || r->status == ROT_IO)
+            if (io->log) io->log(io->ctx, true, "the moved records stay in both files; the move finishes next boot");
         return;
     }
     r->hdr = h2;

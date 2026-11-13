@@ -49,6 +49,10 @@ typedef struct {
     // SPIFFS admission (util/spiffs_guard.h). Caller of rot_run holds the guard.
     bool  (*reserve)(void *ctx, long need);
     void  (*log)(void *ctx, bool warn, const char *msg);
+    // Optional. Called right after a relink committed (the log's header was
+    // reset because the card has no archive): the cursor base must go to 0
+    // before anything else moves.
+    void  (*relinked)(void *ctx);
 } rot_io_t;
 
 typedef struct {
@@ -81,6 +85,8 @@ typedef struct {
     uint32_t dev_records; // records on the device log afterwards
     rot_hdr_t hdr;        // header on the device log afterwards
     long arc_size;        // archive size afterwards (-1 = none)
+    bool relinked;        // the link to a missing archive was reset first
+    uint32_t relinked_from; // records the old link said were on the card
     char why[128];
 } rot_result_t;
 
