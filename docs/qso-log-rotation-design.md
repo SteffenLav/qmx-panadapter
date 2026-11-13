@@ -9,7 +9,24 @@ Decided with the operator after Gyula HA3HZ described the same model on
 groups.io: *"log applications keep only the last few hundred QSOs visible and
 the rest in storage"*.
 
-## Status and where to start — 2026-11-13
+## Status 2026-11-13, later - core + harness done, firmware NOT wired
+
+- `main/adif/adif_rotate.c` is the rotation core, portable, behind `rot_io_t`.
+  Not in `main/CMakeLists.txt` yet. `tools/spiffs_host/rot.c` runs it with a
+  power cut at every flash write: see that README's table. Rotation logic
+  passes; 0.5-0.9 % of cuts lose qso.adi to SPIFFS itself.
+- ⛔ The harness BASELINE (no rotation) loses qso.adi in ~9-10 % of power cuts
+  landing in any SPIFFS write - boot `SPIFFS_check` deletes it. Waiting on the
+  operator: does that change the plan before the firmware is wired?
+- Decided while building (in the code's comments): cap 128 KB, rotate down to
+  96 KB; the worked index takes archive pairs at rotation, not per QSO (the
+  device log supplies its own pairs; a per-QSO SD write is #153 risk); upload
+  cursors are shifted from the header's ARCHIVED count against a base in NVS,
+  cursors written before the base, so a cut gives re-uploads, never skips.
+- Found, not fixed: an upload in flight while a delete runs writes an absolute
+  cursor computed before the delete shifted the records. Pre-existing.
+
+## Status and where to start — 2026-11-13 (morning, superseded above)
 
 **The design below is settled. Nothing of it is implemented.** Start here.
 
