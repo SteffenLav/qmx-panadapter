@@ -4900,6 +4900,7 @@ static void adif_import_mark_uploaded(void)
     settings_set_qrz_uploaded_n(n);
     settings_set_eqsl_uploaded_n(n);
     settings_set_lotw_uploaded_n(n);
+    settings_set_cloudlog_uploaded_n(n);   // #171 - was missing: Cloudlog would re-send a restore
 }
 
 // POST /api/adif/import?mark_uploaded=1 — merge records from an uploaded

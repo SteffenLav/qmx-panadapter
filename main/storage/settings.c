@@ -4450,16 +4450,19 @@ void settings_set_charge_limit_pct(uint8_t pct)
     mark_dirty(DIRTY_CHARGE_LIM_PCT);
 }
 
-void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw)
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw,
+                                 uint32_t *cloudlog)
 {
-    if (qrz)  *qrz  = 0;
-    if (eqsl) *eqsl = 0;
-    if (lotw) *lotw = 0;
+    if (qrz)      *qrz      = 0;
+    if (eqsl)     *eqsl     = 0;
+    if (lotw)     *lotw     = 0;
+    if (cloudlog) *cloudlog = 0;
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (qrz)  *qrz  = s_pending.qrz_uploaded_n;
-    if (eqsl) *eqsl = s_pending.eqsl_uploaded_n;
-    if (lotw) *lotw = s_pending.lotw_uploaded_n;
+    if (qrz)      *qrz      = s_pending.qrz_uploaded_n;
+    if (eqsl)     *eqsl     = s_pending.eqsl_uploaded_n;
+    if (lotw)     *lotw     = s_pending.lotw_uploaded_n;
+    if (cloudlog) *cloudlog = s_pending.cloudlog_uploaded_n;
     xSemaphoreGive(s_mutex);
 }
 

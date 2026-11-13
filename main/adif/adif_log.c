@@ -485,6 +485,47 @@ void adif_log_init(void)
     }
 
     // Create file with header if it doesn't exist yet.
+    // ⛔ AN INTERRUPTED REWRITE MUST NOT BOOT AS AN EMPTY LOG.
+    // Edit, delete, batch delete and the SUBMODE repair all write qso.tmp,
+    // commit it, then remove(qso.adi) and rename(qso.tmp -> qso.adi). A power
+    // cut between the remove and the rename left NO qso.adi, so the code below
+    // created a fresh empty log, and the whole log sat in qso.tmp until the
+    // next rewrite overwrote it. Found in the 2026-11-13 risk review; no field
+    // report.
+    //   - qso.adi missing, qso.tmp present: every writer commits qso.tmp
+    //     (file_commit_close) BEFORE the remove, so qso.tmp is complete. It
+    //     is the log - finish the rename.
+    //   - both present: the rewrite stopped before the remove. qso.adi is the
+    //     valid log; qso.tmp may be partial and only wastes space. Delete it.
+    //     The interrupted edit/delete is lost, which is the safe direction.
+    {
+        static const char *TMP_PATH = "/spiffs/qso.tmp";
+        long tmp_sz = file_size(TMP_PATH);
+        if (tmp_sz >= 0) {
+            if (file_size(FILE_PATH) < 0) {
+                if (rename(TMP_PATH, FILE_PATH) == 0)
+                    ESP_LOGW(TAG, "recovered %s from %s (%ld B) - a rewrite was "
+                                  "interrupted after the old log was removed",
+                             FILE_PATH, TMP_PATH, tmp_sz);
+                else
+                    ESP_LOGE(TAG, "%s is missing and %s (%ld B) could not be "
+                                  "renamed (%s) - NOT creating an empty log",
+                             FILE_PATH, TMP_PATH, tmp_sz, strerror(errno));
+            } else {
+                remove(TMP_PATH);
+                ESP_LOGW(TAG, "removed a stale %s (%ld B) - a rewrite was "
+                              "interrupted before it replaced the log", TMP_PATH, tmp_sz);
+            }
+        }
+        if (file_size(FILE_PATH) < 0 && file_size(TMP_PATH) >= 0) {
+            // The rename failed: logging into a new empty qso.adi would hide
+            // the real log behind it. Leave both alone; nothing gets logged
+            // this boot, and adif_log_record() says so per QSO.
+            s_mounted = false;
+            return;
+        }
+    }
+
     FILE *f = fopen(FILE_PATH, "r");
     if (!f) {
         f = fopen(FILE_PATH, "w");
@@ -660,7 +701,18 @@ static bool append_record(const adif_qso_t *qso, long before, int *err)
 
 void adif_log_record(const adif_qso_t *qso)
 {
-    if (!s_mounted || !qso || !qso->their_call || !qso->their_call[0]) return;
+    if (!qso || !qso->their_call || !qso->their_call[0]) return;
+    if (!s_mounted) {
+        // Was a silent return: a SPIFFS mount failure (or the unrecoverable
+        // qso.tmp case in adif_log_init) dropped every QSO without a word.
+        ESP_LOGE(TAG, "QSO with %s NOT logged - the log storage is not available "
+                      "this boot (see the adif lines at boot)", qso->their_call);
+        char msg[96];
+        snprintf(msg, sizeof(msg), "QSO with %s NOT logged - log storage unavailable",
+                 qso->their_call);
+        ui_toast(msg);
+        return;
+    }
 
     // ⛔ A LOGGER MUST NOT CLAIM A CONTACT IT DID NOT WRITE.
     //
@@ -1154,12 +1206,13 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     // Cursors must follow every deletion that sits BELOW them - same rule as
     // the single delete, counted as we go rather than applied per record.
     int  removed_below_qrz = 0, removed_below_eqsl = 0, removed_below_lotw = 0;
+    int  removed_below_cl = 0;
     // ⛔ NOT settings_load_all() - that is a multi-kilobyte struct on the
     // stack and this runs on a small worker task. Doing it the obvious way
     // crashed adif_delt with a Stack protection fault (2026-09-06); see the
     // task-stack section in CLAUDE.md, which this is now another instance of.
-    uint32_t cur_qrz = 0, cur_eqsl = 0, cur_lotw = 0;
-    settings_get_upload_cursors(&cur_qrz, &cur_eqsl, &cur_lotw);
+    uint32_t cur_qrz = 0, cur_eqsl = 0, cur_lotw = 0, cur_cl = 0;
+    settings_get_upload_cursors(&cur_qrz, &cur_eqsl, &cur_lotw, &cur_cl);
 
     while (fgets(line, sizeof(line), in)) {
         if (rec < 0) { fputs(line, out); rec = 0; continue; }   // keep header
@@ -1168,6 +1221,7 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
             if ((uint32_t)rec < cur_qrz)  removed_below_qrz++;
             if ((uint32_t)rec < cur_eqsl) removed_below_eqsl++;
             if ((uint32_t)rec < cur_lotw) removed_below_lotw++;
+            if ((uint32_t)rec < cur_cl)   removed_below_cl++;
         } else {
             fputs(line, out);
         }
@@ -1197,6 +1251,10 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     if (removed_below_qrz)  settings_set_qrz_uploaded_n(cur_qrz   - removed_below_qrz);
     if (removed_below_eqsl) settings_set_eqsl_uploaded_n(cur_eqsl - removed_below_eqsl);
     if (removed_below_lotw) settings_set_lotw_uploaded_n(cur_lotw - removed_below_lotw);
+    // Cloudlog (#171) arrived after this path was written and was never added
+    // here, so a delete below its cursor made it skip a record that had not
+    // been sent. Same class as the three above.
+    if (removed_below_cl)   settings_set_cloudlog_uploaded_n(cur_cl - removed_below_cl);
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count        = 0;
@@ -1304,11 +1362,14 @@ bool adif_log_delete_record(int idx)
     // Upload cursors are counts into the record sequence: a deletion BELOW a
     // cursor shifts every later record down one, so the cursor must follow.
     // A deletion at/after the cursor is a not-yet-uploaded record - no shift.
-    qmx_settings_t qs;
-    settings_load_all(&qs);
-    if ((uint32_t)idx < qs.qrz_uploaded_n)  settings_set_qrz_uploaded_n(qs.qrz_uploaded_n - 1);
-    if ((uint32_t)idx < qs.eqsl_uploaded_n) settings_set_eqsl_uploaded_n(qs.eqsl_uploaded_n - 1);
-    if ((uint32_t)idx < qs.lotw_uploaded_n) settings_set_lotw_uploaded_n(qs.lotw_uploaded_n - 1);
+    // The narrow accessor, not settings_load_all() into a qmx_settings_t on
+    // this stack (see settings.c). Cloudlog (#171) was missing here.
+    uint32_t cq = 0, ce = 0, cl = 0, cc = 0;
+    settings_get_upload_cursors(&cq, &ce, &cl, &cc);
+    if ((uint32_t)idx < cq) settings_set_qrz_uploaded_n(cq - 1);
+    if ((uint32_t)idx < ce) settings_set_eqsl_uploaded_n(ce - 1);
+    if ((uint32_t)idx < cl) settings_set_lotw_uploaded_n(cl - 1);
+    if ((uint32_t)idx < cc) settings_set_cloudlog_uploaded_n(cc - 1);
 
     // Rebuild count + worked cache from the rewritten file (the deleted
     // record may have been the only QSO with that call/band).
@@ -1340,6 +1401,7 @@ void adif_log_clear(void)
     settings_set_qrz_uploaded_n(0);
     settings_set_eqsl_uploaded_n(0);
     settings_set_lotw_uploaded_n(0);
+    settings_set_cloudlog_uploaded_n(0);   // #171 - was missing here
     ESP_LOGI(TAG, "ADIF log cleared");
 }
 

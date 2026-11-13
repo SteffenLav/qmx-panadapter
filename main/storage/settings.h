@@ -1606,7 +1606,8 @@ void settings_set_lotw_uploaded_n(uint32_t n);
 // Stack protection fault at 48 s on a 4 KB stack (2026-09-06) - the same bug
 // class as the three `wifi.c` instances in CLAUDE.md. Any argument is
 // optional (pass NULL).
-void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw);
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw,
+                                 uint32_t *cloudlog);
 
 // The three fields the spot lane needs, without the whole struct. Same reason:
 // it runs on the `render` task, which the settings_load_all() stack guard
