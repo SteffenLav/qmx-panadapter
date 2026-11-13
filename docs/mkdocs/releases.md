@@ -4,29 +4,37 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.26.2** - 2026-11-12
+**v1.26.3** - 2026-11-13
 
-**Each band keeps its own dB range. Web noise reduction keeps the voice at its level. The bottom-bar clock no longer freezes, the whole S-meter opens the audio panel, and CW text stays clear of the watermark.**
+**A full QSO log no longer loses QSOs, and with an SD card in it no longer fills up: older QSOs move to the card. The SD file browser works with the web radio running.**
 
-**Tab5 and web**
+**QSO log** *(Randy N4OPI, Gyula HA3HZ)*
 
-- **Each band keeps its own dB range** *(Samuel W7STF)*. Min/Max was one setting for all bands. When you leave a band, the range on screen is stored for it, and you get it back when you return - on the Tab5 and in the browser. A band you have not visited yet starts with the range you arrive with.
-- **Web noise reduction keeps the voice at its level** *(Samuel W7STF)*. On real SSB, the voice itself lost about 1 dB with Spectral and 1.5 / 2.7 / 3.4 dB with the speech model at Low / Med / High. That gain is now added back after NR, so only the background goes down. CW is not changed. See [Web DSP](guide/web-dsp.md).
+- **A QSO is reported as logged only when it is saved.** When the Tab5's storage was full, QSOs were shown as logged and then lost (v1.26.2 and earlier). Now a QSO that cannot be saved is refused and the screen says so, and a full log can no longer be damaged.
+- **"QSO log nearly full" is shown from 300 KB**, long before the limit, with what to do.
+- **With an SD card in, older QSOs move to the card.** At start-up the Tab5 keeps about the newest 500 to 700 QSOs and moves older ones to `qso-archive.adi` on the card. `qso.adi` on the card is still your complete log, for your PC logger and for **Restore from SD**. A QSO that QRZ, eQSL, LoTW or Cloudlog has not sent yet stays on the Tab5. Without a card nothing changes, and the warning still applies.
+- **A log that is already full** moves at the first or second start-up with the card in. To make room, the Tab5's own diagnostic log files are first copied to the card (`history/`) and then removed from its internal storage.
+- **A lost log comes back from the card.** If the Tab5 starts and finds its QSO log missing (internal storage damaged by a power cut during a write), it restores the log from the card.
 
-**Fixes**
+**SD card**
 
-- **The bottom-bar UTC clock no longer stops for up to 11 seconds and then jumps.** It was worst on the CW page.
-- **A tap anywhere on the S-meter opens the audio panel.** Before, only the space to the right of the bar did.
-- **The CW page redraws less.** The CW pane and the decode box are no longer redrawn on every waterfall step. The decode box is now solid instead of 90 % see-through.
-- **CW decode text, and the CW page's decode box, end before the watermark** at the right edge of the screen.
-- A small memory leak on some web commands is fixed.
+- **The SD file browser and downloads work with the web radio running** *(Randy N4OPI)*. The web radio had taken memory the card needs.
 
 **Known, not fixed**
 
-- One capture showed the first CW message after a QMX power cycle held by the radio for 33 seconds and then sent ahead of the next one. It has not been reproduced and the cause is not known.
-- The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
+- QSOs moved to the card cannot be edited or deleted on the Tab5. Edit `qso.adi` on the card with a PC.
+- The log window counts only the QSOs on the Tab5.
+- Moved QSOs are meant to keep a station marked as worked before. That is implemented, not yet proven on air.
 
 ## Previous Releases
+
+### v1.26.2 - 2026-11-12
+
+**Each band keeps its own dB range; web noise reduction keeps the voice at its level.**
+
+- Per-band dB range on the Tab5 and the web *(Samuel W7STF)*; web NR make-up gain *(Samuel W7STF)*.
+- The bottom-bar clock no longer stops for up to 11 s; the whole S-meter opens the audio panel.
+- The CW page redraws less; CW text ends before the watermark; a small web-command memory leak fixed.
 
 ### v1.26.1 - 2026-11-11
 
@@ -1299,7 +1307,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.3.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

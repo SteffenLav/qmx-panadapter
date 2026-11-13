@@ -226,14 +226,16 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.26.2 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
+**v1.26.3 — a complete, self-contained FT8/FT4/JS8 station with no PC in the loop, a second
 operating position in any browser, a WSPR propagation beacon, a MODE: CW page, an internet
 radio player, and the radio's own menus on the screen.** The panadapter, FT8/FT4 receive and
 transmit, WSPR, ADIF logging and all four logbook uploads — QRZ, eQSL, ARRL LoTW and your own
 Cloudlog or Wavelog — are stable and in daily use. **JS8 Normal** and the **CW page** are
 betas.
 
-**v1.26.2 keeps a dB range for each band**, keeps the voice at its level with web noise reduction on, and fixes a bottom-bar clock that could stop for up to 11 seconds. See [Releases](releases.md).
+**v1.26.3 makes the QSO log safe when it fills up**: a QSO is reported as logged only when it is saved, and with an SD card in, older QSOs move to the card. See [Releases](releases.md).
+
+**v1.26.2 kept a dB range for each band**, kept the voice at its level with web noise reduction on, and fixed a bottom-bar clock that could stop for up to 11 seconds. See [Releases](releases.md).
 
 **v1.26.1 made WSPR decode every cycle again** - from v1.24.2 it decoded only the first cycle after the page opened - made the WSPR search a third faster, and had the web spectrum follow your dB range. See [Releases](releases.md).
 
@@ -419,7 +421,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.26.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.26.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
