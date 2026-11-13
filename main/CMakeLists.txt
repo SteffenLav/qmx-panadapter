@@ -60,6 +60,7 @@ idf_component_register(
         "util/maidenhead.c"
     "util/db_gridlines.c"
     "util/pan_view.c"
+    "util/spiffs_guard.c"
     "util/hid_rotate.c"
     "util/wf_shift.c"
     "util/qmx_prompt_gate.c"

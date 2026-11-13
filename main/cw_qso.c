@@ -813,9 +813,11 @@ bool cw_qso_on_next_sent(void)
             .stx_string   = ser_sent[0] ? ser_sent : NULL,
             .srx_string   = ser_rcvd[0] ? ser_rcvd : NULL,
         };
-        adif_log_record(&q);
-        ESP_LOGI(TAG, "QSO logged: %s CW rst_rcvd='%s' stx='%s' srx='%s'",
-                 tgt, rst, ser_sent, ser_rcvd);
+        if (adif_log_record(&q))
+            ESP_LOGI(TAG, "QSO logged: %s CW rst_rcvd='%s' stx='%s' srx='%s'",
+                     tgt, rst, ser_sent, ser_rcvd);
+        else
+            ESP_LOGE(TAG, "QSO with %s completed but NOT logged (storage full)", tgt);
         cw_qso_reset();
         return true;
     }

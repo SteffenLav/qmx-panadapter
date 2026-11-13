@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <unistd.h>     // fsync
 #include <errno.h>
-#include <sys/stat.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,6 +15,7 @@
 #include "esp_app_desc.h"
 #include "esp_spiffs.h"   // esp_spiffs_gc() after a rotation
 #include "panic_hook.h"   // T138: mark the cache-off stretches
+#include "spiffs_guard.h" // the QSO log's check-then-append must not be split
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -364,7 +364,14 @@ static uint64_t s_flash_cursor = 0;   // position in s_total space
 static void diag_persist_task(void *arg)
 {
     (void)arg;
+    /* Every write burst and rotation here runs under the SPIFFS write guard
+     * (util/spiffs_guard.h), so it can never land between the QSO log's
+     * reserve check and its append. The diag file's own writes are not
+     * admitted: in the replay their failures never damaged qso.adi, and the
+     * ENOSPC rotation below is how this file makes room for itself. */
+    spiffs_guard_take();
     FILE *f = fopen(DIAG_FLASH_PATH, "a");
+    spiffs_guard_give();
     if (!f) {
         ESP_LOGW(TAG, "flash-persist: cannot open %s (%s)", DIAG_FLASH_PATH, strerror(errno));
         vTaskDelete(NULL);
@@ -380,6 +387,7 @@ static void diag_persist_task(void *arg)
 
     for (;;) {
         bool wrote = false;
+        spiffs_guard_take();
         for (;;) {
             uint64_t next = s_flash_cursor;
             size_t got = diag_log_read_from(s_flash_cursor, buf, sizeof(buf), &next);
@@ -496,6 +504,7 @@ static void diag_persist_task(void *arg)
                         ESP_LOGE(TAG, "flash-persist: rotate-on-full failed (%s) - "
                                       "giving up; /api/log/saved will be stale",
                                  strerror(errno));
+                        spiffs_guard_give();
                         vTaskDelete(NULL);
                         return;
                     }
@@ -531,6 +540,7 @@ static void diag_persist_task(void *arg)
                 bytes = 0;
                 if (!f) {
                     ESP_LOGW(TAG, "flash-persist: reopen after rotate failed (%s)", strerror(errno));
+                    spiffs_guard_give();
                     vTaskDelete(NULL);
                     return;
                 }
@@ -552,37 +562,8 @@ static void diag_persist_task(void *arg)
                          cerr, cerr ? strerror(cerr) : "no errno set");
             }
         }
+        spiffs_guard_give();
         vTaskDelay(pdMS_TO_TICKS(DIAG_FLASH_FLUSH_MS));
-    }
-}
-
-/* A QSO outranks the diagnostic log. Called by adif_log_record() when an
- * append fails: drop the PREVIOUS generation (diag.0.log, up to
- * DIAG_FLASH_MAX) and collect, so the QSO can be retried.
- *
- * Only diag.0.log: diag.log is held open by diag_persist_task. No lock is
- * taken; each SPIFFS call holds the filesystem lock. The one interleaving is
- * a cap rotation running at the same moment (remove .0, rename live -> .0):
- * this remove then either finds nothing (ENOENT, harmless) or removes the
- * generation that was just rotated, which is the space this call is for.
- *
- * Field case 2026-11-12 (N4OPI): qso.adi 511,846 B + diag.0.log 132,294 B
- * filled the partition; diag.log could not even be opened at boot. */
-void diag_log_flash_release(void)
-{
-    struct stat st;
-    long sz = (stat(DIAG_FLASH_PATH_0, &st) == 0) ? (long)st.st_size : -1;
-    panic_hook_crumb_enter("spiffs:diag-release");
-    int r = (sz >= 0) ? remove(DIAG_FLASH_PATH_0) : -1;
-    esp_err_t gc = esp_spiffs_gc("storage", DIAG_GC_REQUEST);
-    panic_hook_crumb_exit();
-    if (sz < 0) {
-        ESP_LOGW(TAG, "flash-persist: no %s to drop for the QSO log (gc=%s)",
-                 DIAG_FLASH_PATH_0, esp_err_to_name(gc));
-    } else {
-        ESP_LOGW(TAG, "flash-persist: %s %s (%ld B) to make room for the QSO log (gc=%s)",
-                 r == 0 ? "dropped" : "could not drop", DIAG_FLASH_PATH_0, sz,
-                 esp_err_to_name(gc));
     }
 }
 

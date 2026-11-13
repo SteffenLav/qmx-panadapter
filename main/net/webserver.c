@@ -1,3 +1,9 @@
+#include "adif_log.h"     // ADIF_BENCH_FILL
+#if ADIF_BENCH_FILL
+#include "esp_spiffs.h"
+#include "spiffs_guard.h"
+#include <unistd.h>
+#endif
 #include "webserver.h"
 #include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "webserver_ws.h"
@@ -2248,6 +2254,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
         cat_request_rit_hz((int)argv);
         ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)argv);
+#if ADIF_BENCH_FILL
+    /* ⛔ BENCH ONLY - compiled out of every release (ADIF_BENCH_FILL is 0 in
+     * adif_log.h). Fills SPIFFS with /spiffs/fill.bin so the full-partition
+     * QSO path can be tested on hardware without touching qso.adi, then
+     * removes it. {"action":"spiffs_fill","kb":N} appends up to N KB until
+     * SPIFFS refuses; {"action":"spiffs_unfill"} deletes the file. */
+    } else if (action && strcmp(action, "spiffs_fill") == 0) {
+        cJSON *jkb = cJSON_GetObjectItem(root, "kb");
+        int kb = cJSON_IsNumber(jkb) ? (int)jkb->valuedouble : 1024;
+        if (kb <= 0 || kb > 1024) kb = 1024;
+        static char blk[1024];
+        memset(blk, 'F', sizeof blk);
+        int done = 0;
+        spiffs_guard_take();
+        FILE *ff = fopen("/spiffs/fill.bin", "a");
+        if (ff) {
+            for (; done < kb; done++) {
+                if (fwrite(blk, 1, sizeof blk, ff) != sizeof blk) break;
+                if (fflush(ff) != 0 || fsync(fileno(ff)) != 0) break;
+            }
+            fclose(ff);
+        }
+        spiffs_guard_give();
+        size_t tot = 0, used = 0;
+        esp_spiffs_info("storage", &tot, &used);
+        ESP_LOGW(TAG, "BENCH spiffs_fill: wrote %d of %d KB; storage %u/%u KB used",
+                 done, kb, (unsigned)(used / 1024), (unsigned)(tot / 1024));
+    } else if (action && strcmp(action, "spiffs_unfill") == 0) {
+        spiffs_guard_take();
+        int r = remove("/spiffs/fill.bin");
+        esp_spiffs_gc("storage", 65536);
+        spiffs_guard_give();
+        ESP_LOGW(TAG, "BENCH spiffs_unfill: remove=%d", r);
+#endif
     } else if (action && strcmp(action, "log_qso") == 0) {
         /* ⭐ MANUAL CW/SSB LOGGING FROM THE BROWSER (T108 parity). The Tab5 got
          * this first; Randy N4OPI works from the web, and a feature that exists
@@ -2302,9 +2342,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 .qth        = qt,
                 .comment    = cm,
             };
-            adif_log_record(&qso);
-            ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
-                     (unsigned long)qso.freq_hz);
+            // The answer must say what happened: a refused QSO answered
+            // {"ok":true} until 2026-11-13 (found by the bench test of the
+            // full-storage path), so the web log form reported it as logged.
+            if (adif_log_record(&qso))
+                ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
+                         (unsigned long)qso.freq_hz);
+            else
+                err = "NOT logged - log storage full: download the log, then clear it";
         }
         cJSON_Delete(root);
         httpd_resp_set_type(req, "application/json");

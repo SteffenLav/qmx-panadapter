@@ -34,7 +34,7 @@
 #include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "panic_hook.h"   // T138: mark the cache-off stretches
 #include "file_commit.h"  // the ONLY honest "did it land" on SPIFFS
-#include "diag_log.h"     // diag_log_flash_release(): a QSO outranks the diag log
+#include "spiffs_guard.h"  // every write to qso.adi is admitted first
 
 static const char *TAG      = "adif";
 static const char *FILE_PATH = "/spiffs/qso.adi";
@@ -46,6 +46,11 @@ static long file_size(const char *path)
 }
 
 static SemaphoreHandle_t s_lock;
+// Defined with their explanation at append_record(); declared here because the
+// boot repair, which comes first in this file, sets them too.
+static long s_fragment_at;
+static bool s_fragment_nl;   // the cut must be followed by a newline
+static bool cut_pending_fragment(int *err);
 static int               s_count   = 0;
 static bool              s_mounted = false;
 
@@ -288,6 +293,16 @@ static void repair_legacy_submode_field(void)
         char *nl = strchr(line, '\n');
         line = nl ? nl + 1 : NULL;
     }
+    // A full copy of the log is written: admitted for that much first.
+    if (changed) {
+        spiffs_guard_take();
+        if (!spiffs_guard_reserve(strlen(buf))) {
+            spiffs_guard_give();
+            ESP_LOGW(TAG, "SUBMODE repair skipped - storage cannot take a copy of the log");
+            free(buf);
+            return;
+        }
+    }
     if (changed) {
         // Temp file + rename, never "wb" over the log: an in-place rewrite
         // that fails partway (full partition) destroys the original.
@@ -304,6 +319,7 @@ static void repair_legacy_submode_field(void)
             remove(TMP_PATH);
             ESP_LOGW(TAG, "could not rewrite %s for SUBMODE repair - log left as it was", FILE_PATH);
         }
+        spiffs_guard_give();
     }
     free(buf);
 }
@@ -357,14 +373,18 @@ static void repair_partial_tail(void)
     const char *frag = tail + cut + (has_nl ? 1 : 0);
     ESP_LOGW(TAG, "%s ends in a partial record (%ld B after the last <EOR>), "
                   "cutting it off. It was: %s", FILE_PATH, sz - keep, frag);
-    if (truncate(FILE_PATH, keep) != 0) {
-        ESP_LOGE(TAG, "could not cut the partial record (%s) - the next QSO "
-                      "will be appended after it", strerror(errno));
+    // The cut is a write: admitted like any other (util/spiffs_guard.h). If
+    // the partition cannot take it, it is remembered and done by the first
+    // admitted write; until then nothing is appended after the fragment.
+    s_fragment_at = keep;
+    s_fragment_nl = !has_nl;
+    spiffs_guard_take();
+    bool done = cut_pending_fragment(NULL);   // admits its own full-copy rewrite
+    spiffs_guard_give();
+    if (!done) {
+        ESP_LOGE(TAG, "could not cut the partial record now (storage full?) - "
+                      "no QSO is written until it is cut");
         return;
-    }
-    if (!has_nl) {                         // "<EOR>junk" with no newline between
-        FILE *a = fopen(FILE_PATH, "a");
-        if (a) { fputc('\n', a); (void)file_commit_close(a); }
     }
     sd_archive_mark_adif_dirty();
 }
@@ -384,6 +404,7 @@ void adif_log_init(void)
         .max_files              = 4,
         .format_if_mount_failed = true,
     };
+    spiffs_guard_init();   // before any SPIFFS writer, incl. the diag persist task
     esp_err_t err = esp_vfs_spiffs_register(&conf);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SPIFFS mount failed: %s", esp_err_to_name(err));
@@ -528,9 +549,14 @@ void adif_log_init(void)
 
     FILE *f = fopen(FILE_PATH, "r");
     if (!f) {
+        // A new file: nothing in it a failed write could damage, so it is
+        // created even if the reservation fails (see adif_log_clear()).
+        spiffs_guard_take();
+        if (!spiffs_guard_reserve(0)) ESP_LOGE(TAG, "storage full while creating %s", FILE_PATH);
         f = fopen(FILE_PATH, "w");
-        if (f) { write_header(f); fclose(f); }
+        if (f) { write_header(f); if (!file_commit_close(f)) ESP_LOGE(TAG, "header write failed on %s", FILE_PATH); }
         else ESP_LOGE(TAG, "Cannot create %s", FILE_PATH);
+        spiffs_guard_give();
     } else {
         fclose(f);
         repair_partial_tail();
@@ -673,18 +699,86 @@ static void write_record(FILE *f, const adif_qso_t *qso)
     fprintf(f, "<EOR>\n");
 }
 
-// Append one record and commit it. On any failure the file is cut back to
-// `before`, so a failed append never leaves a partial record for the next one
-// to run into. Returns false with *err set to the errno of the failing step.
-static bool append_record(const adif_qso_t *qso, long before, int *err)
+// ⛔ EVERY WRITE TO qso.adi IS ADMITTED FIRST - see util/spiffs_guard.h.
+//
+// A record is at most ~1 KB: every free-text field is capped (ADIF_NAME_MAX
+// and friends) and the rest are short fixed fields. Reserved as the bound,
+// not the actual length, because the record is formatted straight into the
+// stream.
+#define ADIF_RECORD_MAX_BYTES 1024
+
+// The size the log had before an append that FAILED after its reserve check
+// passed, or -1. While set, the file may end in a fragment of an unwritten
+// record, and nothing may be written until it is cut off.
+//
+// The replay never produced this case with the reserve check in place (0 in
+// 32 scenarios), so this is the defence for a failure no measurement has
+// shown, not a routine path. The good size is REMEMBERED, never re-read from
+// the file: re-reading it is how an earlier version of this fix appended the
+// next QSO straight after a fragment, merging two records.
+static long s_fragment_at = -1;
+static bool s_fragment_nl = false;
+
+// Cut a pending fragment off. Caller holds the guard. False if it cannot be
+// cut, in which case the caller must not write (the next record would merge
+// into the fragment).
+//
+// ⛔ NEVER truncate() ON SPIFFS. Measured on the IDF v5.4.4 SPIFFS code
+// (tools/spiffs_host/trunc.c, 2026-11-13): SPIFFS_ftruncate() reports
+// success and the file still reads, but the NEXT append breaks it - reads then
+// fail before the end of the file. It did so for 16-43 of 109 file sizes, all
+// from ~330 KB up, with or without a remount in between and with plenty of
+// free space. The first version of this fix cut fragments with truncate();
+// on N4OPI's 512 KB log it would have broken the file at the first QSO after.
+//
+// So the cut is a rewrite, the same way delete and edit rewrite the log: copy
+// the good bytes to qso.tmp, commit, remove the log, rename. That was 0
+// damaged files in 418 cuts in the same test. It is admitted for a full copy;
+// on a partition that cannot hold one, the fragment stays, nothing is
+// appended after it, and the operator is told to download and clear.
+static bool cut_pending_fragment(int *err)
 {
-    // A previous failed attempt whose cut-back itself failed (a truncate is a
-    // write, and the partition was full) left a fragment. Remove it first.
-    if (before >= 0 && file_size(FILE_PATH) != before &&
-        truncate(FILE_PATH, before) != 0) {
-        *err = errno;
+    if (s_fragment_at < 0) return true;
+    long sz = file_size(FILE_PATH);
+    if (sz <= s_fragment_at && !s_fragment_nl) { s_fragment_at = -1; return true; }
+    if (!spiffs_guard_reserve((size_t)s_fragment_at + 1)) {
+        if (err) *err = ENOSPC;
         return false;
     }
+    const char *TMP_PATH = "/spiffs/qso.tmp";
+    FILE *in  = fopen(FILE_PATH, "r");
+    FILE *out = in ? fopen(TMP_PATH, "w") : NULL;
+    bool ok = (in && out);
+    static EXT_RAM_BSS_ATTR char buf[2048];
+    long left = s_fragment_at;
+    while (ok && left > 0) {
+        size_t want = left > (long)sizeof(buf) ? sizeof(buf) : (size_t)left;
+        if (fread(buf, 1, want, in) != want || fwrite(buf, 1, want, out) != want) ok = false;
+        left -= (long)want;
+    }
+    if (ok && s_fragment_nl && fputc('\n', out) == EOF) ok = false;   // "<EOR>junk", no newline
+    if (in) fclose(in);
+    if (out && !file_commit_close(out)) ok = false;
+    if (ok) { remove(FILE_PATH); ok = (rename(TMP_PATH, FILE_PATH) == 0); }
+    if (!ok) {
+        if (err) *err = errno;
+        remove(TMP_PATH);                  // the log itself was not touched
+        return false;
+    }
+    ESP_LOGW(TAG, "cut a %ld B fragment of an unwritten record off %s",
+             sz - s_fragment_at, FILE_PATH);
+    s_fragment_at = -1;
+    s_fragment_nl = false;
+    return true;
+}
+
+// Append one record and commit it. Caller holds the guard and has reserved.
+// No retry and no cut-back here: after a failed write the partition is in the
+// state where more writes do damage, so the failure is recorded and the next
+// admitted write cuts it. Returns false with *err set.
+static bool append_record(const adif_qso_t *qso, long before, int *err)
+{
+    if (!cut_pending_fragment(err)) return false;
     errno = 0;
     FILE *f = fopen(FILE_PATH, "a");
     if (!f) { *err = errno; return false; }
@@ -692,16 +786,40 @@ static bool append_record(const adif_qso_t *qso, long before, int *err)
     errno = 0;
     if (file_commit_close(f)) return true;
     *err = errno;
-    if (before >= 0 && truncate(FILE_PATH, before) != 0) {
-        ESP_LOGE(TAG, "could not cut %s back to %ld B after a failed append (%s)",
-                 FILE_PATH, before, strerror(errno));
-    }
+    if (before >= 0 && file_size(FILE_PATH) != before) s_fragment_at = before;
     return false;
 }
 
-void adif_log_record(const adif_qso_t *qso)
+// ⚠ "LOG NEARLY FULL" - SAID BEFORE ANY REFUSAL, NOT AFTER.
+//
+// The partition cannot hold an unlimited log. Measured on the IDF v5.4.4
+// SPIFFS code at this partition's geometry (host replay, 2026-11-13): SPIFFS's
+// gc picks blocks by erase age, not by deleted pages, so the per-append index
+// rewrites pile up as deleted pages it does not reclaim. With the reserve
+// check, writes are refused from qso.adi 405-459 KB when the diag log is on
+// flash (731-802 KB without it). Clearing the log restored full capacity in
+// the replay, so "download, then clear" is the way out, and the operator has
+// to hear about it before the first refusal.
+//
+// 300 KB is ~1,600 QSOs at N4OPI's 188 B/record, at least 100 KB (~500 QSOs)
+// before the earliest measured refusal. Toasted on the first QSO above it each
+// boot and every 25th after, so it is seen without nagging every contact.
+#define ADIF_WARN_BYTES (300 * 1024)
+static void warn_if_nearly_full(void)
 {
-    if (!qso || !qso->their_call || !qso->their_call[0]) return;
+    static int s_since_warn = -1;
+    long sz = file_size(FILE_PATH);
+    if (sz < ADIF_WARN_BYTES) return;
+    if (s_since_warn >= 0 && ++s_since_warn < 25) return;
+    s_since_warn = 0;
+    ESP_LOGW(TAG, "QSO log is %ld KB - nearly full; download it and clear the "
+                  "device log", sz / 1024);
+    ui_toast("QSO log nearly full - download it (web UI), then clear it");
+}
+
+bool adif_log_record(const adif_qso_t *qso)
+{
+    if (!qso || !qso->their_call || !qso->their_call[0]) return false;
     if (!s_mounted) {
         // Was a silent return: a SPIFFS mount failure (or the unrecoverable
         // qso.tmp case in adif_log_init) dropped every QSO without a word.
@@ -711,44 +829,48 @@ void adif_log_record(const adif_qso_t *qso)
         snprintf(msg, sizeof(msg), "QSO with %s NOT logged - log storage unavailable",
                  qso->their_call);
         ui_toast(msg);
-        return;
+        return false;
     }
 
-    // ⛔ A LOGGER MUST NOT CLAIM A CONTACT IT DID NOT WRITE.
+    // ⛔ A LOGGER MUST NOT CLAIM A CONTACT IT DID NOT WRITE - AND MUST NOT
+    // DAMAGE THE ONES IT ALREADY HAS.
     //
-    // The `storage` partition is 1 MB shared between this log, the rolling
-    // diagnostic log and its previous generation, and the LoTW certificate
-    // and key. Filling it is a real case, not a theoretical one: N4OPI's log
-    // reached 511,846 B (2,715 QSOs) on 2026-11-12 and every later QSO failed.
+    // v1.26.2 checked ferror() and fclose() but not fsync(), and a full SPIFFS
+    // reports a failed write ONLY through fsync() (util/file_commit.h). So
+    // N4OPI's QSOs past 511,846 B were counted, logged as "Logged QSO #N" and
+    // never written. And a failed append of a record over one page can corrupt
+    // the file (util/spiffs_guard.h). Both are closed the same way: the write
+    // is admitted before it starts, and the commit is checked after.
     //
-    // Before v1.26.3 this path checked ferror() and fclose() but not fsync(),
-    // and a full SPIFFS reports the failure ONLY through fsync() - see
-    // file_commit_close() in util/file_commit.h. So those QSOs were counted,
-    // logged as "Logged QSO #N" and shown on the ticker, and never written.
-    //
-    // A QSO outranks diagnostics: on a failure, drop the diag log's previous
-    // generation (up to 128 KB), collect, and try once more before giving up.
-    long before = file_size(FILE_PATH);
+    // ⛔ NOT "free the diag log and retry". The first version of this fix did
+    // that; in the replay it pushed the log into the spare blocks and the next
+    // failed append corrupted it. A refused QSO is reported; nothing retries.
     int  err = 0;
-    bool write_ok = append_record(qso, before, &err);
-    if (!write_ok) {
-        ESP_LOGW(TAG, "QSO with %s: write failed (%s) - freeing the old diag "
-                      "log generation and retrying", qso->their_call,
-                 err ? strerror(err) : "no errno");
-        diag_log_flash_release();
-        write_ok = append_record(qso, before, &err);
-    }
+    bool admitted = false, write_ok = false;
+    spiffs_guard_take();
+    // Under the guard: no other writer can move the end of the file now.
+    long before = (s_fragment_at >= 0) ? s_fragment_at : file_size(FILE_PATH);
+    admitted = spiffs_guard_reserve(ADIF_RECORD_MAX_BYTES);
+    if (admitted) write_ok = append_record(qso, before, &err);
+    spiffs_guard_give();
 
     if (!write_ok) {
-        ESP_LOGE(TAG, "FAILED to log QSO with %s (%s) - the log file could not "
-                      "be written (filesystem full?). The contact is NOT saved.",
-                 qso->their_call, err ? strerror(err) : "no errno");
+        if (admitted)
+            ESP_LOGE(TAG, "FAILED to log QSO with %s (%s) AFTER its reserve check "
+                          "passed - the replay never produced this; the contact "
+                          "is NOT saved", qso->their_call,
+                     err ? strerror(err) : "no errno");
+        else
+            ESP_LOGE(TAG, "QSO with %s NOT logged - the log storage is full "
+                          "(qso.adi %ld B). Download the log and clear it.",
+                     qso->their_call, file_size(FILE_PATH));
         char msg[96];
-        snprintf(msg, sizeof(msg), "QSO with %s NOT logged - storage full?",
+        snprintf(msg, sizeof(msg), "QSO with %s NOT logged - log full: download it, then clear",
                  qso->their_call);
         ui_toast(msg);
-        return;                      // do NOT count it, do NOT mirror it
+        return false;                // do NOT count it, do NOT mirror it
     }
+    warn_if_nearly_full();
 
 /* A mutex that does not exist yet is not a reason to kill the device.
  * xSemaphoreTake(NULL) asserts inside FreeRTOS (queue.c:1709), which is an
@@ -773,6 +895,7 @@ void adif_log_record(const adif_qso_t *qso)
              qso->rst_rcvd ? qso->rst_rcvd : "?");
 
     sd_archive_mark_adif_dirty();  // re-mirror the ADIF file to SD if a card is in
+    return true;
 }
 
 int adif_log_count(void)
@@ -1062,9 +1185,10 @@ static char *strcasestr_local(char *hay, const char *needle)
  * re-upload the entire log. The remote copy of an already-uploaded QSO stays as
  * it was - the caller is responsible for saying so.
  */
-bool adif_log_set_field(int idx, const char *field, const char *value)
+static bool set_field_admitted(int idx, const char *field, const char *value)
 {
     if (!s_mounted || idx < 0 || !field || !field[0]) return false;
+    if (!cut_pending_fragment(NULL)) return false;   // see s_fragment_at
     size_t flen = strlen(field);
     if (flen > 24) return false;
 
@@ -1174,10 +1298,11 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
 // or -1 on failure with the log left untouched.
 //
 // ⚠ Still not for taskLVGL: one rewrite of a large log is hundreds of ms.
-int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *ctx),
-                             void *ctx)
+static int delete_matching_admitted(bool (*want_gone)(int idx, const char *raw, void *ctx),
+                                    void *ctx)
 {
     if (!s_mounted || !want_gone) return -1;
+    if (!cut_pending_fragment(NULL)) return -1;   // see s_fragment_at
 
     const char *TMP_PATH = "/spiffs/qso.tmp";
     FILE *in = fopen(FILE_PATH, "r");
@@ -1267,7 +1392,7 @@ int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *c
     return removed;
 }
 
-bool adif_log_delete_record(int idx)
+static bool delete_record_admitted(int idx)
 {
     // Every early return here used to be silent - the caller (adif_view_modal)
     // only ever knew "failed", never WHY, and neither did anyone reading the
@@ -1277,6 +1402,7 @@ bool adif_log_delete_record(int idx)
     // visibility into until now.
     if (!s_mounted) { ESP_LOGE(TAG, "delete record #%d: log not mounted", idx); return false; }
     if (idx < 0)    { ESP_LOGE(TAG, "delete record #%d: negative index", idx); return false; }
+    if (!cut_pending_fragment(NULL)) return false;   // see s_fragment_at
 
     // Rewrite the file to a temp, skipping record idx (line-oriented: header
     // first, then one record per line - same walk as adif_log_get_record).
@@ -1386,14 +1512,24 @@ bool adif_log_delete_record(int idx)
 
 void adif_log_clear(void)
 {
+    s_fragment_at = -1;   // the whole file goes; nothing left to cut
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count       = 0;
     s_worked_count = 0;
     if (s_lock) xSemaphoreGive(s_lock);
 
+    spiffs_guard_take();
     remove(FILE_PATH);
+    // The remove frees whole blocks, so this reservation is expected to pass.
+    // The header is written even if it does not: a log with no header line
+    // would have its first record read as the header, and a new file holds
+    // nothing a failed write could damage.
+    if (!spiffs_guard_reserve(0))
+        ESP_LOGE(TAG, "clear: storage still full after removing the log");
     FILE *f = fopen(FILE_PATH, "w");
-    if (f) { write_header(f); fclose(f); }
+    if (f) { write_header(f); if (!file_commit_close(f)) ESP_LOGE(TAG, "clear: header write failed"); }
+    else   ESP_LOGE(TAG, "clear: cannot create %s (%s)", FILE_PATH, strerror(errno));
+    spiffs_guard_give();
 
     // The QRZ/eQSL/LoTW upload cursors are record counts into this log; with
     // the log gone they must go back to 0 or every QSO logged after the clear
@@ -1444,13 +1580,14 @@ int adif_log_import(const char *adif_text)
     return adif_log_import_ex(adif_text, &discard);
 }
 
-int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
+static int import_ex_admitted(const char *adif_text, adif_import_result_t *res)
 {
     adif_import_result_t local;
     if (!res) res = &local;
     memset(res, 0, sizeof(*res));
 
     if (!s_mounted || !adif_text) return -1;
+    if (!cut_pending_fragment(NULL)) return -1;   // see s_fragment_at
 
     size_t total_len = strlen(adif_text);
     const char *end = adif_text + total_len;
@@ -1576,15 +1713,15 @@ int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
         // All or nothing: a partial import would leave a cut-off record at
         // the end for the next QSO to run into, and a count the operator
         // cannot reconcile with the file they imported.
-        if (before >= 0 && truncate(FILE_PATH, before) != 0) {
-            ESP_LOGE(TAG, "ADIF import: write failed (storage full?) and the log "
-                          "could not be cut back (%s); some of the %d record(s) "
-                          "may have landed", strerror(errno), added);
-        } else {
-            ESP_LOGE(TAG, "ADIF import: write failed (storage full?) - none of the "
-                          "%d record(s) were added, log unchanged", added);
-        }
-        load_from_file();   // resync count/cache to whatever actually landed on disk
+        // No truncate here: after a failed write the partition is in the
+        // state where more writes do damage (util/spiffs_guard.h). Remember
+        // where the good log ends; the next admitted write cuts it back, and
+        // the count stays at what it was before the import.
+        if (before >= 0 && file_size(FILE_PATH) != before && s_fragment_at < 0)
+            s_fragment_at = before;
+        ESP_LOGE(TAG, "ADIF import: write failed AFTER its reserve check passed - "
+                      "none of the %d record(s) are kept; the log is cut back to "
+                      "%ld B on the next write", added, before);
         return -1;
     }
 
@@ -1629,7 +1766,7 @@ static bool want_gone_if_incoming(int idx, const char *raw, void *ctx)
     return key_in_set(ks, call, date, time_on);
 }
 
-int adif_log_import_update(const char *adif_text, adif_import_result_t *res)
+static int import_update_guarded(const char *adif_text, adif_import_result_t *res)
 {
     adif_import_result_t local;
     if (!res) res = &local;
@@ -1753,6 +1890,74 @@ int adif_log_import_from_sd(adif_import_result_t *res)
 
     if (!read_any) return -1;   // no card, or neither file on it
     return total_added;
+}
+
+// ---- admitted rewrites ----------------------------------------------------
+// Each of these writes a full copy of the log (qso.tmp) or appends a batch, so
+// each is admitted for that much before it starts (util/spiffs_guard.h) and
+// runs under the guard. A refusal leaves the log exactly as it was.
+static bool admit_rewrite(size_t need, const char *what)
+{
+    spiffs_guard_take();
+    if (spiffs_guard_reserve(need)) return true;
+    spiffs_guard_give();
+    ESP_LOGE(TAG, "%s refused - the log storage cannot take %u B now; log unchanged",
+             what, (unsigned)need);
+    char msg[80];
+    snprintf(msg, sizeof(msg), "%s refused - log storage full. Log unchanged", what);
+    ui_toast(msg);
+    return false;
+}
+static size_t log_bytes(void) { long n = file_size(FILE_PATH); return n > 0 ? (size_t)n : 0; }
+
+bool adif_log_set_field(int idx, const char *field, const char *value)
+{
+    if (!s_mounted) return false;
+    if (!admit_rewrite(log_bytes(), "Edit")) return false;
+    bool r = set_field_admitted(idx, field, value);
+    spiffs_guard_give();
+    return r;
+}
+
+int adif_log_delete_matching(bool (*want_gone)(int idx, const char *raw, void *ctx), void *ctx)
+{
+    if (!s_mounted) return -1;
+    if (!admit_rewrite(log_bytes(), "Delete")) return -1;
+    int r = delete_matching_admitted(want_gone, ctx);
+    spiffs_guard_give();
+    return r;
+}
+
+bool adif_log_delete_record(int idx)
+{
+    if (!s_mounted) return false;
+    if (!admit_rewrite(log_bytes(), "Delete")) return false;
+    bool r = delete_record_admitted(idx);
+    spiffs_guard_give();
+    return r;
+}
+
+// Delete the stale versions and import the corrections as ONE guarded step:
+// both inner calls are admitted on their own, and the guard is recursive, so
+// no other writer can land between the two.
+int adif_log_import_update(const char *adif_text, adif_import_result_t *res)
+{
+    spiffs_guard_take();
+    int r = import_update_guarded(adif_text, res);
+    spiffs_guard_give();
+    return r;
+}
+
+int adif_log_import_ex(const char *adif_text, adif_import_result_t *res)
+{
+    if (!s_mounted || !adif_text) return -1;
+    if (!admit_rewrite(strlen(adif_text), "Import")) {
+        if (res) memset(res, 0, sizeof(*res));
+        return -1;
+    }
+    int r = import_ex_admitted(adif_text, res);
+    spiffs_guard_give();
+    return r;
 }
 
 const char *adif_log_band_for_freq(uint32_t hz)

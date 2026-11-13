@@ -106,10 +106,6 @@ size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_ne
 // app_main AFTER SPIFFS is mounted (i.e. after adif_log_init()).
 void diag_log_persist_start(void);
 
-// Drop the previous flash generation (diag.0.log) and garbage-collect, to make
-// room for a QSO whose append failed. Safe while the persist task runs.
-void diag_log_flash_release(void);
-
 // Path to the flash-persisted log file (served by the web UI's /api/log/saved).
 const char *diag_log_persist_path(void);
 

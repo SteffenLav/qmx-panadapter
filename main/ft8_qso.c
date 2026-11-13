@@ -3124,12 +3124,19 @@ static void finish_wait_done(const char *target)
                          target, (long long)((int64_t)time(NULL) - s_logged_ts));
             } else {
                 int64_t adif_t0 = esp_timer_get_time();
-                adif_log_record(&qso);
+                bool logged = adif_log_record(&qso);
                 adif_us = esp_timer_get_time() - adif_t0;
-                strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
-                s_logged_call[sizeof(s_logged_call) - 1] = '\0';
-                s_logged_freq_hz = qso.freq_hz;
-                s_logged_ts      = (int64_t)time(NULL);
+                // Only a QSO that is ON FLASH may arm the duplicate guard: a
+                // refused one marked here would make a second attempt to log
+                // the same contact read as "already logged" and skip it.
+                if (logged) {
+                    strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
+                    s_logged_call[sizeof(s_logged_call) - 1] = '\0';
+                    s_logged_freq_hz = qso.freq_hz;
+                    s_logged_ts      = (int64_t)time(NULL);
+                } else {
+                    ESP_LOGE(TAG, "QSO with %s completed but NOT logged (storage full)", target);
+                }
             }
             // Grace ring: note it on BOTH branches. A contact reaching DONE a
             // second time is still one we have just worked, and it is precisely

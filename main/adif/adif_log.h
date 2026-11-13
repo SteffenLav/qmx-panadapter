@@ -52,11 +52,20 @@ typedef struct {
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.
 // Call once at boot after NVS is initialised (does not depend on WiFi/CAT).
+// ⛔ 0 IN EVERY RELEASE. 1 only for a bench build that tests the full-
+// partition QSO path: it compiles webserver.c's spiffs_fill/spiffs_unfill.
+#ifndef ADIF_BENCH_FILL
+#define ADIF_BENCH_FILL 0
+#endif
+
 void adif_log_init(void);
 
 // Append one completed QSO to the ADIF file.
 // Thread-safe. Blocks briefly while writing (~1-2 ms on SPIFFS).
-void adif_log_record(const adif_qso_t *qso);
+// Returns true only when the record is on flash. False means it was NOT
+// logged (storage full or unavailable) and the operator has already been
+// toasted - a caller must never report it as logged.
+bool adif_log_record(const adif_qso_t *qso);
 
 // Number of QSOs in the log (in-memory counter, no I/O).
 int adif_log_count(void);

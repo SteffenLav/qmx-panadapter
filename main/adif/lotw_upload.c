@@ -4,6 +4,7 @@
 // multipart POST, and the batch/cursor logic.
 
 #include "file_commit.h"
+#include "spiffs_guard.h"
 #include "lotw_upload.h"
 #include "lotw_tq8.h"
 #include "adif_log.h"
@@ -49,17 +50,27 @@ static esp_err_t store_line_file(const char *path, const char *line)
         unlink(path);
         return ESP_OK;
     }
+    size_t len = strlen(line);
+    // Admitted like every SPIFFS write (util/spiffs_guard.h): a failed write
+    // on a full partition can corrupt the file, and this one is the key.
+    spiffs_guard_take();
+    if (!spiffs_guard_reserve(len)) {
+        spiffs_guard_give();
+        ESP_LOGE(TAG, "not storing %s - storage full", path);
+        return ESP_FAIL;
+    }
     FILE *f = fopen(path, "w");
     if (!f) {
+        spiffs_guard_give();
         ESP_LOGE(TAG, "cannot open %s for write", path);
         return ESP_FAIL;
     }
-    size_t len = strlen(line);
     bool ok = fwrite(line, 1, len, f) == len;
     // fsync is mandatory for anything worth keeping on SPIFFS - fflush alone
     // leaves the bytes in FS buffers if power is cut (see CLAUDE.md) - and
     // its RETURN is the only report of a full partition (util/file_commit.h).
     if (!file_commit_close(f)) ok = false;
+    spiffs_guard_give();
     return ok ? ESP_OK : ESP_FAIL;
 }
 

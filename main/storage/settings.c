@@ -2342,6 +2342,11 @@ static void pcal_park_path(char *out, size_t n, const char *uid)
 }
 
 /* Caller holds s_mutex. */
+/* ⚠ The one SPIFFS writer NOT under spiffs_guard (util/spiffs_guard.h): it
+ * runs under s_mutex, and the adif delete paths take s_mutex (cursor updates)
+ * while holding the guard, so taking the guard here would be a lock-order
+ * deadlock. Its ~2.5 KB fits inside SPIFFS_GUARD_MARGIN, so it cannot use up
+ * a QSO's reservation between check and write. */
 static void pcal_park_locked(const char *uid)
 {
     if (!uid || !uid[0]) return;
