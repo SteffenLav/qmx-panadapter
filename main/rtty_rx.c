@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "rx_audio.h"
 #include "rtty_tx.h"
 #include "settings.h"
@@ -299,12 +300,16 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     else if (t_b - s_cpu_win_us >= 10000000) {
         int64_t win = t_b - s_cpu_win_us;
         uint32_t permille = (uint32_t)(s_cpu_busy_us * 1000ULL / (uint64_t)win);
-        ESP_LOGI(TAG, "cpu: %lu us/s = %lu.%lu%% of core 1, call avg %lu max %lu us, %lu calls, %lu smp/s at %.0f Hz",
+        /* stack left = rx_audio's (this runs in it): R028's first build put
+         * 2 KB of FFT arrays on this 4 KB stack and overflowed it. */
+        ESP_LOGI(TAG, "cpu: %lu us/s = %lu.%lu%% of core 1, call avg %lu max %lu us, %lu calls, %lu smp/s at %.0f Hz, stack left %u B%s",
                  (unsigned long)(s_cpu_busy_us * 1000000ULL / (uint64_t)win),
                  (unsigned long)(permille / 10), (unsigned long)(permille % 10),
                  (unsigned long)(s_cpu_calls ? s_cpu_busy_us / s_cpu_calls : 0),
                  (unsigned long)s_cpu_max_us, (unsigned long)s_cpu_calls,
-                 (unsigned long)((uint64_t)s_cpu_smp * 1000000ULL / (uint64_t)win), (double)fs_hz);
+                 (unsigned long)((uint64_t)s_cpu_smp * 1000000ULL / (uint64_t)win), (double)fs_hz,
+                 (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
+                 run_auto ? ", auto on" : "");
         s_cpu_win_us = t_b; s_cpu_busy_us = 0; s_cpu_max_us = 0; s_cpu_calls = 0; s_cpu_smp = 0;
     }
 

@@ -69,8 +69,8 @@ static float peak_at(const rtty_auto_t *a, float f)
 
 static void shift_verdict(rtty_auto_t *a)
 {
-    float tmp[RTTY_AUTO_NBINS];
-    memcpy(tmp, a->pow, sizeof tmp);
+    float *tmp = a->sorted;            /* not on the stack - see rtty_auto.h */
+    memcpy(tmp, a->pow, sizeof a->sorted);
     qsort(tmp, RTTY_AUTO_NBINS, sizeof(float), cmpf);
     float med = tmp[RTTY_AUTO_NBINS / 2];
     if (med <= 0) return;
@@ -143,7 +143,7 @@ static void fft(float *re, float *im, int n)
 
 static void block_done(rtty_auto_t *a)
 {
-    float xr[RTTY_AUTO_NFFT], xi[RTTY_AUTO_NFFT];
+    float *xr = a->fx, *xi = a->fy;    /* not on the stack - see rtty_auto.h */
     for (int i = 0; i < RTTY_AUTO_NFFT; i++) {
         float w = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / RTTY_AUTO_NFFT);
         xr[i] = a->br[i] * w; xi[i] = a->bi[i] * w;

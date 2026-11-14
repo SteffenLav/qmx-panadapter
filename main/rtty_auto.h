@@ -66,6 +66,11 @@ typedef struct {
     int   nb;
     float pow[RTTY_AUTO_NBINS];
     int   blocks;
+    /* ⛔ Work buffers live HERE, never on the stack: rtty_auto_feed runs in
+     * rx_audio (4 KB internal stack). 2 KB of FFT arrays there overflowed it
+     * on the first block - bench2 2026-11-14, Stack protection fault. */
+    float fx[RTTY_AUTO_NFFT], fy[RTTY_AUTO_NFFT];
+    float sorted[RTTY_AUTO_NBINS];
     /* shift verdict */
     bool  shift_ok;
     float shift, pair_centre, pair_db; /* pair_db: weaker tone over median */
