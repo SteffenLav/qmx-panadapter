@@ -41,6 +41,24 @@ static void set_tones(rtty_auto_t *a)
     a->ntrans = 0; a->baud_ok = false;
 }
 
+float rtty_auto_quality(uint32_t dchars, uint32_t dframing, uint32_t dfalse, float secs, float baud)
+{
+    if (secs <= 0 || baud <= 0) return 0;
+    float most = secs * baud / 7.5f;
+    float rate = most > 0 ? (float)dchars / most : 0;
+    if (rate > 1.0f) rate = 1.0f;
+    uint32_t tries = dchars + dframing + dfalse;
+    float clean = tries ? (float)dchars / (float)tries : 0;
+    return rate * clean;
+}
+
+bool rtty_auto_trial_keep(float q_before, float q_after)
+{
+    if (q_after >= q_before + 0.10f) return true;              /* clearly better */
+    if (q_before < 0.20f && q_after > 0.50f) return true;     /* from nothing to a decode */
+    return false;
+}
+
 void rtty_auto_init(rtty_auto_t *a, float fs, float centre_hz)
 {
     memset(a, 0, sizeof *a);

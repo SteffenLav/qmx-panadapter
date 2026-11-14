@@ -112,6 +112,19 @@ typedef struct {
 } rtty_auto_t;
 
 void rtty_auto_init(rtty_auto_t *a, float fs, float centre_hz);
+
+/* Decode quality from the decoder's counter deltas over `secs` at `baud`:
+ * (chars / the most a continuous sender gives, baud/7.5 per s, capped 1)
+ * x (chars / all start attempts). Measured on a clean 75 Bd WAV
+ * (2026-11-15): 75 -> 0.99, 45.45 -> 0.68, 50 -> 0.44, 100 -> 0.34,
+ * wrong shift -> 0 (squelched). */
+float rtty_auto_quality(uint32_t dchars, uint32_t dframing, uint32_t dfalse, float secs, float baud);
+
+/* After an Auto switch: keep it (true) or revert (false). Kept only when
+ * the decode clearly improved - so a damaged signal cannot push a wrong
+ * setting and leave it there (on-air 2026-11-14: 100 Bd, 850 Hz, Reverse
+ * flips on a starved, damaged 75 Bd signal). */
+bool rtty_auto_trial_keep(float q_before, float q_after);
 void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n);
 
 #ifdef __cplusplus
