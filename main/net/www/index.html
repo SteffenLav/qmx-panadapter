@@ -12695,8 +12695,10 @@ function specPassbandOpa() {
    be added twice and the second copy would have been the one that got missed.
    Behind the trace, which is why it is a separate call from the edges below. */
 function drawPassbandTint(sctx, W, H) {
-  /* RTTY page: the tint and edges are back since 2026-11-14 (R010), the
-     amber dial line stays hidden - as on the Tab5, see pb_hidden in ui.c. */
+  /* RTTY page: no passband box and no dial line, ever - as on the Tab5
+     (ui.c, pb_hidden). Operator 2026-11-12, and again 2026-11-14 after I
+     put them back for TX: "It should never be shown here". */
+  if (lastScreen === "rtty") return;
   const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
@@ -12780,7 +12782,8 @@ function drawVfoMarker(sctx, W, H) {
                   left: left };
 }
 function drawPassbandEdges(sctx, W, H) {
-  const pb = passbandBins();   /* RTTY too since 2026-11-14 - see drawPassbandTint */
+  if (lastScreen === "rtty") return;   /* see drawPassbandTint */
+  const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
   const x2 = Math.round(pb.hiBin * W / SPEC_W);

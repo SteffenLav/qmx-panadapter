@@ -12311,18 +12311,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * the orange tone lines; the QMX's own filter and the dial set nothing it
      * hears, so both read as the receiver's target when they are not. The
      * off-view arrow stays - it still says where the dial went and takes you
-     * back. Bring them back with RTTY TX (R010): audio FSK goes out at dial +
-     * tone, through that passband.
+     * back.
      *
-     * ⭐ 2026-11-14, R010: the TINT AND EDGES ARE BACK, the amber line stays
-     * hidden. Operator: "the spectrum scale does not match the Freq/dial" - the
-     * page showed no trace of where the dial was, and still view keeps the
-     * window when the dial moves. A tap now tunes the dial (tapped signal at
-     * 1500 Hz audio), and TX goes out through this passband, so the tint is
-     * the radio's real window with the lines inside it. He chose this over a
-     * Freq readout of dial + offset. The amber centre line is still what he
-     * asked to have removed on 2026-11-12, so only it stays gated. */
-    const bool pb_hidden = (ui_mode_get() == UI_MODE_RTTY);   /* centre line only */
+     * ⛔ NEVER ON THIS PAGE - not for TX either. 2026-11-14 I put the tint and
+     * edges back for R010 (a tap now tunes the dial) and the operator: "the
+     * band pass is NOT supposed to be shown on the MODE: RTTY page ... It
+     * should never be shown here". Do not bring any of the three back. */
+    const bool pb_hidden = (ui_mode_get() == UI_MODE_RTTY);
     SPEC_SIG(pb_hidden);
 
     // Dim, never hide, while panning and while the pan settles
@@ -12466,7 +12461,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             b = (uint16_t)(b * fade_opacity);
             band_color = (r << 11) | (g << 5) | b;
         }
-        for (int x = edge_x_lo; x <= edge_x_hi; x++) {
+        for (int x = edge_x_lo; x <= edge_x_hi && !pb_hidden; x++) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + x] = band_color;
             }
@@ -12922,7 +12917,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
         for (int side = 0; side < 2; side++) {
             int edge_x = pb_x[side];
-            if (edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
+            if (pb_hidden || edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
                 if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
