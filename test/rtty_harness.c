@@ -1,7 +1,7 @@
 // Host harness for the RTTY RX core (T196, phase R1). Links the REAL
 // main/rtty_demod.c and main/rtty_baudot.c - no copy that can drift.
 //
-//   gcc -std=c11 -O2 -Wall -Wextra -I main -o rtty_harness test/rtty_harness.c main/rtty_demod.c main/rtty_baudot.c -lm
+//   gcc -std=c11 -O2 -Wall -Wextra -I main -o rtty_harness test/rtty_harness.c main/rtty_demod.c main/rtty_baudot.c main/rtty_tx_core.c -lm
 //   ./rtty_harness                 # synthetic suite, exit 0 = pass
 //   ./rtty_harness --wav f.wav --centre 2210 [--lsb] [--squelch 0.3]
 //                                  # decode a real recording, print the text
@@ -350,9 +350,104 @@ static double run_qrm(const gen_t *g, const char *text, float d_hz, float rel_db
     return cer;
 }
 
+
+/* ---------- R010: transmit core round trip ---------- */
+#include "rtty_tx_core.h"
+
+/* Run the core to the end of the over and render its codes as FSK the way the
+ * device sequencer keys them: 0.5 s mark, then one code per slot, 0.2 s tail. */
+static sig_t tx_render(rtty_txc_t *c, const gen_t *g, int idle_max, int *ncodes, int *ndiddle)
+{
+    sig_t s = {0};
+    double ph = 0, t = 0;
+    gen_mark(&s, g, g->baud * 0.5f, &ph, &t);
+    *ncodes = 0; *ndiddle = 0;
+    int code;
+    while ((code = rtty_txc_next(c, idle_max)) >= 0 && *ncodes < 20000) {
+        if (code == RTTY_CODE_LTRS && c->len == 0 && c->ipend >= c->npend && c->preamble == 0) (*ndiddle)++;
+        gen_code(&s, g, (uint8_t)code, &ph, &t);
+        (*ncodes)++;
+    }
+    gen_mark(&s, g, g->baud * 0.2f, &ph, &t);
+    add_noise(&s, g);
+    return s;
+}
+
+static char *tx_decode(const gen_t *g, sig_t *s)
+{
+    rtty_demod_cfg_t cfg = { g->fs, g->baud, g->shift, g->centre, false, RTTY_SQ_OPEN, 0 };
+    rtty_demod_init(&g_dem, &cfg);
+    sink_t k = {0}; rtty_baudot_init(&k.b, true);
+    rtty_demod_feed(&g_dem, s->re, s->im, (int)s->n, on_char, &k);
+    return k.buf ? k.buf : strdup("");
+}
+
+static void test_tx_core(void)
+{
+    printf("\nR010 transmit core -> FSK -> demod:\n");
+    static rtty_txc_t c;
+    gen_t g = { 6000, 45.45f, 170.0f, 0, 0, 0, 99 };
+    int nc, nd;
+
+    /* 1. Figures and letters across spaces (USOS), CR LF, a dropped char. */
+    const char *msg = "CQ TEST DE OZ1LAV 599 073-073 TU 5NN? 1A2B3C\n";
+    const char *want = "CQ TEST DE OZ1LAV 599 073-073 TU 5NN? 1A2B3C";   /* CR/LF not printed by on_char */
+    rtty_txc_init(&c);
+    CHECK(rtty_txc_push(&c, msg), "push refused");
+    CHECK(rtty_txc_push(&c, "~"), "push of an unencodable char refused");   /* dropped at encode */
+    rtty_txc_end(&c);
+    sig_t s = tx_render(&c, &g, 100, &nc, &nd);
+    char *got = tx_decode(&g, &s);
+    double cer = (double)lev(want, got) / (double)strlen(want);
+    printf("  clean: %d codes, %d diddles, CER %.3f: \"%s\"\n", nc, nd, cer, got);
+    CHECK(cer == 0.0, "TX round trip CER %.3f", cer);
+    CHECK(nd == 0, "end of over sent %d diddles", nd);
+    free(got); free(s.re); free(s.im);
+
+    /* 2. Same at -6 dB, the RX test level. */
+    g.snr_db = -6;
+    rtty_txc_init(&c); rtty_txc_push(&c, msg); rtty_txc_end(&c);
+    s = tx_render(&c, &g, 100, &nc, &nd);
+    got = tx_decode(&g, &s);
+    cer = (double)lev(want, got) / (double)strlen(want);
+    printf("  -6 dB: CER %.3f\n", cer);
+    CHECK(cer < 0.05, "TX round trip at -6 dB CER %.3f", cer);
+    free(got); free(s.re); free(s.im);
+    g.snr_db = 99;
+
+    /* 3. No end: the queue runs dry, then idle_max diddles, then -1. */
+    rtty_txc_init(&c); rtty_txc_push(&c, "RYRY");
+    s = tx_render(&c, &g, 7, &nc, &nd);
+    printf("  open over: %d codes, %d diddles (want 7)\n", nc, nd);
+    CHECK(nd == 7, "diddles %d, want 7", nd);
+    free(s.re); free(s.im);
+
+    /* 4. Typing during the diddle resets the idle count and clears end. */
+    rtty_txc_init(&c); rtty_txc_push(&c, "AB"); rtty_txc_end(&c);
+    for (int i = 0; i < RTTY_TXC_PREAMBLE + 2; i++) rtty_txc_next(&c, 5);
+    rtty_txc_push(&c, "C");
+    int n_after = 0, code;
+    while ((code = rtty_txc_next(&c, 5)) >= 0 && n_after < 100) n_after++;
+    printf("  push after end: %d more codes (C + 5 diddles = 6)\n", n_after);
+    CHECK(n_after == 6, "push after end: %d codes, want 6", n_after);
+
+    /* 5. Cancel drops the queue; a push that does not fit is refused whole. */
+    rtty_txc_init(&c);
+    static char big[RTTY_TXC_CAP + 2];
+    memset(big, 'E', RTTY_TXC_CAP); big[RTTY_TXC_CAP] = 0;
+    CHECK(rtty_txc_push(&c, big), "full-size push refused");
+    CHECK(!rtty_txc_push(&c, "X"), "overfull push accepted");
+    CHECK(rtty_txc_cancel(&c) == RTTY_TXC_CAP, "cancel count");
+    CHECK(rtty_txc_queued(&c) == 0, "queue not empty after cancel");
+    big[RTTY_TXC_CAP - 1] = '\n';
+    CHECK(!rtty_txc_push(&c, big), "push with trailing newline over cap accepted");
+    printf("  queue limits: checked\n");
+}
+
 static void suite(void)
 {
     test_table();
+    test_tx_core();
     printf("table checks: %s\n", g_fail ? "FAIL" : "pass");
 
     char *text = random_text(1500);

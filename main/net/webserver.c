@@ -80,7 +80,7 @@
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
 #include "rtty_rx.h"           // /api/cmd "rtty" - R005
-#include "rtty_tx_test.h"      // /api/cmd "rtty_tx_test" - R009, keys the radio
+#include "rtty_tx.h"           // /api/cmd "rtty_send" / "rtty_stop" - R010, keys the radio
 #include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
@@ -3329,25 +3329,28 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
         free(txt);
         return ESP_OK;
-    } else if (action && strcmp(action, "rtty_tx_test") == 0) {
-        /* R009 (TODO-RTTY.md): ⛔ KEYS THE RADIO. Sends a fixed RTTY text by
-         * TA tone changes, one per bit, for `seconds`, so a receiver running
-         * fldigi can say whether the QMX follows TA at 22 ms/bit. Refusals and
-         * the band guard live in rtty_tx_test_start().
-         * {"action":"rtty_tx_test","centre_hz":1500,"shift_hz":170,"baud":45.45,"seconds":20} */
-        cJSON *cj = cJSON_GetObjectItem(root, "centre_hz");
-        cJSON *sj = cJSON_GetObjectItem(root, "shift_hz");
-        cJSON *bj = cJSON_GetObjectItem(root, "baud");
-        cJSON *tj = cJSON_GetObjectItem(root, "seconds");
-        rtty_tx_test_cfg_t tc = {
-            .centre_hz = cJSON_IsNumber(cj) ? cj->valueint : 1500,
-            .shift_hz  = cJSON_IsNumber(sj) ? sj->valueint : 170,
-            .baud      = cJSON_IsNumber(bj) ? (float)bj->valuedouble : 45.45f,
-            .seconds   = cJSON_IsNumber(tj) ? tj->valueint : 20,
-        };
+    } else if (action && strcmp(action, "rtty_send") == 0) {
+        /* R010 RTTY TX (docs/rtty-tx-design.md). ⛔ KEYS THE RADIO when idle;
+         * appends while an over runs. Refusals, the dial move and the band
+         * guard live in rtty_tx_send().
+         *   {"action":"rtty_send","text":"CQ CQ DE ...","end":true}
+         * "test":true sends R009's fixed text (THE QUICK BROWN FOX ... DE call)
+         * once, end of over after it - the on-air check with fldigi. */
+        static char ttext[600];
+        cJSON *tj = cJSON_GetObjectItem(root, "text");
+        bool end = !cJSON_IsFalse(cJSON_GetObjectItem(root, "end"));
+        if (cJSON_IsTrue(cJSON_GetObjectItem(root, "test"))) {
+            char call[16]; settings_get_my_callsign(call, sizeof call);
+            snprintf(ttext, sizeof ttext,
+                     "RYRYRYRYRY THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789 DE %s %s\n"
+                     "RYRYRYRYRY THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789 DE %s %s\n",
+                     call, call, call, call);
+        } else {
+            snprintf(ttext, sizeof ttext, "%s", cJSON_IsString(tj) ? tj->valuestring : "");
+        }
         cJSON_Delete(root);
         char terr[160] = "";
-        esp_err_t terr_code = rtty_tx_test_start(&tc, terr, sizeof terr);
+        esp_err_t terr_code = rtty_tx_send(ttext, end, terr, sizeof terr);
         cJSON *res = cJSON_CreateObject();
         cJSON_AddBoolToObject(res, "ok", terr_code == ESP_OK);
         if (terr_code != ESP_OK) cJSON_AddStringToObject(res, "error", terr);
@@ -3357,9 +3360,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
         free(txt);
         return ESP_OK;
-    } else if (action && strcmp(action, "rtty_tx_test_abort") == 0) {
+    } else if (action && strcmp(action, "rtty_stop") == 0) {
         cJSON_Delete(root);
-        rtty_tx_test_abort();
+        rtty_tx_stop();
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
@@ -3637,6 +3640,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "chars", st.chars);
         cJSON_AddNumberToObject(o, "acq_jumps", st.acq_jumps);
         cJSON_AddStringToObject(o, "text", text);
+        rtty_tx_status_t ts;
+        rtty_tx_status(&ts);
+        cJSON *tx = cJSON_AddObjectToObject(o, "tx");
+        cJSON_AddBoolToObject(tx, "keyed", ts.keyed);
+        cJSON_AddNumberToObject(tx, "queued", ts.queued);
+        cJSON_AddNumberToObject(tx, "sent", ts.sent);
+        cJSON_AddNumberToObject(tx, "centre_hz", ts.centre_hz);
+        cJSON_AddNumberToObject(tx, "seconds", ts.seconds);
+        cJSON_AddStringToObject(tx, "echo", ts.echo);
+        cJSON_AddStringToObject(tx, "error", ts.err);
         char *body = cJSON_PrintUnformatted(o);
         cJSON_Delete(o);
         httpd_resp_set_type(req, "application/json");

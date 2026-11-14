@@ -40,7 +40,7 @@ and called it "the automatic reply function", which is exactly what it is.
 |---|---|---|---|
 | `main/ui/ft8_tx_modal.c` | `transmit_btn_cb` | yes | The operator pressed Transmit. |
 | `main/ui/ft8_screen_view.c` | `web_reply_drain` | yes | A reply the browser asked for, drained on the LVGL task. A remote human is still a human. |
-| `main/net/webserver.c` | `cmd_handler` | yes | An `/api/cmd` request. Remote, deliberate. Includes `rtty_tx_test` (R009 bench test, RTTY branch only): one bounded burst of at most 30 s, DiGi only, band-guarded. |
+| `main/net/webserver.c` | `cmd_handler` | yes | An `/api/cmd` request. Remote, deliberate. Includes `rtty_send` (R010 RTTY TX, RTTY branch only): text from the browser or a script; one over, unkeyed 3 s after the queue empties and at 180 s at the latest, DiGi only, band-guarded after any dial move. The rest of an over (diddles, queued text) is a continuation of that request. |
 | `main/ft8_qso.c` | `ft8_qso_override_next` | yes | The operator overrode the next message. |
 | `main/ft8_qso.c` | `ft8_qso_final_resend_now` | yes | The operator pressed **Re-send** on a contact whose final has gone out but has not been acknowledged (Don WB0LQW). One message, armed once. It does not spend `final_track_try_resend`'s automatic budget, so pressing it cannot exhaust the machine's own fallback. |
 | `main/js8_ftx.c` | `js8_ftx_start` | yes | The operator pressed Send on a JS8 free-text message, having been shown its frame count and air time first. |
