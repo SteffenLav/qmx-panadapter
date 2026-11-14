@@ -16,6 +16,7 @@
 #include "cw_callsign.h"
 #include "storage/settings.h"
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
@@ -710,6 +711,27 @@ void rtty_screen_view_tap_hz(uint32_t tapped_hz)
     rtty_rx_apply(&c);
     ESP_LOGI(TAG, "tap: %lu Hz -> dial %lu, decoder at %d Hz", (unsigned long)tapped_hz,
              (unsigned long)dial, c.offset_hz);
+}
+
+/* See the header: Freq on this page is the mark frequency. */
+int rtty_screen_view_mark_offset_hz(void)
+{
+    rtty_rx_status_t st;
+    rtty_rx_status(&st);
+    int c = st.cfg.offset_hz + (st.afc_held ? (int)lroundf(st.afc_hz) : 0);
+    int h = (int)lroundf(st.cfg.shift_hz / 2.0f);
+    return st.cfg.reverse ? c - h : c + h;
+}
+
+void rtty_screen_view_tune_mark_hz(uint32_t mark_hz)
+{
+    rtty_rx_cfg_t c;
+    rtty_rx_get_cfg(&c);
+    int h = (int)lroundf(c.shift_hz / 2.0f);
+    int64_t centre = (int64_t)mark_hz + (c.reverse ? h : -h);
+    if (centre <= 0) return;
+    ESP_LOGI(TAG, "tune: mark %lu Hz -> centre %lld Hz", (unsigned long)mark_hz, (long long)centre);
+    rtty_screen_view_tap_hz((uint32_t)centre);
 }
 
 /* ---- build --------------------------------------------------------------- */

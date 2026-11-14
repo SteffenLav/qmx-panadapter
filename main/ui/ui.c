@@ -894,7 +894,14 @@ static void freq_apply_key(char key, lv_obj_t *target_btn)
                 }
                 return;
             }
-            if (s_freq_buf[0]) {
+            if (s_freq_buf[0] && ui_mode_get() == UI_MODE_RTTY) {
+                /* RTTY page: what is typed is the MARK frequency, the same
+                 * number Freq shows - see rtty_screen_view_mark_offset_hz(). */
+                uint32_t mark_hz = freq_buf_to_hz(s_freq_buf);
+                ESP_LOGI("ui", "Freq keypad (RTTY): '%s' -> mark %lu Hz",
+                         s_freq_buf, (unsigned long)mark_hz);
+                if (mark_hz) rtty_screen_view_tune_mark_hz(mark_hz);
+            } else if (s_freq_buf[0]) {
                 uint32_t target_hz = freq_buf_to_hz(s_freq_buf);
                 // Clamped on the CW page - typing a phone-band frequency
                 // there should still land in the CW segment.
@@ -3098,6 +3105,17 @@ static lv_obj_t *s_freq_label = NULL;
 // early-out on the normal path, and is what makes a dropped label write
 // recoverable rather than permanent (2026-08-20).
 static uint32_t s_freq_shown_hz = 0;
+
+/* What "Freq:" shows for a given dial. On the RTTY page it is the MARK
+ * frequency (dial + rtty_screen_view_mark_offset_hz()), rounded to 10 Hz so
+ * the AFC does not make the last digit flicker. Every writer of s_freq_label
+ * goes through this, or one path would quietly put the dial back. */
+static uint32_t freq_shown_hz(uint32_t dial_hz)
+{
+    if (dial_hz == 0 || ui_mode_get() != UI_MODE_RTTY) return dial_hz;
+    int64_t m = (int64_t)dial_hz + rtty_screen_view_mark_offset_hz();
+    return m > 0 ? (uint32_t)((m + 5) / 10 * 10) : dial_hz;
+}
 static lv_obj_t *s_smeter_bar = NULL;
 static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
@@ -9556,7 +9574,7 @@ static void stroll_cancel(void)
         update_bandplan_strip(s_last_qmx_freq_hz);
         if (s_freq_label && !sv_effective()) {
             char fs[16], fb[32];
-            format_freq_hz(s_last_qmx_freq_hz, g_freq_style, fs, sizeof(fs));
+            format_freq_hz(freq_shown_hz(s_last_qmx_freq_hz), g_freq_style, fs, sizeof(fs));
             snprintf(fb, sizeof(fb), "Freq: %s Hz", fs);
             lv_label_set_text(s_freq_label, fb);
         }
@@ -10152,7 +10170,7 @@ static void pinch_poll_cb(lv_timer_t *t)
              * changing frequency into the readout would be a plain lie about
              * what the gesture is doing. */
             char fb[32];
-            uint32_t t = (uint32_t)tgt;
+            uint32_t t = freq_shown_hz((uint32_t)tgt);
             { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
               snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
             lv_label_set_text(s_freq_label, fb);
@@ -10355,13 +10373,13 @@ void ui_update_frequency(uint32_t freq_hz)
     if (dsp_source_is_real()) {
         snprintf(buf, sizeof(buf), "Line-in mode");
     } else {
-        char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        char fs[16]; format_freq_hz(freq_shown_hz((uint32_t)freq_hz), g_freq_style, fs, sizeof(fs));
         snprintf(buf, sizeof(buf), "Freq: %s Hz", fs);
     }
     (void)mhz; (void)khz; (void)hz;
     if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
-        s_freq_shown_hz = freq_hz;   // so ui_refresh_freq_label() can early-out
+        s_freq_shown_hz = freq_shown_hz(freq_hz);   // so ui_refresh_freq_label() can early-out
         display_unlock();
     } else {
         // Not fatal any more: ui_refresh_freq_label() re-asserts this from the
@@ -10477,7 +10495,9 @@ void ui_refresh_band_label(uint32_t freq_hz)
 void ui_refresh_freq_label(uint32_t freq_hz)
 {
     if (!s_freq_label) return;
-    if (freq_hz == s_freq_shown_hz) return;   // already correct - the normal case
+    /* Compared as SHOWN: on the RTTY page the mark moves with a tap or the
+     * AFC while the dial stays, and this poll is what repaints it. */
+    if (freq_shown_hz(freq_hz) == s_freq_shown_hz) return;   // already correct - the normal case
 
     char buf[32];
     /* Same rule as ui_update_frequency() - see the note there. Both writers,
@@ -10485,7 +10505,7 @@ void ui_refresh_freq_label(uint32_t freq_hz)
     if (dsp_source_is_real()) {
         snprintf(buf, sizeof(buf), "Line-in mode");
     } else {
-        char fs[16]; format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
+        char fs[16]; format_freq_hz(freq_shown_hz((uint32_t)freq_hz), g_freq_style, fs, sizeof(fs));
         snprintf(buf, sizeof(buf), "Freq: %s Hz", fs);
     }
     // Short timeout: this runs on every FA poll, so a busy moment simply means
@@ -10493,7 +10513,7 @@ void ui_refresh_freq_label(uint32_t freq_hz)
     // reason - it would be noise, and the retry IS the recovery.
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
-        s_freq_shown_hz = freq_hz;
+        s_freq_shown_hz = freq_shown_hz(freq_hz);
         display_unlock();
     }
 }
@@ -14250,7 +14270,7 @@ static void touch_event_cb(lv_event_t *e)
             }
             if (s_freq_label) {
                 char fb[32];
-                uint32_t t = (uint32_t)target;
+                uint32_t t = freq_shown_hz((uint32_t)target);
                 { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
                   snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
@@ -14325,7 +14345,7 @@ static void touch_event_cb(lv_event_t *e)
             // dial alone, which is the whole point of the gesture.
             if (s_freq_label) {
                 char fb[32];
-                { char fs[16]; format_freq_hz(dial_pred, g_freq_style, fs, sizeof(fs));
+                { char fs[16]; format_freq_hz(freq_shown_hz(dial_pred), g_freq_style, fs, sizeof(fs));
                   snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);
             }
@@ -14829,7 +14849,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             s_bp_drag_target_hz = target;
             update_bandplan_strip((uint32_t)target);             // live strip position
             if (s_freq_label) {                                  // live top-bar freq (display only)
-                char fb[32]; uint32_t t = (uint32_t)target;
+                char fb[32]; uint32_t t = freq_shown_hz((uint32_t)target);
                 { char fs[16]; format_freq_hz(t, g_freq_style, fs, sizeof(fs));
                   snprintf(fb, sizeof(fb), "Freq: %s Hz", fs); }
                 lv_label_set_text(s_freq_label, fb);

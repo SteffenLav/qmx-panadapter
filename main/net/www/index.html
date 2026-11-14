@@ -2359,7 +2359,7 @@ const FREQ_HOLD_MS = 1520;
 function holdLocalFreq(hz) {
   lastFreqHz    = hz;
   freqHoldUntil = Date.now() + FREQ_HOLD_MS;
-  document.getElementById("vfo").textContent = fmtHz(hz);
+  document.getElementById("vfo").textContent = fmtHz(shownHz(hz));
   updateFreqAxis();
 }
 /* The still-display SETTING, mirrored from /api/status. Decides whether a tune
@@ -2684,6 +2684,14 @@ let freqSepStyle = 0;
 /* #333: mirrors the device setting, so the lane tags modes the same way. */
 let spotsModeFilter = false;
 
+/* RTTY page: the readout is the MARK frequency, dial + rtty_mark_off from
+   /api/status, rounded to 10 Hz - the same number the Tab5 shows (ui.c,
+   freq_shown_hz). Operator 2026-11-14: Freq is what two stations agree on. */
+let rttyMarkOff = null;
+function shownHz(d) {
+  return (lastScreen === "rtty" && rttyMarkOff !== null && d > 0)
+    ? Math.round((d + rttyMarkOff) / 10) * 10 : d;
+}
 function fmtHz(hz) {
     const sep = freqSepStyle === 1 ? "," : ".";
     if (!hz) return "---" + sep + "---" + sep + "--- Hz";
@@ -4343,7 +4351,7 @@ async function sendCmd(payload) {
     /* Optimistically, like the wheel: the readout and the marker move now and
        the poll confirms, rather than the control looking dead for a second. */
     lastFreqHz = hz;
-    document.getElementById("vfo").textContent = fmtHz(hz);
+    document.getElementById("vfo").textContent = fmtHz(shownHz(hz));
     /* set_ft8_mode already exists and already does all of this - retune,
        sub-mode switch, stale-decode clear. Adding an ft8_preset action would
        have been a second door onto the same room. */
@@ -9111,7 +9119,8 @@ async function tick() {
        without finding this second path made it worse rather than better: the
        number a person is watching disagreed with the marker beside it.
        lastFreqHz already equals s.freq_hz whenever no gesture is running. */
-    document.getElementById("vfo").textContent  = fmtHz(lastFreqHz);
+    rttyMarkOff = (typeof s.rtty_mark_off === "number") ? s.rtty_mark_off : null;
+    document.getElementById("vfo").textContent  = fmtHz(shownHz(lastFreqHz));
     document.getElementById("mode").textContent = s.mode || "--";
     document.getElementById("band").textContent = s.band || "--";
     /* The band the OUTPUT POWER ladder belongs to. Its levels are that band's
@@ -12452,7 +12461,7 @@ function drawBandplanOob(ctx, W, H, dpr) {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       bpOobOffPx = offCss * dpr;
       drawBandplan();
-      document.getElementById("vfo").textContent = fmtHz(targetHz);
+      document.getElementById("vfo").textContent = fmtHz(shownHz(targetHz));
       return;
     }
 
@@ -12477,7 +12486,7 @@ function drawBandplanOob(ctx, W, H, dpr) {
     /* Usually unchanged - a drag inside the radio's reach moves the window and
        leaves the dial alone, which is the point of the gesture. */
     targetHz = bpSolveView(targetCenter).dial;
-    document.getElementById("vfo").textContent = fmtHz(targetHz);
+    document.getElementById("vfo").textContent = fmtHz(shownHz(targetHz));
   });
 
   /* Put the window at centerHz. Goes out as "view_center", NOT "set_freq":
@@ -15293,7 +15302,11 @@ document.getElementById("wf-overlay").addEventListener("wheel",  handleWheel, { 
   }
   function commit() {
     const hz = parseInt(buf, 10);
-    if (hz > 0) {
+    if (hz > 0 && lastScreen === "rtty") {
+      /* RTTY page: the typed number is the MARK, as on the Tab5 keypad. */
+      sendCmd({ action: "rtty", mark_hz: hz });
+      document.getElementById("vfo").textContent = fmtHz(hz);
+    } else if (hz > 0) {
       sendCmd({ action: "set_freq", hz: hz });
       lastFreqHz = hz;
       document.getElementById("vfo").textContent = fmtHz(hz);

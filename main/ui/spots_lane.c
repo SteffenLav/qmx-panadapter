@@ -10,6 +10,7 @@
 #include "cat.h"
 #include "util/bandplan.h"
 #include "display/display.h"
+#include "rtty_screen_view.h"
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -724,6 +725,14 @@ static void tune_to_spot(const tap_target_t *t, const char *what)
      * picked this signal, so it belongs on screen and not at an edge (Roy
      * KI0ER). Before the tune - the flag is consumed by the update it causes. */
     ui_note_frequency_jump();
+    if (ui_mode_get() == UI_MODE_RTTY) {
+        /* RTTY page: a spot's frequency is the station's MARK, which is what
+         * Freq shows here - so the orange lines land on its two tones. The
+         * mode is left alone: the page keeps the radio in its own mode. */
+        rtty_screen_view_tune_mark_hz(hz);
+        spots_note_pick(t->call, t->mode, hz);
+        return;
+    }
     cat_set_frequency_forced(hz);   // deliberate user action, bypass the rate limiter
     ui_update_frequency(hz);        // optimistic, same as tap-to-tune on the spectrum
     // Via the poll task: the LVGL thread must never write the CDC pipe directly

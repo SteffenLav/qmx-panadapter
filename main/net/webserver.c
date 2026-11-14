@@ -740,6 +740,9 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
 
     cJSON_AddNumberToObject(root, "freq_hz",     (double)cat_get_frequency());
+    /* RTTY page: Freq shows dial + this (the MARK) - rtty_screen_view.h. */
+    if (ui_mode_get() == UI_MODE_RTTY)
+        cJSON_AddNumberToObject(root, "rtty_mark_off", rtty_screen_view_mark_offset_hz());
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     // Decoded CW, EXACTLY the line the Tab5 is drawing - same grid, same wrap
@@ -3622,6 +3625,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * as a Tab5 tap (dial to put it at 1500 Hz audio, decoder on it). */
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "tune_hz")) && j->valuedouble > 0)
             rtty_screen_view_tap_hz((uint32_t)j->valuedouble);
+        /* "mark_hz": the web keypad on the RTTY page - the typed number is the
+         * mark, as on the Tab5 keypad. */
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "mark_hz")) && j->valuedouble > 0)
+            rtty_screen_view_tune_mark_hz((uint32_t)j->valuedouble);
         /* "clear":true - the web page's Clear. Empties the shared text ring;
          * the Tab5 grid follows rtty_rx_text_clear_gen(). */
         if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) rtty_rx_text_clear();

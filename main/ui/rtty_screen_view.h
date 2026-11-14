@@ -28,3 +28,19 @@ bool      rtty_screen_view_carpet_visible(lv_area_t a[2]);
  * the decoder's tone centre goes on it. Any task (the web calls it). */
 #define RTTY_TAP_AUDIO_HZ 1500
 void      rtty_screen_view_tap_hz(uint32_t tapped_hz);
+
+/* ⛔ ON THE RTTY PAGE "Freq:" IS THE MARK FREQUENCY, not the dial. Operator
+ * 2026-11-14: "I want the dial/Freq to show what two stations would agree to
+ * meet and have a qso on. So when they start the qso then the orange lines
+ * match to two tones". RTTY frequencies (spots, logs, FSK radios) are quoted
+ * as MARK. The QMX itself shows the dial, which is the USB carrier, 1.5 kHz
+ * below a tapped signal.
+ *
+ * mark offset = decoder centre (+ AFC once a station has been decoded,
+ * afc_held - the same rule rtty_tx uses for where it transmits) + shift/2,
+ * - shift/2 when reversed. Any task. */
+int       rtty_screen_view_mark_offset_hz(void);
+
+/* Tune so the MARK tone is at mark_hz (keypad, spot tap, web keypad on the
+ * RTTY page): the centre goes to mark -/+ shift/2 by rtty_screen_view_tap_hz. */
+void      rtty_screen_view_tune_mark_hz(uint32_t mark_hz);
