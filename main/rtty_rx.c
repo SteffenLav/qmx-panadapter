@@ -99,12 +99,14 @@ static int64_t  s_auto_next_us;
 #define RTTY_AUTO_TRIAL_S 5
 #define RTTY_AUTO_BAN_S   30
 #define RTTY_AUTO_QS      5            /* snapshots kept: 4 s of history */
-typedef struct { uint32_t c, f, s; } rtty_qsnap_t;
+typedef struct { uint32_t n; float conf; } rtty_qsnap_t;
 static rtty_qsnap_t s_qs[RTTY_AUTO_QS];
 static int      s_qs_n;
 static bool     s_trial;
 static int64_t  s_trial_us;
 static float    s_trial_qb;
+static uint32_t s_trial_n0;            /* conf counters at the switch */
+static float    s_trial_c0;
 static rtty_rx_cfg_t s_trial_old;
 static float    s_ban_b, s_ban_s;
 static int64_t  s_ban_until_us;
@@ -276,9 +278,13 @@ static void flush_line(void)
     s_line_n = 0;
 }
 
+static volatile float s_conf_sum;      /* R028 trial: sum of conf of delivered chars */
+static volatile uint32_t s_conf_n;
+
 static void on_char(const rtty_char_t *c, void *user)
 {
     (void)user;
+    s_conf_sum += c->conf; s_conf_n++;
     int ch = rtty_baudot_decode(&s_bd, c->code);
     if (ch == 0) return;
     if (ch == '\a') ch = '*';
@@ -480,14 +486,12 @@ void rtty_rx_service(void)
         if (run_auto && cur.auto_mode && t_b >= s_auto_next_us) {
             s_auto_next_us = t_b + 1000000;
             /* per-second counter snapshots of the running decoder */
-            s_qs[s_qs_n % RTTY_AUTO_QS] = (rtty_qsnap_t){ s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start };
+            s_qs[s_qs_n % RTTY_AUTO_QS] = (rtty_qsnap_t){ s_conf_n, s_conf_sum };
             s_qs_n++;
             if (s_trial) {
                 if (rtty_tx_keyed()) { s_trial = false; ESP_LOGI(TAG, "auto: trial ended by TX - kept"); }
                 else if (t_b - s_trial_us >= (int64_t)RTTY_AUTO_TRIAL_S * 1000000) {
-                    float secs = (float)(t_b - s_trial_us) / 1e6f;
-                    float qa = rtty_auto_quality(s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start,
-                                                 secs, cur.baud);
+                    float qa = rtty_auto_quality(s_conf_n - s_trial_n0, s_conf_sum - s_trial_c0);
                     s_trial = false;
                     if (rtty_auto_trial_keep(s_trial_qb, qa)) {
                         ESP_LOGI(TAG, "auto: kept %.2f Bd %.0f Hz%s (quality %.2f -> %.2f)",
@@ -528,12 +532,13 @@ void rtty_rx_service(void)
                 float qb = 0;
                 if (k > j) {
                     const rtty_qsnap_t *x = &s_qs[k % RTTY_AUTO_QS], *y = &s_qs[j % RTTY_AUTO_QS];
-                    qb = rtty_auto_quality(x->c - y->c, x->f - y->f, x->s - y->s, (float)(k - j), c.baud);
+                    qb = rtty_auto_quality(x->n - y->n, x->conf - y->conf);
                 }
                 ESP_LOGI(TAG, "auto: TRIAL %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (held %d s, quality before %.2f)",
                          (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
                          (double)b, (double)sh, rv ? " rev" : "", s_auto_same, (double)qb);
                 s_trial_old = c; s_trial_qb = qb; s_trial = true; s_trial_us = t_b;
+                s_trial_n0 = s_conf_n; s_trial_c0 = s_conf_sum;
                 c.baud = b; c.shift_hz = sh; c.reverse = rv;
                 s_auto_same = 0;
                 s_qs_n = 0;

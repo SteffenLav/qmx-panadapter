@@ -80,20 +80,20 @@ static double settle(const float *re, const float *im, int n, float fs, float wa
  * 75 Bd WAV (rtty_harness, 2026-11-15, 60 s): chars, framing, false starts. */
 static int trial_tests(void)
 {
-    struct { const char *what; float baud; unsigned c, f, s; } d[] = {
-        { "75/170 right", 75, 594, 0, 0 }, { "45.45/170", 45.45f, 267, 16, 1 },
-        { "50/170", 50, 237, 83, 0 }, { "100/170", 100, 404, 189, 0 }, { "75/850", 75, 0, 188, 1 },
+    /* Mean character confidence of REAL decodes of a clean 75 Bd WAV at each
+     * setting (rtty_demod, 2026-11-15, 594/404/237/266 chars); wrong shift
+     * decodes nothing (squelched). */
+    struct { const char *what; unsigned n; float mean; } d[] = {
+        { "75/170 right", 594, 0.844f }, { "45.45/170", 266, 0.574f }, { "50/170", 237, 0.612f },
+        { "100/170", 404, 0.651f }, { "75/850", 0, 0.0f },
     };
     float q[5]; int fails = 0;
     for (int i = 0; i < 5; i++) {
-        q[i] = rtty_auto_quality(d[i].c, d[i].f, d[i].s, 60.0f, d[i].baud);
+        q[i] = rtty_auto_quality(d[i].n, d[i].mean * (float)d[i].n);
         printf("quality %-12s %.2f\n", d[i].what, q[i]);
     }
-    /* switching TO the right setting from any wrong one is kept */
     for (int i = 1; i < 5; i++) if (!rtty_auto_trial_keep(q[i], q[0])) { printf("FAIL keep %s -> right\n", d[i].what); fails++; }
-    /* switching AWAY from the right setting is reverted */
     for (int i = 1; i < 5; i++) if (rtty_auto_trial_keep(q[0], q[i])) { printf("FAIL revert right -> %s\n", d[i].what); fails++; }
-    /* the station stops during the trial: no decode after -> reverted */
     if (rtty_auto_trial_keep(q[1], 0.0f)) { printf("FAIL keep on silence\n"); fails++; }
     printf("trial tests: %d failure(s)\n", fails);
     return fails;
