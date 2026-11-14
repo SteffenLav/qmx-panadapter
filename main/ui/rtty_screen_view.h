@@ -41,6 +41,11 @@ void      rtty_screen_view_tap_hz(uint32_t tapped_hz);
  * - shift/2 when reversed. Any task. */
 int       rtty_screen_view_mark_offset_hz(void);
 
+/* The dial moved (knob, keypad, band, spot - any path). On the RTTY page the
+ * decoder restarts, so AFC and acquisition search afresh round the lines, the
+ * same as after a tap. No-op on other pages and while keyed. Any task. */
+void      rtty_screen_view_dial_moved(void);
+
 /* Tune so the MARK tone is at mark_hz (keypad, spot tap, web keypad on the
  * RTTY page): the centre goes to mark -/+ shift/2 by rtty_screen_view_tap_hz. */
 void      rtty_screen_view_tune_mark_hz(uint32_t mark_hz);

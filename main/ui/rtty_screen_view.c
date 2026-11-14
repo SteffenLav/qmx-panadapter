@@ -10,6 +10,7 @@
 #include "cw_screen_view.h"   /* CW_PANE_W - the shared left-pane width */
 #include "ui_theme.h"
 #include "ui.h"
+#include "ui_mode.h"
 #include "rtty_rx.h"
 #include "rtty_tx.h"
 #include "cat/cat.h"
@@ -711,6 +712,25 @@ void rtty_screen_view_tap_hz(uint32_t tapped_hz)
     rtty_rx_apply(&c);
     ESP_LOGI(TAG, "tap: %lu Hz -> dial %lu, decoder at %d Hz", (unsigned long)tapped_hz,
              (unsigned long)dial, c.offset_hz);
+}
+
+/* ⛔ A DIAL MOVE RESTARTS THE DECODER, AS A TAP DOES. Operator 2026-11-14:
+ * "if i use the dial or the tap to tune - in both cases we need to have the
+ * AFC in action - now it looks like its only the tap to tune". From the code:
+ * once a station is decoded, acq_held keeps AFC and acquisition within
+ * RTTY_HOLD_HZ (20 Hz) of it (R026), and only a restart clears that. A tap
+ * restarts (rtty_rx_apply); the knob did not, so after the first decode the
+ * lines moved onto a new station while AFC stayed on the old one's offset.
+ * The offset from the dial is kept - the lines move with the dial, as a
+ * radio's audio does. Not while keyed: rtty_tx's own QSY applies the cfg it
+ * needs, and a dial change mid-over is not a retune by the operator. */
+void rtty_screen_view_dial_moved(void)
+{
+    if (ui_mode_get() != UI_MODE_RTTY || rtty_tx_keyed()) return;
+    rtty_rx_cfg_t c;
+    rtty_rx_get_cfg(&c);
+    if (!c.on) return;
+    rtty_rx_apply(&c);
 }
 
 /* See the header: Freq on this page is the mark frequency. */

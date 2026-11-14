@@ -10328,6 +10328,7 @@ void ui_update_frequency(uint32_t freq_hz)
     }
     uint32_t prev_freq_hz = s_last_qmx_freq_hz;
     s_last_qmx_freq_hz = freq_hz;
+    if (prev_freq_hz != 0 && prev_freq_hz != freq_hz) rtty_screen_view_dial_moved();
     audio_note_dial_hz(freq_hz);   /* so each sample carries its own dial (#298) */
     /* ⭐ STILL DISPLAY (#298). This line used to be `s_pan_offset_bins = 0;`
      * followed by recompute_zoom_pan() - re-deriving the pan from the passband
