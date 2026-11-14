@@ -24,16 +24,19 @@ const float rtty_auto_bauds[RTTY_AUTO_NBAUD]   = { 45.45f, 50.0f, 75.0f, 100.0f 
 
 static void set_tones(rtty_auto_t *a)
 {
-    double fm = a->centre + a->pair_centre + a->shift / 2.0;
-    double fs = a->centre + a->pair_centre - a->shift / 2.0;
-    a->m_c = 1; a->m_s = 0; a->m_sc = (float)cos(-2 * M_PI * fm / a->fs); a->m_ss = (float)sin(-2 * M_PI * fm / a->fs);
-    a->s_c = 1; a->s_s = 0; a->s_sc = (float)cos(-2 * M_PI * fs / a->fs); a->s_ss = (float)sin(-2 * M_PI * fs / a->fs);
+    float fm = a->centre + a->pair_centre + a->shift / 2.0f;    /* once per pair: float is enough */
+    float fs = a->centre + a->pair_centre - a->shift / 2.0f;
+    a->m_c = 1; a->m_s = 0; a->m_sc = cosf(-2.0f * (float)M_PI * fm / a->fs); a->m_ss = sinf(-2.0f * (float)M_PI * fm / a->fs);
+    a->s_c = 1; a->s_s = 0; a->s_sc = cosf(-2.0f * (float)M_PI * fs / a->fs); a->s_ss = sinf(-2.0f * (float)M_PI * fs / a->fs);
     for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
-        int W = (int)lroundf(a->fs / rtty_auto_bauds[b] / 2.0f);
+        float T = a->fs / rtty_auto_bauds[b];
+        int W = (int)lroundf(T / 2.0f);
         memset(&a->det[b], 0, sizeof a->det[b]);
         a->det[b].W = W < 4 ? 4 : W > RTTY_AUTO_MAXWIN ? RTTY_AUTO_MAXWIN : W;
-        a->det[b].t_last = -1;
+        a->det[b].T = T;
+        a->det[b].deb = (uint32_t)lroundf(RTTY_AUTO_DEBOUNCE * T);
     }
+    a->max_dt = (uint32_t)lroundf(12.0f * a->fs / rtty_auto_bauds[0]);
     a->ntrans = 0; a->baud_ok = false;
 }
 
@@ -45,8 +48,8 @@ void rtty_auto_init(rtty_auto_t *a, float fs, float centre_hz)
     a->D = (int)lroundf(fs / RTTY_AUTO_RATE_HZ);
     if (a->D < 1) a->D = 1;
     a->mc = 1; a->ms = 0;
-    a->mstep_c = (float)cos(-2 * M_PI * centre_hz / fs);
-    a->mstep_s = (float)sin(-2 * M_PI * centre_hz / fs);
+    a->mstep_c = cosf(-2.0f * (float)M_PI * centre_hz / fs);
+    a->mstep_s = sinf(-2.0f * (float)M_PI * centre_hz / fs);
 }
 
 static int cmpf(const void *x, const void *y)
@@ -168,7 +171,7 @@ static int verdict_for(const rtty_auto_t *a, int q, float *sc)
     int bi = -1;
     for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
         const __typeof__(a->det[0]) *e = &a->det[b];
-        s[b] = e->cnt[q] > 0 ? (float)(e->acc[q] / e->cnt[q]) : 0;
+        s[b] = e->cnt[q] > 0 ? e->acc[q] / e->cnt[q] : 0;
         if (s[b] > best) { best = s[b]; bi = b; }
     }
     *sc = best;
@@ -196,7 +199,7 @@ static void speed_verdict(rtty_auto_t *a)
         p = s1 > s0 ? 1 : 0;
         for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
             const __typeof__(a->det[0]) *e = &a->det[b];
-            a->score[b] = e->cnt[p] > 0 ? (float)(e->acc[p] / e->cnt[p]) : 0;
+            a->score[b] = e->cnt[p] > 0 ? e->acc[p] / e->cnt[p] : 0;
         }
         a->baud_ok = false;
         return;
@@ -208,7 +211,7 @@ static void speed_verdict(rtty_auto_t *a)
     int bi = p ? v1 : v0;
     for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
         const __typeof__(a->det[0]) *e = &a->det[b];
-        a->score[b] = e->cnt[p] > 0 ? (float)(e->acc[p] / e->cnt[p]) : 0;
+        a->score[b] = e->cnt[p] > 0 ? e->acc[p] / e->cnt[p] : 0;
         a->short_frac[b] = e->ntrans ? (float)e->nshort / e->ntrans : 1;
     }
     a->baud = rtty_auto_bauds[bi]; a->baud_ok = true;
@@ -217,10 +220,9 @@ static void speed_verdict(rtty_auto_t *a)
 
 void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n)
 {
-    const double max_dt = 12.0 * a->fs / rtty_auto_bauds[0];
     for (int i = 0; i < n; i++) {
         float xr = re[i], xi = im ? im[i] : 0.0f;
-        a->n += 1;
+        a->n++;
 
         /* spectrum path: mix to 0, boxcar-decimate, block */
         float yr = xr * a->mc - xi * a->ms, yi = xr * a->ms + xi * a->mc;
@@ -232,7 +234,7 @@ void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n)
             a->ar = a->ai = 0; a->k = 0;
             if (++a->nb >= RTTY_AUTO_NFFT) { a->nb = 0; block_done(a); }
         }
-        if (((long)a->n & 1023) == 0) {             /* keep the phasors on the circle */
+        if ((a->n & 1023u) == 0) {             /* keep the phasors on the circle */
             float g = 1.0f / sqrtf(a->mc * a->mc + a->ms * a->ms); a->mc *= g; a->ms *= g;
             g = 1.0f / sqrtf(a->m_c * a->m_c + a->m_s * a->m_s); a->m_c *= g; a->m_s *= g;
             g = 1.0f / sqrtf(a->s_c * a->s_c + a->s_s * a->s_s); a->s_c *= g; a->s_s *= g;
@@ -261,25 +263,26 @@ void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n)
             if (st == e->state) { e->cand = st; continue; }     /* a glitch ended */
             /* debounce: see rtty_auto.h */
             if (st != e->cand) { e->cand = st; e->t_cand = a->n; continue; }
-            if (e->state != 0 && a->n - e->t_cand < RTTY_AUTO_DEBOUNCE * a->fs / rtty_auto_bauds[b]) continue;
+            if (e->state != 0 && a->n - e->t_cand < e->deb) continue;
             /* Both tones' runs are scored; the whole-bit one is space - see
              * rtty_auto.h. state +1 = the HIGH tone. */
-            if (e->state != 0 && e->t_last >= 0) {
-                double dt = e->t_cand - e->t_last, T = a->fs / rtty_auto_bauds[b];
-                if (dt >= 0.25 * T && dt < max_dt) {
+            if (e->state != 0 && e->have_last) {
+                uint32_t du = e->t_cand - e->t_last;
+                float dt = (float)du, T = e->T;
+                if (dt >= 0.25f * T && du < a->max_dt) {
                     int p = e->state == 1 ? 1 : 0;     /* the run that just ended */
 #ifdef RTTY_AUTO_DEBUG
-                    if (b == 0) { int hb = (int)(dt / T * 4.0 + 0.5); if (hb < 48) rtty_auto_dbg_hist[p][hb]++; }
+                    if (b == 0) { int hb = (int)(dt / T * 4.0f + 0.5f); if (hb < 48) rtty_auto_dbg_hist[p][hb]++; }
 #endif
-                    const double k = 1.0 - 1.0 / RTTY_AUTO_KEEP;
-                    e->acc[p] = e->acc[p] * k + cos(2.0 * M_PI * dt / T);
-                    e->cnt[p] = e->cnt[p] * k + 1.0;
-                    if (dt < 0.75 * T) e->nshort++;
+                    const float k = 1.0f - 1.0f / RTTY_AUTO_KEEP;
+                    e->acc[p] = e->acc[p] * k + cosf(2.0f * (float)M_PI * dt / T);
+                    e->cnt[p] = e->cnt[p] * k + 1.0f;
+                    if (dt < 0.75f * T) e->nshort++;
                     e->ntrans++;
                     any = true;
                 }
             }
-            e->t_last = e->t_cand;
+            e->t_last = e->t_cand; e->have_last = true;
             e->state = st;
         }
         a->ntrans = a->det[0].ntrans;

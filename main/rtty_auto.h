@@ -79,14 +79,23 @@ typedef struct {
     struct {
         int   W, pos, filled, state;
         int   cand;                    /* debounce: state seen, not yet held */
-        double t_cand;
+        uint32_t t_cand;
         float mr[RTTY_AUTO_MAXWIN], mi[RTTY_AUTO_MAXWIN], sr[RTTY_AUTO_MAXWIN], si[RTTY_AUTO_MAXWIN];
         float smr, smi, ssr, ssi;
-        double t_last;
-        double acc[2], cnt[2];         /* [0] runs of the LOW tone, [1] of the HIGH; decaying */
+        uint32_t t_last;
+        bool  have_last;
+        float T;                       /* bit, samples */
+        uint32_t deb;                  /* debounce, samples */
+        float acc[2], cnt[2];          /* [0] runs of the LOW tone, [1] of the HIGH; decaying */
         int   ntrans, nshort;
     } det[RTTY_AUTO_NBAUD];
-    double n;                          /* sample count */
+    /* ⛔ NO double ANYWHERE ON THE SAMPLE PATH: the P4's FPU is single
+     * precision, so double is software. A double counter + per-sample
+     * double compare took the decoder from 4.5 % to 10.5 % of core 1 and
+     * the worst call to 32 ms (bench2 2026-11-14). The host harness, on a
+     * PC with fast doubles, could not show it. */
+    uint32_t n;                        /* sample count; differences are modular */
+    uint32_t max_dt;
     int   ntrans;                      /* space runs timed by the slowest detector */
     bool  baud_ok;
     float baud;
