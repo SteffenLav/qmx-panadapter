@@ -4,8 +4,8 @@
  * Fed the same complex baseband as rtty_demod, with the pair's expected
  * centre. Two stages, both from the signal alone:
  *
- *   SHIFT: a power spectrum over +/-RTTY_AUTO_SPAN_HZ of the centre, 5 Hz
- *   bins, averaged. Each standard shift S is scored at every centre c within
+ *   SHIFT: a power spectrum over +/-RTTY_AUTO_SPAN_HZ of the centre, 5.9 Hz
+ *   bins (256-point FFT at 1500 Hz), averaged. Each standard shift S is scored at every centre c within
  *   +/-RTTY_AUTO_CSEARCH_HZ: the weaker of the two tone peaks (c -/+ S/2)
  *   over the median bin. The weaker, not the sum: one strong tone of a
  *   neighbour must not make a pair.
@@ -41,10 +41,10 @@ extern "C" {
 
 #define RTTY_AUTO_SPAN_HZ     600.0f
 #define RTTY_AUTO_CSEARCH_HZ  150.0f
-#define RTTY_AUTO_BIN_HZ      5.0f
+#define RTTY_AUTO_BIN_HZ      (RTTY_AUTO_RATE_HZ / RTTY_AUTO_NFFT)   /* 5.86 Hz */
 #define RTTY_AUTO_RATE_HZ     1500.0f   /* spectrum decimated to this */
-#define RTTY_AUTO_NFFT        300       /* RATE / BIN */
-#define RTTY_AUTO_NBINS       241       /* -600..+600 in 5 Hz */
+#define RTTY_AUTO_NFFT        256       /* radix-2 FFT; a 300-point DFT cost 4.5x the demod's own acquisition */
+#define RTTY_AUTO_NBINS       205       /* -102..+102 bins = +/-598 Hz */
 #define RTTY_AUTO_MAXWIN      80        /* boxcar ring: half a 45.45 Bd bit at 6 kHz = 66 */
 #define RTTY_AUTO_NSHIFT      5
 #define RTTY_AUTO_NBAUD       4

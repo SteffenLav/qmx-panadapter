@@ -19,7 +19,7 @@ const float rtty_auto_bauds[RTTY_AUTO_NBAUD]   = { 45.45f, 50.0f, 75.0f, 100.0f 
 /* Shift verdict: the weaker tone over the median bin, dB. */
 #define AUTO_PAIR_DB     6.0f
 #define AUTO_SWITCH_DB   3.0f    /* a new shift must beat the held one by this */
-#define AUTO_MIN_BLOCKS  5          /* 1 s of spectrum */
+#define AUTO_MIN_BLOCKS  6          /* ~1 s of spectrum (0.17 s blocks) */
 #define AUTO_HYST        0.2f       /* decision hysteresis, fraction of total */
 
 static void set_tones(rtty_auto_t *a)
@@ -60,7 +60,7 @@ static int cmpf(const void *x, const void *y)
 /* Peak power within +/-1 bin of f (Hz rel. centre). */
 static float peak_at(const rtty_auto_t *a, float f)
 {
-    int i = (int)lroundf((f + RTTY_AUTO_SPAN_HZ) / RTTY_AUTO_BIN_HZ);
+    int i = (int)lroundf(f / RTTY_AUTO_BIN_HZ) + (RTTY_AUTO_NBINS - 1) / 2;
     float m = 0;
     for (int k = i - 1; k <= i + 1; k++)
         if (k >= 0 && k < RTTY_AUTO_NBINS && a->pow[k] > m) m = a->pow[k];
@@ -117,32 +117,48 @@ static void shift_verdict(rtty_auto_t *a)
     }
 }
 
+/* In-place radix-2 FFT, n a power of two. */
+static void fft(float *re, float *im, int n)
+{
+    for (int i = 1, j = 0; i < n; i++) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) { float t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        float ang = -2.0f * (float)M_PI / len, wr = cosf(ang), wi = sinf(ang);
+        for (int i = 0; i < n; i += len) {
+            float cr = 1, ci = 0;
+            for (int k = 0; k < len / 2; k++) {
+                int u = i + k, v = i + k + len / 2;
+                float xr = re[v] * cr - im[v] * ci, xi = re[v] * ci + im[v] * cr;
+                re[v] = re[u] - xr; im[v] = im[u] - xi;
+                re[u] += xr; im[u] += xi;
+                float nc = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nc;
+            }
+        }
+    }
+}
+
 static void block_done(rtty_auto_t *a)
 {
-    /* Hann window, naive DFT over the 241 bins we need. */
-    static float win[RTTY_AUTO_NFFT];
-    static bool  win_ok;
-    if (!win_ok) {
-        for (int i = 0; i < RTTY_AUTO_NFFT; i++)
-            win[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / RTTY_AUTO_NFFT);
-        win_ok = true;
+    float xr[RTTY_AUTO_NFFT], xi[RTTY_AUTO_NFFT];
+    for (int i = 0; i < RTTY_AUTO_NFFT; i++) {
+        float w = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / RTTY_AUTO_NFFT);
+        xr[i] = a->br[i] * w; xi[i] = a->bi[i] * w;
     }
+    fft(xr, xi, RTTY_AUTO_NFFT);
     for (int b = 0; b < RTTY_AUTO_NBINS; b++) {
-        int k = b - (RTTY_AUTO_NBINS - 1) / 2;          /* -120..120 */
-        float sc = cosf(-2.0f * (float)M_PI * k / RTTY_AUTO_NFFT);
-        float ss = sinf(-2.0f * (float)M_PI * k / RTTY_AUTO_NFFT);
-        float c = 1, s = 0, xr = 0, xi = 0;
-        for (int i = 0; i < RTTY_AUTO_NFFT; i++) {
-            float r = a->br[i] * win[i], q = a->bi[i] * win[i];
-            xr += r * c - q * s;
-            xi += r * s + q * c;
-            float nc = c * sc - s * ss; s = c * ss + s * sc; c = nc;
-        }
-        a->pow[b] += xr * xr + xi * xi;
+        int k = b - (RTTY_AUTO_NBINS - 1) / 2;          /* -102..102 */
+        int i = k < 0 ? k + RTTY_AUTO_NFFT : k;
+        a->pow[b] += xr[i] * xr[i] + xi[i] * xi[i];
     }
     a->blocks++;
     if (a->blocks >= AUTO_MIN_BLOCKS) shift_verdict(a);
 }
+
+static void speed_verdict(rtty_auto_t *a);
 
 /* One polarity's verdict: q = whose runs are taken as space (0 low tone,
  * 1 high tone). Returns the speed index, or -1; *sc = its score. */
