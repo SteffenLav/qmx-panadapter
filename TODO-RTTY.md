@@ -12,10 +12,13 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 ## Open
 
+⛔ Release scope: R010 and R028 both ship in the first RTTY release (operator 2026-11-14).
+
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
 | R022 | Boot after a flash: the Tab5 sent `FA 14085000` at 29.6 s, 125 ms after the band list, no `RTTY entry` line (bench2 2026-11-12 22:43, draft of `dde73aff`). 14.085 = the DiGi-middle fallback, NOT the stored 20 m dial (14.081 - every store logs). The 2nd boot hit (31.4 s, `55b1ae24`) was a band press. Silent writers are all operator gestures; log cannot tell them apart, so every `Sent: FA` now names its caller (addr2line it). Wait for a recurrence. | Investigation | recurrence | - |
 | R010 | **RTTY TX**: engine `8dbc8f15`, pane `e9e77b6a`, restyle `df4da6d2` (mock2), TX at tap unless a decode confirmed AFC + sent text red `37efed59`. bench2 flashed df4da6d2. ON AIR: CQ copied clean by fldigi (2nd try; 1st went 145 Hz off the tap = the AFC fix, unproven on air). NEXT: Answer/Exch/73 (tap a call), Type..., STOP mid-over, QSY path, red TX text, call box. | Large | operator at bench | Don N2VGU asked |
+| R028 | **Auto speed + shift - IN THE FIRST RTTY RELEASE** (operator 2026-11-14: not later). Shift from the acquisition pair spacing, nearest of 170/200/425/450/850. Speed: candidates 45.45/50/75/100 run in parallel after lock-on, keep the fewest framing errors with a margin (e.g. half over 30 chars). Basis: WAE capture 30 s, framing errors 45.45/50/75 Bd = 6/14/42. "Auto" in the speed/shift picker. Host-test with synthetic 50/75 Bd first. | Moderate | - | operator |
 
 ## Done
 
