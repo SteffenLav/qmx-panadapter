@@ -8566,6 +8566,12 @@ static esp_err_t wspr_handler(httpd_req_t *req)
          * line said "off" as a string literal while the operator watched his
          * spots appear on wsprnet.org. */
         cJSON_AddStringToObject(o, "status", wsprnet_status());
+        /* Reports ACCEPTED since boot. A separate number from "confirmed"
+         * below and they will not agree: that one counts eligible callsigns
+         * in the current spot table, this one every accepted report, calls
+         * long aged out of the table included. Asked for after a 20-hour run
+         * where the per-pass count cleared every two minutes. */
+        cJSON_AddNumberToObject(o, "sent_total", wsprnet_sent_total());
         /* How many of the calls heard are eligible under the heard-more-than-
          * once rule that gates publication - the part an operator cannot work
          * out from anywhere else on the page. */
