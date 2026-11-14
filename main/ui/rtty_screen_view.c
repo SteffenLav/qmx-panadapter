@@ -9,6 +9,10 @@
 #include "ui_theme.h"
 #include "ui.h"
 #include "rtty_rx.h"
+#include "rtty_tx.h"
+#include "cw_callsign.h"
+#include "storage/settings.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include "esp_log.h"
@@ -54,6 +58,12 @@ static lv_obj_t *s_btn_rev, *s_btn_afc, *s_btn_sq;
 static lv_obj_t *s_lbl_rev, *s_lbl_afc_btn, *s_lbl_sq;
 static lv_obj_t *s_marker[2];
 static lv_obj_t *s_speed_modal;
+static lv_obj_t *s_kb_wrap, *s_kb, *s_kb_ta;   /* Type... : keyboard + what was typed */
+static int       s_typed_len;                  /* chars of s_kb_ta already sent */
+static bool      s_ta_resetting;               /* our own lv_textarea_set_text() */
+static char      s_call[16];                   /* {CALL}: the callsign tapped in the text */
+static char      s_err_shown[96];              /* rtty_tx's last refusal, as last shown */
+static uint32_t  s_err_until;                  /* lv_tick until which it stays up */
 static lv_timer_t *s_timer;
 static bool s_shown;
 static int  s_txt_top;      /* container y of the text box */
@@ -244,6 +254,175 @@ static void speed_open_cb(lv_event_t *e)
     mk_btn(p, 650, 216, 150, 56, "Close", speed_close_cb, NULL, NULL);
 }
 
+/* ---- TX (R010) ------------------------------------------------------------
+ * Layout approved by the operator 2026-11-14 (docs/rtty-tx-mock.png). Every
+ * press here is a human decision that can key the radio: the rows are in
+ * docs/unattended-tx-inventory.md. The refusals (DiGi, callsign, sim, WSPR,
+ * band guard, ...) are rtty_tx_send()'s, not this file's. */
+
+/* Show a refusal for 8 s in the status lines. */
+static void tx_show_err(const char *e)
+{
+    snprintf(s_err_shown, sizeof s_err_shown, "%s", e);
+    s_err_until = lv_tick_get() + 8000;
+}
+
+static void tx_send(const char *text, bool end)
+{
+    char err[96] = "";
+    if (rtty_tx_send(text, end, err, sizeof err) != ESP_OK) tx_show_err(err);
+}
+
+/* The four fixed messages. CALL is the station tapped in the text box, MY
+ * the callsign from Identity, GRID the locator (left out when unset). The
+ * leading '\n' starts the over on a fresh line at the receiver. */
+enum { MSG_CQ, MSG_ANSWER, MSG_EXCH, MSG_73 };
+
+static void macro_cb(lv_event_t *e)
+{
+    int which = (int)(intptr_t)lv_event_get_user_data(e);
+    char my[16], grid[12], t[200];
+    settings_get_my_callsign(my, sizeof my);
+    settings_get_my_grid(grid, sizeof grid);
+    if (!my[0]) { tx_show_err("no callsign set (Identity)"); return; }
+    if (which != MSG_CQ && !s_call[0]) { tx_show_err("tap their callsign in the text first"); return; }
+    const char *c = s_call;
+    switch (which) {
+    case MSG_CQ:
+        snprintf(t, sizeof t, "\nCQ CQ CQ DE %s %s %s\nCQ CQ CQ DE %s %s %s PSE K\n",
+                 my, my, my, my, my, my);
+        break;
+    case MSG_ANSWER:
+        snprintf(t, sizeof t, "\n%s %s DE %s %s %s K\n", c, c, my, my, my);
+        break;
+    case MSG_EXCH:
+        if (grid[0])
+            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599 QTH %.4s %.4s\n%s DE %s K\n",
+                     c, my, grid, grid, c, my);
+        else
+            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599\n%s DE %s K\n", c, my, c, my);
+        break;
+    default:
+        snprintf(t, sizeof t, "\n%s DE %s TNX FER QSO 73 GL\n%s DE %s SK\n", c, my, c, my);
+        break;
+    }
+    ESP_LOGI(TAG, "TX press: %s", which == MSG_CQ ? "CQ" : which == MSG_ANSWER ? "Answer" :
+             which == MSG_EXCH ? "Exch" : "73");
+    tx_send(t, true);
+}
+
+static void type_close(bool end_over)
+{
+    if (!s_kb_wrap) return;
+    lv_obj_del(s_kb_wrap);
+    s_kb_wrap = s_kb = s_kb_ta = NULL;
+    /* Closing the keyboard ends the over once what was typed has gone. Only
+     * when keyed: on an idle radio rtty_tx_send("") would START an over. */
+    if (end_over && rtty_tx_keyed()) tx_send("", true);
+}
+
+/* Each character is sent as it is typed (approved: "chars sent live"). A
+ * backspace cannot unsend; it only edits the field. */
+static void type_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_ta_resetting || !s_kb_ta) return;
+    const char *txt = lv_textarea_get_text(s_kb_ta);
+    int n = (int)strlen(txt);
+    if (n > s_typed_len) tx_send(txt + s_typed_len, false);
+    s_typed_len = n;
+    if (n > 160) {   /* keep the field short; what was sent is in the echo */
+        s_ta_resetting = true;
+        lv_textarea_set_text(s_kb_ta, "");
+        s_ta_resetting = false;
+        s_typed_len = 0;
+    }
+}
+
+static void type_kb_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) type_close(true);
+}
+
+/* The keyboard covers the text box only, not the pane: STOP must stay in
+ * reach while typing. 960 x 280 keys + a 50 px line of what was typed. */
+static void type_open_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_kb_wrap) { type_close(true); return; }   /* second press closes */
+    s_kb_wrap = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_kb_wrap, MID_W - PANE_W, 330);
+    lv_obj_set_pos(s_kb_wrap, PANE_W, 720 - 330);
+    lv_obj_set_style_bg_color(s_kb_wrap, lv_color_hex(0x0d1116), 0);
+    lv_obj_set_style_bg_opa(s_kb_wrap, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_kb_wrap, 0, 0);
+    lv_obj_set_style_pad_all(s_kb_wrap, 0, 0);
+    lv_obj_set_style_radius(s_kb_wrap, 0, 0);
+    lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_kb_ta = lv_textarea_create(s_kb_wrap);
+    lv_obj_set_size(s_kb_ta, MID_W - PANE_W, 50);
+    lv_obj_set_pos(s_kb_ta, 0, 0);
+    lv_obj_set_style_text_font(s_kb_ta, &qmx_mono_25, 0);
+    lv_obj_set_style_text_color(s_kb_ta, lv_color_hex(0xFF9F9F), 0);
+    lv_obj_set_style_bg_color(s_kb_ta, lv_color_hex(0x14181e), 0);
+    lv_textarea_set_placeholder_text(s_kb_ta, "Type - each key is sent as you type");
+    s_typed_len = 0;
+    lv_obj_add_event_cb(s_kb_ta, type_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_kb = lv_keyboard_create(s_kb_wrap);
+    ui_theme_style_keyboard(s_kb);
+    lv_obj_set_size(s_kb, MID_W - PANE_W, 280);
+    lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    ui_theme_keyboard_attach_caps_cycle_upper(s_kb);
+    lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
+    lv_keyboard_set_textarea(s_kb, s_kb_ta);
+    lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_CANCEL, NULL);
+}
+
+static void stop_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "TX press: STOP");
+    rtty_tx_stop();
+    type_close(false);
+}
+
+/* CALL: a tap on a callsign in the decoded text (approved). The word under
+ * the finger is taken from the text grid; it must be shaped like a callsign
+ * (cw_call_structure_ok - shape only, the test the CW page uses). */
+#define CALLCH(ch) (isalnum((unsigned char)(ch)) || (ch) == '/')
+static void text_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *in = lv_indev_active();
+    if (!in) return;
+    lv_point_t p; lv_indev_get_point(in, &p);
+    lv_area_t a; lv_obj_get_coords(s_text_box, &a);
+    const int pitch = (int)lv_font_get_line_height(&qmx_mono_25) + 2;
+    int row = (p.y - a.y1 - TXT_PAD) / pitch;
+    int col = (p.x - a.x1 - TXT_PAD) / 15;
+    if (p.y - a.y1 < TXT_PAD || p.x - a.x1 < TXT_PAD) return;
+    if (row < 0 || row >= TXT_ROWS || col < 0) return;
+    const char *ln = s_lines[row];
+    int len = (int)strlen(ln);
+    if (col >= len || !CALLCH(ln[col])) return;
+    int b = col, en = col;
+    while (b > 0 && CALLCH(ln[b - 1])) b--;
+    while (en < len && CALLCH(ln[en])) en++;
+    char w[16];
+    int n = en - b;
+    if (n >= (int)sizeof w) return;
+    for (int i = 0; i < n; i++) w[i] = (char)toupper((unsigned char)ln[b + i]);
+    w[n] = 0;
+    if (!cw_call_structure_ok(w)) { ESP_LOGI(TAG, "tap on '%s': not a callsign", w); return; }
+    snprintf(s_call, sizeof s_call, "%s", w);
+    ESP_LOGI(TAG, "call selected: %s", s_call);
+}
+#undef CALLCH
+
 /* ---- live state ---------------------------------------------------------- */
 
 static int hz_to_x(int64_t hz)
@@ -308,13 +487,34 @@ static void timer_cb(lv_timer_t *t)
     lv_label_set_text(s_lbl_afc, st.cfg.afc ? b : "AFC off");
 
     uint32_t dial = ui_get_dial_freq_hz();
-    char s[96];
-    if (st.fs_hz <= 0)
+    char s[128];
+    rtty_tx_status_t tx;
+    rtty_tx_status(&tx);
+    /* A refusal from inside the over (dial move, band guard) arrives late. */
+    if (!tx.keyed && tx.err[0] && strcmp(tx.err, s_err_shown) != 0) tx_show_err(tx.err);
+    if (tx.keyed) s_err_until = 0;
+    bool tx_line = tx.keyed || (int32_t)(s_err_until - lv_tick_get()) > 0;
+    if (tx.keyed) {
+        /* The last 24 characters sent: what fits 296 px at montserrat_20. */
+        const char *ec = tx.echo;
+        size_t el = strlen(ec);
+        if (el > 24) ec += el - 24;
+        snprintf(s, sizeof s, "TX %d s  centre %d Hz\n%s%s", tx.seconds, tx.centre_hz,
+                 el > 24 ? "..." : "", ec);
+    } else if (tx_line) {
+        snprintf(s, sizeof s, "TX refused: %s", s_err_shown);
+    } else if (st.fs_hz <= 0) {
         snprintf(s, sizeof s, "Waiting for audio\nfrom the radio");
-    else
+    } else if (s_call[0]) {
+        snprintf(s, sizeof s, "%s at %d Hz\nTo: %s", st.present ? "Decoding" : "Listening",
+                 st.cfg.offset_hz + (int)st.afc_hz, s_call);
+    } else {
         snprintf(s, sizeof s, "%s at %d Hz\n%lu chars", st.present ? "Decoding" : "Listening",
                  st.cfg.offset_hz + (int)st.afc_hz, (unsigned long)st.chars);
+    }
     lv_label_set_text(s_lbl_status, s);
+    lv_obj_set_style_text_font(s_lbl_status, tx_line ? &lv_font_montserrat_20 : &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(tx_line ? 0xFF7070 : 0xC8CCD2), 0);
     place_markers(&st, dial);
 }
 
@@ -410,16 +610,20 @@ void rtty_screen_view_init(lv_obj_t *parent)
     s_btn_sq  = mk_btn(s_pane, 10, 302, 145, 56, "Squelch", toggle_cb, (void *)2, &s_lbl_sq);
     mk_btn(s_pane, 165, 302, 145, 56, "Clear text", clear_cb, NULL, NULL);
 
-    /* Reserved for TX (R010) - left empty on purpose so the pane does not
-     * reflow when TX lands. */
-    lv_obj_t *tx = mk_rect(s_pane, 10, 372, 300, 168, 0x14181e);
-    lv_obj_set_style_border_width(tx, 1, 0);
-    lv_obj_set_style_border_color(tx, lv_color_hex(0x3a414c), 0);
-    lv_obj_t *txl = mk_label(tx, 0, 0, &lv_font_montserrat_24, 0x6b727c, "TX not built yet");
-    lv_obj_center(txl);
+    /* TX (R010): the box reserved at (10,372) 300x168 since R006, three rows
+     * of 145x52 at a 58 px pitch. Layout approved 2026-11-14. */
+    mk_btn(s_pane, 10, 372, 145, 52, "CQ", macro_cb, (void *)MSG_CQ, NULL);
+    mk_btn(s_pane, 165, 372, 145, 52, "Answer", macro_cb, (void *)MSG_ANSWER, NULL);
+    mk_btn(s_pane, 10, 430, 145, 52, "Exch", macro_cb, (void *)MSG_EXCH, NULL);
+    mk_btn(s_pane, 165, 430, 145, 52, "73", macro_cb, (void *)MSG_73, NULL);
+    mk_btn(s_pane, 10, 488, 145, 52, "Type...", type_open_cb, NULL, NULL);
+    lv_obj_t *stop = mk_btn(s_pane, 165, 488, 145, 52, "STOP", stop_cb, NULL, NULL);
+    lv_obj_set_style_bg_color(stop, lv_color_hex(0xB02020), 0);
 
     s_lbl_status = mk_label(s_pane, 12, MID_H - 76, &lv_font_montserrat_26, 0xC8CCD2, "");
     lv_obj_set_style_text_line_space(s_lbl_status, 2, 0);
+    lv_label_set_long_mode(s_lbl_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_status, 296);
 
     /* Decoded text, 8 rows, above the band-plan strip. */
     s_text_box = mk_rect(s_container, PANE_W, s_txt_top, TXT_BOX_W,
@@ -427,8 +631,9 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_width(s_text_box, 1, 0);
     lv_obj_set_style_border_color(s_text_box, lv_color_hex(0x2a313b), 0);
     /* Eats its own taps: a tap on the text must not move the decoder to the
-     * waterfall row hidden under it. */
+     * waterfall row hidden under it. A tap on a callsign selects CALL. */
     lv_obj_add_flag(s_text_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_text_box, text_tap_cb, LV_EVENT_CLICKED, NULL);
     const int pitch = (int)lv_font_get_line_height(&qmx_mono_25) + 2;
     for (int r = 0; r < TXT_ROWS; r++) {
         s_row[r] = mk_label(s_text_box, TXT_PAD, TXT_PAD + r * pitch, &qmx_mono_25, COL_OLD, "");
@@ -466,6 +671,10 @@ void rtty_screen_view_hide(void)
 {
     if (!s_container) return;
     speed_close();
+    /* TX belongs to this page: leaving it stops an over at once (the decoder
+     * it transmits on is switched off just below). */
+    rtty_tx_stop();
+    type_close(false);
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_shown = false;
     rtty_rx_cfg_t c;
