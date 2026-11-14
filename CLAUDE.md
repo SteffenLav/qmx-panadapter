@@ -7,6 +7,8 @@ a session HERE for RTTY work; start one in `C:\dev\qmx-panadapter` for main.
 - Open work and state: `TODO-RTTY.md`. Design and measurements: `docs/rtty-feasibility.md`.
 - Bench: **bench2** (`tools/bench.json` in the main checkout is the authority).
   `bench flash bench2` builds from this folder. Every flash wedges its QMX.
+- ⛔ Before setting up ANY key-down test: the dial must be on `antenna.band` in
+  bench.json (20 m). The band guard checks the licence, not the antenna.
 - Sessions here get their own (empty) memory folder. The project memory is at
   C:/Users/Steffen/.claude/projects/C--dev-qmx-panadapter/memory/ - read
   `project_handoff_20261112_rtty_device_decode.md` there. Keep anything the
