@@ -10274,11 +10274,11 @@ function handleTuneMove(clientX, rect) {
 
 function handleTuneCommit(clientX, rect) {
   const hz = pxToFreqHz(clientX, rect);
-  /* R007: on the RTTY page a click moves the DECODER onto what was clicked and
-     leaves the dial alone - the same as a tap on the Tab5's RTTY page.
-     Acquisition pulls in the remaining +/-150 Hz. */
-  if (lastScreen === "rtty" && hz > 0 && lastFreqHz > 0) {
-    sendCmd({ action: "rtty", offset_hz: Math.round(hz - lastFreqHz) }).then(rttyRender);
+  /* RTTY page: a click tunes the dial so the clicked signal sits at 1500 Hz
+     audio and puts the decoder on it - the Tab5's own tap function
+     (rtty_screen_view_tap_hz), so the two cannot drift apart. */
+  if (lastScreen === "rtty" && hz > 0) {
+    sendCmd({ action: "rtty", tune_hz: Math.round(hz) }).then(rttyRender);
     tuneCursorX = -1;
     tuneActive  = false;
     return;
@@ -12695,11 +12695,8 @@ function specPassbandOpa() {
    be added twice and the second copy would have been the one that got missed.
    Behind the trace, which is why it is a separate call from the edges below. */
 function drawPassbandTint(sctx, W, H) {
-  /* RTTY page: no passband box and no dial line, as on the Tab5 (ui.c,
-     pb_hidden; operator 2026-11-12). The decoder listens at the orange tone
-     lines; the radio's filter and the dial set nothing it hears. Back with
-     RTTY TX (R010). */
-  if (lastScreen === "rtty") return;
+  /* RTTY page: the tint and edges are back since 2026-11-14 (R010), the
+     amber dial line stays hidden - as on the Tab5, see pb_hidden in ui.c. */
   const pb = passbandBins();
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
@@ -12783,8 +12780,7 @@ function drawVfoMarker(sctx, W, H) {
                   left: left };
 }
 function drawPassbandEdges(sctx, W, H) {
-  if (lastScreen === "rtty") return;   /* see drawPassbandTint */
-  const pb = passbandBins();
+  const pb = passbandBins();   /* RTTY too since 2026-11-14 - see drawPassbandTint */
   if (!pb) return;
   const x1 = Math.round(pb.loBin * W / SPEC_W);
   const x2 = Math.round(pb.hiBin * W / SPEC_W);

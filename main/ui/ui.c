@@ -12312,8 +12312,17 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * hears, so both read as the receiver's target when they are not. The
      * off-view arrow stays - it still says where the dial went and takes you
      * back. Bring them back with RTTY TX (R010): audio FSK goes out at dial +
-     * tone, through that passband. */
-    const bool pb_hidden = (ui_mode_get() == UI_MODE_RTTY);
+     * tone, through that passband.
+     *
+     * ⭐ 2026-11-14, R010: the TINT AND EDGES ARE BACK, the amber line stays
+     * hidden. Operator: "the spectrum scale does not match the Freq/dial" - the
+     * page showed no trace of where the dial was, and still view keeps the
+     * window when the dial moves. A tap now tunes the dial (tapped signal at
+     * 1500 Hz audio), and TX goes out through this passband, so the tint is
+     * the radio's real window with the lines inside it. He chose this over a
+     * Freq readout of dial + offset. The amber centre line is still what he
+     * asked to have removed on 2026-11-12, so only it stays gated. */
+    const bool pb_hidden = (ui_mode_get() == UI_MODE_RTTY);   /* centre line only */
     SPEC_SIG(pb_hidden);
 
     // Dim, never hide, while panning and while the pan settles
@@ -12457,7 +12466,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             b = (uint16_t)(b * fade_opacity);
             band_color = (r << 11) | (g << 5) | b;
         }
-        for (int x = edge_x_lo; x <= edge_x_hi && !pb_hidden; x++) {
+        for (int x = edge_x_lo; x <= edge_x_hi; x++) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + x] = band_color;
             }
@@ -12913,7 +12922,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
         for (int side = 0; side < 2; side++) {
             int edge_x = pb_x[side];
-            if (pb_hidden || edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
+            if (edge_x < X0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
                 if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
@@ -14639,12 +14648,13 @@ static void touch_event_cb(lv_event_t *e)
         // Still armed afterwards, deliberately: running a frequency means a new
         // caller with a new offset every time, so the next tap should move RIT onto
         // them too. The pill is the way out.
-        /* RTTY page (R006): a tap puts the DECODER on what was tapped and
-         * leaves the dial alone, like tap-to-RIT below - acquisition pulls in
-         * the remaining +/-150 Hz. Before RIT: on this page RIT is not what a
-         * tap means. */
+        /* RTTY page: a tap tunes the dial so the tapped signal sits at
+         * 1500 Hz audio and puts the decoder on it - see
+         * rtty_screen_view_tap_hz() (until 2026-11-14 the dial stayed). Before
+         * RIT: on this page RIT is not what a tap means. */
         if (ui_mode_get() == UI_MODE_RTTY) {
-            rtty_screen_view_tap_hz(target_hz, s_last_qmx_freq_hz);
+            rtty_screen_view_tap_hz(target_hz);
+            s_target_until_us = esp_timer_get_time() + 200000;
             return;
         }
         if (s_rit_armed) {

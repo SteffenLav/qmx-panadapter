@@ -81,6 +81,7 @@
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
 #include "rtty_rx.h"           // /api/cmd "rtty" - R005
 #include "rtty_tx.h"           // /api/cmd "rtty_send" / "rtty_stop" - R010, keys the radio
+#include "ui/rtty_screen_view.h" // /api/cmd "rtty" tune_hz - the Tab5 tap, shared
 #include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
 #include "spur_map.h"          // spur_map_set_enabled - /api/settings
@@ -3617,6 +3618,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
         if (touched) rtty_rx_apply(&c);
+        /* "tune_hz": the web page's click on the waterfall - the SAME function
+         * as a Tab5 tap (dial to put it at 1500 Hz audio, decoder on it). */
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "tune_hz")) && j->valuedouble > 0)
+            rtty_screen_view_tap_hz((uint32_t)j->valuedouble);
         /* "clear":true - the web page's Clear. Empties the shared text ring;
          * the Tab5 grid follows rtty_rx_text_clear_gen(). */
         if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) rtty_rx_text_clear();

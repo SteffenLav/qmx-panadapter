@@ -12,6 +12,7 @@
 #include "ui.h"
 #include "rtty_rx.h"
 #include "rtty_tx.h"
+#include "cat/cat.h"
 #include "cw_callsign.h"
 #include "storage/settings.h"
 #include <ctype.h>
@@ -681,14 +682,34 @@ static void timer_cb(lv_timer_t *t)
     place_markers(&st, dial);
 }
 
-void rtty_screen_view_tap_hz(uint32_t tapped_hz, uint32_t dial_hz)
+/* ⛔ A TAP TUNES THE DIAL. Until 2026-11-14 it moved only the decoder and
+ * left the dial (R006), so "Freq:" kept the dial while the lines sat kHz away
+ * ("the Freq is NOT adjusting to the tap" - operator, who chose this over a
+ * Freq readout of dial + offset). The dial goes where the tapped signal lands
+ * at RTTY_TAP_AUDIO_HZ: mid-passband, so TX needs no dial move (rtty_tx's QSY
+ * stays for an offset set any other way). The decoder offset is the exact
+ * remainder after the dial's own quantisation. If the radio refuses the write
+ * the dial has not moved, and the decoder goes onto the tap from where it is. */
+void rtty_screen_view_tap_hz(uint32_t tapped_hz)
 {
+    uint32_t dial = cat_get_frequency();
+    if (tapped_hz > RTTY_TAP_AUDIO_HZ) {
+        uint32_t want = cat_quantise_dial_hz(tapped_hz - RTTY_TAP_AUDIO_HZ);
+        if (cat_set_frequency_forced(want) == ESP_OK) {
+            ui_update_frequency(want);
+            dial = want;
+        } else {
+            ESP_LOGW(TAG, "tap: dial write to %lu refused - decoder moved, dial kept",
+                     (unsigned long)want);
+        }
+    }
     rtty_rx_cfg_t c;
     rtty_rx_get_cfg(&c);
-    c.offset_hz = (int)((int64_t)tapped_hz - (int64_t)dial_hz);
+    c.offset_hz = (int)((int64_t)tapped_hz - (int64_t)dial);
     c.on = true;
     rtty_rx_apply(&c);
-    ESP_LOGI(TAG, "tap: decoder to %d Hz from the dial (dial not moved)", c.offset_hz);
+    ESP_LOGI(TAG, "tap: %lu Hz -> dial %lu, decoder at %d Hz", (unsigned long)tapped_hz,
+             (unsigned long)dial, c.offset_hz);
 }
 
 /* ---- build --------------------------------------------------------------- */

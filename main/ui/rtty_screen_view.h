@@ -23,6 +23,8 @@ lv_obj_t *rtty_screen_view_get_container(void);
  * cw_screen_view_carpet_visible() for why. */
 bool      rtty_screen_view_carpet_visible(lv_area_t a[2]);
 
-/* A tap on the spectrum/waterfall while this page is up: put the decoder's
- * tone centre on the tapped frequency. The dial does not move. LVGL thread. */
-void      rtty_screen_view_tap_hz(uint32_t tapped_hz, uint32_t dial_hz);
+/* A tap (Tab5) or click (web) on the spectrum/waterfall while this page is
+ * up: the DIAL moves so the tapped frequency sits at RTTY_TAP_AUDIO_HZ, and
+ * the decoder's tone centre goes on it. Any task (the web calls it). */
+#define RTTY_TAP_AUDIO_HZ 1500
+void      rtty_screen_view_tap_hz(uint32_t tapped_hz);
