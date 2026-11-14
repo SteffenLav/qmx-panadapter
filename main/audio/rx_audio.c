@@ -2,6 +2,7 @@
 #include "rtty_rx.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 
 #include "freertos/FreeRTOS.h"
@@ -1348,7 +1349,14 @@ static inline void nco_step(nco_t *n, uint32_t sample_idx, float *c, float *s)
  * across a step change, so a retune costs no click in the demod. */
 #define RTTY_FE_D 8
 #define RTTY_AUDIO_PITCH_HZ   2210   /* tone centre heard: mark 2125, space 2295 */
-#define RTTY_AUDIO_HALF_BW_HZ  500   /* 1 kHz audio filter around it */
+/* R027: +/-250, NOT +/-500. At +/-500 a station 480 Hz below the lines came
+ * through louder than the weak one being decoded (bench2 2026-11-14: speaker
+ * pair 1775/1950 Hz, decoder on RL4R at +1631): "I hear a strong signal but do
+ * NOT see it on the lines". 500 Hz holds one 170 Hz pair with AFC room. */
+#define RTTY_AUDIO_HALF_BW_HZ  250
+/* R027: the speaker follows the decoder's AFC, retuned only when it has moved
+ * this far - every retune resets the filters, which clicks. */
+#define RTTY_AUDIO_AFC_STEP_HZ  10
 static float    *s_rt_mix_re, *s_rt_mix_im;    /* [DSP_FFT_SIZE]        */
 static float    *s_rt_out_re, *s_rt_out_im;    /* [DSP_FFT_SIZE / D]    */
 static float    *s_rt_coeff, *s_rt_dl_re, *s_rt_dl_im;   /* [FIR_DECIM_LEN] */
@@ -1758,18 +1766,26 @@ static void rx_audio_task(void *arg)
          * NCO1 goes on the decoder's frequency with the same mapping as
          * rtty_fe_run() (RF offset + ui_get_if_offset_hz(), so CW pitch, trim
          * and RIT are in it), and NCO2 lifts the tone centre to the standard
-         * 2210 Hz, so the pair sounds at 2125/2295 Hz in a 1 kHz filter. The
+         * 2210 Hz, so the pair sounds at 2125/2295 Hz (filter: see
+         * RTTY_AUDIO_HALF_BW_HZ). The
          * mode is forced to USB: in CW the peak filter and the binaural split
          * would act on the RTTY pair. The dial and the radio are untouched. */
         int want_iq = 0;
         if (rtty) {
-            rtty_rx_cfg_t rc;
-            rtty_rx_get_cfg(&rc);
+            rtty_rx_status_t rs;
+            rtty_rx_status(&rs);
+            /* R027: the decoder's centre is offset + AFC (what the lines show),
+             * not the tap alone - bench2 had AFC +131 Hz and the speaker stayed
+             * on the tap. Hysteresis so a creeping AFC does not retune every
+             * frame. */
+            static int afc_applied = 0;
+            int afc = (int)lroundf(rs.afc_hz);
+            if (abs(afc - afc_applied) >= RTTY_AUDIO_AFC_STEP_HZ) afc_applied = afc;
             mode = RXAUD_MODE_SSB;
             want_binaural = false;
             want_center  = RTTY_AUDIO_PITCH_HZ;
             want_half_bw = RTTY_AUDIO_HALF_BW_HZ;
-            want_iq = rc.offset_hz + ui_get_if_offset_hz();
+            want_iq = rs.cfg.offset_hz + afc_applied + ui_get_if_offset_hz();
         }
         int want_cal = (int)ui_get_if_cal_hz();
         float want_overlap = s_pan_overlap;
