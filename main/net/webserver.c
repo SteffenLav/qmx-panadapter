@@ -3630,6 +3630,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
         if (touched) rtty_rx_apply(&c);
+        rtty_rx_service();   /* RTTY can run with only the web page open - see rtty_rx.h */
         /* "tune_hz": the web page's click on the waterfall - the SAME function
          * as a Tab5 tap (dial to put it at 1500 Hz audio, decoder on it). */
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "tune_hz")) && j->valuedouble > 0)

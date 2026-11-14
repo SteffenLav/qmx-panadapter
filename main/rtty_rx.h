@@ -71,6 +71,11 @@ bool rtty_rx_is_on(void);
 
 void rtty_rx_status(rtty_rx_status_t *st);
 
+/* Logging + R028 Auto decisions, OFF the audio task (its 4 KB stack fell to
+ * 60 B with them on it). Call often from a task with a real stack: the RTTY
+ * page's LVGL timer and the web rtty poll do. */
+void rtty_rx_service(void);
+
 /* Development: record the next `seconds` of the decoder's exact input (the
  * complex samples rtty_rx_feed gets) into PSRAM, for host replay. */
 bool rtty_rx_iqcap_start(float seconds);

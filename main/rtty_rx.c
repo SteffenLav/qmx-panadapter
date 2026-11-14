@@ -253,11 +253,26 @@ uint32_t rtty_rx_text_clear_gen(void) { return s_clear_gen; }
 
 uint32_t rtty_rx_text_count(void) { return s_text_w; }
 
+/* ⛔ NOTHING ON THE AUDIO TASK LOGS (rx_audio, 4 KB stack). Its low point
+ * fell to 60 B on bench2 (2026-11-15): ESP_LOG with %f/%s on every decoder
+ * restart, every received line, the 10-s cpu line, and the whole R028 Auto
+ * apply path ran here. The audio task now only stores; rtty_rx_service()
+ * logs and decides, from the RTTY page's LVGL timer and the web poll. */
+#define PEND_LINES 4
+static char     s_pend_line[PEND_LINES][LOG_LINE + 1];
+static volatile uint32_t s_pend_w, s_pend_r;
+static volatile bool s_pend_stopped, s_pend_iqdone, s_pend_cpu, s_pend_start;
+static struct { float fs, centre; int offset, nco; } s_pend_start_v;
+static struct { uint32_t us_s, permille, avg, max, calls, smp_s, stack; float fs; bool aut; } s_pend_cpu_v;
+
 static void flush_line(void)
 {
     if (s_line_n == 0) return;
     s_line[s_line_n] = 0;
-    ESP_LOGI(TAG, "rx: %s", s_line);
+    if (s_pend_w - s_pend_r < PEND_LINES) {
+        memcpy(s_pend_line[s_pend_w % PEND_LINES], s_line, (size_t)s_line_n + 1);
+        s_pend_w++;
+    }
     s_line_n = 0;
 }
 
@@ -293,7 +308,7 @@ static bool start(float fs_hz, int nco_hz)
         .afc_hz = s_run_cfg.afc ? RTTY_RX_AFC_HZ : 0.0f,
     };
     if (!rtty_demod_init(s_dem, &cfg)) {
-        ESP_LOGE(TAG, "demod init refused fs %.0f baud %.2f", (double)fs_hz, (double)cfg.baud);
+        ESP_LOGE(TAG, "demod init refused fs %d baud x100 %d", (int)fs_hz, (int)(cfg.baud * 100.0f));
         return false;
     }
     rtty_baudot_init(&s_bd, true);
@@ -304,8 +319,9 @@ static bool start(float fs_hz, int nco_hz)
         else ESP_LOGE(TAG, "no PSRAM for auto (%u B) - auto off this run", (unsigned)sizeof(*s_auto));
         s_auto_same = 0;
     }
-    ESP_LOGI(TAG, "demod at %.0f Hz, baseband centre %+.0f Hz (offset %d, nco %d), %u B",
-             (double)fs_hz, (double)cfg.centre_hz, s_run_cfg.offset_hz, nco_hz, (unsigned)sizeof(*s_dem));
+    s_pend_start_v.fs = fs_hz; s_pend_start_v.centre = cfg.centre_hz;
+    s_pend_start_v.offset = s_run_cfg.offset_hz; s_pend_start_v.nco = nco_hz;
+    s_pend_start = true;               /* logged by rtty_rx_service() */
     return true;
 }
 
@@ -315,7 +331,7 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     if (seq != s_have_seq) rtty_rx_get_cfg(&s_run_cfg);
     if (!s_run_cfg.on) {
         s_have_seq = seq;
-        if (s_running) { flush_line(); s_running = false; ESP_LOGI(TAG, "stopped"); }
+        if (s_running) { flush_line(); s_running = false; s_pend_stopped = true; }
         return;
     }
     /* (Re)start on new settings, a new rate (decimation follows the mode) or
@@ -347,7 +363,7 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
         uint32_t k = s_iq_n;
         for (int i = 0; i < n && k < s_iq_cap; i++, k++) { s_iq[2 * k] = re[i]; s_iq[2 * k + 1] = im ? im[i] : 0.0f; }
         s_iq_fs = fs_hz; s_iq_n = k;
-        if (k >= s_iq_cap) { s_iq_run = false; ESP_LOGI(TAG, "iqcap: done, %u pairs", (unsigned)k); }
+        if (k >= s_iq_cap) { s_iq_run = false; s_pend_iqdone = true; }
     }
     if (run_auto) rtty_auto_feed(s_auto, re, im, n);   /* inside the cpu window on purpose */
     int64_t t_b = esp_timer_get_time();
@@ -360,16 +376,17 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     else if (t_b - s_cpu_win_us >= 10000000) {
         int64_t win = t_b - s_cpu_win_us;
         uint32_t permille = (uint32_t)(s_cpu_busy_us * 1000ULL / (uint64_t)win);
-        /* stack left = rx_audio's (this runs in it): R028's first build put
+        /* stack left = rx_audio's (taken here, in it): R028's first build put
          * 2 KB of FFT arrays on this 4 KB stack and overflowed it. */
-        ESP_LOGI(TAG, "cpu: %lu us/s = %lu.%lu%% of core 1, call avg %lu max %lu us, %lu calls, %lu smp/s at %.0f Hz, stack left %u B%s",
-                 (unsigned long)(s_cpu_busy_us * 1000000ULL / (uint64_t)win),
-                 (unsigned long)(permille / 10), (unsigned long)(permille % 10),
-                 (unsigned long)(s_cpu_calls ? s_cpu_busy_us / s_cpu_calls : 0),
-                 (unsigned long)s_cpu_max_us, (unsigned long)s_cpu_calls,
-                 (unsigned long)((uint64_t)s_cpu_smp * 1000000ULL / (uint64_t)win), (double)fs_hz,
-                 (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
-                 run_auto ? ", auto on" : "");
+        s_pend_cpu_v.us_s = (uint32_t)(s_cpu_busy_us * 1000000ULL / (uint64_t)win);
+        s_pend_cpu_v.permille = permille;
+        s_pend_cpu_v.avg = s_cpu_calls ? (uint32_t)(s_cpu_busy_us / s_cpu_calls) : 0;
+        s_pend_cpu_v.max = s_cpu_max_us; s_pend_cpu_v.calls = s_cpu_calls;
+        s_pend_cpu_v.smp_s = (uint32_t)((uint64_t)s_cpu_smp * 1000000ULL / (uint64_t)win);
+        s_pend_cpu_v.fs = fs_hz;
+        s_pend_cpu_v.stack = (uint32_t)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+        s_pend_cpu_v.aut = run_auto;
+        s_pend_cpu = true;
         s_cpu_win_us = t_b; s_cpu_busy_us = 0; s_cpu_max_us = 0; s_cpu_calls = 0; s_cpu_smp = 0;
     }
 
@@ -406,79 +423,123 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     }
     portEXIT_CRITICAL(&s_mux);
 
-    /* R028: once a second, a verdict that differs from what runs must hold
-     * RTTY_AUTO_HOLD_S seconds before it is applied. Not while keyed: our
-     * own over is not a station to follow.
-     *
-     * ⛔ AND A SWITCH IS ONLY A TRIAL. On air 2026-11-14 a damaged signal
-     * (bench2's starved audio + a QMX Digi-audio 75 Bd source) made Auto
-     * apply 100 Bd, 850 Hz and flip Reverse, and nothing took them back.
-     * Now the decode quality (rtty_auto_quality: character rate x clean
-     * fraction, from the decoder's own counters) over the 4 s before is
-     * compared with RTTY_AUTO_TRIAL_S after; rtty_auto_trial_keep() keeps
-     * the switch or it is reverted, and that reading is ignored for
-     * RTTY_AUTO_BAN_S. */
-    if (run_auto && s_run_cfg.auto_mode && t_b >= s_auto_next_us) {
-        s_auto_next_us = t_b + 1000000;
-        /* per-second counter snapshots of the running decoder */
-        s_qs[s_qs_n % RTTY_AUTO_QS] = (rtty_qsnap_t){ s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start };
-        s_qs_n++;
-        if (s_trial) {
-            if (rtty_tx_keyed()) { s_trial = false; ESP_LOGI(TAG, "auto: trial ended by TX - kept"); }
-            else if (t_b - s_trial_us >= (int64_t)RTTY_AUTO_TRIAL_S * 1000000) {
-                float secs = (float)(t_b - s_trial_us) / 1e6f;
-                float qa = rtty_auto_quality(s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start,
-                                             secs, s_run_cfg.baud);
-                s_trial = false;
-                if (rtty_auto_trial_keep(s_trial_qb, qa)) {
-                    ESP_LOGI(TAG, "auto: kept %.2f Bd %.0f Hz%s (quality %.2f -> %.2f)",
-                             (double)s_run_cfg.baud, (double)s_run_cfg.shift_hz,
-                             s_run_cfg.reverse ? " rev" : "", (double)s_trial_qb, (double)qa);
-                } else {
-                    rtty_rx_cfg_t c;
-                    rtty_rx_get_cfg(&c);
-                    s_ban_b = c.baud; s_ban_s = c.shift_hz;
-                    s_ban_until_us = t_b + (int64_t)RTTY_AUTO_BAN_S * 1000000;
-                    ESP_LOGW(TAG, "auto: REVERTED %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (quality %.2f -> %.2f), "
-                             "that reading ignored %d s", (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
-                             (double)s_trial_old.baud, (double)s_trial_old.shift_hz,
-                             s_trial_old.reverse ? " rev" : "", (double)s_trial_qb, (double)qa, RTTY_AUTO_BAN_S);
-                    c.baud = s_trial_old.baud; c.shift_hz = s_trial_old.shift_hz; c.reverse = s_trial_old.reverse;
-                    s_qs_n = 0;
-                    rtty_rx_apply(&c);
-                }
-            }
-            return;                    /* no new switch while a trial runs */
-        }
-        bool ok = s_st.auto_ok;
-        float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;
-        bool differs = ok && (fabsf(b - s_run_cfg.baud) > 0.01f || fabsf(sh - s_run_cfg.shift_hz) > 0.5f ||
-                              rv != s_run_cfg.reverse);
-        /* The ignore covers speed + shift WHATEVER the polarity: on air a
-         * damaged signal alternated "100 Bd" and "100 Bd rev", each banned
-         * alone, so Auto tried 4 times in 40 s instead of twice. */
-        bool banned = t_b < s_ban_until_us && b == s_ban_b && sh == s_ban_s;
-        if (!differs || banned || rtty_tx_keyed()) s_auto_same = 0;
-        else if (s_auto_same > 0 && b == s_auto_pb && sh == s_auto_ps && rv == s_auto_pr) s_auto_same++;
-        else { s_auto_same = 1; s_auto_pb = b; s_auto_ps = sh; s_auto_pr = rv; }
-        if (s_auto_same >= RTTY_AUTO_HOLD_S) {
-            rtty_rx_cfg_t c;
-            rtty_rx_get_cfg(&c);
-            /* quality over the last (up to) RTTY_AUTO_QS-1 seconds at the old settings */
-            int k = s_qs_n - 1, j = s_qs_n > RTTY_AUTO_QS - 1 ? s_qs_n - RTTY_AUTO_QS : 0;
-            float qb = 0;
-            if (k > j) {
-                const rtty_qsnap_t *x = &s_qs[k % RTTY_AUTO_QS], *y = &s_qs[j % RTTY_AUTO_QS];
-                qb = rtty_auto_quality(x->c - y->c, x->f - y->f, x->s - y->s, (float)(k - j), c.baud);
-            }
-            ESP_LOGI(TAG, "auto: TRIAL %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (held %d s, quality before %.2f)",
-                     (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
-                     (double)b, (double)sh, rv ? " rev" : "", s_auto_same, (double)qb);
-            s_trial_old = c; s_trial_qb = qb; s_trial = true; s_trial_us = t_b;
-            c.baud = b; c.shift_hz = sh; c.reverse = rv;
-            s_auto_same = 0;
-            s_qs_n = 0;
-            rtty_rx_apply(&c);         /* restarts demod (counters to 0) + estimator on the next frame */
-        }
+}
+
+/* Called from the RTTY page's LVGL timer (200 ms) and the web page's 1-s
+ * rtty poll - never from the audio task. Logs what the audio task queued and
+ * runs R028's once-a-second Auto/trial logic. Concurrent calls are harmless:
+ * the auto tick is gated on s_auto_next_us. */
+void rtty_rx_service(void)
+{
+    static portMUX_TYPE svc_mux = portMUX_INITIALIZER_UNLOCKED;
+    static bool busy;
+    portENTER_CRITICAL(&svc_mux);
+    if (busy) { portEXIT_CRITICAL(&svc_mux); return; }
+    busy = true;
+    portEXIT_CRITICAL(&svc_mux);
+
+    while (s_pend_r != s_pend_w) {
+        ESP_LOGI(TAG, "rx: %s", s_pend_line[s_pend_r % PEND_LINES]);
+        s_pend_r++;
     }
+    if (s_pend_start) {
+        s_pend_start = false;
+        ESP_LOGI(TAG, "demod at %.0f Hz, baseband centre %+.0f Hz (offset %d, nco %d), %u B",
+                 (double)s_pend_start_v.fs, (double)s_pend_start_v.centre, s_pend_start_v.offset,
+                 s_pend_start_v.nco, (unsigned)sizeof(rtty_demod_t));
+    }
+    if (s_pend_stopped) { s_pend_stopped = false; ESP_LOGI(TAG, "stopped"); }
+    if (s_pend_iqdone) { s_pend_iqdone = false; ESP_LOGI(TAG, "iqcap: done, %u pairs", (unsigned)s_iq_n); }
+    if (s_pend_cpu) {
+        s_pend_cpu = false;
+        ESP_LOGI(TAG, "cpu: %lu us/s = %lu.%lu%% of core 1, call avg %lu max %lu us, %lu calls, %lu smp/s at %.0f Hz, stack left %u B%s",
+                 (unsigned long)s_pend_cpu_v.us_s, (unsigned long)(s_pend_cpu_v.permille / 10),
+                 (unsigned long)(s_pend_cpu_v.permille % 10), (unsigned long)s_pend_cpu_v.avg,
+                 (unsigned long)s_pend_cpu_v.max, (unsigned long)s_pend_cpu_v.calls,
+                 (unsigned long)s_pend_cpu_v.smp_s, (double)s_pend_cpu_v.fs,
+                 (unsigned)s_pend_cpu_v.stack, s_pend_cpu_v.aut ? ", auto on" : "");
+    }
+
+    rtty_rx_cfg_t cur;
+    rtty_rx_get_cfg(&cur);
+    const bool run_auto = s_running && (cur.auto_mode || s_observe) && s_auto && s_dem;
+    int64_t t_b = esp_timer_get_time();
+    do {
+        /* R028: once a second, a verdict that differs from what runs must hold
+         * RTTY_AUTO_HOLD_S seconds before it is applied. Not while keyed: our
+         * own over is not a station to follow.
+         *
+         * ⛔ AND A SWITCH IS ONLY A TRIAL. On air 2026-11-14 a damaged signal
+         * (bench2's starved audio + a QMX Digi-audio 75 Bd source) made Auto
+         * apply 100 Bd, 850 Hz and flip Reverse, and nothing took them back.
+         * Now the decode quality (rtty_auto_quality: character rate x clean
+         * fraction, from the decoder's own counters) over the 4 s before is
+         * compared with RTTY_AUTO_TRIAL_S after; rtty_auto_trial_keep() keeps
+         * the switch or it is reverted, and that reading is ignored for
+         * RTTY_AUTO_BAN_S. */
+        if (run_auto && cur.auto_mode && t_b >= s_auto_next_us) {
+            s_auto_next_us = t_b + 1000000;
+            /* per-second counter snapshots of the running decoder */
+            s_qs[s_qs_n % RTTY_AUTO_QS] = (rtty_qsnap_t){ s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start };
+            s_qs_n++;
+            if (s_trial) {
+                if (rtty_tx_keyed()) { s_trial = false; ESP_LOGI(TAG, "auto: trial ended by TX - kept"); }
+                else if (t_b - s_trial_us >= (int64_t)RTTY_AUTO_TRIAL_S * 1000000) {
+                    float secs = (float)(t_b - s_trial_us) / 1e6f;
+                    float qa = rtty_auto_quality(s_dem->n_chars, s_dem->n_framing, s_dem->n_false_start,
+                                                 secs, cur.baud);
+                    s_trial = false;
+                    if (rtty_auto_trial_keep(s_trial_qb, qa)) {
+                        ESP_LOGI(TAG, "auto: kept %.2f Bd %.0f Hz%s (quality %.2f -> %.2f)",
+                                 (double)cur.baud, (double)cur.shift_hz,
+                                 cur.reverse ? " rev" : "", (double)s_trial_qb, (double)qa);
+                    } else {
+                        rtty_rx_cfg_t c;
+                        rtty_rx_get_cfg(&c);
+                        s_ban_b = c.baud; s_ban_s = c.shift_hz;
+                        s_ban_until_us = t_b + (int64_t)RTTY_AUTO_BAN_S * 1000000;
+                        ESP_LOGW(TAG, "auto: REVERTED %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (quality %.2f -> %.2f), "
+                                 "that reading ignored %d s", (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
+                                 (double)s_trial_old.baud, (double)s_trial_old.shift_hz,
+                                 s_trial_old.reverse ? " rev" : "", (double)s_trial_qb, (double)qa, RTTY_AUTO_BAN_S);
+                        c.baud = s_trial_old.baud; c.shift_hz = s_trial_old.shift_hz; c.reverse = s_trial_old.reverse;
+                        s_qs_n = 0;
+                        rtty_rx_apply(&c);
+                    }
+                }
+                break;                     /* no new switch while a trial runs */
+            }
+            bool ok = s_st.auto_ok;
+            float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;
+            bool differs = ok && (fabsf(b - cur.baud) > 0.01f || fabsf(sh - cur.shift_hz) > 0.5f ||
+                                  rv != cur.reverse);
+            /* The ignore covers speed + shift WHATEVER the polarity: on air a
+             * damaged signal alternated "100 Bd" and "100 Bd rev", each banned
+             * alone, so Auto tried 4 times in 40 s instead of twice. */
+            bool banned = t_b < s_ban_until_us && b == s_ban_b && sh == s_ban_s;
+            if (!differs || banned || rtty_tx_keyed()) s_auto_same = 0;
+            else if (s_auto_same > 0 && b == s_auto_pb && sh == s_auto_ps && rv == s_auto_pr) s_auto_same++;
+            else { s_auto_same = 1; s_auto_pb = b; s_auto_ps = sh; s_auto_pr = rv; }
+            if (s_auto_same >= RTTY_AUTO_HOLD_S) {
+                rtty_rx_cfg_t c;
+                rtty_rx_get_cfg(&c);
+                /* quality over the last (up to) RTTY_AUTO_QS-1 seconds at the old settings */
+                int k = s_qs_n - 1, j = s_qs_n > RTTY_AUTO_QS - 1 ? s_qs_n - RTTY_AUTO_QS : 0;
+                float qb = 0;
+                if (k > j) {
+                    const rtty_qsnap_t *x = &s_qs[k % RTTY_AUTO_QS], *y = &s_qs[j % RTTY_AUTO_QS];
+                    qb = rtty_auto_quality(x->c - y->c, x->f - y->f, x->s - y->s, (float)(k - j), c.baud);
+                }
+                ESP_LOGI(TAG, "auto: TRIAL %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (held %d s, quality before %.2f)",
+                         (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
+                         (double)b, (double)sh, rv ? " rev" : "", s_auto_same, (double)qb);
+                s_trial_old = c; s_trial_qb = qb; s_trial = true; s_trial_us = t_b;
+                c.baud = b; c.shift_hz = sh; c.reverse = rv;
+                s_auto_same = 0;
+                s_qs_n = 0;
+                rtty_rx_apply(&c);         /* restarts demod (counters to 0) + estimator on the next frame */
+            }
+        }
+    } while (0);
+    busy = false;
 }

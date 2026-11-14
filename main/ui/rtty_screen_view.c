@@ -656,6 +656,7 @@ static void timer_cb(lv_timer_t *t)
     }
     text_render();
 
+    rtty_rx_service();   /* logs + Auto decisions, off the audio task - see rtty_rx.h */
     rtty_rx_status_t st;
     rtty_rx_status(&st);
     /* R028: Auto changes speed/shift/Reverse from the audio task, and the web
