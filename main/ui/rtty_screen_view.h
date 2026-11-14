@@ -27,6 +27,7 @@ bool      rtty_screen_view_carpet_visible(lv_area_t a[2]);
  * up: the DIAL moves so the tapped frequency sits at RTTY_TAP_AUDIO_HZ, and
  * the decoder's tone centre goes on it. Any task (the web calls it). */
 #define RTTY_TAP_AUDIO_HZ 1500
+#define RTTY_TUNE_MIN_HZ  100000   /* below this a tap/keypad value is refused */
 void      rtty_screen_view_tap_hz(uint32_t tapped_hz);
 
 /* ⛔ ON THE RTTY PAGE "Freq:" IS THE MARK FREQUENCY, not the dial. Operator

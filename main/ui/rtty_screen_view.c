@@ -694,6 +694,13 @@ static void timer_cb(lv_timer_t *t)
  * the dial has not moved, and the decoder goes onto the tap from where it is. */
 void rtty_screen_view_tap_hz(uint32_t tapped_hz)
 {
+    /* Not an RF frequency: refuse. A keypad misread of 140 Hz got through
+     * here, kept the dial, and put the decoder at -14 MHz (clamped to -3000). */
+    if (tapped_hz < RTTY_TUNE_MIN_HZ) {
+        ESP_LOGW(TAG, "tap: %lu Hz is not an RF frequency - ignored", (unsigned long)tapped_hz);
+        ui_toast("Not a valid frequency");
+        return;
+    }
     uint32_t dial = cat_get_frequency();
     if (tapped_hz > RTTY_TAP_AUDIO_HZ) {
         uint32_t want = cat_quantise_dial_hz(tapped_hz - RTTY_TAP_AUDIO_HZ);

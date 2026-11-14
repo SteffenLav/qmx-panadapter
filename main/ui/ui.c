@@ -848,8 +848,15 @@ static uint32_t freq_buf_to_hz(const char *buf)
         p++;
     }
     if (gi == 0) {
-        // No "." entered at all: treat the whole number as Hz directly.
-        return groups[0];
+        /* No separator at all: the whole number is Hz. ⛔ NOT groups[0] - the
+         * 3-digit cap above stops it at 3 digits, so "14080000" was read as
+         * 140 Hz (bench2 2026-11-14, RTTY keypad; the same on every page).
+         * Read every digit here, to 9 (the 99 MHz the keypad can mean). */
+        uint32_t hz = 0;
+        int nd = 0;
+        for (const char *q = buf; *q; q++)
+            if (*q >= '0' && *q <= '9' && nd < 9) { hz = hz * 10 + (uint32_t)(*q - '0'); nd++; }
+        return hz;
     }
     for (int g = 1; g < 3; g++) {
         for (int d = gdigits[g]; d < 3; d++) groups[g] *= 10;
