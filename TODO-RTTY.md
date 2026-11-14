@@ -15,7 +15,7 @@ needed; every flash wedges its QMX and needs his power cycle.
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
 | R022 | Boot after a flash: the Tab5 sent `FA 14085000` at 29.6 s, 125 ms after the band list, no `RTTY entry` line (bench2 2026-11-12 22:43, draft of `dde73aff`). 14.085 = the DiGi-middle fallback, NOT the stored 20 m dial (14.081 - every store logs). The 2nd boot hit (31.4 s, `55b1ae24`) was a band press. Silent writers are all operator gestures; log cannot tell them apart, so every `Sent: FA` now names its caller (addr2line it). Wait for a recurrence. | Investigation | recurrence | - |
-| R010 | **RTTY TX**: engine `8dbc8f15` + TX pane (CQ/Answer/Exch/73/Type.../STOP; tap a call in the text = CALL; status shows TX time, centre, echo, refusals; STOP and page exit stop at once) - built, NOT flashed. NEXT: flash bench2, on-air test vs laptop fldigi (each button, typing, STOP, QSY path). | Large | operator at bench | Don N2VGU asked |
+| R010 | **RTTY TX**: engine `8dbc8f15`, pane `e9e77b6a`, restyle `df4da6d2` (mock2), TX at tap unless a decode confirmed AFC + sent text red `37efed59`. bench2 flashed df4da6d2. ON AIR: CQ copied clean by fldigi (2nd try; 1st went 145 Hz off the tap = the AFC fix, unproven on air). NEXT: Answer/Exch/73 (tap a call), Type..., STOP mid-over, QSY path, red TX text, call box. | Large | operator at bench | Don N2VGU asked |
 
 ## Done
 
