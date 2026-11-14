@@ -9801,6 +9801,10 @@ function tuneSnapHz() {
      the commit read this, so the preview cannot promise a frequency the click will
      not use. */
   if (ritArmed) return 10;
+  /* R025: the RTTY page too - a click there moves the DECODER, never the dial,
+     and the 500 Hz grid left it up to 250 Hz off the pair, outside
+     acquisition's +/-150 Hz. Same rule as ui.c's touch path. */
+  if (lastScreen === "rtty") return 10;
   const m = (lastMode || "").toUpperCase();
   /* ⛔ THE SETTING, NOT A CONSTANT. "Tune snap (SSB & digital)" moved the
      Tab5 and did nothing here: this returned a hardcoded 250 for SSB and

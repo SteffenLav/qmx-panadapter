@@ -14467,6 +14467,14 @@ static void touch_event_cb(lv_event_t *e)
             // The cursor is drawn from this same snap, so the marker still lands
             // exactly where the line was when the finger lifted.
             if (s_rit_armed) snap = 10;
+            /* R025: the RTTY page too, for the same reason - its tap moves the
+             * DECODER, never the dial. On the 500 Hz DiGi grid a tap landed up
+             * to 250 Hz off the pair, outside acquisition's +/-150 Hz, so it
+             * sat beside the station (operator, 2026-11-14: "snapping to
+             * 000/500 and this is often on each side of the real freq"). At
+             * 10 Hz the finger's own error is what is left, and acquisition
+             * pulls that in. */
+            if (ui_mode_get() == UI_MODE_RTTY) snap = 10;
             // Snap the absolute target frequency to the grid (e.g. ...200,
             // 300, 400 Hz), not the touch offset — otherwise the grid is
             // shifted by the VFO's own offset from a snap multiple.
