@@ -1224,9 +1224,10 @@ static inline float cw_peak_step(int ear, float x)
     return x;
 }
 
-/* NCO1's frequency above the QMX's 12 kHz IF (stage-1 baseband 0). Equal to
- * the RF offset from the dial only outside CW - rtty_rx_feed's caller converts. */
-static int s_nco1_hz = 0;
+/* R024: the IQ frequency NCO1 must put at baseband 0, or 0 for the mode's own
+ * (12000 + centre + CW trim). Set only on the RTTY page - see the retune
+ * decision in rx_audio_task. */
+static int s_nco1_iq_hz = 0;
 
 static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
 {
@@ -1278,7 +1279,8 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
      * fix, just pointing elsewhere. One rule, in both places: the trim is a
      * CW thing. */
     const int if_cal = (mode == RXAUD_MODE_CW) ? (int)ui_get_if_cal_hz() : 0;
-    float w1 = 2.0f * (float)M_PI * (float)(12000 + center_hz + if_cal) / fs;
+    const int nco1_iq = s_nco1_iq_hz ? s_nco1_iq_hz : 12000 + center_hz + if_cal;
+    float w1 = 2.0f * (float)M_PI * (float)nco1_iq / fs;
 
     bool panoramic = (mode == RXAUD_MODE_CW && s_binaural_en);
     float half_split = panoramic ? (float)half_bw_hz / 2.0f : 0.0f;
@@ -1300,7 +1302,6 @@ static void retune(int center_hz, int half_bw_hz, rxaud_mode_t mode)
     s_nco_r.re = 1.0f; s_nco_r.im = 0.0f;
     s_nco_pre.re = 1.0f; s_nco_pre.im = 0.0f;
     s_center_hz = center_hz;
-    s_nco1_hz = center_hz + if_cal;   /* NCO1 above the 12 kHz IF; NOT the RF offset in CW - see the rtty_rx_feed call */
 }
 
 // Rotate the phasor one sample forward and hand back this sample's (cos,sin).
@@ -1321,6 +1322,101 @@ static inline void nco_step(nco_t *n, uint32_t sample_idx, float *c, float *s)
         float k = 1.5f - 0.5f * mag2;
         n->re *= k; n->im *= k;
     }
+}
+
+/* ---- RTTY's own front end (R023) ---------------------------------------
+ *
+ * ⛔ THE DECODER MUST NOT SHARE THE AUDIO PATH'S STAGE 1. It did (R005), and
+ * the decoder listened 6 kHz away from the orange lines on most of the
+ * screen. Stage 1 is centred on what the operator HEARS (DiGi: dial +1800 Hz)
+ * and decimated to 6000 Hz, so it holds only +/-3000 Hz around that. A tap
+ * further out gave the demod a centre outside its own Nyquist, and a complex
+ * stream at 6000 Hz cannot tell -4759 Hz from +1241 Hz. Measured on bench2
+ * 2026-11-14: lines at dial -2959, log `baseband centre -4610 Hz (offset
+ * -2810, nco 1800)`, decoder copying dial +3041 - 6000 Hz above the lines,
+ * which the operator heard as "it listens 5.5 kHz above". R005 passed only
+ * because ON8FAB happened to be inside the window.
+ *
+ * So the decoder mixes the FULL 48 kHz I/Q with its own NCO, put on the
+ * tapped frequency, and decimates by a fixed 8 with its own filter. Baseband 0
+ * is then always the lines' centre, wherever on the screen they are, in every
+ * mode, whatever the audio path's per-mode D is. The audio is untouched.
+ *
+ * IQ frequency of RF offset r from the dial = r + ui_get_if_offset_hz() (the
+ * spectrum's own mapping; it holds the CW pitch, trim and RIT). Re-read every
+ * frame, because RIT moves it without a retune(). The NCO keeps its phase
+ * across a step change, so a retune costs no click in the demod. */
+#define RTTY_FE_D 8
+#define RTTY_AUDIO_PITCH_HZ   2210   /* tone centre heard: mark 2125, space 2295 */
+#define RTTY_AUDIO_HALF_BW_HZ  500   /* 1 kHz audio filter around it */
+static float    *s_rt_mix_re, *s_rt_mix_im;    /* [DSP_FFT_SIZE]        */
+static float    *s_rt_out_re, *s_rt_out_im;    /* [DSP_FFT_SIZE / D]    */
+static float    *s_rt_coeff, *s_rt_dl_re, *s_rt_dl_im;   /* [FIR_DECIM_LEN] */
+static fir_f32_t s_rt_fir_re, s_rt_fir_im;
+static nco_t     s_rt_nco = { 1.0f, 0.0f, 1.0f, 0.0f };
+static int       s_rt_iq_hz = 0x7fffffff;
+static int       s_rt_state = 0;                /* 0 not tried, 1 ready, -1 no memory */
+
+static bool rtty_fe_init(void)
+{
+    if (s_rt_state) return s_rt_state > 0;
+    const uint32_t caps = MALLOC_CAP_SPIRAM;
+    s_rt_mix_re = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), caps);
+    s_rt_mix_im = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), caps);
+    s_rt_out_re = heap_caps_malloc(DSP_FFT_SIZE / RTTY_FE_D * sizeof(float), caps);
+    s_rt_out_im = heap_caps_malloc(DSP_FFT_SIZE / RTTY_FE_D * sizeof(float), caps);
+    s_rt_coeff  = heap_caps_malloc(FIR_DECIM_LEN * sizeof(float), caps);
+    s_rt_dl_re  = heap_caps_calloc(FIR_DECIM_LEN, sizeof(float), caps);
+    s_rt_dl_im  = heap_caps_calloc(FIR_DECIM_LEN, sizeof(float), caps);
+    if (!s_rt_mix_re || !s_rt_mix_im || !s_rt_out_re || !s_rt_out_im ||
+        !s_rt_coeff || !s_rt_dl_re || !s_rt_dl_im) {
+        ESP_LOGE(TAG, "RTTY front end: no PSRAM - decoder off");
+        s_rt_state = -1;
+        return false;
+    }
+    /* Same windowed-sinc design as build_decimator(), at a FIXED D. */
+    const float cutoff_norm = 0.45f / (float)RTTY_FE_D;
+    const int   M = FIR_DECIM_LEN - 1;
+    float sum = 0.0f;
+    for (int n = 0; n < FIR_DECIM_LEN; n++) {
+        float m = (float)n - M / 2.0f;
+        s_rt_coeff[n] = 2.0f * cutoff_norm * sinc_norm(2.0f * cutoff_norm * m)
+                      * (0.54f - 0.46f * cosf(2.0f * (float)M_PI * (float)n / (float)M));
+        sum += s_rt_coeff[n];
+    }
+    for (int n = 0; n < FIR_DECIM_LEN; n++) s_rt_coeff[n] /= sum;
+    dsps_fird_init_f32(&s_rt_fir_re, s_rt_coeff, s_rt_dl_re, FIR_DECIM_LEN, RTTY_FE_D);
+    dsps_fird_init_f32(&s_rt_fir_im, s_rt_coeff, s_rt_dl_im, FIR_DECIM_LEN, RTTY_FE_D);
+    s_rt_state = 1;
+    return true;
+}
+
+static void rtty_fe_run(const int16_t *iq, int pairs)
+{
+    if (!rtty_fe_init()) return;
+    rtty_rx_cfg_t c;
+    rtty_rx_get_cfg(&c);
+    int iq_hz = c.offset_hz + ui_get_if_offset_hz();
+    if (iq_hz != s_rt_iq_hz) {
+        float w = 2.0f * (float)M_PI * (float)iq_hz / (float)DSP_SAMPLE_RATE_HZ;
+        s_rt_nco.step_re = cosf(w);
+        s_rt_nco.step_im = sinf(w);
+        s_rt_iq_hz = iq_hz;
+    }
+    for (int i = 0; i < pairs; i++) {
+        float co, si;
+        nco_step(&s_rt_nco, (uint32_t)i, &co, &si);
+        float I = (float)iq[2 * i], Q = (float)iq[2 * i + 1];
+        s_rt_mix_re[i] = I * co + Q * si;      /* (I + jQ) * e^-jwt, as NCO1 */
+        s_rt_mix_im[i] = Q * co - I * si;
+    }
+    int n = pairs / RTTY_FE_D;
+    if (n <= 0) return;
+    dsps_fird_f32(&s_rt_fir_re, s_rt_mix_re, s_rt_out_re, n);
+    dsps_fird_f32(&s_rt_fir_im, s_rt_mix_im, s_rt_out_im, n);
+    /* Baseband 0 IS the tone centre, so the demod's centre is 0 Hz. */
+    rtty_rx_feed(s_rt_out_re, s_rt_out_im, n,
+                 (float)DSP_SAMPLE_RATE_HZ / (float)RTTY_FE_D, c.offset_hz);
 }
 
 // What center/half-bandwidth the given mode wants right now, tracking the
@@ -1654,6 +1750,27 @@ static void rx_audio_task(void *arg)
          * this, moving the trim in the drawer would change the display and
          * leave the audio where it was until the mode or the width happened
          * to change. */
+        /* ⛔ R024: ON THE RTTY PAGE THE SPEAKER PLAYS THE SIGNAL UNDER THE
+         * LINES. It played the radio mode's passband (DiGi: dial +150..+3200),
+         * so after R023 the decoder copied the tapped station while the
+         * operator heard another part of the band: "it now decodes where the
+         * lines are but still the audio is from a higher freq" (2026-11-14).
+         * NCO1 goes on the decoder's frequency with the same mapping as
+         * rtty_fe_run() (RF offset + ui_get_if_offset_hz(), so CW pitch, trim
+         * and RIT are in it), and NCO2 lifts the tone centre to the standard
+         * 2210 Hz, so the pair sounds at 2125/2295 Hz in a 1 kHz filter. The
+         * mode is forced to USB: in CW the peak filter and the binaural split
+         * would act on the RTTY pair. The dial and the radio are untouched. */
+        int want_iq = 0;
+        if (rtty) {
+            rtty_rx_cfg_t rc;
+            rtty_rx_get_cfg(&rc);
+            mode = RXAUD_MODE_SSB;
+            want_binaural = false;
+            want_center  = RTTY_AUDIO_PITCH_HZ;
+            want_half_bw = RTTY_AUDIO_HALF_BW_HZ;
+            want_iq = rc.offset_hz + ui_get_if_offset_hz();
+        }
         int want_cal = (int)ui_get_if_cal_hz();
         float want_overlap = s_pan_overlap;
         bool half_bw_changed = (want_half_bw != s_half_bw_hz);
@@ -1670,8 +1787,9 @@ static void rx_audio_task(void *arg)
         bool cal_changed = (want_cal != cal_prev);
         if (mode != mode_prev || want_center != s_center_hz ||
             want_binaural != binaural_prev || half_bw_changed || decim_changed ||
-            cal_changed) {
+            cal_changed || want_iq != s_nco1_iq_hz) {
             cal_prev = want_cal;
+            s_nco1_iq_hz = want_iq;
             retune(want_center, want_half_bw, mode);
             mode_prev = mode;
             binaural_prev = want_binaural;
@@ -1844,22 +1962,11 @@ static void rx_audio_task(void *arg)
         if (n_out > 0) {
             dsps_fird_f32(&s_dec_fir_re, s_mix_re, s_filt_re, n_out);
             dsps_fird_f32(&s_dec_fir_im, s_mix_im, s_filt_im, n_out);
-            if (rtty) {
-                /* rtty_rx wants the RF offset FROM THE DIAL at baseband 0, in
-                 * the display's coordinates, so a tap on a signal is where the
-                 * decoder listens. s_nco1_hz is NCO1's offset above the 12 kHz
-                 * IF, which is NOT that in CW: the QMX moves its LO by the CW
-                 * pitch, so the dial lands at IF + pitch + trim
-                 * (ui_get_if_offset_hz(), which also holds RIT). Passing
-                 * s_nco1_hz as it was put the decoder one pitch (550 Hz) below
-                 * the orange lines in CW - measured 2026-11-12 on ON8FAB: lines
-                 * on the pair, sig 0.35, nothing; offset +550 Hz copied it.
-                 * Same function the spectrum uses, read every frame because RIT
-                 * moves it without a retune(). */
-                int rf0 = s_nco1_hz - (ui_get_if_offset_hz() - 12000);
-                rtty_rx_feed(s_filt_re, s_filt_im, n_out,
-                             (float)DSP_SAMPLE_RATE_HZ / (float)s_decim_d, rf0);
-            }
+            /* RTTY reads the raw I/Q through its own front end - NOT this
+             * stage 1, which only holds +/-fs/2D around what is heard. See
+             * rtty_fe_run(). (The one-pitch CW error of R005 is covered there
+             * too: the mapping is ui_get_if_offset_hz(), the spectrum's own.) */
+            if (rtty) rtty_fe_run(s_rxbuf, pairs);
             // Stage 2: the actual mode-width selectivity, at the now-
             // decimated rate - see the FIR_LEN comment above for why this
             // has to be a second, non-decimating pass rather than folded

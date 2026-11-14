@@ -73,6 +73,7 @@ uint32_t rtty_rx_text_clear_gen(void);
 /* Running count of characters ever written - a reader's cursor starts here. */
 uint32_t rtty_rx_text_count(void);
 
-/* Called by rx_audio_task with the stage-1 output. nco_hz is the RF offset
- * from the dial that sits at baseband 0 (rx_audio's NCO1 minus the IF). */
+/* Called by rx_audio_task with RTTY's own front end (rtty_fe_run, NOT the audio
+ * path's stage 1 - R023). nco_hz is the RF offset from the dial that sits at
+ * baseband 0; the front end puts the tone centre there, so it is offset_hz. */
 void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_hz);
