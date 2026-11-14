@@ -241,9 +241,14 @@ static lv_obj_t *mk_btn_f(lv_obj_t *parent, int x, int y, int w, int h, const lv
 static const float SPEEDS[] = { 45.45f, 50.0f, 75.0f };
 static const int   SHIFTS[] = { 170, 200, 425, 450, 850 };
 
+/* ⛔ ASYNC: speed_pick_cb / speed_close_cb are CLICKED handlers of the modal
+ * or of buttons inside it, so a plain delete freed the object LVGL was still
+ * dispatching through - the fault type_close() hit (see there). The modal is
+ * rebuilt on every open to show the current choice, so it is deleted, but
+ * only after the event has finished. */
 static void speed_close(void)
 {
-    if (s_speed_modal) { lv_obj_del(s_speed_modal); s_speed_modal = NULL; }
+    if (s_speed_modal) { lv_obj_delete_async(s_speed_modal); s_speed_modal = NULL; }
 }
 
 static void speed_pick_cb(lv_event_t *e)
@@ -368,11 +373,21 @@ static void macro_cb(lv_event_t *e)
     if (tx_send(t, true)) s_sending = which;
 }
 
+/* ⛔ HIDE, NEVER DELETE. This deleted s_kb_wrap, and it is called from the
+ * keyboard's own READY/CANCEL event: LVGL went on dispatching through the
+ * freed keyboard - bench2 2026-11-14, Instruction access fault in taskLVGL
+ * (lv_keyboard_def_event_cb -> lv_obj_event_base), cyan screen, right after
+ * the first typed over ended. The same fault is recorded at
+ * still_notice_ok_cb() in ui.c, and every modal there hides. */
+static bool type_is_open(void)
+{
+    return s_kb_wrap && !lv_obj_has_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void type_close(bool end_over)
 {
-    if (!s_kb_wrap) return;
-    lv_obj_del(s_kb_wrap);
-    s_kb_wrap = s_kb = s_kb_ta = NULL;
+    if (!type_is_open()) return;
+    lv_obj_add_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
     /* Closing the keyboard ends the over once what was typed has gone. Only
      * when keyed: on an idle radio rtty_tx_send("") would START an over. */
     if (end_over && rtty_tx_keyed()) tx_send("", true);
@@ -407,7 +422,15 @@ static void type_kb_cb(lv_event_t *e)
 static void type_open_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_kb_wrap) { type_close(true); return; }   /* second press closes */
+    if (type_is_open()) { type_close(true); return; }   /* second press closes */
+    if (s_kb_wrap) {                                     /* built once, reused */
+        s_ta_resetting = true;
+        lv_textarea_set_text(s_kb_ta, "");
+        s_ta_resetting = false;
+        s_typed_len = 0;
+        lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
     s_kb_wrap = lv_obj_create(lv_layer_top());
     lv_obj_set_size(s_kb_wrap, MID_W - PANE_W, 330);
     lv_obj_set_pos(s_kb_wrap, PANE_W, 720 - 330);

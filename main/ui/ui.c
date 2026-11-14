@@ -421,6 +421,34 @@ static bool rtty_digi_range_hz(uint32_t hz, uint32_t *lo, uint32_t *hi)
     return false;
 }
 
+/* The RTTY page's band-plan TRACK: the DiGi segment plus half its width on
+ * each side, grown to include the visible window, clipped to the band.
+ * ⛔ It was the DiGi segment alone (R017), and our table's DiGi is coarse -
+ * Region 1 20 m is 14.070-14.100 and everything above is "Phone", while the
+ * real plan has narrow-band/digimodes up to 14.112. WAE RTTY at 14.103-14.110
+ * put the visible-span box off the right end of the track ("the band plan
+ * slider that is gone or all the way out to the right", operator 2026-11-14),
+ * and the drag could not reach the stations at all. The margin is where the
+ * stations are ("expand and add some margin where the stations are"); the
+ * view term means the box can never fall off the track. Strip and drag both
+ * use this, so finger and box agree. */
+static bool rtty_strip_range(const bp_seg_t *segs, int n, int64_t vis_lo, int64_t vis_hi,
+                             uint32_t *lo, uint32_t *hi)
+{
+    for (int i = 0; segs && i < n; i++) {
+        if (segs[i].type != BP_DIGI) continue;
+        int64_t m = (int64_t)(segs[i].hi_hz - segs[i].lo_hz) / 2;
+        int64_t l = (int64_t)segs[i].lo_hz - m, h = (int64_t)segs[i].hi_hz + m;
+        if (vis_lo < l) l = vis_lo;
+        if (vis_hi > h) h = vis_hi;
+        if (l < (int64_t)segs[0].lo_hz)     l = segs[0].lo_hz;
+        if (h > (int64_t)segs[n - 1].hi_hz) h = segs[n - 1].hi_hz;
+        *lo = (uint32_t)l; *hi = (uint32_t)h;
+        return h > l;
+    }
+    return false;
+}
+
 /* The radio's band-list centre for any frequency in that band (nearest centre
  * within 1.5 MHz, ui_update_frequency()'s rule), 0 if none. The RTTY band
  * dial is keyed by it. ⚠ The recall must map too: the first bench test sent
@@ -6980,10 +7008,25 @@ static void update_bandplan_strip(uint32_t freq_hz)
      * table carries - there is no RTTY-only row to show. Strip only: tuning
      * is NOT clamped to it, because RTTY receive is unrestricted and contest
      * RTTY spills outside the segment. */
-    bp_seg_t rtty_digi[1];
+    /* Since 2026-11-14: the track is rtty_strip_range() - DiGi plus margin
+     * and the view - with each neighbour shown, clipped, in its own colour. */
+    bp_seg_t rtty_segs[BANDPLAN_MAX_SEG];
     if (ui_mode_get() == UI_MODE_RTTY) {
-        for (int i = 0; i < n; i++)
-            if (segs[i].type == BP_DIGI) { rtty_digi[0] = segs[i]; segs = rtty_digi; n = 1; break; }
+        int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+        int64_t c = (int64_t)freq_hz + in.pan_hz;
+        uint32_t tl, th;
+        if (rtty_strip_range(segs, n, c - span_hz / 2, c + span_hz / 2, &tl, &th)) {
+            int k = 0;
+            for (int i = 0; i < n && k < BANDPLAN_MAX_SEG; i++) {
+                uint32_t a = segs[i].lo_hz > tl ? segs[i].lo_hz : tl;
+                uint32_t b = segs[i].hi_hz < th ? segs[i].hi_hz : th;
+                if (b <= a) continue;
+                rtty_segs[k] = segs[i];
+                rtty_segs[k].lo_hz = a; rtty_segs[k].hi_hz = b;
+                k++;
+            }
+            if (k > 0) { segs = rtty_segs; n = k; }
+        }
     }
 
     uint32_t band_lo = segs[0].lo_hz;
@@ -14134,17 +14177,17 @@ static void touch_event_cb(lv_event_t *e)
                     s_bp_drag_band_hi = ch;
                 }
             }
-            /* RTTY page: the strip shows only the DiGi segment (see
-             * update_bandplan_strip), so a drag along it must map onto that
-             * same segment or the finger and the marker disagree. Only the
-             * drag - taps, the keypad and the knob stay unrestricted. */
+            /* RTTY page: the drag maps onto the strip's own track
+             * (rtty_strip_range), or the finger and the box disagree. Only
+             * the drag - taps, the keypad and the knob stay unrestricted. */
             if (ui_mode_get() == UI_MODE_RTTY) {
-                for (int i = 0; i < n; i++)
-                    if (segs[i].type == BP_DIGI) {
-                        s_bp_drag_band_lo = segs[i].lo_hz;
-                        s_bp_drag_band_hi = segs[i].hi_hz;
-                        break;
-                    }
+                int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+                uint32_t tl, th;
+                if (rtty_strip_range(segs, n, s_bp_drag_start_view_hz - span_hz / 2,
+                                     s_bp_drag_start_view_hz + span_hz / 2, &tl, &th)) {
+                    s_bp_drag_band_lo = tl;
+                    s_bp_drag_band_hi = th;
+                }
             }
         } else {
             // Outside a known band: no absolute map exists, so this press drives
