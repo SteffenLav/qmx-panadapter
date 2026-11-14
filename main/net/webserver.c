@@ -119,6 +119,7 @@ extern uint32_t qmx_lv_event_chain_bad;
 #include "freertos/idf_additions.h"  // xTaskCreateWithCaps / vTaskDeleteWithCaps
 #include "freertos/queue.h"
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
@@ -3621,6 +3622,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "baud")))    { c.baud = (float)j->valuedouble; c.auto_mode = false; touched = true; }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "shift")))   { c.shift_hz = (float)j->valuedouble; c.auto_mode = false; touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "auto")))      { c.auto_mode = cJSON_IsTrue(j); touched = true; }
+        /* development: "observe":true runs the estimator without applying;
+         * "iqcap":10 records the decoder's input -> GET /api/rxaudio.wav?rtty=1 */
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "observe")))   rtty_rx_set_observe(cJSON_IsTrue(j));
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "iqcap")))   rtty_rx_iqcap_start((float)j->valuedouble);
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
         if (touched) rtty_rx_apply(&c);
@@ -3682,6 +3687,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "afc_hz", (int)(st.afc_hz * 10.0f) / 10.0);
         cJSON_AddNumberToObject(o, "chars", st.chars);
         cJSON_AddNumberToObject(o, "acq_jumps", st.acq_jumps);
+        {   /* development: the decoder's counters since its last restart */
+            cJSON *dm = cJSON_AddObjectToObject(o, "dem");
+            cJSON_AddNumberToObject(dm, "chars", st.dem_chars);
+            cJSON_AddNumberToObject(dm, "framing", st.dem_framing);
+            cJSON_AddNumberToObject(dm, "false_start", st.dem_false_start);
+            cJSON_AddNumberToObject(dm, "unlock", st.dem_unlock);
+            cJSON_AddNumberToObject(dm, "grid", st.dem_grid);
+            uint32_t iqn = 0; float iqfs = 0; bool iqr = false;
+            rtty_rx_iqcap_data(&iqn, &iqfs, &iqr);
+            cJSON_AddNumberToObject(dm, "iq_pairs", iqn);
+            cJSON_AddBoolToObject(dm, "iq_recording", iqr);
+        }
         cJSON_AddStringToObject(o, "text", text);
         rtty_tx_status_t ts;
         rtty_tx_status(&ts);
@@ -5440,8 +5457,52 @@ static const httpd_uri_t uri_adif_edit = {
  * GET /api/rxaudio.json returns the sample index of every gap in the same
  * window, so an artefact in the waveform can be matched to one - or shown not
  * to coincide with any, which is just as useful an answer. */
+/* ?rtty=1: the RTTY decoder's I/Q input (rtty_rx_iqcap_*) as a stereo WAV,
+ * I left, Q right, scaled so the largest |sample| is 30000. Development. */
+static esp_err_t rtty_iq_wav(httpd_req_t *req)
+{
+    uint32_t n = 0; float fs = 0; bool run = false;
+    const float *iq = rtty_rx_iqcap_data(&n, &fs, &run);
+    if (!iq || run) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, run ? "still recording" :
+            "nothing recorded - POST /api/cmd {\"action\":\"rtty\",\"iqcap\":10} first");
+        return ESP_FAIL;
+    }
+    float mx = 1e-9f;
+    for (uint32_t i = 0; i < 2 * n; i++) { float a = fabsf(iq[i]); if (a > mx) mx = a; }
+    const float g = 30000.0f / mx;
+    const uint32_t rate = (uint32_t)(fs + 0.5f), data_bytes = n * 4;
+    uint8_t hdr[44];
+    #define W32(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff); hdr[o+2]=(uint8_t)(((v)>>16)&0xff); hdr[o+3]=(uint8_t)(((v)>>24)&0xff);}while(0)
+    #define W16(o,v) do{ hdr[o]=(uint8_t)((v)&0xff); hdr[o+1]=(uint8_t)(((v)>>8)&0xff);}while(0)
+    memcpy(hdr, "RIFF", 4); W32(4, 36 + data_bytes); memcpy(hdr + 8, "WAVEfmt ", 8); W32(16, 16); W16(20, 1);
+    W16(22, 2); W32(24, rate); W32(28, rate * 4); W16(32, 4); W16(34, 16);
+    memcpy(hdr + 36, "data", 4); W32(40, data_bytes);
+    #undef W32
+    #undef W16
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=rtty_iq.wav");
+    webserver_ws_set_paused(true);
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+    static int16_t buf[2048];
+    for (uint32_t off = 0; off < 2 * n && err == ESP_OK; off += 2048) {
+        uint32_t len = 2 * n - off < 2048 ? 2 * n - off : 2048;
+        for (uint32_t i = 0; i < len; i++) buf[i] = (int16_t)lroundf(iq[off + i] * g);
+        err = httpd_resp_send_chunk(req, (const char *)buf, (ssize_t)(len * 2));
+    }
+    if (err != ESP_OK) { webserver_ws_set_paused(false); return ESP_FAIL; }
+    httpd_resp_send_chunk(req, NULL, 0);
+    webserver_ws_set_paused(false);
+    return ESP_OK;
+}
+
 static esp_err_t rxaudio_wav_handler(httpd_req_t *req)
 {
+    {
+        char q[32];
+        if (httpd_req_get_url_query_str(req, q, sizeof q) == ESP_OK && strstr(q, "rtty=1"))
+            return rtty_iq_wav(req);
+    }
     uint32_t n = 0;
     const int16_t *pcm = rx_audio_cap_data(&n);
     if (!pcm || !n) {

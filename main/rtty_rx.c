@@ -94,6 +94,40 @@ static int      s_auto_same;             /* consecutive seconds of the pending v
 static float    s_auto_pb, s_auto_ps;
 static bool     s_auto_pr;
 static int64_t  s_auto_next_us;
+static volatile bool s_observe;          /* estimator runs, applies nothing */
+
+/* Development I/Q recorder: see rtty_rx_iqcap_start(). */
+static float   *s_iq;
+static volatile uint32_t s_iq_n, s_iq_cap;
+static volatile bool s_iq_run;
+static float    s_iq_fs;
+
+bool rtty_rx_iqcap_start(float seconds)
+{
+    if (seconds < 1) seconds = 1;
+    if (seconds > 20) seconds = 20;
+    uint32_t cap = (uint32_t)(seconds * 6000.0f);
+    s_iq_run = false;
+    if (!s_iq || s_iq_cap < cap) {
+        heap_caps_free(s_iq);
+        s_iq = heap_caps_malloc((size_t)cap * 2 * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (!s_iq) { s_iq_cap = 0; return false; }
+    }
+    s_iq_cap = cap; s_iq_n = 0; s_iq_run = true;
+    ESP_LOGI(TAG, "iqcap: recording %.0f s (%u pairs, %u B PSRAM)", (double)seconds,
+             (unsigned)cap, (unsigned)(cap * 2 * sizeof(float)));
+    return true;
+}
+
+const float *rtty_rx_iqcap_data(uint32_t *n_pairs, float *fs_hz, bool *running)
+{
+    if (n_pairs) *n_pairs = s_iq_n;
+    if (fs_hz) *fs_hz = s_iq_fs;
+    if (running) *running = s_iq_run;
+    return (s_iq && s_iq_n) ? s_iq : NULL;
+}
+
+void rtty_rx_set_observe(bool on) { s_observe = on; s_want_seq++; }
 static rtty_baudot_t s_bd;
 static rtty_rx_cfg_t s_run_cfg;
 static uint32_t s_have_seq;
@@ -244,7 +278,7 @@ static bool start(float fs_hz, int nco_hz)
     }
     rtty_baudot_init(&s_bd, true);
     s_line_n = 0;
-    if (s_run_cfg.auto_mode) {
+    if (s_run_cfg.auto_mode || s_observe) {
         if (!s_auto) s_auto = heap_caps_calloc(1, sizeof(*s_auto), MALLOC_CAP_SPIRAM);
         if (s_auto) rtty_auto_init(s_auto, fs_hz, cfg.centre_hz);
         else ESP_LOGE(TAG, "no PSRAM for auto (%u B) - auto off this run", (unsigned)sizeof(*s_auto));
@@ -288,7 +322,13 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     static uint32_t s_cpu_max_us, s_cpu_calls, s_cpu_smp;
     int64_t t_a = esp_timer_get_time();
     rtty_demod_feed(s_dem, re, im, n, on_char, NULL);
-    const bool run_auto = s_run_cfg.auto_mode && s_auto;
+    const bool run_auto = (s_run_cfg.auto_mode || s_observe) && s_auto;
+    if (s_iq_run && s_iq) {            /* development recorder: the exact input */
+        uint32_t k = s_iq_n;
+        for (int i = 0; i < n && k < s_iq_cap; i++, k++) { s_iq[2 * k] = re[i]; s_iq[2 * k + 1] = im ? im[i] : 0.0f; }
+        s_iq_fs = fs_hz; s_iq_n = k;
+        if (k >= s_iq_cap) { s_iq_run = false; ESP_LOGI(TAG, "iqcap: done, %u pairs", (unsigned)k); }
+    }
     if (run_auto) rtty_auto_feed(s_auto, re, im, n);   /* inside the cpu window on purpose */
     int64_t t_b = esp_timer_get_time();
     uint32_t d_us = (uint32_t)(t_b - t_a);
@@ -324,6 +364,9 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     s_st.afc_held = s_dem->acq_held;
     s_st.acq_jumps = s_dem->n_acq;
     s_st.fs_hz = fs_hz;
+    s_st.dem_chars = s_dem->n_chars; s_st.dem_framing = s_dem->n_framing;
+    s_st.dem_false_start = s_dem->n_false_start; s_st.dem_unlock = s_dem->n_unlock;
+    s_st.dem_grid = s_dem->n_grid;
     s_st.auto_ok = run_auto && s_auto->shift_ok && s_auto->baud_ok;
     s_st.auto_run = run_auto;
     if (run_auto) {
@@ -346,7 +389,7 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     /* R028: once a second, a verdict that differs from what runs must hold
      * RTTY_AUTO_HOLD_S seconds before it is applied. Not while keyed: our
      * own over is not a station to follow. */
-    if (run_auto && t_b >= s_auto_next_us) {
+    if (run_auto && s_run_cfg.auto_mode && t_b >= s_auto_next_us) {
         s_auto_next_us = t_b + 1000000;
         bool ok = s_st.auto_ok;
         float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;

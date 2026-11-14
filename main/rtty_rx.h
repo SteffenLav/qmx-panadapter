@@ -50,6 +50,8 @@ typedef struct {
     int      auto_runs;
     float    auto_score[4];
     uint16_t auto_hist[2][64];   /* rtty_auto_t.hist, copied */
+    /* Development: the decoder's own counters (rtty_demod_t) */
+    uint32_t dem_chars, dem_framing, dem_false_start, dem_unlock, dem_grid;
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */
 } rtty_rx_status_t;
 
@@ -68,6 +70,16 @@ void rtty_rx_set(bool on, int offset_hz, bool reverse);
 bool rtty_rx_is_on(void);
 
 void rtty_rx_status(rtty_rx_status_t *st);
+
+/* Development: record the next `seconds` of the decoder's exact input (the
+ * complex samples rtty_rx_feed gets) into PSRAM, for host replay. */
+bool rtty_rx_iqcap_start(float seconds);
+/* The recording: interleaved I,Q floats, *n_pairs pairs at *fs_hz. NULL if none. */
+const float *rtty_rx_iqcap_data(uint32_t *n_pairs, float *fs_hz, bool *running);
+
+/* Development: run the R028 estimator even with Auto off, applying nothing,
+ * so its readout (auto_dbg) can be read. */
+void rtty_rx_set_observe(bool on);
 
 /* Copy the last up to n-1 decoded characters into buf, NUL-terminated.
  * Returns the length. */
