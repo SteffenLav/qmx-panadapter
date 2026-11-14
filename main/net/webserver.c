@@ -120,6 +120,7 @@ extern uint32_t qmx_lv_event_chain_bad;
 #include "freertos/queue.h"
 #include <stdlib.h>
 #include <math.h>
+#include "esp_attr.h"
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
@@ -5484,7 +5485,7 @@ static esp_err_t rtty_iq_wav(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=rtty_iq.wav");
     webserver_ws_set_paused(true);
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
-    static int16_t buf[2048];
+    static EXT_RAM_BSS_ATTR int16_t buf[2048];   /* PSRAM - see rtty_rx.c s_text */
     for (uint32_t off = 0; off < 2 * n && err == ESP_OK; off += 2048) {
         uint32_t len = 2 * n - off < 2048 ? 2 * n - off : 2048;
         for (uint32_t i = 0; i < len; i++) buf[i] = (int16_t)lroundf(iq[off + i] * g);

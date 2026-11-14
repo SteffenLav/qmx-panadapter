@@ -15,6 +15,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -25,12 +26,13 @@ static const char *TAG = "rtty_tx";
 #define STOP_RETRIES 5
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static rtty_txc_t   s_core;            /* guarded by s_mux */
-static rtty_tx_status_t s_st;          /* guarded by s_mux */
+/* PSRAM - see rtty_rx.c s_text for why. */
+static EXT_RAM_BSS_ATTR rtty_txc_t   s_core;            /* guarded by s_mux */
+static EXT_RAM_BSS_ATTR rtty_tx_status_t s_st;          /* guarded by s_mux */
 static volatile bool s_keyed;          /* an over owns the radio, from start to RX; */
 static volatile bool s_stop;
 #define TX_TEXT_RING 512
-static char     s_tx_text[TX_TEXT_RING];   /* guarded by s_mux */
+static EXT_RAM_BSS_ATTR char s_tx_text[TX_TEXT_RING];   /* guarded by s_mux; PSRAM */
 static uint32_t s_tx_text_w;               /* characters ever written */
 
 /* Set by start_over() for the task; the task owns them after that. */

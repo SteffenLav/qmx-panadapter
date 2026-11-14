@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -139,10 +140,15 @@ static int      s_line_n;
 
 /* Shared: text ring + status snapshot. */
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static char     s_text[TEXT_RING];
+/* ⛔ PSRAM (EXT_RAM_BSS_ATTR), not internal .bss. 2026-11-14 bench2: the
+ * branch's internal heap sat at 17-22 KB free (min 0); ~5 KB more of RTTY
+ * .bss took it to 12 KB, core 0 idle fell to 1-4 % and USB audio starved
+ * (decoder got 94-96 % of its samples). Task context only - no ISR, no
+ * cache-off path touches these. */
+static EXT_RAM_BSS_ATTR char s_text[TEXT_RING];
 static uint32_t s_text_w;
 static uint32_t s_text_floor;            /* Clear moves this; readers never go below */
-static rtty_rx_status_t s_st;
+static EXT_RAM_BSS_ATTR rtty_rx_status_t s_st;   /* PSRAM - see s_text */
 
 void rtty_rx_get_cfg(rtty_rx_cfg_t *c)
 {
