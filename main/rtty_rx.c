@@ -2,13 +2,16 @@
 #include "rtty_rx.h"
 #include "rtty_demod.h"
 #include "rtty_baudot.h"
+#include "rtty_auto.h"
 
+#include <math.h>
 #include <string.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "rx_audio.h"
+#include "rtty_tx.h"
 #include "settings.h"
 
 static const char *TAG = "rtty";
@@ -27,6 +30,7 @@ static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
 static const rtty_rx_cfg_t RTTY_DEFAULTS = {
     .on = false, .offset_hz = 1500, .reverse = false,
     .baud = 45.45f, .shift_hz = 170.0f, .afc = true, .squelch = true,
+    .auto_mode = true,   /* R028: 45.45/170 stations change nothing; others are followed */
 };
 static rtty_rx_cfg_t s_cfg = RTTY_DEFAULTS;
 static volatile uint32_t s_want_seq;
@@ -54,6 +58,7 @@ static void load_once(void)
     c.reverse   = r.reverse != 0;
     c.afc       = r.afc != 0;
     c.squelch   = r.squelch != 0;
+    c.auto_mode = r.auto_mode != 0;
     if (!(c.baud >= 20.0f && c.baud <= 300.0f)) c.baud = RTTY_DEFAULTS.baud;
     if (!(c.shift_hz >= 50.0f && c.shift_hz <= 1000.0f)) c.shift_hz = RTTY_DEFAULTS.shift_hz;
     if (c.offset_hz < -3000 || c.offset_hz > 4500) c.offset_hz = RTTY_DEFAULTS.offset_hz;
@@ -72,13 +77,22 @@ static void save(const rtty_rx_cfg_t *c)
         .shift_hz  = (uint16_t)(c->shift_hz + 0.5f),
         .baud_x100 = (uint16_t)(c->baud * 100.0f + 0.5f),
         .reverse = c->reverse, .afc = c->afc, .squelch = c->squelch,
-        .valid = 1,
+        .valid = 1, .auto_mode = c->auto_mode,
     };
     settings_set_rtty(&r);
 }
 
 /* Owned by the audio task. */
 static rtty_demod_t *s_dem;              /* PSRAM, ~18 KB, allocated once */
+static rtty_auto_t  *s_auto;             /* R028, PSRAM, allocated on first auto use */
+/* R028: a verdict that differs from the running cfg must hold this long, in
+ * whole seconds of the same verdict, before it is applied. R120RB (weak, deep
+ * QSB) showed a lone 1-s 50 Bd verdict in 54 s of 45.45 (harness, 2026-11-14). */
+#define RTTY_AUTO_HOLD_S 3
+static int      s_auto_same;             /* consecutive seconds of the pending verdict */
+static float    s_auto_pb, s_auto_ps;
+static bool     s_auto_pr;
+static int64_t  s_auto_next_us;
 static rtty_baudot_t s_bd;
 static rtty_rx_cfg_t s_run_cfg;
 static uint32_t s_have_seq;
@@ -116,9 +130,9 @@ void rtty_rx_apply(const rtty_rx_cfg_t *c)
     portEXIT_CRITICAL(&s_cfg_mux);
     s_want_seq++;
     save(&n);
-    ESP_LOGI(TAG, "%s offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d", n.on ? "ON" : "off",
+    ESP_LOGI(TAG, "%s offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d auto=%d", n.on ? "ON" : "off",
              n.offset_hz, (double)n.baud, (double)n.shift_hz, n.reverse ? " reverse" : "",
-             (int)n.afc, (int)n.squelch);
+             (int)n.afc, (int)n.squelch, (int)n.auto_mode);
     if (n.on) rx_audio_wake();   /* the chain may be asleep with no listener */
 }
 
@@ -229,6 +243,12 @@ static bool start(float fs_hz, int nco_hz)
     }
     rtty_baudot_init(&s_bd, true);
     s_line_n = 0;
+    if (s_run_cfg.auto_mode) {
+        if (!s_auto) s_auto = heap_caps_calloc(1, sizeof(*s_auto), MALLOC_CAP_SPIRAM);
+        if (s_auto) rtty_auto_init(s_auto, fs_hz, cfg.centre_hz);
+        else ESP_LOGE(TAG, "no PSRAM for auto (%u B) - auto off this run", (unsigned)sizeof(*s_auto));
+        s_auto_same = 0;
+    }
     ESP_LOGI(TAG, "demod at %.0f Hz, baseband centre %+.0f Hz (offset %d, nco %d), %u B",
              (double)fs_hz, (double)cfg.centre_hz, s_run_cfg.offset_hz, nco_hz, (unsigned)sizeof(*s_dem));
     return true;
@@ -267,6 +287,8 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     static uint32_t s_cpu_max_us, s_cpu_calls, s_cpu_smp;
     int64_t t_a = esp_timer_get_time();
     rtty_demod_feed(s_dem, re, im, n, on_char, NULL);
+    const bool run_auto = s_run_cfg.auto_mode && s_auto;
+    if (run_auto) rtty_auto_feed(s_auto, re, im, n);   /* inside the cpu window on purpose */
     int64_t t_b = esp_timer_get_time();
     uint32_t d_us = (uint32_t)(t_b - t_a);
     s_cpu_busy_us += d_us;
@@ -297,5 +319,37 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     s_st.afc_held = s_dem->acq_held;
     s_st.acq_jumps = s_dem->n_acq;
     s_st.fs_hz = fs_hz;
+    s_st.auto_ok = run_auto && s_auto->shift_ok && s_auto->baud_ok;
+    if (s_st.auto_ok) {
+        s_st.auto_baud = s_auto->baud;
+        s_st.auto_shift = s_auto->shift;
+        /* The baseband is RF-oriented: mark is the HIGHER frequency unless
+         * the station is reversed. mark_low = the station is reversed. */
+        s_st.auto_reverse = s_auto->mark_low;
+    }
     portEXIT_CRITICAL(&s_mux);
+
+    /* R028: once a second, a verdict that differs from what runs must hold
+     * RTTY_AUTO_HOLD_S seconds before it is applied. Not while keyed: our
+     * own over is not a station to follow. */
+    if (run_auto && t_b >= s_auto_next_us) {
+        s_auto_next_us = t_b + 1000000;
+        bool ok = s_st.auto_ok;
+        float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;
+        bool differs = ok && (fabsf(b - s_run_cfg.baud) > 0.01f || fabsf(sh - s_run_cfg.shift_hz) > 0.5f ||
+                              rv != s_run_cfg.reverse);
+        if (!differs || rtty_tx_keyed()) s_auto_same = 0;
+        else if (s_auto_same > 0 && b == s_auto_pb && sh == s_auto_ps && rv == s_auto_pr) s_auto_same++;
+        else { s_auto_same = 1; s_auto_pb = b; s_auto_ps = sh; s_auto_pr = rv; }
+        if (s_auto_same >= RTTY_AUTO_HOLD_S) {
+            rtty_rx_cfg_t c;
+            rtty_rx_get_cfg(&c);
+            ESP_LOGI(TAG, "auto: %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (held %d s)",
+                     (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
+                     (double)b, (double)sh, rv ? " rev" : "", s_auto_same);
+            c.baud = b; c.shift_hz = sh; c.reverse = rv;
+            s_auto_same = 0;
+            rtty_rx_apply(&c);         /* restarts demod + estimator on the next frame */
+        }
+    }
 }

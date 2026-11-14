@@ -197,6 +197,8 @@ static void refresh_buttons(void)
     if (c.baud == 45.45f) snprintf(b, sizeof b, "45.45/%d", (int)c.shift_hz);
     else snprintf(b, sizeof b, "%d/%d", (int)(c.baud + 0.5f), (int)c.shift_hz);
     lv_label_set_text(s_lbl_speed, b);
+    /* R028: green while Auto is on (the pane's convention, green = on). */
+    lv_obj_set_style_text_color(s_lbl_speed, lv_color_hex(c.auto_mode ? 0x30E060 : 0x5FD4FF), 0);
 }
 
 static void toggle_cb(lv_event_t *e)
@@ -241,7 +243,9 @@ static lv_obj_t *mk_btn_f(lv_obj_t *parent, int x, int y, int w, int h, const lv
 
 /* ---- speed / shift picker ------------------------------------------------ */
 
-static const float SPEEDS[] = { 45.45f, 50.0f, 75.0f };
+static const float SPEEDS[] = { 45.45f, 50.0f, 75.0f, 100.0f };   /* rtty_auto_bauds too */
+#define NSPEEDS ((int)(sizeof SPEEDS / sizeof SPEEDS[0]))
+#define PICK_AUTO 99
 static const int   SHIFTS[] = { 170, 200, 425, 450, 850 };
 
 /* ⛔ ASYNC: speed_pick_cb / speed_close_cb are CLICKED handlers of the modal
@@ -259,8 +263,11 @@ static void speed_pick_cb(lv_event_t *e)
     int v = (int)(intptr_t)lv_event_get_user_data(e);
     rtty_rx_cfg_t c;
     rtty_rx_get_cfg(&c);
-    if (v < 100) c.baud = SPEEDS[v];          /* 0..2: speed index */
-    else c.shift_hz = (float)SHIFTS[v - 100]; /* 100..: shift index */
+    /* A fixed speed or shift is a choice and turns Auto (R028) off; Auto
+     * toggles. The web page's selects do the same (webserver.c). */
+    if (v == PICK_AUTO) c.auto_mode = !c.auto_mode;
+    else if (v < 100) { c.baud = SPEEDS[v]; c.auto_mode = false; }
+    else { c.shift_hz = (float)SHIFTS[v - 100]; c.auto_mode = false; }
     rtty_rx_apply(&c);
     refresh_buttons();
     speed_close();
@@ -296,11 +303,21 @@ static void speed_open_cb(lv_event_t *e)
     lv_obj_set_style_text_font(t1, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(t1, lv_color_hex(0xC8CCD2), 0);
     lv_obj_set_pos(t1, 0, 0);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NSPEEDS; i++) {
         char b[12];
         if (i == 0) snprintf(b, sizeof b, "45.45"); else snprintf(b, sizeof b, "%d", (int)SPEEDS[i]);
         lv_obj_t *bt = mk_btn(p, i * 160, 34, 150, 56, b, speed_pick_cb, (void *)(intptr_t)i, NULL);
         if (SPEEDS[i] == c.baud) lv_obj_set_style_bg_color(bt, lv_color_hex(BTN_ON), 0);
+    }
+    /* R028: Auto - speed, shift and Reverse follow the station. Green = on,
+     * as the pane's toggles; the speed/shift buttons still show what runs. */
+    {
+        lv_obj_t *lbl;
+        lv_obj_t *bt = mk_btn(p, NSPEEDS * 160, 34, 150, 56, "Auto", speed_pick_cb,
+                              (void *)(intptr_t)PICK_AUTO, &lbl);
+        if (c.auto_mode) lv_obj_set_style_text_color(lbl, lv_color_hex(0x30E060), 0);
+        if (c.auto_mode) lv_obj_set_style_border_color(bt, lv_color_hex(0x30E060), 0);
+        if (c.auto_mode) lv_obj_set_style_border_width(bt, 3, 0);
     }
     lv_obj_t *t2 = lv_label_create(p);
     lv_label_set_text(t2, "Shift (Hz)");
@@ -641,6 +658,20 @@ static void timer_cb(lv_timer_t *t)
 
     rtty_rx_status_t st;
     rtty_rx_status(&st);
+    /* R028: Auto changes speed/shift/Reverse from the audio task, and the web
+     * page changes any of them - repaint the buttons when what they show is
+     * no longer what runs. */
+    {
+        static rtty_rx_cfg_t shown;
+        static bool shown_ok;
+        const rtty_rx_cfg_t *k = &st.cfg;
+        if (!shown_ok || k->baud != shown.baud || k->shift_hz != shown.shift_hz ||
+            k->reverse != shown.reverse || k->afc != shown.afc || k->squelch != shown.squelch ||
+            k->auto_mode != shown.auto_mode) {
+            refresh_buttons();
+            shown = *k; shown_ok = true;
+        }
+    }
     /* dB over the noise floor, full scale RTTY_BAR_DB. They were each tone
      * over the LARGER tone, so on noise both sat near full and said nothing
      * (operator, 2026-11-12: "almost fully extended on the noise floor"). */

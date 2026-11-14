@@ -1479,16 +1479,17 @@
       <span id="rtty-status" style="color:var(--dim); font-size:14px;">-</span>
       <span title="Signal: the squelch opens at the white tick"><span id="rtty-sig"><i></i><b></b></span></span>
       <select id="rtty-baud" title="Speed, baud">
-        <option value="45.45">45.45 Bd</option><option value="50">50 Bd</option><option value="75">75 Bd</option>
+        <option value="45.45">45.45 Bd</option><option value="50">50 Bd</option><option value="75">75 Bd</option><option value="100">100 Bd</option>
       </select>
       <select id="rtty-shift" title="Shift, Hz">
         <option value="170">170 Hz</option><option value="200">200 Hz</option><option value="425">425 Hz</option>
         <option value="450">450 Hz</option><option value="850">850 Hz</option>
       </select>
+      <button id="rtty-auto" type="button" title="Speed, shift and Reverse follow the station (after 3 s of the same reading)">Auto</button>
       <button id="rtty-rev" type="button" title="Swap mark and space">Reverse</button>
       <button id="rtty-afc" type="button" title="Follow a drifting or mistuned signal, +/-150 Hz">AFC</button>
       <button id="rtty-sq" type="button" title="Print nothing while there is no RTTY signal">Squelch</button>
-      <span style="color:var(--dim); font-size:13px; margin-left:auto;">Click the waterfall to move the decoder - the dial stays</span>
+      <span style="color:var(--dim); font-size:13px; margin-left:auto;">Click the waterfall to tune: the signal goes to 1500 Hz audio</span>
     </div>
   </div>
 
@@ -8053,7 +8054,7 @@ function rttyRender(r) {
   sel("rtty-baud", r.baud === 45.45 ? "45.45" : Math.round(r.baud || 45.45));
   sel("rtty-shift", Math.round(r.shift || 170));
   const tog = (id, on) => { const e = document.getElementById(id); if (e) e.classList.toggle("on", !!on); };
-  tog("rtty-rev", r.reverse); tog("rtty-afc", r.afc); tog("rtty-sq", r.squelch);
+  tog("rtty-rev", r.reverse); tog("rtty-afc", r.afc); tog("rtty-sq", r.squelch); tog("rtty-auto", r.auto);
 }
 async function rttyPoll() {
   if (rttyTimer) { clearTimeout(rttyTimer); rttyTimer = null; }
@@ -8067,6 +8068,7 @@ async function rttyPoll() {
   b("rtty-rev", () => set({ reverse: !document.getElementById("rtty-rev").classList.contains("on") }));
   b("rtty-afc", () => set({ afc: !document.getElementById("rtty-afc").classList.contains("on") }));
   b("rtty-sq",  () => set({ squelch: !document.getElementById("rtty-sq").classList.contains("on") }));
+  b("rtty-auto", () => set({ auto: !document.getElementById("rtty-auto").classList.contains("on") }));
   b("rtty-clear", () => set({ clear: true }));
   const c = (id, key) => { const e = document.getElementById(id);
     if (e) e.addEventListener("change", () => set({ [key]: parseFloat(e.value) })); };

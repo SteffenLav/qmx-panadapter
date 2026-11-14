@@ -24,6 +24,7 @@ typedef struct {
     float shift_hz;      /* 170 default */
     bool  afc;           /* AFC + acquisition, +/-150 Hz */
     bool  squelch;
+    bool  auto_mode;     /* R028: speed, shift and reverse follow the signal */
 } rtty_rx_cfg_t;
 
 typedef struct {
@@ -38,6 +39,11 @@ typedef struct {
                              * sits on it; false = any offset is acquisition alone */
     uint32_t chars;         /* characters printed since the decoder (re)started */
     uint32_t acq_jumps;
+    /* R028 estimator (only while cfg.auto_mode): what it hears now. Applied
+     * to cfg after RTTY_AUTO_HOLD_S seconds of the same verdict. */
+    bool     auto_ok;
+    float    auto_baud, auto_shift;
+    bool     auto_reverse;
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */
 } rtty_rx_status_t;
 

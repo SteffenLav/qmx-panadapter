@@ -181,6 +181,9 @@ typedef struct {
     uint16_t baud_x100;     /* 4545 = 45.45 Bd */
     uint8_t  reverse, afc, squelch;
     uint8_t  valid;
+    uint8_t  auto_mode;     /* R028. ⚠ 10 -> 12 bytes: a blob saved before
+                             * R028 fails the size check once and the RTTY
+                             * settings come back as defaults (never released) */
 } settings_rtty_t;
 
 typedef struct {

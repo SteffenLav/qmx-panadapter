@@ -3616,8 +3616,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "on")))        { c.on = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "offset_hz"))) { c.offset_hz = j->valueint; touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "reverse")))   { c.reverse = cJSON_IsTrue(j); touched = true; }
-        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "baud")))    { c.baud = (float)j->valuedouble; touched = true; }
-        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "shift")))   { c.shift_hz = (float)j->valuedouble; touched = true; }
+        /* A fixed speed or shift is a choice: it turns R028's auto off, the
+         * same as on the Tab5 picker. "auto":true turns it back on. */
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "baud")))    { c.baud = (float)j->valuedouble; c.auto_mode = false; touched = true; }
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "shift")))   { c.shift_hz = (float)j->valuedouble; c.auto_mode = false; touched = true; }
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "auto")))      { c.auto_mode = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "afc")))       { c.afc = cJSON_IsTrue(j); touched = true; }
         if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "squelch")))   { c.squelch = cJSON_IsTrue(j); touched = true; }
         if (touched) rtty_rx_apply(&c);
@@ -3645,6 +3648,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "shift", (int)st.cfg.shift_hz);
         cJSON_AddBoolToObject(o, "afc", st.cfg.afc);
         cJSON_AddBoolToObject(o, "squelch", st.cfg.squelch);
+        cJSON_AddBoolToObject(o, "auto", st.cfg.auto_mode);
+        if (st.auto_ok) {   /* what the estimator hears now (R028) */
+            cJSON *a = cJSON_AddObjectToObject(o, "heard");
+            cJSON_AddNumberToObject(a, "baud", (int)(st.auto_baud * 100.0f + 0.5f) / 100.0);
+            cJSON_AddNumberToObject(a, "shift", (int)st.auto_shift);
+            cJSON_AddBoolToObject(a, "reverse", st.auto_reverse);
+        }
         cJSON_AddNumberToObject(o, "fs_hz", st.fs_hz);
         cJSON_AddNumberToObject(o, "sig_lvl", (int)(st.sig_lvl * 100.0f + 0.5f) / 100.0);
         cJSON_AddBoolToObject(o, "present", st.present);

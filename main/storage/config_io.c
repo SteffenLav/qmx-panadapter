@@ -85,6 +85,7 @@ char *config_io_export(size_t *out_len)
         APP("rtty_reverse       = %s\n", yn(c.rtty.reverse));
         APP("rtty_afc           = %s\n", yn(c.rtty.afc));
         APP("rtty_squelch       = %s\n", yn(c.rtty.squelch));
+        APP("rtty_auto          = %s\n", yn(c.rtty.auto_mode));
     }
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
@@ -470,6 +471,7 @@ int config_io_import(char *text)
                     r.shift_hz  = (uint16_t)(d.shift_hz + 0.5f);
                     r.baud_x100 = (uint16_t)(d.baud * 100.0f + 0.5f);
                     r.reverse = d.reverse; r.afc = d.afc; r.squelch = d.squelch;
+                    r.auto_mode = d.auto_mode;
                 }
                 bool known = true;
                 if      (!strcasecmp(key, "rtty_offset_hz")) r.offset_hz = (int16_t)atoi(val);
@@ -478,6 +480,7 @@ int config_io_import(char *text)
                 else if (!strcasecmp(key, "rtty_reverse"))   r.reverse   = to_bool(val);
                 else if (!strcasecmp(key, "rtty_afc"))       r.afc       = to_bool(val);
                 else if (!strcasecmp(key, "rtty_squelch"))   r.squelch   = to_bool(val);
+                else if (!strcasecmp(key, "rtty_auto"))      r.auto_mode = to_bool(val);
                 else known = false;
                 if (known) { r.valid = 1; settings_set_rtty(&r); }
             }

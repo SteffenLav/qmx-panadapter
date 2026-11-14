@@ -4,6 +4,7 @@ idf_component_register(
         "cw_decode.c"
         "rtty_baudot.c"
         "rtty_demod.c"
+        "rtty_auto.c"
         "rtty_rx.c"
         "rtty_tx.c"
         "rtty_tx_core.c"
