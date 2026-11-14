@@ -1,7 +1,9 @@
 /* RTTY page - see rtty_screen_view.h. R006.
  *
  * Layout agreed with the operator 2026-11-12 from a 1280x720 mock-up, with
- * 8 text rows ("8 rows") over a 190 px waterfall: RTTY prints continuously,
+ * 8 text rows ("8 rows") over a 190 px waterfall - now 6 (operator,
+ * 2026-11-14: "Reduce the decode lines from 8 to 6 - to give more space for
+ * the wf"), +58 px of waterfall (2 x 29 px pitch). RTTY prints continuously,
  * ~6 characters/s, and the CW page's 4-row ticker would scroll text away
  * before it can be read. */
 #include "rtty_screen_view.h"
@@ -28,7 +30,7 @@ static const char *TAG = "rtty_screen";
 #define PANE_W        CW_PANE_W
 #define BANDPLAN_H    22
 
-#define TXT_ROWS      8
+#define TXT_ROWS      6   /* was 8; operator 2026-11-14, for waterfall room */
 #define TXT_PAD       8
 /* The text box ENDS LEFT OF THE OPERATOR WATERMARK, box and text both
  * (operator, 2026-11-12, for the CW page and then this one: "the greyed box
@@ -625,7 +627,7 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_label_set_long_mode(s_lbl_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_status, 296);
 
-    /* Decoded text, 8 rows, above the band-plan strip. */
+    /* Decoded text, TXT_ROWS rows, above the band-plan strip. */
     s_text_box = mk_rect(s_container, PANE_W, s_txt_top, TXT_BOX_W,
                          MID_H - BANDPLAN_H - s_txt_top, 0x0d1116);
     lv_obj_set_style_border_width(s_text_box, 1, 0);
@@ -658,7 +660,7 @@ void rtty_screen_view_show(void)
     s_cursor = rtty_rx_text_count();   /* only what arrives from now on */
     refresh_buttons();
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
-    /* ⛔ NOT foregrounded - the CW page's rule (cw_screen_view_show). Raising
+    /* â›” NOT foregrounded - the CW page's rule (cw_screen_view_show). Raising
      * the container put it over the left-edge strip, so neither the swipe nor
      * the grip tap reached left_drawer_open(): bench2 booted into RTTY and
      * could not leave the page (operator, 2026-11-12, "stuck there"). The

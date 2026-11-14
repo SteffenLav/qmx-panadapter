@@ -3,9 +3,9 @@
  *
  * Same grid as the CW page: the panadapter spectrum and waterfall stay live
  * underneath, a 320 px pane on the left (CW_PANE_W - the spectrum mapping in
- * ui.c already narrows to it for any page with a left pane), and an 8-row
+ * ui.c already narrows to it for any page with a left pane), and a 6-row
  * decoded-text area over the bottom of the waterfall, above the band-plan
- * strip. RX only: the pane keeps a reserved, empty slot for TX (R010).
+ * strip. The pane carries the TX buttons (R010).
  *
  * Showing the page turns the decoder (rtty_rx) on; hiding it turns it off. */
 
