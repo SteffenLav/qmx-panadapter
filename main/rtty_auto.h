@@ -50,6 +50,8 @@ extern "C" {
 #define RTTY_AUTO_NBAUD       4
 #define RTTY_AUTO_MIN_TRANS   80        /* space runs before a speed verdict */
 #define RTTY_AUTO_NEAR        0.75f
+#define RTTY_AUTO_HIST_N      64        /* 1 ms bins */
+#define RTTY_AUTO_HIST_DET    2         /* the 75 Bd detector */
 #define RTTY_AUTO_KEEP        150.0f    /* runs: time constant of the decaying sums */
 #define RTTY_AUTO_DEBOUNCE    0.4f
 
@@ -103,6 +105,10 @@ typedef struct {
                                         * mark is the LOW tone (LSB audio, or a reversed
                                         * station) */
     float score[RTTY_AUTO_NBAUD], short_frac[RTTY_AUTO_NBAUD];
+    /* Development: run lengths in 1 ms bins from the RTTY_AUTO_HIST_DET
+     * detector, [0] low tone, [1] high tone - to see what a real radio path
+     * does to the timing (a 75 Bd signal via a QMX scored 100 > 75). */
+    uint16_t hist[2][RTTY_AUTO_HIST_N];
 } rtty_auto_t;
 
 void rtty_auto_init(rtty_auto_t *a, float fs, float centre_hz);

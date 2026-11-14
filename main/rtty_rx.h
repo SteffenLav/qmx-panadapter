@@ -49,6 +49,7 @@ typedef struct {
     float    auto_pair_db, auto_pair_centre;
     int      auto_runs;
     float    auto_score[4];
+    uint16_t auto_hist[2][64];   /* rtty_auto_t.hist, copied */
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */
 } rtty_rx_status_t;
 

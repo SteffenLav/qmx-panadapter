@@ -20,6 +20,7 @@ const float rtty_auto_bauds[RTTY_AUTO_NBAUD]   = { 45.45f, 50.0f, 75.0f, 100.0f 
 #define AUTO_PAIR_DB     6.0f
 #define AUTO_SWITCH_DB   3.0f    /* a new shift must beat the held one by this */
 #define AUTO_MIN_BLOCKS  6          /* ~1 s of spectrum (0.17 s blocks) */
+#define AUTO_SPEC_KEEP   0.97f       /* per 0.17 s block: ~5.7 s. 0.9 (1.7 s) cost 422 -> 381 harness cases, 0.95 -> 401 */
 #define AUTO_HYST        0.2f       /* decision hysteresis, fraction of total */
 
 static void set_tones(rtty_auto_t *a)
@@ -155,7 +156,9 @@ static void block_done(rtty_auto_t *a)
     for (int b = 0; b < RTTY_AUTO_NBINS; b++) {
         int k = b - (RTTY_AUTO_NBINS - 1) / 2;          /* -102..102 */
         int i = k < 0 ? k + RTTY_AUTO_NFFT : k;
-        a->pow[b] += xr[i] * xr[i] + xi[i] * xi[i];
+        /* Decaying, not a sum: summed from start, minutes of noise before an
+         * over made the pair take 30 s to reach 6 dB (bench2, 75 Bd test). */
+        a->pow[b] = a->pow[b] * AUTO_SPEC_KEEP + xr[i] * xr[i] + xi[i] * xi[i];
     }
     a->blocks++;
     if (a->blocks >= AUTO_MIN_BLOCKS) shift_verdict(a);
@@ -271,6 +274,10 @@ void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n)
                 float dt = (float)du, T = e->T;
                 if (dt >= 0.25f * T && du < a->max_dt) {
                     int p = e->state == 1 ? 1 : 0;     /* the run that just ended */
+                    if (b == RTTY_AUTO_HIST_DET) {
+                        int ms = (int)(dt * 1000.0f / a->fs + 0.5f);
+                        if (ms < RTTY_AUTO_HIST_N && a->hist[p][ms] < 65535) a->hist[p][ms]++;
+                    }
 #ifdef RTTY_AUTO_DEBUG
                     if (b == 0) { int hb = (int)(dt / T * 4.0f + 0.5f); if (hb < 48) rtty_auto_dbg_hist[p][hb]++; }
 #endif

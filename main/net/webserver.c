@@ -3657,6 +3657,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(d, "pair_centre", (int)st.auto_pair_centre);
             cJSON_AddNumberToObject(d, "runs", st.auto_runs);
             cJSON_AddBoolToObject(d, "baud_ok", st.auto_baud_ok);
+            for (int p = 0; p < 2; p++) {   /* run lengths, 1 ms bins: [ms, count] pairs, non-zero only */
+                cJSON *h = cJSON_AddArrayToObject(d, p ? "hist_high" : "hist_low");
+                for (int k = 0; k < 64; k++)
+                    if (st.auto_hist[p][k]) {
+                        cJSON *pr = cJSON_CreateArray();
+                        cJSON_AddItemToArray(pr, cJSON_CreateNumber(k));
+                        cJSON_AddItemToArray(pr, cJSON_CreateNumber(st.auto_hist[p][k]));
+                        cJSON_AddItemToArray(h, pr);
+                    }
+            }
             cJSON *sc = cJSON_AddArrayToObject(d, "scores");
             for (int k = 0; k < 4; k++) cJSON_AddItemToArray(sc, cJSON_CreateNumber((int)(st.auto_score[k] * 100.0f) / 100.0));
         }
