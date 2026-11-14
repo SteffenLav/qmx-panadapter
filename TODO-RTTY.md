@@ -14,14 +14,14 @@ needed; every flash wedges its QMX and needs his power cycle.
 
 | ID | Item | Effort | Blocked on | Who |
 |---|---|---|---|---|
-| R009 | **TX timing gate**: can the QMX follow `TA<freq>;` toggles at 22 ms/bit? Dummy load, fldigi as arbiter. Host side already measured (`cat_ta_latency_probe()`). Decides whether R010 is worth writing. Burst BUILT + flashed bench2 (`2d15d857`): `{"action":"rtty_tx_test","centre_hz":1500,"seconds":20}`, DiGi, dial 14.080.00, dummy load; PC receiver + fldigi. Not yet keyed. | Small | operator at the bench | - |
 | R022 | Boot after a flash: the Tab5 sent `FA 14085000` at 29.6 s, 125 ms after the band list, no `RTTY entry` line (bench2 2026-11-12 22:43, draft of `dde73aff`). 14.085 = the DiGi-middle fallback, NOT the stored 20 m dial (14.081 - every store logs). The 2nd boot hit (31.4 s, `55b1ae24`) was a band press. Silent writers are all operator gestures; log cannot tell them apart, so every `Sent: FA` now names its caller (addr2line it). Wait for a recurrence. | Investigation | recurrence | - |
-| R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | R009 | Don N2VGU asked |
+| R010 | **RTTY TX**: encoder exists (`rtty_baudot_encode`); sequencer, macros, keyboard. Must pass `tx_band_guard_allows()` and enter `docs/unattended-tx-inventory.md`. `KY` is NOT usable (no abort); `TA` stops at once. | Large | - | Don N2VGU asked |
 
 ## Done
 
 | ID | Item | Commit |
 |---|---|---|
+| R009 | TX timing gate PASSED on air 2026-11-14: bench2 QMX+ keyed by `TA` toggles at 45.45 Bd (dial 14.105.000, 1415/1585 Hz, ~3 W), laptop QMX + fldigi 4.2.13 copied "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789 DE OZ1LAV OZ1LAV" clean (111 chars, only settle/tail junk; AFC -9 Hz). Tab5: 0 write fails, slip p50 4 us p99 0.9 ms max 1.6 ms. Earlier no-decodes were the RECEIVER: laptop QMX in IQ mode (Q91) and bench2 Max PA voltage 2.3 V. R010 is worth writing. | `2d15d857` |
 | R027 | Speaker played a neighbour, not the decoded station: R024's filter was +/-500 Hz and ignored AFC. bench2: decoder on RL4R at +1631 (tap 1500, AFC +131); speaker's strongest pair 1775/1950 Hz = ~480 Hz below the lines. Now +/-250 Hz and follows offset + AFC (10 Hz hysteresis). bench2: operator "Yes perfect". | `8fba8f4c` |
 | R026 | AFC jumped between stations in the gaps between overs: bench2, one tap, 14 acquisition jumps in 2 min between stations at -150 and +10 Hz. After a real pair (present AND both tones, R014) is decoded, acquisition searches only +/-20 Hz around it and AFC is clamped there until a pair is seen again; a tap re-arms. Harness gap test (B +110 Hz +6 dB in the gap): before, jumped to B and printed 156 of its chars; after, 0 jumps, A again CER 0.000. Freezing AFC instead cost 4 of 66 GRITTY words (QSB); the clamp costs none (66 = 66). bench2 after: 1 jump (the pull-in) in ~85 s after a tap, AFC held +55..+71 Hz on one station; operator: "Stays put". | `693aed1c` |
 | R025 | RTTY tap on a 10 Hz grid, Tab5 and web (was the 500 Hz DiGi dial grid: up to 250 Hz off the pair, outside acquisition's +/-150 Hz). bench2 taps at +830/-2670/+740/+2890; operator: "Locks on". | `4d42824d` |
