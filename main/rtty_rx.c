@@ -107,7 +107,6 @@ static int64_t  s_trial_us;
 static float    s_trial_qb;
 static rtty_rx_cfg_t s_trial_old;
 static float    s_ban_b, s_ban_s;
-static bool     s_ban_r;
 static int64_t  s_ban_until_us;
 static volatile bool s_observe;          /* estimator runs, applies nothing */
 
@@ -438,7 +437,7 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
                 } else {
                     rtty_rx_cfg_t c;
                     rtty_rx_get_cfg(&c);
-                    s_ban_b = c.baud; s_ban_s = c.shift_hz; s_ban_r = c.reverse;
+                    s_ban_b = c.baud; s_ban_s = c.shift_hz;
                     s_ban_until_us = t_b + (int64_t)RTTY_AUTO_BAN_S * 1000000;
                     ESP_LOGW(TAG, "auto: REVERTED %.2f Bd %.0f Hz%s -> %.2f Bd %.0f Hz%s (quality %.2f -> %.2f), "
                              "that reading ignored %d s", (double)c.baud, (double)c.shift_hz, c.reverse ? " rev" : "",
@@ -455,7 +454,10 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
         float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;
         bool differs = ok && (fabsf(b - s_run_cfg.baud) > 0.01f || fabsf(sh - s_run_cfg.shift_hz) > 0.5f ||
                               rv != s_run_cfg.reverse);
-        bool banned = t_b < s_ban_until_us && b == s_ban_b && sh == s_ban_s && rv == s_ban_r;
+        /* The ignore covers speed + shift WHATEVER the polarity: on air a
+         * damaged signal alternated "100 Bd" and "100 Bd rev", each banned
+         * alone, so Auto tried 4 times in 40 s instead of twice. */
+        bool banned = t_b < s_ban_until_us && b == s_ban_b && sh == s_ban_s;
         if (!differs || banned || rtty_tx_keyed()) s_auto_same = 0;
         else if (s_auto_same > 0 && b == s_auto_pb && sh == s_auto_ps && rv == s_auto_pr) s_auto_same++;
         else { s_auto_same = 1; s_auto_pb = b; s_auto_ps = sh; s_auto_pr = rv; }
