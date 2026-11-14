@@ -325,6 +325,14 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     s_st.acq_jumps = s_dem->n_acq;
     s_st.fs_hz = fs_hz;
     s_st.auto_ok = run_auto && s_auto->shift_ok && s_auto->baud_ok;
+    s_st.auto_run = run_auto;
+    if (run_auto) {
+        s_st.auto_shift_ok = s_auto->shift_ok; s_st.auto_baud_ok = s_auto->baud_ok;
+        s_st.auto_pair_db = s_auto->pair_db; s_st.auto_pair_centre = s_auto->pair_centre;
+        s_st.auto_runs = s_auto->ntrans;
+        for (int k = 0; k < 4 && k < RTTY_AUTO_NBAUD; k++) s_st.auto_score[k] = s_auto->score[k];
+        if (s_auto->shift_ok) s_st.auto_shift = s_auto->shift;
+    }
     if (s_st.auto_ok) {
         s_st.auto_baud = s_auto->baud;
         s_st.auto_shift = s_auto->shift;

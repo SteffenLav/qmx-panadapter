@@ -44,6 +44,11 @@ typedef struct {
     bool     auto_ok;
     float    auto_baud, auto_shift;
     bool     auto_reverse;
+    /* R028 estimator internals, for the API (development): see rtty_auto.h */
+    bool     auto_run, auto_shift_ok, auto_baud_ok;
+    float    auto_pair_db, auto_pair_centre;
+    int      auto_runs;
+    float    auto_score[4];
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */
 } rtty_rx_status_t;
 

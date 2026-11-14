@@ -3649,6 +3649,17 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(o, "afc", st.cfg.afc);
         cJSON_AddBoolToObject(o, "squelch", st.cfg.squelch);
         cJSON_AddBoolToObject(o, "auto", st.cfg.auto_mode);
+        if (st.auto_run) {   /* R028 estimator internals - development */
+            cJSON *d = cJSON_AddObjectToObject(o, "auto_dbg");
+            cJSON_AddBoolToObject(d, "shift_ok", st.auto_shift_ok);
+            cJSON_AddNumberToObject(d, "shift", (int)st.auto_shift);
+            cJSON_AddNumberToObject(d, "pair_db", (int)(st.auto_pair_db * 10.0f) / 10.0);
+            cJSON_AddNumberToObject(d, "pair_centre", (int)st.auto_pair_centre);
+            cJSON_AddNumberToObject(d, "runs", st.auto_runs);
+            cJSON_AddBoolToObject(d, "baud_ok", st.auto_baud_ok);
+            cJSON *sc = cJSON_AddArrayToObject(d, "scores");
+            for (int k = 0; k < 4; k++) cJSON_AddItemToArray(sc, cJSON_CreateNumber((int)(st.auto_score[k] * 100.0f) / 100.0));
+        }
         if (st.auto_ok) {   /* what the estimator hears now (R028) */
             cJSON *a = cJSON_AddObjectToObject(o, "heard");
             cJSON_AddNumberToObject(a, "baud", (int)(st.auto_baud * 100.0f + 0.5f) / 100.0);
