@@ -56,6 +56,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
+#include "archive_adopt_modal.h"
 #include "date_confirm_modal.h"
 #include "ft8_tone_modal.h"
 #include "ft8_pileup_modal.h"
@@ -5925,6 +5926,12 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     if (t && (date_confirm_modal_is_open() ||
               (!s_drawer_open && !ui_any_overlay_active() && !any_modal_open())))
         date_confirm_modal_tick();
+    // "Use the contacts on the card?" - same gate as the date question: a
+    // clear screen only, and never on a direct (t == NULL) call.
+    if (t && (archive_adopt_modal_is_open() ||
+              (!s_drawer_open && !ui_any_overlay_active() && !any_modal_open() &&
+               !date_confirm_modal_is_open())))
+        archive_adopt_modal_tick();
     if (!s_qmx_wait_overlay) return;
     bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
     // Never show the "turn on your QMX" breathing overlay over the docs Reader —

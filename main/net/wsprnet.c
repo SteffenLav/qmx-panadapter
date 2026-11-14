@@ -95,6 +95,28 @@ typedef struct {
 static EXT_RAM_BSS_ATTR work_t   s_work;
 static SemaphoreHandle_t         s_work_mtx;
 
+/* ⭐ THE COUNT MUST SURVIVE THE CYCLE. Operator, 2026-11-14, after a 20-hour
+ * WSPR run: "I do see from cycle to cycle how many was sent - but that gets
+ * cleared next cycle... running the whole night will tell nothing about the
+ * sent reports". He was right, and the line was answering a question nobody
+ * had: a pass publishes a handful of spots and then says so for two minutes.
+ * Over a night that number never rises above about ten and the real figure -
+ * 658 spots on bench1's 21-hour boot, counted afterwards out of the serial
+ * capture - was nowhere on the screen.
+ *
+ * So the line now carries the TOTAL SINCE BOOT, and "wait" still says what
+ * this pass could not get through. Only spots the server accepted are
+ * counted: wspr_spots_mark_sent() and this counter move together, one line
+ * apart, deliberately.
+ *
+ * ⚠ It is NOT the same quantity as "N of M publishable" on the line below,
+ * and the two will not agree. That one counts the callsigns currently in the
+ * spot table that are eligible; this one counts every report accepted since
+ * the unit booted, including calls long since aged out of the table. */
+static uint32_t s_sent_total;
+
+uint32_t wsprnet_sent_total(void) { return s_sent_total; }
+
 const char *wsprnet_status(void) { return s_status; }
 
 /* Build the query for one spot. Returns the length written, or 0 if the spot
@@ -243,7 +265,10 @@ static void wsprnet_task(void *arg)
         } else {
             n = wspr_spots_pending_upload(s_work.sp, BATCH_MAX);
             if (n <= 0) {
-                snprintf(s_status, sizeof(s_status), "idle");
+                /* Nothing owed - but the night's total stays on screen. "idle"
+                 * only while there is genuinely nothing to report yet. */
+                if (s_sent_total) snprintf(s_status, sizeof(s_status), "%lu sent", (unsigned long)s_sent_total);
+                else              snprintf(s_status, sizeof(s_status), "idle");
             } else {
                 /* Oldest first, so a truncated batch leaves the NEWEST for
                  * next time rather than stranding the oldest forever. */
@@ -253,6 +278,7 @@ static void wsprnet_task(void *arg)
                     if (!post_one(s_work.q)) break;   /* stop on first failure */
                     wspr_spots_mark_sent(s_work.sp[i].cycle_utc, s_work.sp[i].call);
                     sent++;
+                    s_sent_total++;
                     /* ⚠ 1500 ms, not 500. Roughly half the posts were coming
                      * back "no response" at 500 ms - the cause is NOT
                      * established (wsprnet is a busy volunteer service, each
@@ -274,8 +300,8 @@ static void wsprnet_task(void *arg)
                  * status string is consumed by a fixed-width label, so its
                  * LENGTH is part of its contract, not a cosmetic detail. */
                 snprintf(s_status, sizeof(s_status),
-                         n - sent > 0 ? "%d sent %d wait" : "%d sent",
-                         sent, n - sent);
+                         n - sent > 0 ? "%lu sent %d wait" : "%lu sent",
+                         (unsigned long)s_sent_total, n - sent);
             }
         }
 

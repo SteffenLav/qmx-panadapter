@@ -19,6 +19,7 @@
 #include "driver/i2c.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_touch.h"
+#include "esp_timer.h"
 
 #define FW_VERSION_REG          (0x0000)
 #define FW_REVISION_REG         (0x000C)
@@ -30,6 +31,41 @@
 #define REPORT_COORD_0_REG      (0x0014)
 
 static const char *TAG = "ST7123";
+
+// ---------------------------------------------------------------------------
+// TOUCH TRACE - every report the panel makes, whether or not it lands on a
+// widget. Added 2026-11-14 for the phantom press that opened the update modal
+// on bench1 at 07:51:50 UTC with nobody at the bench: one POINTER press at
+// (422,719), the only touch in 20 h of uptime, no mouse paired this boot, no
+// network contact for 16 h either side. The press was real as far as LVGL was
+// concerned, so it came up through this driver - but nothing today records a
+// touch unless it hits something, so a press at a dead coordinate, or a
+// one-sample flicker, leaves no evidence at all. Same shape as the frequency
+// keypad opening itself with nobody touching the Tab5 (Roy KI0ER, 2026-09-24),
+// and this instrument covers both, because it sits below every caller.
+//
+// ⚠ It reports RAW PANEL COORDINATES. The screen is landscape and the display
+// is rotated, so on-screen x is panel y (see pinch_poll_cb in main/ui/ui.c).
+// The bench1 press at screen (422,719) is panel (~719,~422). Do not compare
+// these numbers with a screen coordinate without swapping them first.
+//
+// Cost: no extra I2C traffic - it reads what read_data() already fetched.
+// 44 B of .bss, nothing logged while the panel is idle, and one line per
+// COMPLETED touch, so the duration and the sample count are in it. The burst
+// limiter exists so a panel that starts chattering cannot flood the capture
+// and the SD mirror behind it.
+#define TTRACE_BURST_N      20      // presses...
+#define TTRACE_BURST_MS     10000   // ...within this window before it goes quiet
+static uint32_t s_tt_down_ms;       // when the current touch started
+static uint16_t s_tt_x0, s_tt_y0;   // where it started
+static uint16_t s_tt_last_x, s_tt_last_y;  // where it was last seen
+static uint8_t  s_tt_max_pts;       // most fingers seen during it
+static uint16_t s_tt_samples;       // reports seen during it
+static uint8_t  s_tt_area_min, s_tt_area_max;
+static uint8_t  s_tt_prev_pts;
+static uint32_t s_tt_win_ms;        // burst window start
+static uint16_t s_tt_win_n;         // presses in this window
+static uint32_t s_tt_suppressed;    // presses not logged
 
 static esp_err_t read_data(esp_lcd_touch_handle_t tp);
 static bool get_xy(esp_lcd_touch_handle_t tp, uint16_t *x, uint16_t *y, uint16_t *strength, uint8_t *point_num, uint8_t max_point_num);
@@ -152,7 +188,52 @@ static esp_err_t read_data(esp_lcd_touch_handle_t tp)
     }
     /* Expect Number of touched points */
     tp->data.points = j;
+    uint16_t tt_x = j ? tp->data.coords[0].x : 0;
+    uint16_t tt_y = j ? tp->data.coords[0].y : 0;
+    uint8_t  tt_a = j ? (uint8_t)tp->data.coords[0].strength : 0;
     portEXIT_CRITICAL(&tp->data.lock);
+
+    // ---- touch trace (see the note at the top of this file) ----------------
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (j > 0) {
+        if (s_tt_prev_pts == 0) {               // finger down
+            s_tt_down_ms  = now;
+            s_tt_x0       = tt_x;
+            s_tt_y0       = tt_y;
+            s_tt_samples  = 0;
+            s_tt_area_min = 0xFF;
+            s_tt_area_max = 0;
+        }
+        if (s_tt_samples < 0xFFFF) s_tt_samples++;
+        if (tt_a < s_tt_area_min) s_tt_area_min = tt_a;
+        if (tt_a > s_tt_area_max) s_tt_area_max = tt_a;
+        s_tt_last_x = tt_x;
+        s_tt_last_y = tt_y;
+    } else if (s_tt_prev_pts > 0) {             // finger up - report the touch
+        if (now - s_tt_win_ms > TTRACE_BURST_MS) { s_tt_win_ms = now; s_tt_win_n = 0; }
+        s_tt_win_n++;
+        if (s_tt_win_n <= TTRACE_BURST_N) {
+            // One line, and it is a W so it survives a log level of WARN.
+            ESP_LOGW(TAG, "touch: panel (%u,%u)->(%u,%u) %" PRIu32 " ms %u reports "
+                          "area %u..%u fingers %u%s",
+                     s_tt_x0, s_tt_y0, s_tt_last_x, s_tt_last_y,
+                     now - s_tt_down_ms, s_tt_samples,
+                     s_tt_area_min == 0xFF ? 0 : s_tt_area_min, s_tt_area_max,
+                     s_tt_max_pts,
+                     s_tt_samples <= 2 ? "  <-- SINGLE-SAMPLE" : "");
+            if (s_tt_suppressed) {
+                ESP_LOGW(TAG, "touch: %" PRIu32 " earlier touches were not logged "
+                              "(more than %d in %d ms)",
+                         s_tt_suppressed, TTRACE_BURST_N, TTRACE_BURST_MS);
+                s_tt_suppressed = 0;
+            }
+        } else {
+            s_tt_suppressed++;
+        }
+        s_tt_max_pts = 0;
+    }
+    if (j > s_tt_max_pts) s_tt_max_pts = (uint8_t)j;
+    s_tt_prev_pts = (uint8_t)j;
 
     return ESP_OK;
 }

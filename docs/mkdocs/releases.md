@@ -4,35 +4,46 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.26.1** - 2026-11-11
+**v1.26.3** - 2026-11-13
 
-**WSPR decodes every cycle again: from v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after it opened and then nothing. The WSPR search is a third faster. The web spectrum follows your dB range, TX power is a slider in the Radio menu, and the web top and bottom bars are cleaned up.**
+**A full QSO log no longer loses QSOs, and with an SD card in it no longer fills up: older QSOs move to the card. The SD file browser works with the QMX connected.**
 
-**Fixes**
+**QSO log** *(Randy N4OPI, Gyula HA3HZ)*
 
-- ⛔ **WSPR decodes every cycle again** *(Samuel W7STF)*. From v1.24.2 to v1.26.0 the WSPR page decoded the first cycle after you opened it, then logged `NO MEMORY for the candidate search` for every cycle after that, so it looked like a bad antenna or a dead band. The receiver now takes all the memory it needs once, when you open the page, and allocates nothing during a cycle. If the memory is not there, the page says so once, with the numbers. On the bench: 22 cycles and repeated page re-entries with no failure, against 4 failures in 4 cycles on v1.26.0.
-- **The WSPR search is a third faster: 8.3 s instead of 12.8 s.** While the WSPR page was showing, the Tab5 kept drawing the hidden panadapter behind it and took about a third of the processor the decoder runs on. That time now goes to decoding, two searches per cycle.
-- **A memory leak on every visit to the WSPR page is fixed** (16 KB a visit). The same fault, smaller, is fixed in the WiFi scan, WiFi on/off, the Reader page, the QMX terminal and the Bluetooth start. The firmware build now refuses this fault.
-- **The web spectrum follows the dB range** *(Samuel W7STF)*. The browser drew the spectrum on its own fixed scale and ignored the floor and ceiling set on the Tab5. It now uses them (with **F** off, as on the Tab5).
-- **The web WSPR page shows only the controls that work there.** Mode, BW, Zoom, Tune and RIT did nothing on the WSPR page, or were refused, and are no longer shown. **Band** stays and lists the WSPR bands: a pick does what the WSPR page's own band button does.
-- **The FT8 boot self-test says SKIPPED, not FAIL, when it cannot get memory** - for example when the Tab5 starts straight into the WSPR page. It used to report that as a decoding fault.
+- **A QSO is reported as logged only when it is saved.** When the Tab5's storage was full, QSOs were shown as logged and then lost (v1.26.2 and earlier). Now a QSO that cannot be saved is refused and the screen says so, and a full log can no longer be damaged.
+- **"QSO log nearly full" is shown from 300 KB**, long before the limit, with what to do.
+- **With an SD card in, older QSOs move to the card.** At start-up the Tab5 keeps about the newest 500 to 700 QSOs and moves older ones to `qso-archive.adi` on the card. `qso.adi` on the card is still your complete log, for your PC logger and for **Restore from SD**. A QSO that QRZ, eQSL, LoTW or Cloudlog has not sent yet stays on the Tab5. Without a card nothing changes, and the warning still applies.
+- **A log that is already full** moves at the first or second start-up with the card in. To make room, the Tab5's own diagnostic log files are first copied to the card (`history/`) and then removed from its internal storage.
+- **A lost log comes back from the card.** If the Tab5 starts and finds its QSO log missing (internal storage damaged by a power cut during a write), it restores the log from the card.
 
-**Web page**
+**SD card**
 
-- **TX power moved from the top bar to the Radio menu**, as a slider with one stop per level your Calibrate Power sweep measured - 0.1 W steps where the radio has them. The top bar no longer scrolls sideways.
-- The top bar's frequency and S-meter, and the bottom bar's clock, are smaller. The bottom bar shows the WiFi network name; the signal strength is in its tooltip. **Miscellaneous** is now **Misc**.
-- The bottom-bar menus are never taller than the window; on a short window a menu scrolls instead of losing its top.
-
-**Documentation**
-
-- The [Web DSP](guide/web-dsp.md) chapter link on tab5.lav.dk works again, and the site now publishes itself on every release.
+- **The SD file browser and downloads work with the QMX connected** *(Randy N4OPI)*. With the radio connected, the card was left too little memory and the browser failed.
 
 **Known, not fixed**
 
-- One capture showed the first CW message after a QMX power cycle held by the radio for 33 seconds and then sent ahead of the next one. It has not been reproduced and the cause is not known.
-- The web audio stream carries 1 to 3 short holes a second (11 ms each) when the Tab5's WiFi is busy. With noise reduction on, the browser patches them.
+- QSOs moved to the card cannot be edited or deleted on the Tab5. Edit `qso.adi` on the card with a PC.
+- The log window counts only the QSOs on the Tab5.
+- Moved QSOs are meant to keep a station marked as worked before. That is implemented, not yet proven on air.
 
 ## Previous Releases
+
+### v1.26.2 - 2026-11-12
+
+**Each band keeps its own dB range; web noise reduction keeps the voice at its level.**
+
+- Per-band dB range on the Tab5 and the web *(Samuel W7STF)*; web NR make-up gain *(Samuel W7STF)*.
+- The bottom-bar clock no longer stops for up to 11 s; the whole S-meter opens the audio panel.
+- The CW page redraws less; CW text ends before the watermark; a small web-command memory leak fixed.
+
+### v1.26.1 - 2026-11-11
+
+**WSPR decodes every cycle again, and the WSPR search is a third faster.**
+
+- WSPR decoded only the first cycle after the page opened (v1.24.2 to v1.26.0); fixed.
+- WSPR search 8.3 s instead of 12.8 s; a 16 KB memory leak per WSPR page visit fixed.
+- The web spectrum follows the dB range; TX power is a slider in the Radio menu.
+- The web WSPR page shows only the controls that work there; web top and bottom bars cleaned up.
 
 ### v1.26.0 - 2026-11-10
 
@@ -1296,7 +1307,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.26.3.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

@@ -101,10 +101,15 @@ uint32_t diag_log_usb_enum_failures(void);
 size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_next);
 
 // Start the background task that persists the log to a small rolling file on
-// internal SPIFFS flash (256 KB), so it survives power-off even with no SD
+// internal SPIFFS flash (two generations of 128 KB), so it survives power-off even with no SD
 // card inserted (the PSRAM ring alone is wiped on reboot). Call once from
 // app_main AFTER SPIFFS is mounted (i.e. after adif_log_init()).
 void diag_log_persist_start(void);
+
+// Delete both flash generations (diag.log, diag.0.log) and start an empty
+// diag.log. ONLY for QSO log rotation at the wall, after the caller has copied
+// both files to the card (adif_log_rotate). Takes the SPIFFS guard.
+bool diag_log_persist_drop(void);
 
 // Path to the flash-persisted log file (served by the web UI's /api/log/saved).
 const char *diag_log_persist_path(void);

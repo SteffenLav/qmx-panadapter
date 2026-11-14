@@ -1,3 +1,9 @@
+#include "adif_log.h"     // ADIF_BENCH_FILL
+#if ADIF_BENCH_FILL
+#include "esp_spiffs.h"
+#include "spiffs_guard.h"
+#include <unistd.h>
+#endif
 #include "webserver.h"
 #include "util/mem_ledger.h"   // DMA-pool bracket, 2026-10-04
 #include "webserver_ws.h"
@@ -1294,6 +1300,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddStringToObject(root, "time_src", tsn);
     }
     cJSON_AddNumberToObject(root, "qso_count",   (double)adif_log_count());
+    cJSON_AddNumberToObject(root, "qso_archived", (double)adif_log_archived_count());   // on the SD card (rotation)
     {
         qmx_settings_t cfg;
         settings_load_all(&cfg);
@@ -2263,6 +2270,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (!cmd_num_arg(req, root, "hz", &argv)) { cJSON_Delete(root); return ESP_FAIL; }
         cat_request_rit_hz((int)argv);
         ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)argv);
+#if ADIF_BENCH_FILL
+    /* ⛔ BENCH ONLY - compiled out of every release (ADIF_BENCH_FILL is 0 in
+     * adif_log.h). Fills SPIFFS with /spiffs/fill.bin so the full-partition
+     * QSO path can be tested on hardware without touching qso.adi, then
+     * removes it. {"action":"spiffs_fill","kb":N} appends up to N KB until
+     * SPIFFS refuses; {"action":"spiffs_unfill"} deletes the file. */
+    } else if (action && strcmp(action, "spiffs_fill") == 0) {
+        cJSON *jkb = cJSON_GetObjectItem(root, "kb");
+        int kb = cJSON_IsNumber(jkb) ? (int)jkb->valuedouble : 1024;
+        if (kb <= 0 || kb > 1024) kb = 1024;
+        static char blk[1024];
+        memset(blk, 'F', sizeof blk);
+        int done = 0;
+        spiffs_guard_take();
+        FILE *ff = fopen("/spiffs/fill.bin", "a");
+        if (ff) {
+            for (; done < kb; done++) {
+                if (fwrite(blk, 1, sizeof blk, ff) != sizeof blk) break;
+                if (fflush(ff) != 0 || fsync(fileno(ff)) != 0) break;
+            }
+            fclose(ff);
+        }
+        spiffs_guard_give();
+        size_t tot = 0, used = 0;
+        esp_spiffs_info("storage", &tot, &used);
+        ESP_LOGW(TAG, "BENCH spiffs_fill: wrote %d of %d KB; storage %u/%u KB used",
+                 done, kb, (unsigned)(used / 1024), (unsigned)(tot / 1024));
+    } else if (action && strcmp(action, "spiffs_unfill") == 0) {
+        spiffs_guard_take();
+        int r = remove("/spiffs/fill.bin");
+        esp_spiffs_gc("storage", 65536);
+        spiffs_guard_give();
+        ESP_LOGW(TAG, "BENCH spiffs_unfill: remove=%d", r);
+#endif
     } else if (action && strcmp(action, "log_qso") == 0) {
         /* ⭐ MANUAL CW/SSB LOGGING FROM THE BROWSER (T108 parity). The Tab5 got
          * this first; Randy N4OPI works from the web, and a feature that exists
@@ -2317,9 +2358,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 .qth        = qt,
                 .comment    = cm,
             };
-            adif_log_record(&qso);
-            ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
-                     (unsigned long)qso.freq_hz);
+            // The answer must say what happened: a refused QSO answered
+            // {"ok":true} until 2026-11-13 (found by the bench test of the
+            // full-storage path), so the web log form reported it as logged.
+            if (adif_log_record(&qso))
+                ESP_LOGI(TAG, "web: logged %s %s at %lu Hz", ucall, mode,
+                         (unsigned long)qso.freq_hz);
+            else
+                err = "NOT logged - log storage full: download the log, then clear it";
         }
         cJSON_Delete(root);
         httpd_resp_set_type(req, "application/json");
@@ -3407,6 +3453,43 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", oerr);
             httpd_resp_sendstr(req, body);
         }
+        return ESP_OK;
+    } else if (action && strcmp(action, "upload_cursors") == 0) {
+        /* Read, and optionally set, how many device-log records each upload
+         * has sent: {"action":"upload_cursors"} reads; add any of "qrz",
+         * "eqsl", "lotw", "cloudlog" (a count, clamped to the log) to set.
+         * There was no way to see or put these back; the bench test of QSO
+         * log rotation (2026-11-13) needed both, and so does support - lower
+         * one and the next upload re-sends the records above it. Set values
+         * are flushed before the reply. */
+        uint32_t c[4];
+        settings_get_upload_cursors(&c[0], &c[1], &c[2], &c[3]);
+        static const char *const nm[4] = { "qrz", "eqsl", "lotw", "cloudlog" };
+        uint32_t n = (uint32_t)adif_log_count();
+        bool changed = false;
+        for (int i = 0; i < 4; i++) {
+            cJSON *v = cJSON_GetObjectItem(root, nm[i]);
+            if (!cJSON_IsNumber(v) || v->valuedouble < 0) continue;
+            uint32_t want = (uint32_t)v->valuedouble;
+            if (want > n) want = n;
+            if (i == 0) settings_set_qrz_uploaded_n(want);
+            if (i == 1) settings_set_eqsl_uploaded_n(want);
+            if (i == 2) settings_set_lotw_uploaded_n(want);
+            if (i == 3) settings_set_cloudlog_uploaded_n(want);
+            ESP_LOGW(TAG, "upload cursor %s set %lu -> %lu over the API", nm[i],
+                     (unsigned long)c[i], (unsigned long)want);
+            c[i] = want;
+            changed = true;
+        }
+        if (changed) settings_flush();
+        cJSON_Delete(root);
+        char body[200];
+        snprintf(body, sizeof body,
+                 "{\"ok\":true,\"qso_count\":%lu,\"qso_archived\":%d,\"qrz\":%lu,\"eqsl\":%lu,\"lotw\":%lu,\"cloudlog\":%lu}",
+                 (unsigned long)n, adif_log_archived_count(), (unsigned long)c[0], (unsigned long)c[1],
+                 (unsigned long)c[2], (unsigned long)c[3]);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
         return ESP_OK;
     } else if (action && strcmp(action, "reboot") == 0) {
         /* Randy N4OPI, 2026-09-22: "is there a way to reboot the Tab5 from the
@@ -5070,6 +5153,7 @@ static void adif_import_mark_uploaded(void)
     settings_set_qrz_uploaded_n(n);
     settings_set_eqsl_uploaded_n(n);
     settings_set_lotw_uploaded_n(n);
+    settings_set_cloudlog_uploaded_n(n);   // #171 - was missing: Cloudlog would re-send a restore
 }
 
 // POST /api/adif/import?mark_uploaded=1 — merge records from an uploaded
@@ -8696,6 +8780,12 @@ static esp_err_t wspr_handler(httpd_req_t *req)
          * line said "off" as a string literal while the operator watched his
          * spots appear on wsprnet.org. */
         cJSON_AddStringToObject(o, "status", wsprnet_status());
+        /* Reports ACCEPTED since boot. A separate number from "confirmed"
+         * below and they will not agree: that one counts eligible callsigns
+         * in the current spot table, this one every accepted report, calls
+         * long aged out of the table included. Asked for after a 20-hour run
+         * where the per-pass count cleared every two minutes. */
+        cJSON_AddNumberToObject(o, "sent_total", wsprnet_sent_total());
         /* How many of the calls heard are eligible under the heard-more-than-
          * once rule that gates publication - the part an operator cannot work
          * out from anywhere else on the page. */
@@ -9720,6 +9810,10 @@ static void upload_task(void *arg)
         dsp_set_transfer_quiet(true);
         webserver_ws_set_paused(true);
         bool sd_locked = sd_archive_lock(5000);
+        // A rotation renumbers every record; it never runs while this batch
+        // holds the lock (adif_log_rotate tries once and leaves it for the
+        // next boot).
+        adif_log_upload_lock();
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
@@ -9775,6 +9869,7 @@ static void upload_task(void *arg)
         // between the old simultaneous release and the SD task's next
         // write actually landing. Release SD first and give it a moment to
         // do that write while WS/DSP are still quiet, then resume those.
+        adif_log_upload_unlock();
         if (sd_locked) sd_archive_unlock();
         vTaskDelay(pdMS_TO_TICKS(1500));
         webserver_ws_set_paused(false);

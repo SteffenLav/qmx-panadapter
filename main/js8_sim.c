@@ -10,6 +10,7 @@
 //   - idle traffic
 //   - answering what we send them
 //   - the task
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR - see T198
 #include "js8_sim.h"
 
 #include "ft8_test.h"          /* ft8_op_mode_get / _slot_ms              */
@@ -510,7 +511,12 @@ static void js8_sim_task(void *arg)
      * the first run on bench1 (2026-10-31, right after injecting its first
      * phantom). The task is this struct's only user, so a file-static costs
      * nothing and removes the largest consumer whatever the stack size. */
-    static qmx_settings_t s;
+    /* PSRAM. 4,212 B, and this is the SIMULATOR - a shipped unit never runs
+     * this task, so it was 4 KB of the DMA pool's headroom held for nothing.
+     * Not DMA, not an ISR, read once per 500 ms tick. See T198 and the
+     * internal-RAM audit; the same struct in settings.c stays internal
+     * because settings_load_all() is hot, which this caller is not. */
+    static EXT_RAM_BSS_ATTR qmx_settings_t s;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));

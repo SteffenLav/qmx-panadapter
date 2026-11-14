@@ -45,6 +45,10 @@ static const char *TAG = "sd_arch";
 #define SD_HISTORY_DIR   "/sdcard/qmx-panadapter/history"
 #define SD_ADIF_PATH     "/sdcard/qmx-panadapter/qso.adi"
 #define SD_ADIF_PREV     "/sdcard/qmx-panadapter/qso.prev.adi"
+// QSO log rotation (docs/qso-log-rotation-design.md): records moved off the
+// device, append-only, and the worked-before index derived from them.
+#define SD_ARC_PATH      "/sdcard/qmx-panadapter/qso-archive.adi"
+#define SD_WIDX_PATH     "/sdcard/qmx-panadapter/qso-worked.idx"
 #define SD_CONFIG_PATH   "/sdcard/qmx-panadapter/qmx-config.txt"
 #define SD_LOTW_CERT_PATH "/sdcard/qmx-panadapter/lotw_cert.b64"
 #define SD_LOTW_KEY_PATH  "/sdcard/qmx-panadapter/lotw_key.b64"
@@ -141,6 +145,15 @@ static const char *TAG = "sd_arch";
 static volatile bool s_mounted      = false;
 // Set once the boot-window mount retries have finished, mounted or not.
 static volatile bool s_boot_probe_done = false;
+// The card was mounted inside the boot window: the only place a rotation
+// runs (an SD write at an arbitrary moment with WiFi up is the #153 risk).
+static bool s_boot_mount = false;
+static bool s_rotation_tried = false;
+// What the card's qso.adi holds as "archive + device records", if THIS mount
+// wrote it that way: the archive size it was built with. Lets a later mirror
+// in the same mount rewrite only the part after the archive. 0 = unknown.
+static long s_card_full_ab = 0;
+
 static volatile bool s_adif_dirty   = true;   // mirror once on first mount
 static volatile bool s_config_dirty = true;
 static volatile bool s_lotw_dirty   = true;   // LoTW cert+key: mount + on import
@@ -230,6 +243,9 @@ static void write_readme(void)
         "  qso.adi         Your QSO log (ADIF). Import into any logger, or\r\n"
         "                  upload to QRZ / eQSL / LoTW. Restore it onto a Tab5\r\n"
         "                  with 'Restore from SD' in the log window.\r\n"
+        "  qso-archive.adi Older QSOs moved off the Tab5 at start-up. qso.adi\r\n"
+        "                  above already contains them - it is the whole log.\r\n"
+        "  qso-worked.idx  Stations the archive has worked (worked-before).\r\n"
         "  qso.prev.adi    The copy from just before the log last got SMALLER\r\n"
         "                  (a deletion, a reset). Kept so a mistake is not\r\n"
         "                  mirrored away; only replaced by the next shrink.\r\n"
@@ -1260,6 +1276,7 @@ static bool try_mount(void)
 
     s_log_rotate_tried = false;    // each mount gets one rotate-and-retry
     s_adif_dirty = true;           // force a full mirror right after mounting
+    s_card_full_ab = 0;            // nothing known about the card file yet
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
@@ -1312,6 +1329,7 @@ static bool try_mount(void)
     }
 
     s_mounted = true;
+    if (!s_boot_probe_done) s_boot_mount = true;
     s_last_mount_err = ESP_OK;
     s_instr.mount_ok++;
     /* Mounting wrote README.txt (and the snapshot is about to write qso.adi and
@@ -1322,6 +1340,311 @@ static bool try_mount(void)
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
     return true;
+}
+
+// ---- QSO log + archive ------------------------------------------------------
+
+// The size the card's qso.adi gets: the archive this log owns, then the device
+// log's records. Without an archive of this log on the card, the device file.
+static bool archive_in_use(void)
+{
+    uint32_t ab = adif_log_archive_bytes();
+    struct stat st;
+    return ab > 0 && stat(SD_ARC_PATH, &st) == 0 && st.st_size >= (off_t)ab;
+}
+static long adif_full_log_bytes(long device_file_bytes)
+{
+    return archive_in_use() ? (long)adif_log_archive_bytes() + adif_log_records_bytes() : device_file_bytes;
+}
+
+// ⛔ ONE CARD FILE OPEN AT A TIME, PLUS qmx-log.txt.
+// The card is mounted with max_files = 2 (bsp_sdcard_init in try_mount), and
+// s_log_file holds qmx-log.txt open for the whole mount. A third fopen on the
+// card fails. The first version of this code held qso.adi AND the archive open
+// together: every mirror failed, each failure was read as a card removal, and
+// the card went through unmount/remount every ~40 s with WiFi up - and the
+// "wb" open had already emptied qso.adi (bench1, 2026-11-13). So: a file on
+// the card is opened, used and closed before the next one is opened. SPIFFS
+// files are a different VFS and do not count.
+
+// Read n bytes at off from a card file, open-read-close. False on any error.
+static bool card_read_at(const char *path, long off, void *dst, size_t n)
+{
+    FILE *f = fopen(path, "rb");
+    bool ok = f && fseek(f, off, SEEK_SET) == 0 && fread(dst, 1, n, f) == n;
+    if (f) fclose(f);
+    return ok;
+}
+
+// Does the card file (qso.adi, or qso.prev.adi) start with the first ab bytes
+// of the archive? Compared on the last 256 of them: the archive is append-
+// only, so a file that matches there was written from it. Card lock held.
+static bool prefix_matches_locked(const char *path, long ab)
+{
+    static char a[256] SD_IO_ALIGNED, b[256] SD_IO_ALIGNED;
+    struct stat st;
+    if (ab <= 0 || stat(path, &st) != 0 || st.st_size < ab) return false;
+    long n = ab < 256 ? ab : 256;
+    return card_read_at(SD_ARC_PATH, ab - n, a, (size_t)n) &&
+           card_read_at(path, ab - n, b, (size_t)n) &&
+           memcmp(a, b, (size_t)n) == 0;
+}
+
+// Copy the device log's records (everything after its header line) to the
+// open card file `out`. The device log is on SPIFFS - not a card file.
+static bool copy_device_records(FILE *out, char *buf, size_t bufsz, long *copied)
+{
+    FILE *d = fopen(adif_log_file_path(), "rb");
+    if (!d) return false;
+    int c;
+    while ((c = fgetc(d)) != EOF && c != '\n') { }   // header line
+    bool ok = !ferror(d);
+    size_t g;
+    *copied = 0;
+    while (ok && (g = fread(buf, 1, bufsz, d)) > 0) {
+        if (fwrite(buf, 1, g, out) != g) ok = false;
+        *copied += (long)g;
+    }
+    if (ferror(d)) ok = false;
+    fclose(d);
+    return ok;
+}
+
+
+#define SD_ADIF_TMP SD_ADIF_PATH ".tmp"
+#define MIRROR_CHUNK (64 * 1024)
+
+// Mirror the QSO log to the card's qso.adi: the archive this log owns, then
+// the device log's records, so the card file is the whole log for a PC and for
+// "Restore from SD". Card lock held. A failure here is logged and NOT treated
+// as a card removal (see the caller): the card is fine, the next boot retries.
+static bool mirror_adif(void)
+{
+    if (!archive_in_use()) { s_card_full_ab = 0; return copy_file(adif_log_file_path(), SD_ADIF_PATH); }
+    long ab = (long)adif_log_archive_bytes();
+    char *buf = sd_io_buf_alloc(MIRROR_CHUNK);
+    if (!buf) { ESP_LOGE(TAG, "QSO log mirror: no memory for its buffer"); return false; }
+    const char *step = "";
+    long recs = 0;
+    bool ok = true;
+
+    // A qso.adi.tmp left by a cut between the remove and the rename below is
+    // the complete file: finish the rename first.
+    struct stat st;
+    if (stat(SD_ADIF_PATH, &st) != 0 && stat(SD_ADIF_TMP, &st) == 0) rename(SD_ADIF_TMP, SD_ADIF_PATH);
+
+    if (s_card_full_ab == ab && stat(SD_ADIF_PATH, &st) == 0 && st.st_size >= ab) {
+        // Same mount, same archive: rewrite the part after it, in place.
+        step = "open r+b";
+        FILE *out = fopen(SD_ADIF_PATH, "r+b");
+        ok = out != NULL;
+        if (ok) { step = "seek"; ok = fseek(out, ab, SEEK_SET) == 0; }
+        if (ok) { step = "device records"; ok = copy_device_records(out, buf, MIRROR_CHUNK, &recs); }
+        if (ok) { step = "truncate"; ok = fflush(out) == 0 && ftruncate(fileno(out), ab + recs) == 0; }
+        if (ok) { step = "fsync"; ok = fsync(fileno(out)) == 0; }
+        if (out && fclose(out) != 0 && ok) { step = "close"; ok = false; }
+    } else {
+        // Build qso.adi.tmp, then swap it in. Never truncate qso.adi first.
+        long done = 0;
+        bool first = true;
+        while (ok && done < ab) {
+            size_t n = (size_t)((ab - done) < MIRROR_CHUNK ? (ab - done) : MIRROR_CHUNK);
+            step = "read archive";
+            ok = card_read_at(SD_ARC_PATH, done, buf, n);
+            if (!ok) break;
+            step = "write tmp";
+            FILE *t = fopen(SD_ADIF_TMP, first ? "wb" : "ab");
+            ok = t && fwrite(buf, 1, n, t) == n && fflush(t) == 0 && fsync(fileno(t)) == 0;
+            if (t && fclose(t) != 0) ok = false;
+            first = false;
+            done += (long)n;
+        }
+        if (ok) {
+            step = "device records";
+            FILE *t = fopen(SD_ADIF_TMP, "ab");
+            ok = t && copy_device_records(t, buf, MIRROR_CHUNK, &recs) && fflush(t) == 0 && fsync(fileno(t)) == 0;
+            if (t && fclose(t) != 0) ok = false;
+        }
+        if (ok) { step = "size"; ok = stat(SD_ADIF_TMP, &st) == 0 && st.st_size == ab + recs; }
+        if (ok) {
+            step = "swap";
+            unlink(SD_ADIF_PATH);                  // FatFs rename does not replace
+            ok = rename(SD_ADIF_TMP, SD_ADIF_PATH) == 0;
+        }
+        if (!ok) unlink(SD_ADIF_TMP);
+    }
+    int e = errno;
+    sd_io_buf_free(buf);
+    if (ok) {
+        s_card_full_ab = ab;
+        ESP_LOGI(TAG, "mirrored QSO log: %ld B archive + %ld B device records", ab, recs);
+    } else {
+        s_card_full_ab = 0;
+        ESP_LOGE(TAG, "QSO log mirror FAILED at '%s' (errno %d %s) - qso.adi on the card left as it was; next boot retries",
+                 step, e, strerror(e));
+    }
+    return ok;
+}
+
+// Copy the flash-persisted diag logs (both generations) to the card's
+// history/ folder. For QSO log rotation at the wall, which then deletes them
+// from flash (adif_log_rotate): they hold EARLIER boots too - possibly boots
+// that ran without a card - so they are not on the card until copied here.
+// sd_archive's task only, card lock held. True only if every file that
+// exists was copied completely.
+bool sd_archive_save_flash_diag(void)
+{
+    if (!s_mounted) return false;
+    char dir[64], dst[112];
+    snprintf(dir, sizeof dir, "%s/history", SD_DIR);
+    ensure_dir(dir);
+    time_t now = time(NULL);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+    char stamp[20];
+    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+    static const char *const src[2] = { "/spiffs/diag.0.log", "/spiffs/diag.log" };
+    bool ok = true;
+    for (int i = 0; i < 2; i++) {
+        struct stat st, dt;
+        if (stat(src[i], &st) != 0) continue;            // that generation does not exist
+        snprintf(dst, sizeof dst, "%s/flash-diag-%s-%d.txt", dir, stamp, i);
+        if (!copy_file(src[i], dst) || stat(dst, &dt) != 0 || dt.st_size != st.st_size) {
+            ESP_LOGE(TAG, "could not copy %s to the card - it stays on flash", src[i]);
+            ok = false;
+        } else {
+            ESP_LOGW(TAG, "copied %s (%ld B) to %s before it is dropped", src[i], (long)st.st_size, dst);
+        }
+    }
+    return ok;
+}
+
+bool sd_archive_archive_info(long *bytes, uint32_t *records)
+{
+    if (!sd_archive_is_mounted() || !sd_archive_lock(5000)) return false;
+    struct stat st;
+    bool ok = stat(SD_ARC_PATH, &st) == 0;
+    if (ok) {
+        if (bytes) *bytes = (long)st.st_size;
+        if (records) {
+            // Lines after the header line: one record each.
+            FILE *f = fopen(SD_ARC_PATH, "rb");
+            static char buf[2048] SD_IO_ALIGNED;
+            long nl = 0; size_t g;
+            while (f && (g = fread(buf, 1, sizeof buf, f)) > 0)
+                for (size_t i = 0; i < g; i++) nl += (buf[i] == '\n');
+            if (f) fclose(f); else ok = false;
+            *records = nl > 0 ? (uint32_t)(nl - 1) : 0;
+        }
+    }
+    sd_archive_unlock();
+    return ok;
+}
+
+bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes)
+{
+    if (!sd_archive_is_mounted() || !sd_archive_lock(5000)) return false;
+    bool r = prefix_matches_locked(previous ? SD_ADIF_PREV : SD_ADIF_PATH, arc_bytes);
+    sd_archive_unlock();
+    return r;
+}
+
+// ---- adopting an archive the operator put on the card ----------------------
+//
+// Randy N4OPI, 2026-11-14: "is there a way to get all 2700 existing QSOs plus
+// new contacts onto the SD card's version of qso.adi". There was not. A single
+// 500 KB ADIF restore is refused (it does not fit in the 1 MB partition and
+// never could), and a file placed on the card by hand was mirrored over.
+//
+// This is the route: the records stay on the card as qso-archive.adi and the
+// device log simply takes ownership of them, which costs one header line. The
+// worked-before index is then built from them on the next mount, so every one
+// of those callsigns turns grey.
+//
+// ⛔ IT IS AN OFFER, NEVER AUTOMATIC, and the reason is not politeness. The
+// same conditions are met by a card carrying ANOTHER STATION'S archive - four
+// Tab5s here and users swap cards - and by a log the operator has just
+// deliberately CLEARED with the old archive still on the card. Adopting in
+// either case merges or resurrects a log in silence. Only the person who put
+// the file there can tell those three cases apart, so only they decide.
+//
+// Not offered when the log was LOST: adif_log_restore_lost_from_sd() owns that
+// case and would otherwise offer the same records twice.
+static uint32_t s_offer_recs, s_offer_bytes;
+static bool     s_offer_open;        // the question is up (or waiting to be)
+static bool     s_offer_checked;     // asked once per boot, however it was answered
+static int      s_offer_answer;      // 0 none, 1 use them, 2 leave it
+
+static void adoption_check(void)
+{
+    if (s_offer_checked || s_offer_open) return;
+    if (adif_log_was_lost()) return;
+    if (adif_log_archive_bytes() != 0) return;      // this log has a history already
+
+    struct stat st;
+    if (stat(SD_ARC_PATH, &st) != 0 || st.st_size <= 0) return;
+    if ((uint32_t)st.st_size == settings_get_archive_declined()) return;   // already said no
+
+    // ⛔ Counted HERE, not through sd_archive_archive_info(): that one takes
+    // sd_archive_lock(), the task already holds it, and the mutex is not
+    // recursive. Records = lines after the archive's header line, the same
+    // rule that function uses.
+    long bytes = (long)st.st_size;
+    uint32_t recs = 0;
+    {
+        FILE *f = fopen(SD_ARC_PATH, "rb");
+        if (!f) return;
+        static char cbuf[2048] SD_IO_ALIGNED;
+        long nl = 0; size_t g;
+        while ((g = fread(cbuf, 1, sizeof cbuf, f)) > 0)
+            for (size_t i = 0; i < g; i++) nl += (cbuf[i] == '\n');
+        fclose(f);
+        if (nl < 2) return;                  // header only, or not line-per-record
+        recs = (uint32_t)(nl - 1);
+    }
+
+    s_offer_recs  = recs;
+    s_offer_bytes = (uint32_t)bytes;
+    s_offer_open  = true;
+    ESP_LOGW(TAG, "the card holds an archive of %lu records (%ld B) this log does not own - asking the operator",
+             (unsigned long)recs, bytes);
+}
+
+static void adoption_apply(void)
+{
+    int ans = s_offer_answer;
+    if (!ans) return;
+    s_offer_answer = 0;
+    s_offer_open   = false;
+    s_offer_checked = true;
+    if (ans == 2) {
+        settings_set_archive_declined(s_offer_bytes);
+        ESP_LOGW(TAG, "adoption declined for a %lu B archive - not asked again for this file",
+                 (unsigned long)s_offer_bytes);
+        return;
+    }
+    if (!adif_log_adopt_card_archive(s_offer_recs, s_offer_bytes)) return;
+    // The index is what makes the adopted calls read as worked before. Built
+    // here rather than waiting for the next boot, because the operator just
+    // asked for exactly that and a slow pass now is the honest cost.
+    adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
+    s_adif_dirty = true;            // qso.adi is archive + records from now on
+    ESP_LOGW(TAG, "adopted the card's archive: %lu records, %lu B",
+             (unsigned long)s_offer_recs, (unsigned long)s_offer_bytes);
+}
+
+bool sd_archive_adoption_offer(uint32_t *records, uint32_t *bytes)
+{
+    if (!s_offer_open) return false;
+    if (records) *records = s_offer_recs;
+    if (bytes)   *bytes   = s_offer_bytes;
+    return true;
+}
+
+void sd_archive_adoption_answer(bool use)
+{
+    if (!s_offer_open) return;
+    s_offer_answer = use ? 1 : 2;   // the task does the work; this is the UI thread
 }
 
 // ---- task ------------------------------------------------------------------
@@ -1356,7 +1679,11 @@ static void keep_previous_adif(void)
     if (stat(SD_ADIF_PATH, &cur) != 0 || cur.st_size <= 0) return;   // nothing to keep
     const char *src = adif_log_file_path();
     if (!src || stat(src, &incoming) != 0) return;
-    if (incoming.st_size >= cur.st_size) return;   // growing or unchanged: normal logging
+    // With an archive the card's file is archive + device records, and that
+    // sum is what it is about to become.
+    long in_sz = adif_full_log_bytes((long)incoming.st_size);
+    if (in_sz >= (long)cur.st_size) return;   // growing or unchanged: normal logging
+    incoming.st_size = in_sz;
 
     unlink(SD_ADIF_PREV);   // FatFs rename will not replace an existing file
     if (rename(SD_ADIF_PATH, SD_ADIF_PREV) == 0) {
@@ -1463,6 +1790,8 @@ static void sd_archive_task(void *arg)
     // Release app_main, which flushes the Reader's staged offline manual to the
     // card before it starts WiFi (see sd_archive_wait_mounted).
     s_boot_probe_done = true;
+    // A log lost at boot with no card to restore it from: say so now.
+    if (!s_mounted && adif_log_was_lost()) adif_log_report_lost_no_card();
 
     for (;;) {
         // WiFi-aware gating. Read the user's on/off INTENT live (not
@@ -1783,13 +2112,27 @@ static void sd_archive_task(void *arg)
         // log through a remount for the sake of it.
         if (ok) mirror_cw();
 
-        if (ok && s_adif_dirty) {
+        // Rotation: once per boot, on a boot-window mount, BEFORE the mirror
+        // so the card's qso.adi is written once with the result.
+        if (ok && s_boot_mount && !s_rotation_tried && !adif_log_was_lost()) {
+            s_rotation_tried = true;
+            adif_log_rotate(SD_ARC_PATH);
+            adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
+        }
+
+        // The adoption offer, and the answer to it. See adoption_check().
+        if (ok) adoption_check();
+        if (ok) adoption_apply();
+
+        // ⛔ Never mirror a LOST log over the card's copy - that copy is what
+        // restores it (adif_log_restore_lost_from_sd, after this burst).
+        if (ok && s_adif_dirty && !adif_log_was_lost()) {
             s_adif_dirty = false;
             keep_previous_adif();
-            if (!copy_file(adif_log_file_path(), SD_ADIF_PATH)) {
-                s_adif_dirty = true;   // retry after remount
-                ok = false;
-            }
+            // ⛔ Not a card error: a mirror that fails for its own reasons
+            // must not put the card through unmount/remount with WiFi up.
+            // Logged inside; the next boot (dirty at mount) retries.
+            (void)mirror_adif();
         }
         if (ok && s_config_dirty) {
             s_config_dirty = false;
@@ -1911,11 +2254,13 @@ static void sd_archive_task(void *arg)
         if (wifi_on) {
             park_snapshot();
             if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+            if (adif_log_was_lost()) adif_log_restore_lost_from_sd();   // takes the lock itself
             continue;
         }
 
 
         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+        if (adif_log_was_lost()) adif_log_restore_lost_from_sd();       // takes the lock itself
 
         // 30 s heartbeat: proves SD is alive + shows how hard it's writing, so
         // any concurrent WiFi/FT8 disturbance in the log has an SD reference.
@@ -2015,6 +2360,11 @@ const char *sd_archive_log_path(void)   { return SD_LOG_PATH; }
 // is no card, no file, or no memory.
 char *sd_archive_read_adif_file(bool previous, size_t *out_len)
 {
+    return sd_archive_read_adif_file_at(previous, 0, out_len);
+}
+
+char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len)
+{
     if (!sd_archive_is_mounted()) {
         ESP_LOGW(TAG, "ADIF restore: no card mounted");
         return NULL;
@@ -2034,13 +2384,15 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
         // Not an error for the previous copy - most cards will never have one.
         ESP_LOGI(TAG, "ADIF restore: %s not on the card", path);
     } else {
-        size_t len = (size_t)st.st_size;
+        // offset: skip the archive part of the file (adif_log_import_from_sd).
+        size_t len = (size_t)st.st_size > offset ? (size_t)st.st_size - offset : 0;
         // Aligned, not plain PSRAM: this is a whole-file fread off the card.
         buf = sd_io_buf_alloc(len + 1);
         if (!buf) {
             ESP_LOGE(TAG, "ADIF restore: out of memory for %u bytes", (unsigned)len);
         } else {
             FILE *f = fopen(path, "r");
+            if (f && offset && fseek(f, (long)offset, SEEK_SET) != 0) { fclose(f); f = NULL; }
             size_t got = f ? fread(buf, 1, len, f) : 0;
             if (f) fclose(f);
             // A short read is a failing card, not a short file - do not hand

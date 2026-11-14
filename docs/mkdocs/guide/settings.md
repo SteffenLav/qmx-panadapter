@@ -837,7 +837,9 @@ Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is 
 
 | File | Contents |
 |------|----------|
-| `qso.adi` | ADIF QSO log — after each new entry with WiFi off, otherwise at the next start-up |
+| `qso.adi` | ADIF QSO log, complete: the archive below plus the QSOs on the Tab5 — after each new entry with WiFi off, otherwise at the next start-up |
+| `qso-archive.adi` | Older QSOs moved off the Tab5 — see **The QSO log and the card** below |
+| `qso-worked.idx` | Which stations the archive has worked, on which band, for the worked-before marking |
 | `qso.prev.adi` | The QSO log as it was just before it last got **smaller** — see below |
 | `qmx-config.txt` | All settings + memory channels, as INI text (restore via **Config** upload) |
 | `lotw_cert.b64`, `lotw_key.b64` | Your LoTW signing certificate + private key, so a restored device can sign for LoTW |
@@ -853,9 +855,28 @@ The Tab5 works perfectly well without one. With a card in, you also get:
 - **A full diagnostic history instead of the last few minutes.** Without a card, the log that survives a restart is held in a small area of internal flash and is overwritten roughly every 11 minutes of busy operating. On the card it is kept whole — so if something goes wrong overnight, or an hour ago, the evidence is still there when you come to report it.
 - **A grab-and-go station backup.** Your QSO log, every setting, your WiFi details and your LoTW certificate and key, mirrored automatically. Move the card to another Tab5 and your station comes with it, with no computer involved.
 - **A safety net for the QSO log.** The copy from just before the log last got *smaller* is kept beside it as `qso.prev.adi`, so a deletion you only notice two restarts later is still recoverable.
+- **A QSO log that does not fill up.** See below.
 - **Somewhere to put things.** Browse, download, upload and delete everything on the card from any computer at `http://qmx.local/files` — without pulling it out.
 
 A plain 32 GB FAT32 card is ideal. There is no benefit to a fast or expensive one: the Tab5 writes a few kilobytes a minute.
+
+### The QSO log and the card
+
+The Tab5's internal storage holds about 2,000 QSOs. With a card in, it never has to:
+at start-up the Tab5 keeps about the newest 500 to 700 QSOs and moves older ones to
+`qso-archive.adi` on the card. `qso.adi` on the card is still the complete log - use that
+one in your PC logger and for **Restore from SD**.
+
+- A QSO that QRZ, eQSL, LoTW or Cloudlog has not sent yet is not moved. If an upload falls
+  behind, the log on the Tab5 grows until it has caught up.
+- QSOs on the card cannot be edited or deleted on the Tab5. Edit `qso.adi` with a PC.
+- A log that is already full moves at the first or second start-up with the card in. To
+  make room, the Tab5's own diagnostic log files are copied to `history/` on the card and
+  removed from internal storage.
+- If the Tab5 starts and its QSO log is missing - internal storage can be damaged by a power
+  cut during a write - it restores the log from the card.
+- Without a card nothing moves. From 300 KB the Tab5 shows **QSO log nearly full**: download
+  the log, then clear it.
 
 **After inserting the SD card your Tab5 needs a restart.**
 

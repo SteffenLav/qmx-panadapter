@@ -98,6 +98,23 @@ const char *sd_archive_log_path(void);
 // written on success. Pauses the spectrum stream for the duration, like every
 // other bulk SD read here. See adif_log_import_from_sd().
 char *sd_archive_read_adif_file(bool previous, size_t *out_len);
+// The same, from byte `offset` on (the part of qso.adi after the archive).
+char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len);
+// The card's QSO archive: size and record count. False: no card or no archive.
+bool sd_archive_archive_info(long *bytes, uint32_t *records);
+// Does qso.adi (or qso.prev.adi) start with the archive's first arc_bytes?
+bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes);
+// Copy /spiffs/diag.0.log and diag.log to the card's history/ folder. For QSO
+// log rotation at the wall only (sd_archive's task, card lock held).
+bool sd_archive_save_flash_diag(void);
+
+// The adoption offer: a qso-archive.adi on the card that this log does not
+// own. True while the question should be on screen; the UI answers it with
+// sd_archive_adoption_answer(), and the archive task does the work. Never
+// adopted without an answer - see the note at adoption_check() for the three
+// cases this guards against. Safe from any task.
+bool sd_archive_adoption_offer(uint32_t *records, uint32_t *bytes);
+void sd_archive_adoption_answer(bool use);
 
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);

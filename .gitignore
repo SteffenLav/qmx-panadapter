@@ -130,3 +130,6 @@ build_host/
 
 # T18: zig output for tools/build_rnnoise_wasm.sh (the .gz in main/net/www is committed)
 build_wasm/
+
+# host harness binaries
+tools/spiffs_host/*.exe

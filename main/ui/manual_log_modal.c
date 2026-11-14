@@ -224,7 +224,13 @@ static void log_cb(lv_event_t *e)
     /* OUR activation is NOT set here on purpose - adif_log_record() stamps it
      * from settings, so a hand-typed QSO cannot miss the park the automatic
      * ones carry. See the comment on adif_qso_t. */
-    adif_log_record(&qso);
+    if (!adif_log_record(&qso)) {
+        /* Refused (storage full): say so here, and keep the call in the box -
+         * the operator has to log this contact somewhere else, and wiping it
+         * would also wipe the only record of it on this screen. */
+        note_set("NOT logged - log full: download it, then clear", UI_COLOR_DANGER);
+        return;
+    }
     ESP_LOGI(TAG, "logged %s %s %s/%s at %lu Hz", call, mode,
              qso.rst_sent ? qso.rst_sent : "-", qso.rst_rcvd ? qso.rst_rcvd : "-",
              (unsigned long)qso.freq_hz);

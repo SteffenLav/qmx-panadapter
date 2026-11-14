@@ -25,6 +25,7 @@
 // where æøå should have been. See font_ui_latin_24.c. The header and the
 // transport buttons stay on a built-in, because their text is ASCII and the
 // built-ins are already linked.
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "webradio_modal.h"
 #include "audio/webradio.h"
 #include "net/radio_browser.h"
@@ -119,7 +120,10 @@ typedef struct {
     char name[RB_NAME_LEN];
     char url[RB_URL_LEN];
 } wr_mem_t;
-static wr_mem_t  s_mem[WR_MEM_N];
+/* PSRAM: six NVS-loaded station memories, read when the modal opens and
+ * written when the operator saves one. Not DMA, not per-frame. 1,536 B of
+ * internal .bss otherwise - see radio_browser.c `seen` and T198. */
+static EXT_RAM_BSS_ATTR wr_mem_t s_mem[WR_MEM_N];
 static lv_obj_t *s_mem_btn[WR_MEM_N];
 static lv_obj_t *s_mem_lbl[WR_MEM_N];
 

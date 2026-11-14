@@ -1626,7 +1626,28 @@ void settings_set_lotw_uploaded_n(uint32_t n);
 // Stack protection fault at 48 s on a 4 KB stack (2026-09-06) - the same bug
 // class as the three `wifi.c` instances in CLAUDE.md. Any argument is
 // optional (pass NULL).
-void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw);
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw,
+                                 uint32_t *cloudlog);
+
+// QSO log rotation (adif_log.c). The archived-record count the upload cursors
+// were last shifted to, and the shift itself: every cursor drops by
+// (to_base - base), clamped at 0, written synchronously before the new base.
+uint32_t settings_get_rot_base(void);
+void settings_shift_upload_cursors(uint32_t to_base);
+// Set the base WITHOUT shifting: a log that adopts the card's archive (restore)
+// sets its cursors itself.
+void settings_set_rot_base(uint32_t base);
+
+// The size of a card archive the operator declined to adopt, so the offer is
+// not raised again for that same file. 0 = none declined.
+uint32_t settings_get_archive_declined(void);
+void settings_set_archive_declined(uint32_t bytes);
+
+// Set once a QSO log has existed on this unit. A missing log on a unit that
+// had one was lost (SPIFFS power-cut damage), not never created - the
+// trigger for restoring it from the card.
+bool settings_qso_log_seen(void);
+void settings_mark_qso_log_seen(void);
 
 // The three fields the spot lane needs, without the whole struct. Same reason:
 // it runs on the `render` task, which the settings_load_all() stack guard

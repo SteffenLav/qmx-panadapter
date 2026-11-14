@@ -52,11 +52,20 @@ typedef struct {
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.
 // Call once at boot after NVS is initialised (does not depend on WiFi/CAT).
+// ⛔ 0 IN EVERY RELEASE. 1 only for a bench build that tests the full-
+// partition QSO path: it compiles webserver.c's spiffs_fill/spiffs_unfill.
+#ifndef ADIF_BENCH_FILL
+#define ADIF_BENCH_FILL 0
+#endif
+
 void adif_log_init(void);
 
 // Append one completed QSO to the ADIF file.
 // Thread-safe. Blocks briefly while writing (~1-2 ms on SPIFFS).
-void adif_log_record(const adif_qso_t *qso);
+// Returns true only when the record is on flash. False means it was NOT
+// logged (storage full or unavailable) and the operator has already been
+// toasted - a caller must never report it as logged.
+bool adif_log_record(const adif_qso_t *qso);
 
 // Number of QSOs in the log (in-memory counter, no I/O).
 int adif_log_count(void);
@@ -231,6 +240,34 @@ int adif_log_import_update(const char *adif_text, adif_import_result_t *res);
 // Returns records added, -1 if the card could not be read (no card, no file, a
 // read error), or -1 with res->found > 0 if the log could not be written.
 int adif_log_import_from_sd(adif_import_result_t *res);
+
+// ---- Older records on the SD card (docs/qso-log-rotation-design.md) -------
+// adif_log_count() is the DEVICE log - every index above, and every upload
+// cursor, refers to it. Records moved to the card are counted here.
+int      adif_log_archived_count(void);
+uint32_t adif_log_archive_bytes(void);   // the archive size this log owns; 0 = none
+
+// Take over a card archive the operator placed there by hand, after they have
+// said yes to the offer. Refuses if this log already owns an archive. Rewrites
+// the log's header only - no record is copied into SPIFFS.
+bool     adif_log_adopt_card_archive(uint32_t records, uint32_t bytes);
+long     adif_log_records_bytes(void);   // device log size minus its header line
+bool     adif_log_was_lost(void);        // log missing at boot on a unit that had one
+
+// Held by the upload task for a whole batch: a rotation shifts every index.
+void adif_log_upload_lock(void);
+void adif_log_upload_unlock(void);
+
+// sd_archive's task only, card mounted, in the boot burst:
+// move the oldest records to arc_path once the log is over its cap. Returns
+// records moved (0 also when there was nothing to do or it was refused).
+int  adif_log_rotate(const char *arc_path);
+// Load the card's worked-before index and add the archive's newer pairs.
+void adif_log_worked_index_sync(const char *idx_path, const char *arc_path);
+// Restore a log lost at boot from the card (outside the SD lock), or say once
+// that there was no card to restore from.
+void adif_log_restore_lost_from_sd(void);
+void adif_log_report_lost_no_card(void);
 
 // The ADIF BAND string this module would log for a frequency ("20M", "40M"...),
 // or "" if it falls outside every known band. Exposed so callers comparing two

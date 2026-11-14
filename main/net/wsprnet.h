@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Publish WSPR reception reports to wsprnet.org.
  *
@@ -34,5 +35,12 @@ void wsprnet_init(void);
  * is published. Returns false if there is nothing eligible. */
 bool wsprnet_dry_run(void);
 
-/* One line for the WSPR page: what the uploader is doing, or why it is not. */
+/* One line for the WSPR page: what the uploader is doing, or why it is not.
+ * Carries the TOTAL accepted since boot, not this pass's count - see the note
+ * at s_sent_total in wsprnet.c. */
 const char *wsprnet_status(void);
+
+/* Reports wsprnet has ACCEPTED since boot. Not the same as the "N of M
+ * publishable" count on the page: that is the eligible callsigns in the
+ * current spot table, this is every accepted report, aged-out calls included. */
+uint32_t wsprnet_sent_total(void);
