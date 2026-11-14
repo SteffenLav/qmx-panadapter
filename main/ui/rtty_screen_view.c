@@ -384,10 +384,37 @@ static bool type_is_open(void)
     return s_kb_wrap && !lv_obj_has_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
 }
 
+static bool s_kb_phys;   /* layout last applied: a physical keyboard was up */
+
+/* Physical keyboards (operator 2026-11-14: "I want to use my ble keyb ... on
+ * screen keyb should go away or not be shown if ble is connected", and "the
+ * attachable keyb should work"). Both the BLE and the snap-on keyboard type
+ * into whatever ui_kbd_note_focus() names, and ui_osk_show() is the project's
+ * one gate that keeps the on-screen keyboard away while either is connected.
+ * This line was opened by a button, never focused, and showed its keyboard
+ * directly - so neither physical keyboard reached it. With one connected the
+ * line alone shows, ABOVE the text box, so the decoded text stays in view. */
+static void type_layout(void)
+{
+    s_kb_phys = ui_phys_kbd_active();
+    const int w = MID_W - PANE_W;
+    if (s_kb_phys) {
+        lv_obj_set_size(s_kb_wrap, w, 50);
+        lv_obj_set_pos(s_kb_wrap, PANE_W, MID_Y + s_txt_top - 50);
+        lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_set_size(s_kb_wrap, w, 330);
+        lv_obj_set_pos(s_kb_wrap, PANE_W, 720 - 330);
+    }
+    ui_osk_show(s_kb);   /* hides it again itself while a keyboard is up */
+}
+
 static void type_close(bool end_over)
 {
     if (!type_is_open()) return;
     lv_obj_add_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_state(s_kb_ta, LV_STATE_FOCUSED);
+    ui_kbd_note_unfocus(s_kb_ta);
     /* Closing the keyboard ends the over once what was typed has gone. Only
      * when keyed: on an idle radio rtty_tx_send("") would START an over. */
     if (end_over && rtty_tx_keyed()) tx_send("", true);
@@ -417,49 +444,61 @@ static void type_kb_cb(lv_event_t *e)
     if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) type_close(true);
 }
 
+/* The line's two buttons, registered with ui_kbd_set_buttons(): a physical
+ * keyboard's Enter clicks the first (a new line is sent), Esc the second. */
+static void type_newline_cb(lv_event_t *e) { (void)e; if (s_kb_ta) lv_textarea_add_char(s_kb_ta, '\n'); }
+static void type_done_cb(lv_event_t *e)    { (void)e; type_close(true); }
+
 /* The keyboard covers the text box only, not the pane: STOP must stay in
  * reach while typing. 960 x 280 keys + a 50 px line of what was typed. */
 static void type_open_cb(lv_event_t *e)
 {
     (void)e;
     if (type_is_open()) { type_close(true); return; }   /* second press closes */
-    if (s_kb_wrap) {                                     /* built once, reused */
-        s_ta_resetting = true;
-        lv_textarea_set_text(s_kb_ta, "");
-        s_ta_resetting = false;
-        s_typed_len = 0;
-        lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
-        return;
+    if (!s_kb_wrap) {                                    /* built once, reused */
+        const int w = MID_W - PANE_W, bw = 100;
+        s_kb_wrap = lv_obj_create(lv_layer_top());
+        lv_obj_set_style_bg_color(s_kb_wrap, lv_color_hex(0x0d1116), 0);
+        lv_obj_set_style_bg_opa(s_kb_wrap, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_kb_wrap, 0, 0);
+        lv_obj_set_style_pad_all(s_kb_wrap, 0, 0);
+        lv_obj_set_style_radius(s_kb_wrap, 0, 0);
+        lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
+
+        s_kb_ta = lv_textarea_create(s_kb_wrap);
+        lv_obj_set_size(s_kb_ta, w - 2 * (bw + 6), 50);
+        lv_obj_set_pos(s_kb_ta, 0, 0);
+        lv_obj_set_style_text_font(s_kb_ta, &qmx_mono_25, 0);
+        lv_obj_set_style_text_color(s_kb_ta, lv_color_hex(0xFF9F9F), 0);
+        lv_obj_set_style_bg_color(s_kb_ta, lv_color_hex(0x14181e), 0);
+        lv_textarea_set_placeholder_text(s_kb_ta, "Type - each key is sent as you type");
+        lv_obj_add_event_cb(s_kb_ta, type_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        lv_obj_t *nl = mk_btn_f(s_kb_wrap, w - 2 * bw - 6, 2, bw, 46, &lv_font_montserrat_24,
+                                LV_SYMBOL_NEW_LINE, type_newline_cb, NULL, NULL);
+        lv_obj_t *dn = mk_btn_f(s_kb_wrap, w - bw, 2, bw, 46, &lv_font_montserrat_24,
+                                "Done", type_done_cb, NULL, NULL);
+        ui_kbd_set_buttons(nl, dn);
+
+        s_kb = lv_keyboard_create(s_kb_wrap);
+        ui_theme_style_keyboard(s_kb);
+        lv_obj_set_size(s_kb, w, 280);
+        lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+        ui_theme_keyboard_attach_caps_cycle_upper(s_kb);
+        lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
+        lv_keyboard_set_textarea(s_kb, s_kb_ta);
+        lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_READY, NULL);
+        lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_CANCEL, NULL);
     }
-    s_kb_wrap = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_kb_wrap, MID_W - PANE_W, 330);
-    lv_obj_set_pos(s_kb_wrap, PANE_W, 720 - 330);
-    lv_obj_set_style_bg_color(s_kb_wrap, lv_color_hex(0x0d1116), 0);
-    lv_obj_set_style_bg_opa(s_kb_wrap, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_kb_wrap, 0, 0);
-    lv_obj_set_style_pad_all(s_kb_wrap, 0, 0);
-    lv_obj_set_style_radius(s_kb_wrap, 0, 0);
-    lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_kb_ta = lv_textarea_create(s_kb_wrap);
-    lv_obj_set_size(s_kb_ta, MID_W - PANE_W, 50);
-    lv_obj_set_pos(s_kb_ta, 0, 0);
-    lv_obj_set_style_text_font(s_kb_ta, &qmx_mono_25, 0);
-    lv_obj_set_style_text_color(s_kb_ta, lv_color_hex(0xFF9F9F), 0);
-    lv_obj_set_style_bg_color(s_kb_ta, lv_color_hex(0x14181e), 0);
-    lv_textarea_set_placeholder_text(s_kb_ta, "Type - each key is sent as you type");
+    s_ta_resetting = true;
+    lv_textarea_set_text(s_kb_ta, "");
+    s_ta_resetting = false;
     s_typed_len = 0;
-    lv_obj_add_event_cb(s_kb_ta, type_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    s_kb = lv_keyboard_create(s_kb_wrap);
-    ui_theme_style_keyboard(s_kb);
-    lv_obj_set_size(s_kb, MID_W - PANE_W, 280);
-    lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    ui_theme_keyboard_attach_caps_cycle_upper(s_kb);
-    lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
-    lv_keyboard_set_textarea(s_kb, s_kb_ta);
-    lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_READY, NULL);
-    lv_obj_add_event_cb(s_kb, type_kb_cb, LV_EVENT_CANCEL, NULL);
+    lv_obj_clear_flag(s_kb_wrap, LV_OBJ_FLAG_HIDDEN);
+    type_layout();
+    lv_obj_add_state(s_kb_ta, LV_STATE_FOCUSED);   /* cursor shows where keys go */
+    ui_kbd_note_focus(s_kb_ta);
 }
 
 static void stop_cb(lv_event_t *e)
@@ -638,6 +677,7 @@ static void timer_cb(lv_timer_t *t)
     if (strcmp(lv_label_get_text(s_lbl_status), s) != 0) lv_label_set_text(s_lbl_status, s);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(tx_line ? 0xFF5050 : 0xC8CCD2), 0);
     tx_refresh(tx.keyed);
+    if (type_is_open() && ui_phys_kbd_active() != s_kb_phys) type_layout();
     place_markers(&st, dial);
 }
 
