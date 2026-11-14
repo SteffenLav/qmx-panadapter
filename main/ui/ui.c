@@ -7637,9 +7637,21 @@ static void update_freq_axis_labels(uint32_t center_hz)
          * operator's answer was to narrow the drawing instead. */
         const int X0 = ui_spec_x0();
         const int VW = DISPLAY_H_RES - X0;
-        int x = X0 + (int)(((hz - lo) * VW) / span_hz) - 44;
-        if (x < X0 + 2) x = X0 + 2;
-        if (x > DISPLAY_H_RES - 92) x = DISPLAY_H_RES - 92;
+        /* ⛔ CENTRED ON THE TICK, BY THE TEXT'S MEASURED WIDTH. This used a
+         * fixed -44 px, right only for one text length: "14.105" is ~55 px
+         * and "14.106.500" ~95 px, so labels sat left of their ticks at some
+         * zooms (operator 2026-11-14: "scale label shall be centred under tick
+         * mark on every zoom level"). A label that cannot be centred without
+         * crossing the view's edge is HIDDEN, not pushed sideways - pushed,
+         * it names a tick it is not under. The tick mark itself stays. */
+        const lv_font_t *f = lv_obj_get_style_text_font(s_tick_labels[i], LV_PART_MAIN);
+        int tw = (int)lv_text_get_width(buf, (uint32_t)strlen(buf), f, 0);
+        int tx = X0 + (int)(((hz - lo) * VW) / span_hz);
+        int x = tx - tw / 2;
+        if (x < X0 + 2 || x + tw > DISPLAY_H_RES - 2) {
+            lv_obj_add_flag(s_tick_labels[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
         lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x, -3);
     }
 }
