@@ -4536,6 +4536,30 @@ void settings_set_rot_base(uint32_t base)
     if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (qso_rot_base) failed: 0x%x", err);
 }
 
+#define KEY_ARC_DECL  "qso_arc_decl"
+
+/* ⛔ A DECLINE MUST STICK, or the question is worse than no question.
+ *
+ * The "use the card's archive?" offer is raised at every card mount, so an
+ * operator who says "Leave it" would be asked again on the next boot, and the
+ * one after. Keyed on the archive's SIZE: the same file declined stays
+ * declined, while a file the operator then CHANGES on the PC is a new offer,
+ * which is the behaviour they would expect. 0 = nothing declined. */
+uint32_t settings_get_archive_declined(void)
+{
+    uint32_t v = 0;
+    if (s_ready) nvs_get_u32(s_nvs, KEY_ARC_DECL, &v);
+    return v;
+}
+
+void settings_set_archive_declined(uint32_t bytes)
+{
+    if (!s_ready) return;
+    nvs_set_u32(s_nvs, KEY_ARC_DECL, bytes);
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs_commit (qso_arc_decl) failed: 0x%x", err);
+}
+
 bool settings_qso_log_seen(void)
 {
     uint8_t v = 0;

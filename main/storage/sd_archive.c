@@ -1549,6 +1549,104 @@ bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes)
     return r;
 }
 
+// ---- adopting an archive the operator put on the card ----------------------
+//
+// Randy N4OPI, 2026-11-14: "is there a way to get all 2700 existing QSOs plus
+// new contacts onto the SD card's version of qso.adi". There was not. A single
+// 500 KB ADIF restore is refused (it does not fit in the 1 MB partition and
+// never could), and a file placed on the card by hand was mirrored over.
+//
+// This is the route: the records stay on the card as qso-archive.adi and the
+// device log simply takes ownership of them, which costs one header line. The
+// worked-before index is then built from them on the next mount, so every one
+// of those callsigns turns grey.
+//
+// ⛔ IT IS AN OFFER, NEVER AUTOMATIC, and the reason is not politeness. The
+// same conditions are met by a card carrying ANOTHER STATION'S archive - four
+// Tab5s here and users swap cards - and by a log the operator has just
+// deliberately CLEARED with the old archive still on the card. Adopting in
+// either case merges or resurrects a log in silence. Only the person who put
+// the file there can tell those three cases apart, so only they decide.
+//
+// Not offered when the log was LOST: adif_log_restore_lost_from_sd() owns that
+// case and would otherwise offer the same records twice.
+static uint32_t s_offer_recs, s_offer_bytes;
+static bool     s_offer_open;        // the question is up (or waiting to be)
+static bool     s_offer_checked;     // asked once per boot, however it was answered
+static int      s_offer_answer;      // 0 none, 1 use them, 2 leave it
+
+static void adoption_check(void)
+{
+    if (s_offer_checked || s_offer_open) return;
+    if (adif_log_was_lost()) return;
+    if (adif_log_archive_bytes() != 0) return;      // this log has a history already
+
+    struct stat st;
+    if (stat(SD_ARC_PATH, &st) != 0 || st.st_size <= 0) return;
+    if ((uint32_t)st.st_size == settings_get_archive_declined()) return;   // already said no
+
+    // ⛔ Counted HERE, not through sd_archive_archive_info(): that one takes
+    // sd_archive_lock(), the task already holds it, and the mutex is not
+    // recursive. Records = lines after the archive's header line, the same
+    // rule that function uses.
+    long bytes = (long)st.st_size;
+    uint32_t recs = 0;
+    {
+        FILE *f = fopen(SD_ARC_PATH, "rb");
+        if (!f) return;
+        static char cbuf[2048] SD_IO_ALIGNED;
+        long nl = 0; size_t g;
+        while ((g = fread(cbuf, 1, sizeof cbuf, f)) > 0)
+            for (size_t i = 0; i < g; i++) nl += (cbuf[i] == '\n');
+        fclose(f);
+        if (nl < 2) return;                  // header only, or not line-per-record
+        recs = (uint32_t)(nl - 1);
+    }
+
+    s_offer_recs  = recs;
+    s_offer_bytes = (uint32_t)bytes;
+    s_offer_open  = true;
+    ESP_LOGW(TAG, "the card holds an archive of %lu records (%ld B) this log does not own - asking the operator",
+             (unsigned long)recs, bytes);
+}
+
+static void adoption_apply(void)
+{
+    int ans = s_offer_answer;
+    if (!ans) return;
+    s_offer_answer = 0;
+    s_offer_open   = false;
+    s_offer_checked = true;
+    if (ans == 2) {
+        settings_set_archive_declined(s_offer_bytes);
+        ESP_LOGW(TAG, "adoption declined for a %lu B archive - not asked again for this file",
+                 (unsigned long)s_offer_bytes);
+        return;
+    }
+    if (!adif_log_adopt_card_archive(s_offer_recs, s_offer_bytes)) return;
+    // The index is what makes the adopted calls read as worked before. Built
+    // here rather than waiting for the next boot, because the operator just
+    // asked for exactly that and a slow pass now is the honest cost.
+    adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
+    s_adif_dirty = true;            // qso.adi is archive + records from now on
+    ESP_LOGW(TAG, "adopted the card's archive: %lu records, %lu B",
+             (unsigned long)s_offer_recs, (unsigned long)s_offer_bytes);
+}
+
+bool sd_archive_adoption_offer(uint32_t *records, uint32_t *bytes)
+{
+    if (!s_offer_open) return false;
+    if (records) *records = s_offer_recs;
+    if (bytes)   *bytes   = s_offer_bytes;
+    return true;
+}
+
+void sd_archive_adoption_answer(bool use)
+{
+    if (!s_offer_open) return;
+    s_offer_answer = use ? 1 : 2;   // the task does the work; this is the UI thread
+}
+
 // ---- task ------------------------------------------------------------------
 
 // Before the mirror overwrites qso.adi, keep the copy that is there as
@@ -2021,6 +2119,10 @@ static void sd_archive_task(void *arg)
             adif_log_rotate(SD_ARC_PATH);
             adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
         }
+
+        // The adoption offer, and the answer to it. See adoption_check().
+        if (ok) adoption_check();
+        if (ok) adoption_apply();
 
         // ⛔ Never mirror a LOST log over the card's copy - that copy is what
         // restores it (adif_log_restore_lost_from_sd, after this burst).

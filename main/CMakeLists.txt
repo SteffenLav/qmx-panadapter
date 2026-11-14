@@ -36,6 +36,7 @@ idf_component_register(
         "ui/manual_log_modal.c"
         "ui/sched_modal.c"
         "ui/ft8_time_modal.c"
+        "ui/archive_adopt_modal.c"
         "ui/date_confirm_modal.c"
         "ui/ft8_tone_modal.c"
         "ui/adif_view_modal.c"

@@ -1618,6 +1618,11 @@ void settings_shift_upload_cursors(uint32_t to_base);
 // sets its cursors itself.
 void settings_set_rot_base(uint32_t base);
 
+// The size of a card archive the operator declined to adopt, so the offer is
+// not raised again for that same file. 0 = none declined.
+uint32_t settings_get_archive_declined(void);
+void settings_set_archive_declined(uint32_t bytes);
+
 // Set once a QSO log has existed on this unit. A missing log on a unit that
 // had one was lost (SPIFFS power-cut damage), not never created - the
 // trigger for restoring it from the card.

@@ -2465,6 +2465,41 @@ static bool adopt_archive(uint32_t archived, uint32_t arc_bytes)
     return ok;
 }
 
+// Take over an archive the operator put on the card by hand (the adoption
+// offer - sd_archive.c raises it, archive_adopt_modal.c asks).
+//
+// ⛔ THE GUARD IS THE WHOLE SAFETY. Adoption makes this log claim records it
+// never wrote, so it is only ever offered, never inferred: a card carrying
+// another station's archive, moved into this unit, would otherwise merge two
+// stations' logs in silence. The checks here are the last line - the operator
+// already said yes - and they are the same two the restore path uses: this log
+// must own NO archive at all. A log that already has one has a history of its
+// own and must not be given a second.
+//
+// Nothing is copied. adopt_archive() rewrites one header line; the records
+// stay on the card, which is the point - 2,700 contacts would not fit in the
+// 1 MB partition and must never be asked to. The worked-before index is built
+// from them on the next mount (adif_log_worked_index_sync), so the callsigns
+// turn grey without any of it entering SPIFFS.
+//
+// Proved on the host before it was written: tools/spiffs_host/adopt.inc runs
+// the real rotation code over a seeded 2,700-record archive and checks three
+// things - before adopting, rotation REFUSES and touches nothing; after
+// adopting, it accepts the archive and still touches nothing; and new contacts
+// then rotate onto it with the seeded bytes unchanged byte for byte.
+bool adif_log_adopt_card_archive(uint32_t records, uint32_t bytes)
+{
+    if (records == 0 || bytes == 0) return false;
+    if (s_arc_bytes != 0 || s_archived != 0) {
+        ESP_LOGW(TAG, "adoption refused: this log already owns an archive of %lu records",
+                 (unsigned long)s_archived);
+        return false;
+    }
+    if (!adopt_archive(records, bytes)) return false;
+    load_from_file();
+    return true;
+}
+
 int adif_log_import_from_sd(adif_import_result_t *res)
 {
     adif_import_result_t local;

@@ -108,6 +108,14 @@ bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes);
 // log rotation at the wall only (sd_archive's task, card lock held).
 bool sd_archive_save_flash_diag(void);
 
+// The adoption offer: a qso-archive.adi on the card that this log does not
+// own. True while the question should be on screen; the UI answers it with
+// sd_archive_adoption_answer(), and the archive task does the work. Never
+// adopted without an answer - see the note at adoption_check() for the three
+// cases this guards against. Safe from any task.
+bool sd_archive_adoption_offer(uint32_t *records, uint32_t *bytes);
+void sd_archive_adoption_answer(bool use);
+
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);
 

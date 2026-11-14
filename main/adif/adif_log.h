@@ -246,6 +246,11 @@ int adif_log_import_from_sd(adif_import_result_t *res);
 // cursor, refers to it. Records moved to the card are counted here.
 int      adif_log_archived_count(void);
 uint32_t adif_log_archive_bytes(void);   // the archive size this log owns; 0 = none
+
+// Take over a card archive the operator placed there by hand, after they have
+// said yes to the offer. Refuses if this log already owns an archive. Rewrites
+// the log's header only - no record is copied into SPIFFS.
+bool     adif_log_adopt_card_archive(uint32_t records, uint32_t bytes);
 long     adif_log_records_bytes(void);   // device log size minus its header line
 bool     adif_log_was_lost(void);        // log missing at boot on a unit that had one
 

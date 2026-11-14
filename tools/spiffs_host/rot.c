@@ -426,6 +426,7 @@ static long readable_prefix(void)
 }
 
 #include "baseline.inc"
+#include "adopt.inc"
 
 int main(int argc, char **argv)
 {
@@ -655,6 +656,8 @@ int main(int argc, char **argv)
         }
         free(b0);
     }
+
+    adopt_scenarios();
 
     printf("\n%ld scenarios, %ld failures, writes failing after a passed reserve: %ld\n", n_scen, n_fail, after_reserve_fail);
     return n_fail ? 1 : 0;
