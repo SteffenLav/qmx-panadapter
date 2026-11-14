@@ -452,6 +452,38 @@ static void suite(void)
         CHECK(cer < 0.03, "AFC after noise: CER %.3f", cer);
         free(n.re); free(n.im); free(s.re); free(s.im); free(k.buf);
     }
+    {
+        /* R026: THE GAP BETWEEN OVERS. Station A on 0 Hz sends, stops; in the
+         * gap station B, 6 dB stronger, sends 110 Hz away (inside acquisition's
+         * +/-150); A comes back. Operator, 2026-11-14: "the afc is probably too
+         * sensitive - it tends to have offsprings in the break between
+         * transmissions"; bench2 had afc -150 (railed) and 13 jumps after one
+         * tap. The decoder must still be on A when A returns. */
+        char *t1 = random_text(150), *t2 = random_text(150), *tb = random_text(150);
+        gen_t ga = { 6000, 45.45f, 170.0f, 0, 0, 0, -6 };
+        gen_t gb = ga; gb.f_off = 110; gb.snr_db = 0; gb.baud_err = 0.003f;
+        sig_t a1 = make_signal(&ga, t1), b = make_signal(&gb, tb), a2 = make_signal(&ga, t2);
+        rtty_demod_cfg_t cfg = { 6000, 45.45f, 170.0f, 0, false, RTTY_SQ_OPEN, g_afc };
+        rtty_demod_init(&g_dem, &cfg);
+        sink_t k1 = {0}, kb = {0}, k2 = {0};
+        rtty_baudot_init(&k1.b, false); rtty_baudot_init(&kb.b, false); rtty_baudot_init(&k2.b, false);
+        rtty_demod_feed(&g_dem, a1.re, a1.im, (int)a1.n, on_char, &k1);
+        float off_a1 = g_dem.afc_off;
+        uint32_t j0 = g_dem.n_acq;
+        rtty_demod_feed(&g_dem, b.re, b.im, (int)b.n, on_char, &kb);
+        float off_gap = g_dem.afc_off;
+        uint32_t jumps = g_dem.n_acq - j0;
+        rtty_demod_feed(&g_dem, a2.re, a2.im, (int)a2.n, on_char, &k2);
+        double cer2 = (double)lev(t2, k2.buf ? k2.buf : "") / (double)strlen(t2);
+        printf("  gap with QRM +110 Hz +6 dB: offset after A %+5.1f, after gap %+5.1f Hz, "
+               "%u jump(s) in gap, %zu chars in gap, A again CER %.3f\n",
+               off_a1, off_gap, (unsigned)jumps, kb.n, cer2);
+        CHECK(jumps == 0, "%u acquisition jump(s) in the gap", (unsigned)jumps);
+        CHECK(fabsf(off_gap - off_a1) <= RTTY_HOLD_HZ + 1.0f, "gap moved the decoder %+.1f -> %+.1f Hz", off_a1, off_gap);
+        CHECK(cer2 < 0.05, "after the gap: CER %.3f", cer2);
+        free(a1.re); free(a1.im); free(b.re); free(b.im); free(a2.re); free(a2.im);
+        free(k1.buf); free(kb.buf); free(k2.buf); free(t1); free(t2); free(tb);
+    }
     g_afc = 0.0f;
     const float berr[] = { -0.02f, -0.01f, 0.01f, 0.02f };
     for (int i = 0; i < 4; i++) {

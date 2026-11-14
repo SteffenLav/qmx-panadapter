@@ -50,6 +50,17 @@ static void afc_update(rtty_demod_t *d)
     float o = d->afc_off + RTTY_AFC_MU * e;
     if (o >  d->cfg.afc_hz) o =  d->cfg.afc_hz;
     if (o < -d->cfg.afc_hz) o = -d->cfg.afc_hz;
+    /* R026: once a station has been decoded, AFC stays within RTTY_HOLD_HZ of
+     * where a real pair (on_station) was last seen, until one is seen again.
+     * Harness gap test without it: a neighbour's mark on our space filter
+     * kept `present` up, AFC walked to -58 Hz and the returning station
+     * decoded nothing (CER 1.000). Freezing AFC outright instead also passed,
+     * but cost 4 of 66 exchange words on the GRITTY WAVs (R120RB QSB, DL2AL):
+     * a fade that drops one tone is not a gap. The clamp costs none. */
+    if (d->acq_held && !d->on_station) {
+        if (o > d->acq_anchor + RTTY_HOLD_HZ) o = d->acq_anchor + RTTY_HOLD_HZ;
+        if (o < d->acq_anchor - RTTY_HOLD_HZ) o = d->acq_anchor - RTTY_HOLD_HZ;
+    }
     d->afc_off = o;
     retune(d);
 }
@@ -97,6 +108,17 @@ static void acq_block(rtty_demod_t *d)
         if (t == 0) d->mark_snr_db = db; else d->space_snr_db = db;
     }
 
+    /* ⛔ R026: ACQUISITION FINDS THE STATION ONCE, THEN STOPS. It is for the
+     * pull-in after a tap. It also ran in every gap between overs and jumped
+     * to whatever else stood within +/-afc_hz - in a contest that is the other
+     * side of the QSO. bench2 2026-11-14, one tap: 14 jumps in 2 min between
+     * stations at -150 and +10 Hz; operator: "it tends to have offsprings in
+     * the break between transmissions". Harness (gap test): B +110 Hz +6 dB in
+     * the gap moved the decoder -0.4 -> +110.3 Hz and printed 156 of B's
+     * characters. After the first decoded station the search is limited to
+     * RTTY_HOLD_HZ around where it was last present, so it can re-find that
+     * station after a gap and nothing else. A new tap re-inits the demod and
+     * frees it. */
     if (d->acq_blocks < 2 || d->cfg.afc_hz <= 0.0f || AFC_PRESENT(d)) return;
     float thr = RTTY_ACQ_SNR * med;
 
@@ -105,6 +127,7 @@ static void acq_block(rtty_demod_t *d)
     for (int b = h; b < d->acq_nb - h; b++) {
         float off = d->acq_f0 + RTTY_ACQ_STEP_HZ * (float)b;
         if (fabsf(off) > d->cfg.afc_hz) continue;
+        if (d->acq_held && fabsf(off - d->acq_anchor) > RTTY_HOLD_HZ) continue;
         float lo = d->acq_pow[b - h], hi = d->acq_pow[b + h];
         float m = lo < hi ? lo : hi;
         if (m > thr && m > best) { best = m; best_off = off; }
@@ -247,6 +270,16 @@ static void emit(rtty_demod_t *d, double t0, double Tb, float score,
      * Always computed - AFC uses it even when the squelch is off. */
     d->sig_lvl += RTTY_SQ_ALPHA * (ch.conf - d->sig_lvl);
     if (!d->present && d->sig_lvl >= RTTY_SQ_OPEN) d->present = true;
+    /* R014's both-tones test, computed here because R026 needs it too: see
+     * the squelch below for why one tone is not a station. */
+    bool tones = d->acq_blocks >= 2 &&
+                 fminf(d->mark_snr_db, d->space_snr_db) >= RTTY_SQ_TONE_DB;
+    /* R026: the held station is where the tones were while a REAL pair was
+     * decoded. `present` alone is not that: in the harness gap test a
+     * neighbour's mark on our space filter held present = 1 for 30 s while
+     * AFC walked to -58 Hz. See acq_block(). */
+    d->on_station = d->present && tones;
+    if (d->on_station) { d->acq_held = true; d->acq_anchor = d->afc_off; }
     else if (d->present && d->sig_lvl < RTTY_SQ_OPEN - RTTY_SQ_HYST) d->present = false;
 
     if (d->cfg.squelch <= 0.0f) { d->n_chars++; if (cb) cb(&ch, user); return; }
@@ -265,8 +298,6 @@ static void emit(rtty_demod_t *d, double t0, double Tb, float score,
      * 13 chars/min, 6 left 0 at no cost, 7 cost CER at -10 dB (0.29 -> 0.31).
      * Closing on a lost tone: see RTTY_SQ_TONE_CLOSE. Before 2 blocks (1 s)
      * there is no level: stay shut, the hold buffer keeps those characters. */
-    bool tones = d->acq_blocks >= 2 &&
-                 fminf(d->mark_snr_db, d->space_snr_db) >= RTTY_SQ_TONE_DB;
     if (!d->sq_open && d->sig_lvl >= d->cfg.squelch && d->low_run == 0 && tones) d->sq_open = true;
     else if (d->sq_open && (d->sig_lvl < d->cfg.squelch - RTTY_SQ_HYST || (RTTY_SQ_TONE_CLOSE && !tones) ||
                             d->low_run >= RTTY_SQ_LOW_RUN)) {

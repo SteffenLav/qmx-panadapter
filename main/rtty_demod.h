@@ -106,6 +106,10 @@ extern "C" {
 #define RTTY_ACQ_SNR        6.0f
 #endif
 #define RTTY_ACQ_MIN_MOVE   10.0f     /* Hz; smaller errors are AFC's job */
+/* R026: once a station has been decoded, AFC and acquisition keep within this
+ * of where it was last present, so a gap between overs cannot carry the tones
+ * to a neighbour. While it is present the anchor follows it (drift). */
+#define RTTY_HOLD_HZ        20.0f   /* 40 and 20 both kept 66/66 WAV words; 20 lands nearer */
 /* Acquisition window, each side, when AFC is off or narrower: see init. */
 #define RTTY_ACQ_FLOOR_HZ   150.0f
 /* Squelch: the weaker tone must stand this far over the floor (R014). */
@@ -216,6 +220,9 @@ typedef struct {
     float acq_f0;                                 /* Hz of bin 0, rel. centre */
     float acq_pow[RTTY_ACQ_BINS];
     uint32_t n_acq;                               /* jumps made */
+    bool  acq_held;   /* R026: a station was decoded; tones stay near acq_anchor */
+    float acq_anchor; /* R026: afc_off where that station was last present */
+    bool  on_station; /* R026: present AND both tones up (R014) */
     /* counters */
     uint32_t n_chars, n_framing, n_false_start, n_squelched, n_grid, n_unlock;
 } rtty_demod_t;
