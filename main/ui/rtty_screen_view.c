@@ -46,6 +46,7 @@ _Static_assert(PANE_W + TXT_PAD + TXT_COLS * 15 <= TXT_BOX_X2 - TXT_PAD,
 
 #define COL_NEW       0x30E0E0   /* current line, cyan - as the CW ticker */
 #define COL_OLD       0x30E060   /* earlier lines, green */
+#define COL_TX        0xFF5050   /* what we sent, red (operator 2026-11-14) */
 #define COL_MARK      0xFF9F40   /* tone markers + level bars */
 #define BTN_BG        0x2a2f37
 #define BTN_ON        0x2d5a3f
@@ -74,6 +75,10 @@ static int  s_txt_top;      /* container y of the text box */
 static char     s_lines[TXT_ROWS][TXT_COLS + 1];
 static int      s_col;
 static uint32_t s_cursor;
+static uint32_t s_tx_cursor;     /* rtty_tx_text_read() position */
+static bool     s_row_tx[TXT_ROWS];   /* the row holds sent text: drawn red */
+static bool     s_cur_tx;        /* the line being written is sent text */
+static bool     s_fresh;         /* a source switch just opened this line */
 static bool     s_text_dirty;
 static uint32_t s_clear_seen;   /* rtty_rx_text_clear_gen() last acted on */
 
@@ -89,13 +94,30 @@ static uint32_t s_clear_seen;   /* rtty_rx_text_clear_gen() last acted on */
 static void text_newline(void)
 {
     memmove(s_lines[0], s_lines[1], sizeof(s_lines[0]) * (TXT_ROWS - 1));
+    memmove(&s_row_tx[0], &s_row_tx[1], sizeof(s_row_tx[0]) * (TXT_ROWS - 1));
     s_lines[TXT_ROWS - 1][0] = 0;
+    s_row_tx[TXT_ROWS - 1] = s_cur_tx;
     s_col = 0;
+}
+
+/* Sent and received text never share a row: one colour per label. A switch
+ * of source starts a new line unless the current one is still empty. */
+static void text_source(bool tx)
+{
+    if (tx == s_cur_tx) return;
+    s_cur_tx = tx;
+    if (s_col > 0) text_newline();
+    s_row_tx[TXT_ROWS - 1] = tx;
+    s_fresh = true;
 }
 
 static void text_put(char c)
 {
     if (c == '\r') return;
+    /* An over starts with '\n', and text_source() already opened a line. */
+    bool fresh = s_fresh;
+    s_fresh = false;
+    if (c == '\n' && fresh && s_col == 0) return;
     if (c == '\n') { text_newline(); s_text_dirty = true; return; }
     if (s_col >= TXT_COLS) text_newline();
     s_lines[TXT_ROWS - 1][s_col++] = c;
@@ -106,6 +128,8 @@ static void text_put(char c)
 static void text_clear(void)
 {
     memset(s_lines, 0, sizeof(s_lines));
+    memset(s_row_tx, 0, sizeof(s_row_tx));
+    s_cur_tx = false;
     s_col = 0;
     s_text_dirty = true;
 }
@@ -116,7 +140,8 @@ static void text_render(void)
     s_text_dirty = false;
     for (int r = 0; r < TXT_ROWS; r++) {
         lv_label_set_text(s_row[r], s_lines[r]);
-        lv_obj_set_style_text_color(s_row[r], lv_color_hex(r == TXT_ROWS - 1 ? COL_NEW : COL_OLD), 0);
+        uint32_t col = s_row_tx[r] ? COL_TX : (r == TXT_ROWS - 1 ? COL_NEW : COL_OLD);
+        lv_obj_set_style_text_color(s_row[r], lv_color_hex(col), 0);
     }
 }
 
@@ -466,12 +491,21 @@ static void timer_cb(lv_timer_t *t)
     if (g != s_clear_seen) {
         s_clear_seen = g;
         s_cursor = rtty_rx_text_count();
+        s_tx_cursor = rtty_tx_text_count();
         text_clear();
     }
     char buf[128];
     size_t n;
-    while ((n = rtty_rx_text_read(&s_cursor, buf, sizeof buf)) > 0)
+    bool rx_any = false;
+    while ((n = rtty_rx_text_read(&s_cursor, buf, sizeof buf)) > 0) {
+        if (!rx_any) { text_source(false); rx_any = true; }
         for (size_t i = 0; i < n; i++) text_put(buf[i]);
+    }
+    bool tx_any = false;
+    while ((n = rtty_tx_text_read(&s_tx_cursor, buf, sizeof buf)) > 0) {
+        if (!tx_any) { text_source(true); tx_any = true; }
+        for (size_t i = 0; i < n; i++) text_put(buf[i]);
+    }
     text_render();
 
     rtty_rx_status_t st;
@@ -658,6 +692,7 @@ void rtty_screen_view_show(void)
     c.on = true;
     rtty_rx_apply(&c);
     s_cursor = rtty_rx_text_count();   /* only what arrives from now on */
+    s_tx_cursor = rtty_tx_text_count();
     refresh_buttons();
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     /* â›” NOT foregrounded - the CW page's rule (cw_screen_view_show). Raising

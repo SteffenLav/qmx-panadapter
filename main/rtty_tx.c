@@ -29,6 +29,9 @@ static rtty_txc_t   s_core;            /* guarded by s_mux */
 static rtty_tx_status_t s_st;          /* guarded by s_mux */
 static volatile bool s_keyed;          /* an over owns the radio, from start to RX; */
 static volatile bool s_stop;
+#define TX_TEXT_RING 512
+static char     s_tx_text[TX_TEXT_RING];   /* guarded by s_mux */
+static uint32_t s_tx_text_w;               /* characters ever written */
 
 /* Set by start_over() for the task; the task owns them after that. */
 static uint32_t s_dial;
@@ -38,6 +41,24 @@ static float    s_baud;
 static int      s_mark_hz, s_space_hz;
 
 bool rtty_tx_keyed(void) { return s_keyed; }
+
+uint32_t rtty_tx_text_count(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    uint32_t w = s_tx_text_w;
+    portEXIT_CRITICAL(&s_mux);
+    return w;
+}
+
+size_t rtty_tx_text_read(uint32_t *cursor, char *buf, size_t n)
+{
+    size_t k = 0;
+    portENTER_CRITICAL(&s_mux);
+    if (s_tx_text_w - *cursor > TX_TEXT_RING) *cursor = s_tx_text_w - TX_TEXT_RING;
+    while (*cursor != s_tx_text_w && k < n) buf[k++] = s_tx_text[(*cursor)++ % TX_TEXT_RING];
+    portEXIT_CRITICAL(&s_mux);
+    return k;
+}
 
 void rtty_tx_status(rtty_tx_status_t *st)
 {
@@ -200,6 +221,7 @@ static void over_task(void *arg)
             if (n + 1 >= sizeof s_st.echo) { memmove(s_st.echo, s_st.echo + 1, n); n--; }
             s_st.echo[n] = (ch == '\n') ? ' ' : (char)ch; s_st.echo[n + 1] = 0;
             s_st.sent++;
+            s_tx_text[s_tx_text_w++ % TX_TEXT_RING] = (char)ch;
         }
         s_st.seconds = (int)((esp_timer_get_time() - k.t0) / 1000000);
         portEXIT_CRITICAL(&s_mux);
@@ -238,7 +260,22 @@ static esp_err_t start_over(char *err, size_t err_len)
 
     rtty_rx_status_t rs; rtty_rx_status(&rs);
     if (!rs.cfg.on)                 { snprintf(err, err_len, "RTTY page is not open"); return ESP_ERR_INVALID_STATE; }
-    int centre = rs.cfg.offset_hz + (int)lroundf(rs.afc_hz);
+    /* ⛔ AFC THAT NO DECODE CONFIRMED IS NOT WHERE TO TRANSMIT. Acquisition
+     * (R013) jumps to any tone pair within +/-150 Hz until a station is
+     * decoded (R026 then holds it). bench2 2026-11-14, first on-air CQ: tap
+     * on a free spot in a contest, AFC +145 Hz with nothing ever decoded,
+     * and the CQ went out 145 Hz off the tap - onto whatever pair it had
+     * found. So unless a station was decoded since the tap, restart the
+     * decoder (AFC 0: the orange lines go back to the tap) and send there.
+     * TX still equals the lines at key-down. */
+    int afc = (int)lroundf(rs.afc_hz);
+    if (afc != 0 && !rs.afc_held) {
+        rtty_rx_cfg_t rc; rtty_rx_get_cfg(&rc);
+        rtty_rx_apply(&rc);
+        ESP_LOGW(TAG, "AFC %+d Hz not on a decoded station: TX at the tap, AFC reset", afc);
+        afc = 0;
+    }
+    int centre = rs.cfg.offset_hz + afc;
     int shift  = (int)lroundf(rs.cfg.shift_hz);
     uint32_t dial = cat_get_frequency();
     if (!dial)                      { snprintf(err, err_len, "no dial reading from the radio"); return ESP_ERR_INVALID_STATE; }

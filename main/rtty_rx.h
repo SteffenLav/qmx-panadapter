@@ -34,6 +34,8 @@ typedef struct {
     float    mark_lvl, space_lvl;   /* tone envelopes, arbitrary units */
     float    mark_db, space_db;     /* each tone over the noise floor, dB */
     float    afc_hz;        /* AFC + acquisition offset in force */
+    bool     afc_held;      /* R026: a station was decoded since the tap, so afc_hz
+                             * sits on it; false = any offset is acquisition alone */
     uint32_t chars;         /* characters printed since the decoder (re)started */
     uint32_t acq_jumps;
     float    fs_hz;         /* rate the demod runs at; 0 = not fed yet */

@@ -294,6 +294,7 @@ void rtty_rx_feed(const float *re, const float *im, int n, float fs_hz, int nco_
     s_st.mark_db   = s_dem->mark_snr_db;
     s_st.space_db  = s_dem->space_snr_db;
     s_st.afc_hz = s_dem->afc_off;
+    s_st.afc_held = s_dem->acq_held;
     s_st.acq_jumps = s_dem->n_acq;
     s_st.fs_hz = fs_hz;
     portEXIT_CRITICAL(&s_mux);

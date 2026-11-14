@@ -39,4 +39,11 @@ esp_err_t rtty_tx_send(const char *text, bool end, char *err, size_t err_len);
 void rtty_tx_stop(void);
 
 bool rtty_tx_keyed(void);
+
+/* What was actually sent, as a stream ('\n' kept, '\r' dropped), for the
+ * RTTY page's text box (operator 2026-11-14: "i want to see my tx on the
+ * decode - in red"). Same cursor scheme as rtty_rx_text_read(): a reader
+ * that fell more than the ring behind skips ahead. */
+uint32_t rtty_tx_text_count(void);
+size_t   rtty_tx_text_read(uint32_t *cursor, char *buf, size_t n);
 void rtty_tx_status(rtty_tx_status_t *st);

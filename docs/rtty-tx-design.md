@@ -8,6 +8,7 @@ So TX = the R009 mechanism: `TX;`, then one `TA<Hz>;` per tone change, `RX;`.
 | Question | Decision | Who |
 |---|---|---|
 | Where TX lands | On the decoder: tone centre = tap offset + AFC, mark/space at +/- shift/2 (reverse swaps them). You land on the station you answer. | design |
+| AFC not confirmed by a decode | If no station was decoded since the tap (R026 not holding), AFC is reset at key-down and TX goes to the tap. First on-air CQ went 145 Hz off a free-spot tap: acquisition had jumped to a weak pair. | design, bench2 2026-11-14 |
 | Lines outside the passband | At key-down the DIAL moves so the centre sits at 1500 Hz audio; the decoder offset moves by the same amount, so RF, lines and decode stay put. | operator 2026-11-14 ("Move the dial") |
 | Passband accepted without a move | centre - shift/2 >= 400 Hz and centre + shift/2 <= 2700 Hz | design |
 | Abort | Stop = `TA0;` + `RX;` at once (TA stops immediately; `KY` cannot, so RTTY never uses KY) | design |
