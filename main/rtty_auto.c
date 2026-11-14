@@ -1,0 +1,272 @@
+/* RTTY auto speed + shift (R028) - see rtty_auto.h. */
+#include "rtty_auto.h"
+
+#include <math.h>
+#include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#ifdef RTTY_AUTO_DEBUG
+int rtty_auto_dbg_hist[2][48];
+#endif
+const float rtty_auto_shifts[RTTY_AUTO_NSHIFT] = { 170.0f, 200.0f, 425.0f, 450.0f, 850.0f };
+const float rtty_auto_bauds[RTTY_AUTO_NBAUD]   = { 45.45f, 50.0f, 75.0f, 100.0f };
+
+/* Speed verdict: the best score must reach this (noise scores ~0). */
+#define AUTO_MIN_SCORE   0.20f   /* noise over 80 runs: sigma ~0.08; 100 Bd/170 at -3 dB scored 0.23-0.26 */
+/* Shift verdict: the weaker tone over the median bin, dB. */
+#define AUTO_PAIR_DB     6.0f
+#define AUTO_SWITCH_DB   3.0f    /* a new shift must beat the held one by this */
+#define AUTO_MIN_BLOCKS  5          /* 1 s of spectrum */
+#define AUTO_HYST        0.2f       /* decision hysteresis, fraction of total */
+
+static void set_tones(rtty_auto_t *a)
+{
+    double fm = a->centre + a->pair_centre + a->shift / 2.0;
+    double fs = a->centre + a->pair_centre - a->shift / 2.0;
+    a->m_c = 1; a->m_s = 0; a->m_sc = (float)cos(-2 * M_PI * fm / a->fs); a->m_ss = (float)sin(-2 * M_PI * fm / a->fs);
+    a->s_c = 1; a->s_s = 0; a->s_sc = (float)cos(-2 * M_PI * fs / a->fs); a->s_ss = (float)sin(-2 * M_PI * fs / a->fs);
+    for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
+        int W = (int)lroundf(a->fs / rtty_auto_bauds[b] / 2.0f);
+        memset(&a->det[b], 0, sizeof a->det[b]);
+        a->det[b].W = W < 4 ? 4 : W > RTTY_AUTO_MAXWIN ? RTTY_AUTO_MAXWIN : W;
+        a->det[b].t_last = -1;
+    }
+    a->ntrans = 0; a->baud_ok = false;
+}
+
+void rtty_auto_init(rtty_auto_t *a, float fs, float centre_hz)
+{
+    memset(a, 0, sizeof *a);
+    a->fs = fs;
+    a->centre = centre_hz;
+    a->D = (int)lroundf(fs / RTTY_AUTO_RATE_HZ);
+    if (a->D < 1) a->D = 1;
+    a->mc = 1; a->ms = 0;
+    a->mstep_c = (float)cos(-2 * M_PI * centre_hz / fs);
+    a->mstep_s = (float)sin(-2 * M_PI * centre_hz / fs);
+}
+
+static int cmpf(const void *x, const void *y)
+{
+    float p = *(const float *)x, q = *(const float *)y;
+    return p < q ? -1 : p > q;
+}
+
+#include <stdlib.h>
+
+/* Peak power within +/-1 bin of f (Hz rel. centre). */
+static float peak_at(const rtty_auto_t *a, float f)
+{
+    int i = (int)lroundf((f + RTTY_AUTO_SPAN_HZ) / RTTY_AUTO_BIN_HZ);
+    float m = 0;
+    for (int k = i - 1; k <= i + 1; k++)
+        if (k >= 0 && k < RTTY_AUTO_NBINS && a->pow[k] > m) m = a->pow[k];
+    return m;
+}
+
+static void shift_verdict(rtty_auto_t *a)
+{
+    float tmp[RTTY_AUTO_NBINS];
+    memcpy(tmp, a->pow, sizeof tmp);
+    qsort(tmp, RTTY_AUTO_NBINS, sizeof(float), cmpf);
+    float med = tmp[RTTY_AUTO_NBINS / 2];
+    if (med <= 0) return;
+    float best = 0, bs = 0, bc = 0, held = 0, hc = a->pair_centre;
+    for (int s = 0; s < RTTY_AUTO_NSHIFT; s++) {
+        float h = rtty_auto_shifts[s] / 2.0f;
+        for (float c = -RTTY_AUTO_CSEARCH_HZ; c <= RTTY_AUTO_CSEARCH_HZ; c += RTTY_AUTO_BIN_HZ) {
+            float lo = peak_at(a, c - h), hi = peak_at(a, c + h);
+            float w = lo < hi ? lo : hi;
+            if (w > best) { best = w; bs = rtty_auto_shifts[s]; bc = c; }
+            /* the held shift's own best, near where it was */
+            if (a->shift_ok && rtty_auto_shifts[s] == a->shift && fabsf(c - a->pair_centre) <= 20.0f && w > held)
+                { held = w; hc = c; }
+        }
+    }
+    /* 170 over 200 unless 200 is AUTO_SWITCH_DB stronger. At a low
+     * modulation index the two are hard to tell apart in the spectrum, and
+     * the cost is real: R120RB (weak, 170) decoded with 200 copied "599" once
+     * instead of three times (measured 2026-11-14). 170 is the amateur norm. */
+    if (bs == 200.0f) {
+        float b170 = 0, c170 = bc;
+        for (float c = bc - 20.0f; c <= bc + 20.0f; c += RTTY_AUTO_BIN_HZ) {
+            float lo = peak_at(a, c - 85.0f), hi = peak_at(a, c + 85.0f);
+            float w = lo < hi ? lo : hi;
+            if (w > b170) { b170 = w; c170 = c; }
+        }
+        if (b170 > 0 && 10.0f * log10f(best / b170) < AUTO_SWITCH_DB) { bs = 170.0f; bc = c170; }
+    }
+    float db = 10.0f * log10f(best / med);
+    a->pair_db = db;
+    if (db < AUTO_PAIR_DB) return;
+    if (!a->shift_ok) {
+        a->shift = bs; a->pair_centre = bc; a->shift_ok = true;
+        set_tones(a);
+        return;
+    }
+    /* Hysteresis: at a low modulation index (shift/baud < ~2.5) the CPFSK
+     * spectrum's peaks are not at the tones, and 170/200 alternated at 75-100
+     * Bd - each switch restarted the speed count (measured 2026-11-14). */
+    if (bs != a->shift && held > 0 && 10.0f * log10f(best / held) < AUTO_SWITCH_DB) bs = a->shift, bc = hc;
+    if (bs != a->shift || fabsf(bc - a->pair_centre) > 20.0f) {
+        a->shift = bs; a->pair_centre = bc;
+        set_tones(a);                  /* a different pair: speed starts over */
+    }
+}
+
+static void block_done(rtty_auto_t *a)
+{
+    /* Hann window, naive DFT over the 241 bins we need. */
+    static float win[RTTY_AUTO_NFFT];
+    static bool  win_ok;
+    if (!win_ok) {
+        for (int i = 0; i < RTTY_AUTO_NFFT; i++)
+            win[i] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * i / RTTY_AUTO_NFFT);
+        win_ok = true;
+    }
+    for (int b = 0; b < RTTY_AUTO_NBINS; b++) {
+        int k = b - (RTTY_AUTO_NBINS - 1) / 2;          /* -120..120 */
+        float sc = cosf(-2.0f * (float)M_PI * k / RTTY_AUTO_NFFT);
+        float ss = sinf(-2.0f * (float)M_PI * k / RTTY_AUTO_NFFT);
+        float c = 1, s = 0, xr = 0, xi = 0;
+        for (int i = 0; i < RTTY_AUTO_NFFT; i++) {
+            float r = a->br[i] * win[i], q = a->bi[i] * win[i];
+            xr += r * c - q * s;
+            xi += r * s + q * c;
+            float nc = c * sc - s * ss; s = c * ss + s * sc; c = nc;
+        }
+        a->pow[b] += xr * xr + xi * xi;
+    }
+    a->blocks++;
+    if (a->blocks >= AUTO_MIN_BLOCKS) shift_verdict(a);
+}
+
+/* One polarity's verdict: q = whose runs are taken as space (0 low tone,
+ * 1 high tone). Returns the speed index, or -1; *sc = its score. */
+static int verdict_for(const rtty_auto_t *a, int q, float *sc)
+{
+    float s[RTTY_AUTO_NBAUD], best = -2;
+    int bi = -1;
+    for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
+        const __typeof__(a->det[0]) *e = &a->det[b];
+        s[b] = e->cnt[q] > 0 ? (float)(e->acc[q] / e->cnt[q]) : 0;
+        if (s[b] > best) { best = s[b]; bi = b; }
+    }
+    *sc = best;
+    if (best < AUTO_MIN_SCORE) return -1;
+    /* Lowest-wins ONLY for an exact multiple: a b Bd signal scores as high at
+     * 2b. Applied to every candidate it picked 45.45 for a -6 dB 50 Bd
+     * signal (0.31 vs 0.43) - those are not multiples (measured 2026-11-14). */
+    for (int b = 0; b < bi; b++)
+        if (fabsf(2.0f * rtty_auto_bauds[b] - rtty_auto_bauds[bi]) < 0.01f && s[b] >= RTTY_AUTO_NEAR * best)
+            return b;
+    return bi;
+}
+
+static void speed_verdict(rtty_auto_t *a)
+{
+    /* Each polarity gets its own verdict. ⛔ They can BOTH fit: at 50 Bd with
+     * a 1.5-bit stop the mark runs (stop = 30 ms = 3 bits of 100 Bd) fit 100
+     * as well as the space runs fit 50 (0.99 each, measured 2026-11-14), so
+     * the higher score alone picked 100 half the time. When the two are close
+     * the LOWER speed is right: no 100 Bd frame has mark runs that fit 50. */
+    float s0, s1;
+    int v0 = verdict_for(a, 0, &s0), v1 = verdict_for(a, 1, &s1);
+    int p;
+    if (v0 < 0 && v1 < 0) {            /* no verdict; scores still shown */
+        p = s1 > s0 ? 1 : 0;
+        for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
+            const __typeof__(a->det[0]) *e = &a->det[b];
+            a->score[b] = e->cnt[p] > 0 ? (float)(e->acc[p] / e->cnt[p]) : 0;
+        }
+        a->baud_ok = false;
+        return;
+    }
+    if (v0 < 0) p = 1;
+    else if (v1 < 0) p = 0;
+    else if (s0 >= RTTY_AUTO_NEAR * s1 && s1 >= RTTY_AUTO_NEAR * s0) p = v0 <= v1 ? 0 : 1;
+    else p = s1 > s0 ? 1 : 0;
+    int bi = p ? v1 : v0;
+    for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
+        const __typeof__(a->det[0]) *e = &a->det[b];
+        a->score[b] = e->cnt[p] > 0 ? (float)(e->acc[p] / e->cnt[p]) : 0;
+        a->short_frac[b] = e->ntrans ? (float)e->nshort / e->ntrans : 1;
+    }
+    a->baud = rtty_auto_bauds[bi]; a->baud_ok = true;
+    a->mark_low = (p == 1);            /* the high tone's runs are whole bits: it is space */
+}
+
+void rtty_auto_feed(rtty_auto_t *a, const float *re, const float *im, int n)
+{
+    const double max_dt = 12.0 * a->fs / rtty_auto_bauds[0];
+    for (int i = 0; i < n; i++) {
+        float xr = re[i], xi = im ? im[i] : 0.0f;
+        a->n += 1;
+
+        /* spectrum path: mix to 0, boxcar-decimate, block */
+        float yr = xr * a->mc - xi * a->ms, yi = xr * a->ms + xi * a->mc;
+        float nc = a->mc * a->mstep_c - a->ms * a->mstep_s;
+        a->ms = a->mc * a->mstep_s + a->ms * a->mstep_c; a->mc = nc;
+        a->ar += yr; a->ai += yi;
+        if (++a->k >= a->D) {
+            a->br[a->nb] = a->ar / a->D; a->bi[a->nb] = a->ai / a->D;
+            a->ar = a->ai = 0; a->k = 0;
+            if (++a->nb >= RTTY_AUTO_NFFT) { a->nb = 0; block_done(a); }
+        }
+        if (((long)a->n & 1023) == 0) {             /* keep the phasors on the circle */
+            float g = 1.0f / sqrtf(a->mc * a->mc + a->ms * a->ms); a->mc *= g; a->ms *= g;
+            g = 1.0f / sqrtf(a->m_c * a->m_c + a->m_s * a->m_s); a->m_c *= g; a->m_s *= g;
+            g = 1.0f / sqrtf(a->s_c * a->s_c + a->s_s * a->s_s); a->s_c *= g; a->s_s *= g;
+        }
+        if (!a->shift_ok) continue;
+
+        /* speed path: shared tone mixers, one boxcar pair per candidate */
+        float mr = xr * a->m_c - xi * a->m_s, mi = xr * a->m_s + xi * a->m_c;
+        float sr = xr * a->s_c - xi * a->s_s, si = xr * a->s_s + xi * a->s_c;
+        nc = a->m_c * a->m_sc - a->m_s * a->m_ss; a->m_s = a->m_c * a->m_ss + a->m_s * a->m_sc; a->m_c = nc;
+        nc = a->s_c * a->s_sc - a->s_s * a->s_ss; a->s_s = a->s_c * a->s_ss + a->s_s * a->s_sc; a->s_c = nc;
+        bool any = false;
+        for (int b = 0; b < RTTY_AUTO_NBAUD; b++) {
+            __typeof__(a->det[0]) *e = &a->det[b];
+            e->smr += mr - e->mr[e->pos]; e->smi += mi - e->mi[e->pos];
+            e->ssr += sr - e->sr[e->pos]; e->ssi += si - e->si[e->pos];
+            e->mr[e->pos] = mr; e->mi[e->pos] = mi; e->sr[e->pos] = sr; e->si[e->pos] = si;
+            if (++e->pos >= e->W) e->pos = 0;
+            if (e->filled < e->W) { e->filled++; continue; }
+            float pm = e->smr * e->smr + e->smi * e->smi;
+            float ps = e->ssr * e->ssr + e->ssi * e->ssi;
+            float d = pm - ps, tot = pm + ps;
+            int st = e->state;
+            if (d > AUTO_HYST * tot) st = 1;
+            else if (d < -AUTO_HYST * tot) st = -1;
+            if (st == e->state) { e->cand = st; continue; }     /* a glitch ended */
+            /* debounce: see rtty_auto.h */
+            if (st != e->cand) { e->cand = st; e->t_cand = a->n; continue; }
+            if (e->state != 0 && a->n - e->t_cand < RTTY_AUTO_DEBOUNCE * a->fs / rtty_auto_bauds[b]) continue;
+            /* Both tones' runs are scored; the whole-bit one is space - see
+             * rtty_auto.h. state +1 = the HIGH tone. */
+            if (e->state != 0 && e->t_last >= 0) {
+                double dt = e->t_cand - e->t_last, T = a->fs / rtty_auto_bauds[b];
+                if (dt >= 0.25 * T && dt < max_dt) {
+                    int p = e->state == 1 ? 1 : 0;     /* the run that just ended */
+#ifdef RTTY_AUTO_DEBUG
+                    if (b == 0) { int hb = (int)(dt / T * 4.0 + 0.5); if (hb < 48) rtty_auto_dbg_hist[p][hb]++; }
+#endif
+                    const double k = 1.0 - 1.0 / RTTY_AUTO_KEEP;
+                    e->acc[p] = e->acc[p] * k + cos(2.0 * M_PI * dt / T);
+                    e->cnt[p] = e->cnt[p] * k + 1.0;
+                    if (dt < 0.75 * T) e->nshort++;
+                    e->ntrans++;
+                    any = true;
+                }
+            }
+            e->t_last = e->t_cand;
+            e->state = st;
+        }
+        a->ntrans = a->det[0].ntrans;
+        if (any && a->ntrans >= RTTY_AUTO_MIN_TRANS) speed_verdict(a);
+    }
+}
