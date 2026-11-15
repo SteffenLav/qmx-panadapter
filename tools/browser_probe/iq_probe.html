@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QMX Browser Probe</title>
+<!--
+  Feasibility probe for a browser-only panadapter (2026-11-15).
+  Question it answers: does the browser deliver the QMX's two USB audio channels
+  as an untouched I/Q pair? CAT over Web Serial is known to work (many PC apps
+  use the CDC port); it is here only to put the radio in I/Q mode (Q9 1;).
+
+  Verdict rules, decided BEFORE the run:
+    PASS  - 2 channels at 48000 Hz, L and R not identical, image rejection of a
+            clear carrier >= 30 dB, received rate within 0.5 % of 48000.
+    FAIL  - mono (L == R), a rate other than 48000, or the carrier shows on
+            both sides of zero at similar level (image rejection < 10 dB).
+  "Integer at 2^23 / 2^15" is a hint only: the OS mixer may convert formats
+  without harming I/Q, so it does not decide anything by itself.
+
+  Serve from localhost (getUserMedia and Web Serial need a secure context):
+    python -m http.server 8766 --bind 127.0.0.1 --directory tools/browser_probe
+  then open http://localhost:8766/iq_probe.html in Chrome or Edge.
+-->
+<style>
+:root { --bg:#111; --fg:#ddd; --dim:#888; --ok:#4c4; --bad:#e55; --warn:#db4; --line:#333; }
+body { background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; margin:16px; }
+h1 { font-size:18px; margin:0 0 8px; }
+section { border:1px solid var(--line); padding:10px; margin:10px 0; border-radius:6px; }
+button, select { font-size:14px; padding:6px 10px; margin:2px; }
+table { border-collapse:collapse; }
+td { padding:2px 10px 2px 0; vertical-align:top; }
+td:first-child { color:var(--dim); }
+.ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+canvas { width:100%; height:260px; background:#000; display:block; }
+#verdict { font-size:16px; font-weight:bold; }
+pre { white-space:pre-wrap; margin:4px 0; color:var(--dim); }
+</style>
+</head>
+<body>
+<h1>QMX browser probe - I/Q through the browser</h1>
+
+<section>
+  <b>1. Radio (Web Serial, optional)</b> - only to switch the QMX to I/Q output.
+  Close any other program that has the QMX's COM port open first.<br>
+  <button id="serConnect">Connect CAT port</button>
+  <button id="serIq" disabled>Enable I/Q (Q9 1;)</button>
+  <button id="serRead" disabled>Read ID / FA / Q9</button>
+  <pre id="serLog"></pre>
+</section>
+
+<section>
+  <b>2. Audio input</b> - pick the QMX's sound device.<br>
+  <button id="audPerm">Allow microphone access / list devices</button>
+  <select id="audDev"></select>
+  <button id="audStart" disabled>Start capture</button>
+  <button id="audStop" disabled>Stop</button>
+  <label><input type="checkbox" id="swap"> swap I/Q</label>
+</section>
+
+<section>
+  <b>3. Results</b>
+  <table>
+    <tr><td>Track settings</td><td id="rSettings">-</td></tr>
+    <tr><td>AudioContext rate</td><td id="rCtx">-</td></tr>
+    <tr><td>Received rate</td><td id="rRate">-</td></tr>
+    <tr><td>L vs R</td><td id="rLR">-</td></tr>
+    <tr><td>Levels (RMS)</td><td id="rRms">-</td></tr>
+    <tr><td>Integer at 2^23 / 2^15</td><td id="rQuant">-</td></tr>
+    <tr><td>Strongest carrier</td><td id="rPeak">-</td></tr>
+    <tr><td>Image rejection</td><td id="rIR">-</td></tr>
+  </table>
+  <div id="verdict">-</div>
+  <canvas id="spec" width="1200" height="260"></canvas>
+  <pre>Spectrum of I + jQ, -24 kHz (left) to +24 kHz (right), 8192-point FFT, Blackman-Harris, 8 frames averaged.
+Tune the QMX so one clear carrier sits well away from the centre. A healthy I/Q pair shows it on ONE side only;
+its mirror (orange marker) should be 30 dB or more lower.</pre>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const log = s => { $("serLog").textContent += s + "\n"; };
+
+/* ---------------- Web Serial (CAT) ---------------- */
+let port = null, writer = null, reader = null, rxBuf = "";
+$("serConnect").onclick = async () => {
+  if (!("serial" in navigator)) { log("Web Serial is not available in this browser (use Chrome or Edge)."); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 38400 });
+    writer = port.writable.getWriter();
+    reader = port.readable.getReader();
+    log("CAT port open at 38400 baud.");
+    $("serIq").disabled = $("serRead").disabled = false;
+    (async () => {
+      const dec = new TextDecoder();
+      try { for (;;) { const { value, done } = await reader.read(); if (done) break; rxBuf += dec.decode(value); } }
+      catch (e) { log("read stopped: " + e.message); }
+    })();
+  } catch (e) { log("open failed: " + e.message); }
+};
+async function cat(cmd, waitMs = 300) {
+  rxBuf = "";
+  await writer.write(new TextEncoder().encode(cmd));
+  await new Promise(r => setTimeout(r, waitMs));
+  return rxBuf.trim();
+}
+$("serIq").onclick = async () => { log("> Q9 1;  " + (await cat("Q9 1;")) ); log("> Q9;  " + (await cat("Q9;"))); };
+$("serRead").onclick = async () => { for (const c of ["ID;", "FA;", "MD;", "Q9;"]) log("> " + c + "  " + (await cat(c))); };
+
+/* ---------------- Audio capture ---------------- */
+$("audPerm").onclick = async () => {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(t => t.stop());
+  } catch (e) { alert("Microphone permission refused: " + e.message); return; }
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "audioinput");
+  $("audDev").innerHTML = "";
+  for (const d of devs) {
+    const o = document.createElement("option");
+    o.value = d.deviceId; o.textContent = d.label || d.deviceId;
+    if (/qmx|qrp/i.test(d.label)) o.selected = true;
+    $("audDev").appendChild(o);
+  }
+  $("audStart").disabled = devs.length === 0;
+};
+
+const WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  process(inputs) {
+    const inp = inputs[0];
+    if (inp && inp.length) {
+      const l = inp[0], r = inp.length > 1 ? inp[1] : null;
+      this.port.postMessage({ n: inp.length, l: l.slice(0), r: r ? r.slice(0) : null });
+    }
+    return true;
+  }
+}
+registerProcessor("tap", Tap);`;
+
+let ctx = null, stream = null, node = null, timer = null;
+const N = 8192;                      // FFT size
+let ring = { i: new Float32Array(N), q: new Float32Array(N), w: 0, filled: 0 };
+let stats = { samples: 0, t0: 0, chanSeen: 0, lrSame: 0, lrTotal: 0, i23: 0, i15: 0, qTot: 0,
+              sumL2: 0, sumR2: 0, sumLR: 0, nLR: 0 };
+let avg = null, nAvg = 0;
+
+$("audStart").onclick = async () => {
+  const deviceId = $("audDev").value;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: { exact: deviceId }, channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 },
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  const st = stream.getAudioTracks()[0].getSettings();
+  $("rSettings").textContent = JSON.stringify({ sampleRate: st.sampleRate, channelCount: st.channelCount,
+    echoCancellation: st.echoCancellation, noiseSuppression: st.noiseSuppression, autoGainControl: st.autoGainControl,
+    sampleSize: st.sampleSize, latency: st.latency });
+  ctx = new AudioContext({ sampleRate: 48000 });
+  $("rCtx").textContent = ctx.sampleRate + " Hz";
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
+  const src = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, "tap", { channelCount: 2, channelCountMode: "explicit", channelInterpretation: "discrete" });
+  node.port.onmessage = e => ingest(e.data);
+  src.connect(node);                 // not connected to the speakers on purpose
+  stats = { samples: 0, t0: performance.now(), chanSeen: 0, lrSame: 0, lrTotal: 0, i23: 0, i15: 0, qTot: 0,
+            sumL2: 0, sumR2: 0, sumLR: 0, nLR: 0 };
+  avg = null; nAvg = 0;
+  timer = setInterval(report, 500);
+  $("audStart").disabled = true; $("audStop").disabled = false;
+};
+$("audStop").onclick = async () => {
+  clearInterval(timer);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) await ctx.close();
+  $("audStart").disabled = false; $("audStop").disabled = true;
+};
+
+function ingest(m) {
+  const l = m.l, r = m.r || m.l;
+  stats.chanSeen = Math.max(stats.chanSeen, m.n);
+  stats.samples += l.length;
+  const swap = $("swap").checked;
+  for (let k = 0; k < l.length; k++) {
+    const a = l[k], b = r[k];
+    if (m.r) { stats.lrTotal++; if (a === b) stats.lrSame++; }
+    stats.sumL2 += a * a; stats.sumR2 += b * b; stats.sumLR += a * b; stats.nLR++;
+    if (stats.qTot < 200000 && a !== 0) {
+      stats.qTot++;
+      const x23 = a * 8388608, x15 = a * 32768;
+      if (Math.abs(x23 - Math.round(x23)) < 1e-3) stats.i23++;
+      if (Math.abs(x15 - Math.round(x15)) < 1e-3) stats.i15++;
+    }
+    ring.i[ring.w] = swap ? b : a;
+    ring.q[ring.w] = swap ? a : b;
+    ring.w = (ring.w + 1) % N;
+    if (ring.filled < N) ring.filled++;
+  }
+}
+
+/* ---------------- FFT ---------------- */
+const win = new Float32Array(N);
+for (let n = 0; n < N; n++) {
+  const x = 2 * Math.PI * n / (N - 1);
+  win[n] = 0.35875 - 0.48829 * Math.cos(x) + 0.14128 * Math.cos(2 * x) - 0.01168 * Math.cos(3 * x);
+}
+function fft(re, im) {                // in-place radix-2
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ar = re[i + k + len / 2], ai = im[i + k + len / 2];
+        const tr = ar * cr - ai * ci, ti = ar * ci + ai * cr;
+        re[i + k + len / 2] = re[i + k] - tr; im[i + k + len / 2] = im[i + k] - ti;
+        re[i + k] += tr; im[i + k] += ti;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+
+function spectrum() {
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let n = 0; n < N; n++) {
+    const k = (ring.w + n) % N;
+    re[n] = ring.i[k] * win[n]; im[n] = ring.q[k] * win[n];
+  }
+  fft(re, im);
+  const p = new Float64Array(N);
+  for (let k = 0; k < N; k++) p[k] = re[k] * re[k] + im[k] * im[k] + 1e-30;
+  if (!avg || nAvg >= 8) { avg = p; nAvg = 1; } else { for (let k = 0; k < N; k++) avg[k] += p[k]; nAvg++; }
+  return avg.map(v => v / nAvg);
+}
+
+const db = v => 10 * Math.log10(v);
+function cls(el, ok) { el.className = ok === null ? "warn" : ok ? "ok" : "bad"; }
+
+function report() {
+  const secs = (performance.now() - stats.t0) / 1000;
+  const rate = stats.samples / secs;
+  $("rRate").textContent = rate.toFixed(0) + " samples/s over " + secs.toFixed(1) + " s";
+  cls($("rRate"), secs < 3 ? null : Math.abs(rate - 48000) / 48000 < 0.005);
+
+  const corr = stats.sumLR / Math.sqrt(stats.sumL2 * stats.sumR2 + 1e-30);
+  const same = stats.lrTotal ? stats.lrSame / stats.lrTotal : 1;
+  $("rLR").textContent = stats.chanSeen < 2 ? "only ONE channel delivered"
+    : "identical samples " + (100 * same).toFixed(2) + " %, correlation " + corr.toFixed(3);
+  cls($("rLR"), stats.chanSeen >= 2 && same < 0.5);
+
+  $("rRms").textContent = "I " + db(stats.sumL2 / stats.nLR).toFixed(1) + " dBFS, Q " + db(stats.sumR2 / stats.nLR).toFixed(1) + " dBFS";
+  $("rQuant").textContent = stats.qTot ? (100 * stats.i23 / stats.qTot).toFixed(1) + " % / " + (100 * stats.i15 / stats.qTot).toFixed(1) + " %" : "-";
+
+  if (ring.filled < N) return;
+  const s = spectrum();
+  // strongest bin away from DC (+-200 Hz) and the band edges
+  const binHz = 48000 / N, guard = Math.ceil(200 / binHz);
+  let kMax = -1, vMax = 0;
+  for (let k = guard; k < N - guard; k++) {
+    if (Math.abs(k - N / 2) < guard) continue;
+    if (s[k] > vMax) { vMax = s[k]; kMax = k; }
+  }
+  const mirror = (N - kMax) % N;
+  const sum3 = k => s[(k - 1 + N) % N] + s[k] + s[(k + 1) % N];
+  const fHz = (kMax < N / 2 ? kMax : kMax - N) * binHz;
+  const sorted = Float64Array.from(s).sort();
+  const floor = sorted[Math.floor(N / 2)];
+  const snr = db(vMax / floor);
+  const ir = db(sum3(kMax) / sum3(mirror));
+  $("rPeak").textContent = (fHz >= 0 ? "+" : "") + fHz.toFixed(0) + " Hz, " + snr.toFixed(1) + " dB over the median floor";
+  $("rIR").textContent = ir.toFixed(1) + " dB (carrier vs its mirror at " + (-fHz).toFixed(0) + " Hz)";
+  cls($("rIR"), snr < 30 ? null : ir >= 30);
+  draw(s, kMax, mirror);
+  verdict(rate, secs, same, ir, snr);
+}
+
+function verdict(rate, secs, same, ir, snr) {
+  const v = $("verdict");
+  if (secs < 3) { v.textContent = "measuring..."; v.className = "warn"; return; }
+  if (stats.chanSeen < 2 || same > 0.99) { v.textContent = "FAIL - the browser delivers mono (L == R): no I/Q."; v.className = "bad"; return; }
+  if (Math.abs(rate - 48000) / 48000 > 0.005) { v.textContent = "FAIL - rate is not 48000 Hz."; v.className = "bad"; return; }
+  if (snr < 30) { v.textContent = "No clear carrier yet (need 30 dB over the floor) - tune one in, away from the centre."; v.className = "warn"; return; }
+  if (ir >= 30) { v.textContent = "PASS - untouched I/Q pair: " + ir.toFixed(1) + " dB image rejection."; v.className = "ok"; return; }
+  if (ir < 10) { v.textContent = "FAIL - the carrier shows on both sides (" + ir.toFixed(1) + " dB)."; v.className = "bad"; return; }
+  v.textContent = "UNCLEAR - " + ir.toFixed(1) + " dB image rejection. Try another carrier, and check Q9 is 1."; v.className = "warn";
+}
+
+function draw(s, kMax, mirror) {
+  const c = $("spec"), g = c.getContext("2d"), W = c.width, H = c.height;
+  g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+  const top = -10, bot = -150;
+  const y = v => (top - db(v)) / (top - bot) * H;
+  const x = k => ((k + N / 2) % N) / N * W;           // fftshift
+  g.strokeStyle = "#333"; g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.stroke();
+  g.strokeStyle = "#4c4"; g.beginPath();
+  for (let px = 0; px < W; px++) {
+    const k0 = Math.floor(px / W * N), k1 = Math.floor((px + 1) / W * N);
+    let m = 0; for (let k = k0; k < k1; k++) { const kk = (k + N / 2) % N; if (s[kk] > m) m = s[kk]; }
+    px ? g.lineTo(px, y(m)) : g.moveTo(px, y(m));
+  }
+  g.stroke();
+  g.fillStyle = "#4cf"; g.fillRect(x(kMax) - 1, 0, 3, 12);
+  g.fillStyle = "#f93"; g.fillRect(x(mirror) - 1, 0, 3, 12);
+}
+</script>
+</body>
+</html>
