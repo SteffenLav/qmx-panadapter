@@ -14,7 +14,8 @@ So TX = the R009 mechanism: `TX;`, then one `TA<Hz>;` per tone change, `RX;`.
 | Abort | Stop = `TA0;` + `RX;` at once (TA stops immediately; `KY` cannot, so RTTY never uses KY) | design |
 | Typing stops while keyed | Diddle (LTRS) to hold the link; unkey after 3 s with nothing queued | design |
 | Hard limit | 180 s key-down per over, then unkey whatever is queued | design (never leave a radio transmitting) |
-| Refusals | not DiGi, no callsign, sim mode, WSPR running, another burst holds CAT, band guard (re-checked after any dial move, right above key-down) | as R009 |
+| Refusals | no callsign, sim mode, WSPR running, another burst holds CAT, band guard (re-checked after any dial move, right above key-down) | as R009 |
+| Radio mode | not DiGi: the over task switches it (MD6 via the poll task, confirmed within 1.5 s) - was a refusal until 2026-11-15 | as FT8 TX |
 
 ## Shape
 

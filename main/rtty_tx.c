@@ -40,7 +40,7 @@ static uint32_t s_tx_text_w;               /* characters ever written */
 /* Set by start_over() for the task; the task owns them after that. */
 static uint32_t s_dial;
 static int      s_centre, s_shift;
-static bool     s_reverse, s_need_qsy;
+static bool     s_reverse, s_need_qsy, s_need_digi;
 static float    s_baud;
 static int      s_mark_hz, s_space_hz;
 
@@ -124,6 +124,21 @@ static uint32_t qsy_target(uint32_t dial, int centre)
  * were (operator, 2026-11-14: "Move the dial"). AFC is folded into the new
  * offset, because rtty_rx_apply() restarts the demodulator. Waits for the
  * radio to report the new dial - so it must run with the CAT poll NOT held. */
+/* Radio to DiGi (MD6) through the poll task (cat_request_mode: retried, not
+ * dropped by the 200 ms write limiter - see ui.c restore_apply_step), then
+ * wait for the MD readback, as ft8_tx_arm() does. */
+static bool to_digi(char *err, size_t err_len)
+{
+    ESP_LOGI(TAG, "radio is in %s - switching to DiGi", cat_get_mode_str());
+    cat_request_mode("DIGI");
+    for (int i = 0; i < 15 && strcmp(cat_get_mode_str(), "DiGi") != 0; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    if (strcmp(cat_get_mode_str(), "DiGi") != 0) {
+        snprintf(err, err_len, "radio did not switch to DiGi (is %s)", cat_get_mode_str());
+        return false;
+    }
+    return true;
+}
+
 static bool qsy(uint32_t *dial, int *centre, char *err, size_t err_len)
 {
     uint32_t want = qsy_target(*dial, *centre);
@@ -176,8 +191,10 @@ static void over_task(void *arg)
 {
     (void)arg;
     char err[96] = "";
-    /* ⛔ THE DIAL MOVE GOES BEFORE cat_poll_hold(): with the poll held a
-     * frequency write is parked, not sent, and its readback never comes. */
+    /* ⛔ THE MODE SWITCH AND THE DIAL MOVE GO BEFORE cat_poll_hold(): with
+     * the poll held, a write is parked, not sent, and its readback never
+     * comes. The radio stays in DiGi after the over, as after FT8 TX. */
+    if (s_need_digi && !to_digi(err, sizeof err)) goto refused;
     if (s_need_qsy && !qsy(&s_dial, &s_centre, err, sizeof err)) goto refused;
     /* ⛔ BAND GUARD, right above key-down, on the dial actually in force. */
     if (!tx_band_guard_allows(s_dial + (uint32_t)(s_centre - s_shift / 2),
@@ -253,10 +270,12 @@ static esp_err_t start_over(char *err, size_t err_len)
     char call[16]; settings_get_my_callsign(call, sizeof call);
     if (!call[0])                   { snprintf(err, err_len, "no callsign set"); return ESP_ERR_INVALID_STATE; }
     if (settings_get_sim_mode_en()) { snprintf(err, err_len, "simulation mode is on"); return ESP_ERR_INVALID_STATE; }
-    if (strcmp(cat_get_mode_str(), "DiGi") != 0) {
-        snprintf(err, err_len, "radio must be in DiGi (is %s)", cat_get_mode_str());
-        return ESP_ERR_INVALID_STATE;
-    }
+    /* Not in DiGi: the over task switches it (to_digi), as FT8 and WSPR TX
+     * do. This was a refusal until 2026-11-15, and the RTTY page dims the
+     * Mode control, so a radio left in USB (bench2 overnight) refused every
+     * CQ with no way to fix it from the page. Not done here: the Tab5 caller
+     * is the LVGL thread, and the confirm takes up to 1.5 s. */
+    bool need_digi = strcmp(cat_get_mode_str(), "DiGi") != 0;
     if (cat_poll_held_by_other(CAT_HOLD_TX_BURST)) {
         snprintf(err, err_len, "another transmission holds the radio"); return ESP_ERR_INVALID_STATE;
     }
@@ -293,6 +312,7 @@ static esp_err_t start_over(char *err, size_t err_len)
 
     s_dial = dial; s_centre = centre; s_shift = shift;
     s_reverse = rs.cfg.reverse; s_baud = rs.cfg.baud; s_need_qsy = need_qsy;
+    s_need_digi = need_digi;
     portENTER_CRITICAL(&s_mux);
     s_st.sent = 0; s_st.seconds = 0; s_st.echo[0] = 0;
     portEXIT_CRITICAL(&s_mux);

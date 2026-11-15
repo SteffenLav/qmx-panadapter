@@ -32,6 +32,7 @@ nav:
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
     - CW: guide/cw.md
+    - RTTY: guide/rtty.md
     - Web Radio: guide/webradio.md
     - JS8: guide/js8.md
     - Time Sync: guide/time-sync.md

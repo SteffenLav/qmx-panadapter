@@ -43,12 +43,15 @@ items marked *(needs WiFi)* need a network.
   writes the ADIF record and uploads it to QRZ, eQSL, ARRL LoTW and Cloudlog or Wavelog.
   LoTW records are signed on the device with your own certificate.
 - **A second operating position in any browser** *(needs WiFi)*. The spectrum, the
-  controls, the CW page, the log and the radio's audio. **From v1.26.0 the browser has
+  controls, the CW and RTTY pages, the log and the radio's audio. **From v1.26.0 the browser has
   noise reduction and an auto-notch**, and they cost the Tab5 nothing.
 - **Audio made on the device.** CW, SSB and AM demodulated from the I/Q, **binaural CW**
   that separates two stations by direction, and a CW peak filter ahead of the AGC.
 - **A CW page**. The radio's decoded text with a noise squelch, a hint line, a
   station card, two macro sets, one-tap logging, and type-ahead sending from the browser.
+- **RTTY, receive and send, on the device.** Tap a signal to decode it; speed, shift and
+  polarity follow the station by themselves. CQ, Answer, Exch and 73 in one press, or
+  type live - on the Tab5 or in the browser.
 - **You see who is there, and who hears you** *(needs WiFi)*. POTA, RBN and DX cluster
   spots drawn on the trace, and a world map of the stations that reported your signal.
 - **WSPR with measured power.** The Tab5 measures real RF output per band, so the power
@@ -243,6 +246,15 @@ already filled in. In the browser you can type the other station's callsign, typ
 while the radio keys, and log the operator's name, QTH and remarks. Tuning on this page
 is held inside the CW and Digi parts of the band. ⚠ The QMX has no command to stop a
 message once the radio holds it; STOP drops only what the Tab5 still holds. See [CW](#cw).
+
+**The RTTY page** — RTTY decoded and sent by the Tab5 itself, on the radio's I/Q, with no
+PC and no sound card. Tap a signal and the decoder locks on it; **Auto** finds the speed,
+shift and polarity and keeps a change only when the copy gets better. Sent text shows in
+red in the text box, where it went. Tap a callsign to work it, then **CQ**, **Answer**,
+**Exch** and **73**, or type live from the on-screen, Bluetooth or snap-on keyboard. The
+browser has the same page, including sending, and shares the station you are working
+with the Tab5. The radio is switched to DiGi and every over passes the band guard. See
+[RTTY](#rtty).
 
 
 **FT8 and FT4, receive** — Continuous on-device decoding in the same view as the
@@ -452,6 +464,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
 - [Audio](#audio) — binaural CW, panoramic split, AM, listening in the browser
 - [CW](#cw) — the MODE: CW page, decode ticker, keyer macros
+- [RTTY](#rtty) — the MODE: RTTY page: decode, Auto speed/shift, CQ/Answer/Exch/73, typed sending
 - [Web Radio](#web-radio) — an internet radio player on the Tab5, for when the bands are quiet
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
 - [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
@@ -721,10 +734,9 @@ ticker** that squelches a quiet band's endless lone `T`s, a **copilot hint
 line** that says what the copy *meant* ("W1AW is calling CQ — tap the card to
 answer"), two named sets of six keyer macros (**General** and **Contest**, with
 a toggle at the bottom of the panel to switch between them), and a station
-card that tells you whether you have worked them before. It is there to be
-tried and reported on, not to be relied on for a contest yet — in particular,
-the radio cannot stop a message it already holds. Text that is still queued on
-the Tab5 can be dropped with **STOP**.
+card that tells you whether you have worked them before. The radio cannot
+stop a message it already holds; text that is still queued on the Tab5 can be
+dropped with **STOP**.
 
 **From v1.26.0:** a **Log** button above the station card opens the log window
 with the station filled in. A sideways slide of about 40 px abandons a macro
@@ -767,6 +779,40 @@ The page ships **on**. Turn it off with
 over the API, if you would rather not have it yet.
 
 Full chapter: [tab5.lav.dk/guide/cw](https://tab5.lav.dk/guide/cw/)
+
+---
+
+## RTTY
+
+A MODE: RTTY page (page picker, or **Switch to RTTY** in the browser). The Tab5
+decodes RTTY from the radio's I/Q and sends it by keying the QMX's tone command:
+no PC and no sound card.
+
+- **Tune:** tap the signal on the waterfall. The dial moves so it sits at 1500 Hz
+  audio and the decoder finds the tone pair within ±150 Hz. Once a station is
+  decoded, the decoder holds on it between overs. The top bar shows the **mark**
+  frequency on this page.
+- **Speed and shift:** 45.45, 50, 75 or 100 baud; 170 to 850 Hz shift. With
+  **Auto** on (the default) the page tries the speed, shift and polarity it
+  measures for 5 s and keeps them only if the copy gets better.
+- **Reverse, AFC, Squelch**, and **Clear text**. The squelch opens only when both
+  tones stand clear of the noise.
+- **Send:** tap their callsign in the text, then **CQ**, **Answer**, **Exch** or
+  **73**; or **Type...** and each key goes out as you type. **STOP** ends the over
+  at once. You transmit on the decoder's tones. The radio is put in DiGi mode if
+  needed, the band guard checks both tones right before key-down, and one over is
+  at most 180 s.
+- **In the browser:** the same controls and the same text, with sending. A
+  callsign picked in the browser is the one the Tab5 sends to, and the other way
+  round.
+- The Tab5 speaker plays the signal under the decoder's lines, not the whole
+  passband.
+
+Settings survive a reboot (`rtty_*` lines in a config file). API:
+`{"action":"rtty"}`, `rtty_send`, `rtty_stop` - see the
+[Web API](https://tab5.lav.dk/reference/web-api/).
+
+Full chapter: [tab5.lav.dk/guide/rtty](https://tab5.lav.dk/guide/rtty/)
 
 ---
 
@@ -1277,7 +1323,6 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of
   the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
-- **RTTY mode.** See `docs/rtty-feasibility.md`. JS8 shipped in v1.17.0.
 - **FM audio.** The demodulator handles CW, USB, LSB and - from v1.19.0 - AM. FM is
   still silent, so an FM signal means listening to it in USB or not at all.
 

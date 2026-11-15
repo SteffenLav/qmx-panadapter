@@ -404,6 +404,16 @@ panel instead of the FT8 one, at parity with the rest of this page:
   new. See [CW](cw.md) for the keyer, macros, band discipline and QSO-ladder
   concepts this panel is built on; everything there applies here too.
 
+## RTTY Control
+
+**Switch to RTTY** in the menu opens the RTTY page on the Tab5 and shows its controls under the waterfall: the decoded text over the waterfall (your own sent text in red), speed and shift, **Auto**, **Reverse**, **AFC**, **Squelch**, and a **RTTY send** block with **To:**, **CQ**, **Answer**, **Exch**, **73**, **STOP** and a **Type** line.
+
+- Click the waterfall to tune: the dial moves and the decoder starts on the click, as a tap on the Tab5.
+- Click a callsign in the text, or type it in **To:** and press Enter. The Tab5 and the browser share this station.
+- The **Type** line sends each key as you type it; **Enter** ends the over.
+
+Everything else - what each control does, and what the Tab5 checks before it keys - is in [RTTY](rtty.md).
+
 ## Memory channels
 
 The **Memory** button opens your 32 channels as a grid.

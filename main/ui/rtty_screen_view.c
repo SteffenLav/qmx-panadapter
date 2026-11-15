@@ -338,7 +338,7 @@ static void speed_open_cb(lv_event_t *e)
  * Layout approved by the operator 2026-11-14 (docs/rtty-tx-mock.png), restyled
  * the same day (docs/rtty-tx-mock2-*.png). Every
  * press here is a human decision that can key the radio: the rows are in
- * docs/unattended-tx-inventory.md. The refusals (DiGi, callsign, sim, WSPR,
+ * docs/unattended-tx-inventory.md. The refusals (callsign, sim, WSPR,
  * band guard, ...) are rtty_tx_send()'s, not this file's. */
 
 /* Show a refusal for 8 s in the status lines. */
