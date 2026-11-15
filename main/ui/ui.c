@@ -12673,6 +12673,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * equivalent of s_prev_y_top, and what makes it a line rather than dots.
      * -1 = no neighbour to join (frame start, or across a no-data gap). */
     int peak_prev_col = -1;
+    /* For the changed band: did the previous column's peak move this push,
+     * and where was it last push (its old joining segment). */
+    bool peak_prev_moved = false;   /* frame start: no joining segment */
+    int  peak_prev_old   = -1;
     {
         uint8_t secs = s_peak_secs;
         if (!secs) {
@@ -12768,6 +12772,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     s_peak_show[x]  = (int16_t)SPECTRUM_H;
                     s_peak_prev[x]  = -1;
                     peak_prev_col   = -1;   /* never join across the hatch */
+                    peak_prev_moved = false; /* next column: no joining segment */
+                    peak_prev_old   = -1;
                 }
                 continue;
             }
@@ -12867,16 +12873,31 @@ void ui_push_spectrum(const float *bins, int n_bins)
              * glass until something else repaints that row. */
             if (s_frame_ytop) {
                 int pprev = s_frame_ytop_valid ? s_peak_prev[x] : -1;
-                if (pprev != py || plo != phi) {
+                /* ⛔ ONLY WHAT MOVED. This was `pprev != py || plo != phi`:
+                 * the second term is true wherever the line merely SLOPES,
+                 * so a held peak that had not moved still widened the band
+                 * every push. bench1 2026-11-15, RTTY page: band 30-70 px with
+                 * peak hold on, 15-32 off; draw 30-35 -> 25-27 ms. A column's
+                 * pixels depend on its own peak and the previous column's (the
+                 * joining segment), so it changed iff either moved. */
+                bool moved = pprev < 0 || pprev != py || peak_prev_moved;
+                if (moved) {
                     int lo3, hi3;
                     if (pprev < 0) { lo3 = 0; hi3 = SPECTRUM_H - 1; }
-                    else { /* the whole span this column just painted, and
-                            * where it painted last time */
-                           lo3 = (pprev < plo) ? pprev : plo;
-                           hi3 = (pprev > phi) ? pprev : phi; }
+                    else { /* the span painted now, and the one painted last
+                            * time (own old peak + the old joining segment) */
+                           int olo = pprev, ohi = pprev;
+                           if (peak_prev_old >= 0) {
+                               if (peak_prev_old < olo) olo = peak_prev_old;
+                               if (peak_prev_old > ohi) ohi = peak_prev_old;
+                           }
+                           lo3 = (olo < plo) ? olo : plo;
+                           hi3 = (ohi > phi) ? ohi : phi; }
                     if (lo3 - 1 < band_lo) band_lo = lo3 - 1;
                     if (hi3 + 1 > band_hi) band_hi = hi3 + 1;
                 }
+                peak_prev_moved = (pprev != py);
+                peak_prev_old   = pprev;
                 s_peak_prev[x] = (int16_t)py;
             }
         }
