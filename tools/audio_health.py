@@ -14,7 +14,8 @@ later than the Tab5 boot.
   A4 OUT within +/-0.2 % of the USB rate, over 60 s sums. Not per 10 s:
      one USB chunk is 0.67 % of a 10 s window, so the per-window USB mean
      itself jitters +/-0.3 % (measured 2026-11-15).
-  A5 no backlog flush after the first 60 s; backlog max < 12800.
+  A5 backlog max < 12800; flushes only follow an underrun (since the
+     underrun flush, a flush after A2's gap is intended).
 
 Needs firmware >= 16dad59b (backlog + flush fields). Older boots are listed
 as "no fields".
@@ -113,7 +114,7 @@ def judge(b, min_windows):
     # A5
     fl = [round(w["t"]) for w in ws if w["flush"]]
     bmax = max(w["bmax"] for w in ws)
-    res["A5"] = (not fl and bmax < FLUSH_AT, f"flush after 60 s at {fl[:5]}, backlog max {bmax}")
+    res["A5"] = (bmax < FLUSH_AT and len(fl) <= ovf_up, f"flush after 60 s at {fl[:5]}, backlog max {bmax}")
     return res, f"{n} windows, {ws[0]['t']:.0f}-{ws[-1]['t']:.0f} s"
 
 
