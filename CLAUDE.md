@@ -1,22 +1,11 @@
 # CLAUDE.md — QMX Panadapter
 
-## ⛔ THIS FOLDER IS THE RTTY BRANCH (`qmx-panadapter-rtty`), NOT MAIN
+## RTTY is on main (since 2026-11-15)
 
-`C:\dev\qmx-panadapter-rtty` is its own git worktree (since 2026-11-12). Start
-a session HERE for RTTY work; start one in `C:\dev\qmx-panadapter` for main.
-- Open work and state: `TODO-RTTY.md`. Design and measurements: `docs/rtty-feasibility.md`.
-- Bench: **bench2** (`tools/bench.json` in the main checkout is the authority).
-  `bench flash bench2` builds from this folder. Every flash wedges its QMX.
-- ⛔ Before setting up ANY key-down test: the dial must be on `antenna.band` in
-  bench.json (20 m). The band guard checks the licence, not the antenna.
-- Sessions here get their own (empty) memory folder. The project memory is at
-  C:/Users/Steffen/.claude/projects/C--dev-qmx-panadapter/memory/ - read
-  `project_handoff_20261112_rtty_device_decode.md` there. Keep anything the
-  branch needs in committed files, not only in memory.
-- Nothing on this branch is pushed or released until the operator says so.
-- ⭐ **AT SESSION START, unasked:** read `TODO-RTTY.md`, then do every open item
-  that needs no operator (today: none - R009 needs him). Items that key the radio or need him at the
-  bench (R009) - say what is ready and ask; never key without his go.
+Fast-forward of `qmx-panadapter-rtty`. RTTY work is ordinary main work on bench1.
+Open items: `TODO-RTTY.md` (R-IDs). Design and measurements: `docs/rtty-feasibility.md`,
+`docs/rtty-tx-design.md`. ⛔ Before ANY key-down test the dial must be on
+`antenna.band` in bench.json - the band guard checks the licence, not the antenna.
 
 ESP-IDF firmware for M5Stack Tab5 (ESP32-P4). Real-time panadapter for the QRP Labs QMX/QMX+ HF transceiver: USB host captures IQ audio (UAC) + CAT (CDC-ACM), FFT runs on-device, spectrum + waterfall rendered on the 5" touch display (landscape 1280×720).
 
@@ -209,25 +198,15 @@ Detailed sections moved to memory for session speed:
 - [Release process](../../../memory/project_release_process.md)
 - [Internal RAM audit](../../../memory/project_internal_ram_bss_audit.md) — where the 445 KB goes, what may and may NOT move to PSRAM
 
-## CW page is ON MAIN, and `cw_page_en` defaults ON from v1.24.0
+## CW page is ON MAIN, `cw_page_en` defaults ON, no beta label
 
-Merged 2026-11-02 (fast-forward, 104 commits). `feat/cw-page` is gone; do
-not recreate it - CW work is ordinary main work from here.
+Merged 2026-11-02. ON since v1.24.0. The operator dropped the "beta" label
+from CW and JS8 on 2026-11-15; the docs state the limits plainly instead
+(KY has no abort; only JS8 Normal is proven on air). Turn the page OFF with
+`{"action":"cw_enable","on":false}` or `cw_page_enabled = no`.
 
-⭐ **It ships ON as v1.24.0's own beta** (operator, 2026-11-03: "I want it
-turned on NOW and it just carries the beta status" - re-cut same version,
-see memory for the full exchange). The gate is still firmware, same four
-surfaces as before, just flipped: the drawer shows `MODE: CW`, `set_screen
-"cw"` works, boot restore honours a saved CW page, `ui_set_base_mode()`
-allows it. Turn it OFF with `{"action":"cw_enable","on":false}` or
-`cw_page_enabled = no` in a config file. The no-abort gap (`KY` cannot be
-cancelled - see memory/project_cw_ky_abort_rx_does_not_work.md) is why it is
-still "beta" everywhere it's documented, not why it is off.
-
-⚠ **Why it stays dark: `KY` has no abort.** The CAT manual documents none in
-TS480-compat-OFF mode, so a sent message runs to the end of the radio's
-80-character buffer. That is the open hardware question, and the gate comes
-off when it is answered - not before.
+⚠ **`KY` has no abort.** The CAT manual documents none in TS480-compat-OFF
+mode, so a sent message runs to the end of the radio's 80-character buffer.
 
 ⭐ **CW TRANSMIT WORKS - CAT `KY` KEYS THE RADIO**, confirmed off air by the
 operator 2026-09-30: *"the cw is keyed clearly on the antenna - i have tried
