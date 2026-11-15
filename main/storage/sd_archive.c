@@ -1610,7 +1610,17 @@ static void adoption_check(void)
              (unsigned long)recs, bytes);
 }
 
-static void adoption_apply(void)
+// build_index false = parked (WiFi up): adopt only, and let the next boot's
+// rotation pass build the worked index in the boot window. The index pass
+// reads the whole archive (547 KB for Randy) off the card, which is the kind
+// of long SD burst the park exists to keep away from a live WiFi link.
+//
+// ⛔ THIS MUST ALSO RUN WHILE PARKED. v2.0.0 called it from the normal burst
+// only, which never runs once WiFi is up - and the question is never asked
+// before 45 s, by which time every WiFi boot is parked. So "Use them" and
+// "Leave it" were both recorded and never acted on, and the offer stayed
+// open (Randy N4OPI, 2026-11-15: "it keeps popping up the same message").
+static void adoption_apply(bool build_index)
 {
     int ans = s_offer_answer;
     if (!ans) return;
@@ -1625,17 +1635,23 @@ static void adoption_apply(void)
     }
     if (!adif_log_adopt_card_archive(s_offer_recs, s_offer_bytes)) return;
     // The index is what makes the adopted calls read as worked before. Built
-    // here rather than waiting for the next boot, because the operator just
-    // asked for exactly that and a slow pass now is the honest cost.
-    adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
+    // here when the card is not parked, because the operator just asked for
+    // exactly that and a slow pass now is the honest cost. Parked, the next
+    // boot builds it (rotation path in the task) - the modal says so.
+    if (build_index) adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
     s_adif_dirty = true;            // qso.adi is archive + records from now on
-    ESP_LOGW(TAG, "adopted the card's archive: %lu records, %lu B",
-             (unsigned long)s_offer_recs, (unsigned long)s_offer_bytes);
+    ESP_LOGW(TAG, "adopted the card's archive: %lu records, %lu B%s",
+             (unsigned long)s_offer_recs, (unsigned long)s_offer_bytes,
+             build_index ? "" : " - worked index is built on the next start");
 }
 
 bool sd_archive_adoption_offer(uint32_t *records, uint32_t *bytes)
 {
-    if (!s_offer_open) return false;
+    // ⛔ An ANSWERED offer is not an open question. The task applies the
+    // answer later (up to a PROBE_MS later, or a mutex wait), and until then
+    // s_offer_open is still true - so the modal tick saw the offer again
+    // 150 ms after the tap and put the same question back up.
+    if (!s_offer_open || s_offer_answer) return false;
     if (records) *records = s_offer_recs;
     if (bytes)   *bytes   = s_offer_bytes;
     return true;
@@ -1905,6 +1921,16 @@ static void sd_archive_task(void *arg)
             // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
             // was sent to explain. Only while a card is actually mounted; the
             // no-card park below must stay silent.
+            // The adoption answer, while parked. See adoption_apply(): the
+            // decline is NVS only and the adopt is SPIFFS only, so nothing
+            // here touches the card. The mutex is still taken because
+            // adoption_apply() is otherwise only ever run under it.
+            if (s_mounted && s_offer_answer && s_sd_mutex &&
+                xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                adoption_apply(false);
+                xSemaphoreGive(s_sd_mutex);
+            }
+
             if (s_mounted) {
                 int64_t now_us = esp_timer_get_time();
                 /* ⛔ NO BROWSER DEFERRAL. A web page is a MONITOR: having one
@@ -2122,7 +2148,7 @@ static void sd_archive_task(void *arg)
 
         // The adoption offer, and the answer to it. See adoption_check().
         if (ok) adoption_check();
-        if (ok) adoption_apply();
+        if (ok) adoption_apply(true);
 
         // ⛔ Never mirror a LOST log over the card's copy - that copy is what
         // restores it (adif_log_restore_lost_from_sd, after this burst).

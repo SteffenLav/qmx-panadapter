@@ -144,8 +144,8 @@ void archive_adopt_modal_tick(void)
     lv_label_set_text(s_lbl_body,
                       "qso-archive.adi holds QSOs that are new to this device. "
                       "Use them as your log history? They stay on the card and "
-                      "count as worked before.\n"
-                      "First start after this is slower.");
+                      "count as worked before from the next start.\n"
+                      "That start is slower.");
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
     ESP_LOGW(TAG, "asking: adopt %lu records (%lu B) from the card?",
