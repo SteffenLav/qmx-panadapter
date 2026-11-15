@@ -548,7 +548,19 @@ void app_main(void)
     if (rx_src_real && line_in_start() != ESP_OK)
         ESP_LOGE(TAG, "line input failed to start - no samples this session");
     iq_balance_set_enabled(cfg->iq_enabled);
-    ui_set_flat_mode(cfg->flat_mode);
+    /* ⛔ Under display_lock, like ui_apply_saved_mode_view() above: it sets
+     * labels and widget state from app_main while taskLVGL is rendering. Found
+     * 2026-11-15 by the Tab5 simulator, where LVGL's "invalidate area is not
+     * allowed during rendering" assert fired here (update_db_scale ->
+     * lv_label_set_text) on a boot straight into the CW page and killed
+     * app_main before cw_decode_init(). Same for the three calls further down
+     * marked "display_lock: see ui_set_flat_mode". */
+    if (display_lock(2000)) {
+        ui_set_flat_mode(cfg->flat_mode);
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - flat mode not restored");
+    }
     // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
     // ~13 s from now), so the MMCW write this used to make went nowhere on every
     // single boot. The radio tells us its own centre at link-up instead, and that is
@@ -559,7 +571,12 @@ void app_main(void)
     /* #298: before the first frame, so nobody sees the wrong one and then a jump.
      * Defaults ON; the one-time notice in ui.c tells the operator how to go back. */
     ui_set_still_view(cfg->still_view);
-    ui_still_notice_arm(!cfg->still_notice_done);
+    if (display_lock(2000)) {   /* display_lock: see ui_set_flat_mode (lv_timer_create + flag) */
+        ui_still_notice_arm(!cfg->still_notice_done);
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - still-view notice not armed");
+    }
     render_waterfall_set_colormap(cfg->colormap_idx);
 
     /* ⛔ SAY IT ON THE SCREEN WHEN THE SUPPLY BROWNED OUT.
@@ -731,14 +748,24 @@ void app_main(void)
     // mutex - re-apply now so a saved zoom > x1 engages the zoom-FFT
     // (increased resolution) from first boot instead of staying in plain
     // magnification mode until the user touches the zoom control.
-    ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
+    if (display_lock(2000)) {   /* display_lock: see ui_set_flat_mode (zoom label) */
+        ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - saved zoom not re-applied");
+    }
     ESP_ERROR_CHECK(render_init());
     MEM_LEDGER("render_init");
 
     // The drawer opens on whichever half the operator last chose. Applied here
     // rather than inside ui_init() because it only moves widgets that already
     // exist, and ui_set_drawer_expert() is a no-op when the value matches.
-    ui_set_drawer_expert(cfg->drawer_expert);
+    if (display_lock(2000)) {   /* display_lock: see ui_set_flat_mode (drawer restack + scroll) */
+        ui_set_drawer_expert(cfg->drawer_expert);
+        display_unlock();
+    } else {
+        ESP_LOGW(TAG, "no display lock - drawer Basic/Advanced not restored");
+    }
 
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
     render_waterfall_set_black_level(cfg->wf_black_db);
