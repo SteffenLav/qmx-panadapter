@@ -502,6 +502,7 @@ static volatile uint32_t s_write_late_win = 0;   /* writes over 25 ms */
 static uint32_t s_frame_max_win = 0, s_write_max_win = 0, s_away_max_win = 0;
 static uint32_t s_away_over100_win = 0;
 static int64_t  s_read_end_us = 0;
+static uint32_t s_backlog_max_win = 0;   /* forward-ring fill, pairs */
 static volatile uint32_t s_frames_win     = 0;   /* frames in this window */
 static volatile uint32_t s_pairs_win      = 0;   /* sample-pairs written this window */
 /* Clock-drift corrector state - see the rate-match block in the task loop. */
@@ -777,6 +778,9 @@ static int64_t  s_in_win_us    = 0;      /* when that window started */
  * no more correct. */
 #define RATE_WIN_US     10000000   /* 10 s - see above */
 #define RATE_SMOOTH_A   0.10f      /* one pole on the window estimate, ~100 s */
+#define RXA_BACKLOG_DEADBAND_PAIRS 6400u    /* 133 ms = 2 USB chunks */
+#define RXA_BACKLOG_GAIN           2.5e-7f  /* 0.3 % at 12000 pairs over */
+#define RXA_BACKLOG_TRIM_MAX       0.003f
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -2544,7 +2548,23 @@ static void rx_audio_task(void *arg)
             if (err >  2000) err =  2000;
             if (err < -2000) err = -2000;
 
-            s_in_pairs_win += (uint32_t)in_pairs;
+            /* ⛔⛔ THE SOURCE RATE IS WHAT THE RADIO OFFERED, NOT WHAT WE READ.
+             * MEASURED 2026-11-15, bench1, RTTY page, WAE contest: this counted
+             * in_pairs (pairs READ). When the forward ring is full the producer
+             * drops whole chunks, reads fall short, the "source rate" falls,
+             * s_up_inc falls, we consume less and the ring stays full: POSITIVE
+             * FEEDBACK. Pitch stepped down after every drop burst and never came
+             * back (-1724 -> -3589 -> -6456 -> -8966 ppm over 5 min) while USB
+             * delivered 48.00k pairs/s; drops 200-570 pairs/s = the 0.7 % the
+             * pitch said. A 96 KB ring (e20bd084) only held a bigger backlog.
+             * Offered = sent + dropped, so no consumer behaviour can move it. */
+            {
+                static uint32_t s_off_prev = 0;
+                uint32_t off = dsp_rxaudio_offered_pairs();
+                s_in_pairs_win += off - s_off_prev;   /* unsigned: wrap-safe */
+                s_off_prev = off;
+                (void)in_pairs;
+            }
             int64_t win_us = now_rm - s_in_win_us;
             if (s_in_win_us == 0) { s_in_win_us = now_rm; s_in_pairs_win = 0; }
             else if (win_us >= RATE_WIN_US) {            /* see RATE_WIN_US - T36 */
@@ -2612,6 +2632,26 @@ static void rx_audio_task(void *arg)
                 s_in_win_us = now_rm; s_in_pairs_win = 0;
             }
             if (s_up_target > 0.0f) s_up_inc = s_up_target - (float)err * 2.0e-10f;
+
+            /* BACKLOG DRAIN (2026-11-15). With the rate measured at the source
+             * (above), a backlog a stall leaves in the ring is never drained:
+             * consumption equals production, so the fill just stays, adds up
+             * to 0.5 s latency, and the next stall overflows. A proportional
+             * trim on the fill ABOVE a dead band drains it. This is P on a
+             * level (the plant integrates), first order, tau ~80 s against a
+             * 21 ms measurement delay - not the integrator-on-rate that rang
+             * (see above). Larger s_up_inc = more input per output = drains.
+             * Below the dead band (2 x a 67 ms USB chunk) it does nothing, so
+             * normal jitter never moves the pitch. Cap 0.3 % = 5 cents. */
+            if (s_up_target > 0.0f) {
+                uint32_t bl = dsp_rxaudio_backlog_pairs();
+                if (bl > s_backlog_max_win) s_backlog_max_win = bl;
+                if (bl > RXA_BACKLOG_DEADBAND_PAIRS) {
+                    float trim = (float)(bl - RXA_BACKLOG_DEADBAND_PAIRS) * RXA_BACKLOG_GAIN;
+                    if (trim > RXA_BACKLOG_TRIM_MAX) trim = RXA_BACKLOG_TRIM_MAX;
+                    s_up_inc *= 1.0f + trim;
+                }
+            }
 
             /* T21: record the pitch, in ppm from nominal. Taken HERE, right
              * where the value is decided, rather than sampled by the reader -
@@ -2772,10 +2812,14 @@ static void rx_audio_task(void *arg)
                     uint32_t drop = 0, fmin = 0;
                     dsp_rxaudio_fwd_stats(&drop, &fmin);
                     ESP_LOGI(TAG, "diag: win fwd drop %lu pairs  ring free min %ld B  "
-                             "away max %lu us (>100ms %lu)  frame max %lu us  write max %lu us",
+                             "away max %lu us (>100ms %lu)  frame max %lu us  write max %lu us  "
+                             "backlog max %lu now %lu pairs",
                              (unsigned long)drop, fmin == UINT32_MAX ? -1L : (long)fmin,
                              (unsigned long)s_away_max_win, (unsigned long)s_away_over100_win,
-                             (unsigned long)s_frame_max_win, (unsigned long)s_write_max_win);
+                             (unsigned long)s_frame_max_win, (unsigned long)s_write_max_win,
+                             (unsigned long)s_backlog_max_win,
+                             (unsigned long)dsp_rxaudio_backlog_pairs());
+                    s_backlog_max_win = 0;
                     s_away_max_win = s_away_over100_win = 0;
                     s_frame_max_win = s_write_max_win = 0;
                 }

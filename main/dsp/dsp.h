@@ -173,6 +173,11 @@ size_t dsp_rxaudio_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms);
 // Pairs dropped on a full ring and the lowest free space seen, since the last
 // call (the call resets both). For rx_audio's 10 s diag line.
 void   dsp_rxaudio_fwd_stats(uint32_t *drop_pairs, uint32_t *free_min_bytes);
+// Pairs the producer OFFERED to the ring (sent + dropped), monotonic, wraps.
+// The radio's rate - unlike pairs read, which a full ring makes the consumer's.
+uint32_t dsp_rxaudio_offered_pairs(void);
+// Pairs waiting in the ring now.
+uint32_t dsp_rxaudio_backlog_pairs(void);
 
 // ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
 // The fft_task mixes the pan-center down to DC, low-pass filters, decimates
