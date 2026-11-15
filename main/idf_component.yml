@@ -22,7 +22,12 @@ dependencies:
   # mDNS: reach the Tab5 as qmx.local instead of hunting an IP that changes with
   # the network. Added after an evening lost to exactly that (roamed onto a hotel
   # WiFi, new lease, no way to find it).
-  espressif/mdns: "^1.2.0"
+  # Pinned 2026-11-15. "^1.2.0" floated and dependencies.lock is git-ignored,
+  # so each worktree resolved its own mdns (main 1.11.3, rtty 1.15.1). Only
+  # 1.15 has CONFIG_MDNS_ENABLE_BROWSE, so a sdkconfig committed from one tree
+  # was rewritten by every build in the other - a permanently dirty sdkconfig.
+  # 1.11.3 is what the release candidate was verified with on bench1.
+  espressif/mdns: "==1.11.3"
 
   lvgl/lvgl: "~9.2.0"
   espressif/esp_wifi_remote:
