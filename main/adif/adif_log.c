@@ -62,6 +62,7 @@ static bool              s_mounted = false;
 // on the card, and the archive size this log last committed.
 static uint32_t s_archived  = 0;
 static uint32_t s_arc_bytes = 0;
+static bool     s_rot_mismatch = false;   // this boot's rotation said the card's archive is not ours
 // The log was missing at boot on a unit that had one: SPIFFS power-cut damage
 // (tools/spiffs_host BASELINE: boot check deletes the file in ~9 % of cuts
 // that land in a write). The SD task restores it from the card.
@@ -2267,6 +2268,8 @@ int adif_log_rotate(const char *arc_path)
     } else {
         ESP_LOGE(TAG, "rotation: no memory for its buffer");
     }
+    // Read by adif_log_worked_index_sync(), which runs right after this.
+    s_rot_mismatch = (r.status == ROT_MISMATCH);
     int moved = 0;
     if (r.status == ROT_DONE || r.relinked) {
         if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -2283,16 +2286,50 @@ int adif_log_rotate(const char *arc_path)
 }
 
 // ---- the card's worked-before index ---------------------------------------
-// qso-worked.idx: a 16-byte header, then one 26-byte entry per unique
+// qso-worked.idx: a 20-byte header, then one 26-byte entry per unique
 // (call, band) in the archive. Derived data: missing, damaged or not matching
 // this log's archive, it is rebuilt from the archive once.
 // Measured (tools/spiffs_host/workedbench.c): appending to an already-unique
 // index is linear; rebuilding by scanning is quadratic. So it is appended to,
 // and read at boot without a dedupe pass.
-#define WIDX_MAGIC "QMXWIDX1"
-typedef struct __attribute__((packed)) { char magic[8]; uint32_t covered; uint32_t count; } widx_hdr_t;
+// ⛔ QMXWIDX2: THE INDEX NAMES THE ARCHIVE IT WAS BUILT FROM (fp).
+// QMXWIDX1 was "valid" whenever covered <= the archive this log owns, so ANY
+// archive in that place inherited it. Measured on bench1 2026-11-15: a
+// 20-record test archive was deleted (the log relinked), a 2,903-record one
+// adopted, and the next boot kept the 20 stale pairs and resumed indexing at
+// byte 3,433 of the NEW file - 7 real pairs never indexed. fp is FNV-1a over
+// the archive's first 4 KB and the 256 B ending at `covered` (both clipped to
+// covered); a different file there gives a different fp and a rebuild.
+// QMXWIDX1 files are rebuilt once (one slower boot), which is the safe way
+// out of a format that could not tell.
+#define WIDX_MAGIC "QMXWIDX2"
+typedef struct __attribute__((packed)) { char magic[8]; uint32_t covered; uint32_t count; uint32_t fp; } widx_hdr_t;
 typedef struct __attribute__((packed)) { char call[ADIF_CALL_MAX]; char band[ADIF_BAND_MAX]; uint32_t hash; } widx_ent_t;
 _Static_assert(sizeof(widx_ent_t) == 26, "index entry is 26 bytes on the card");
+_Static_assert(sizeof(widx_hdr_t) == 20, "index header is 20 bytes on the card");
+
+// FNV-1a over the archive's bytes [0, min(covered, 4096)) and
+// [max(0, covered - 256), covered). 0 if the archive cannot be read, which
+// never equals a stored fp of a real read (the basis is not 0), so an
+// unreadable archive reads as "does not match" - a rebuild, which then fails
+// on the same read and leaves the index for the next boot.
+static uint32_t widx_fp(const char *arc_path, uint32_t covered)
+{
+    uint32_t h = 2166136261u;
+    if (covered == 0) return h;
+    FILE *a = fopen(arc_path, "rb");
+    if (!a) return 0;
+    static EXT_RAM_BSS_ATTR uint8_t buf[4096];
+    size_t n1 = covered < sizeof buf ? covered : sizeof buf;
+    bool ok = fread(buf, 1, n1, a) == n1;
+    for (size_t i = 0; ok && i < n1; i++) { h ^= buf[i]; h *= 16777619u; }
+    long t0 = covered > 256 ? (long)covered - 256 : 0;
+    size_t n2 = (size_t)((long)covered - t0);
+    ok = ok && fseek(a, t0, SEEK_SET) == 0 && fread(buf, 1, n2, a) == n2;
+    for (size_t i = 0; ok && i < n2; i++) { h ^= buf[i]; h *= 16777619u; }
+    fclose(a);
+    return ok ? h : 0;
+}
 
 // Insert n pairs at the end of the card-index segment, in one move of the
 // device segment. Returns how many fitted.
@@ -2336,16 +2373,36 @@ void adif_log_worked_index_sync(const char *idx_path, const char *arc_path)
         ESP_LOGW(TAG, "worked index: the card's archive is not this log's - not used");
         return;
     }
+    // ⛔ After a rotation MISMATCH the file at arc_path is not this log's
+    // archive (another unit's card, or replaced on a PC). Indexing it would
+    // mark another log's calls as worked; rebuilding the index from it would
+    // throw away a good one. Leave the index file alone until it matches.
+    if (s_rot_mismatch) {
+        ESP_LOGW(TAG, "worked index: the card's archive did not match this log at rotation - index left as it is");
+        return;
+    }
     int64_t t0 = esp_timer_get_time();
     widx_hdr_t h = {0};
     bool valid = false;
     long idx_sz = file_size(idx_path);
+    // The index file is closed before the archive is opened for the
+    // fingerprint: the card allows two open files and qmx-log.txt holds one.
     FILE *f = fopen(idx_path, "rb");
     if (f) {
         valid = fread(&h, 1, sizeof h, f) == sizeof h && memcmp(h.magic, WIDX_MAGIC, 8) == 0 &&
                 h.covered <= s_arc_bytes &&
                 idx_sz == (long)(sizeof h + (size_t)h.count * sizeof(widx_ent_t));
-        if (valid && s_idx_count == 0 && h.count > 0) {
+        fclose(f);
+        f = NULL;
+    }
+    if (valid && widx_fp(arc_path, h.covered) != h.fp) {
+        ESP_LOGW(TAG, "worked index was built from a different archive file - rebuilding it");
+        valid = false;
+    }
+    if (valid && s_idx_count == 0 && h.count > 0) f = fopen(idx_path, "rb");
+    if (f && fseek(f, (long)sizeof h, SEEK_SET) != 0) valid = false;
+    if (f) {
+        if (valid) {
             widx_ent_t *all = heap_caps_malloc((size_t)h.count * sizeof(widx_ent_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (all && fread(all, sizeof(widx_ent_t), h.count, f) == h.count) {
                 int got = index_segment_insert(all, (int)h.count);
@@ -2368,6 +2425,7 @@ void adif_log_worked_index_sync(const char *idx_path, const char *arc_path)
         if (s_lock) xSemaphoreGive(s_lock);
         memset(&h, 0, sizeof h);
         memcpy(h.magic, WIDX_MAGIC, 8);
+        h.fp = widx_fp(arc_path, 0);
         f = fopen(idx_path, "wb");
         bool ok = f && fwrite(&h, 1, sizeof h, f) == sizeof h;
         if (f && !file_commit_close(f)) ok = false;
@@ -2413,6 +2471,7 @@ void adif_log_worked_index_sync(const char *idx_path, const char *arc_path)
     if (ok) {
         h.covered = s_arc_bytes;
         h.count += (uint32_t)nb;
+        h.fp = widx_fp(arc_path, h.covered);   // `a` is closed: one card file at a time
         f = fopen(idx_path, "r+b");
         ok = f && fwrite(&h, 1, sizeof h, f) == sizeof h;
         if (f && !file_commit_close(f)) ok = false;
@@ -2456,6 +2515,7 @@ static bool adopt_archive(uint32_t archived, uint32_t arc_bytes)
     if (ok) {
         s_archived = archived;
         s_arc_bytes = arc_bytes;
+        s_rot_mismatch = false;            // this boot's MISMATCH was "not adopted yet"
         settings_set_rot_base(archived);   // the cursors index the device log, which did not move
         ESP_LOGI(TAG, "log now owns the card's archive: %lu records, %lu B",
                  (unsigned long)archived, (unsigned long)arc_bytes);
