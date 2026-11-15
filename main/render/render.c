@@ -646,10 +646,10 @@ esp_err_t render_init(void)
      * touches LVGL or display_lock (grep: zero matches in render.c and
      * render_waterfall.c), so there is no lock to carry across the cores.
      *
-     * ⚠ It shared priority 3 with rx_audio on core 1 and was "the thing to
-     * watch if audio gets worse". It did: on a busy band (bench1 2026-11-15,
-     * render ~13-44 % of core 1) the two time-sliced and rx_audio's ring
-     * overflowed. rx_audio is priority 6 since then, above this task. */
+     * ⚠ It now shares priority 3 with rx_audio on core 1. rx_audio spends
+     * nearly all its time blocked in the I2S write (it does not even appear in
+     * the cpu_owners table, i.e. under 0.2%), so they should not contend - but
+     * that is the thing to watch if audio gets worse rather than better. */
     BaseType_t ok = xTaskCreatePinnedToCore(
         render_task, "render", 4096, NULL, 3, &s_render_task, 1);
     if (ok != pdPASS) {

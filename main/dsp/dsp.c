@@ -638,9 +638,9 @@ esp_err_t dsp_init(void)
         ESP_LOGW(TAG, "Self-test FAILED (expected bin %d, got %d)", test_bin, peak_idx);
     }
 
-    // Spawn the real-time FFT task on core 1. rx_audio_task (6) preempts it
-    // since 2026-11-15 - its frames are <= ~11 ms against this task's 1.34 s
-    // of input buffering; see RX_AUDIO_TASK_PRIORITY in rx_audio.c.
+    // Spawn the real-time FFT task on core 1 at lower priority than audio.
+    // DSP_FFT_TASK_PRIORITY (dsp.h) names this 4 for rx_audio_task's benefit -
+    // that task must never preempt this one.
     BaseType_t ok = xTaskCreatePinnedToCore(
         fft_task, "fft_task", 6144, NULL, DSP_FFT_TASK_PRIORITY, &s_fft_task, 1);
     if (ok != pdPASS) {
