@@ -2846,6 +2846,9 @@ bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins)
 }
 static int      s_last_band_idx = -1;    // track band changes for decode list clearing
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
+/* The radio's mode when the RTTY page forced DiGi; handed back to the
+ * panadapter on leaving the page. "" = nothing to give back. */
+static char s_rtty_prev_mode[8] = "";
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 // Set when a top-bar label write had to be abandoned because the display lock
 // timed out. topbar_reconcile_cb() picks it up; without it the label stays wrong
@@ -21312,6 +21315,14 @@ void ui_apply_saved_mode_start(void)
         ESP_LOGI(TAG, "restore: CW mode requested from the radio");
         return;
     }
+    /* RTTY: the same DiGi rule as on entry (operator, 2026-11-15). A boot
+     * straight into the page used to leave the radio in whatever mode it was
+     * powered up in. */
+    if (s_saved_ui_mode == UI_MODE_RTTY) {
+        cat_request_mode("DIGI");
+        ESP_LOGI(TAG, "restore: RTTY - DiGi requested from the radio");
+        return;
+    }
     if (s_saved_ui_mode == UI_MODE_FT8) {
         // FT8 is a digital mode - force the radio into DiGi regardless of
         // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll
@@ -21476,6 +21487,13 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         rtty_screen_view_hide();
         rtty_band_dial_store(s_last_qmx_freq_hz);   /* leaving the page = going away */
         ui_save_snapshot(&s_pan_snapshot);
+        /* The page forced DiGi on entry; the panadapter gets back the mode it
+         * had, as FT8's own snapshot gives it back on leaving FT8. Empty when
+         * the page was restored at boot - the snapshot's mode then stands. */
+        if (s_rtty_prev_mode[0]) {
+            snprintf(s_pan_snapshot.mode, sizeof(s_pan_snapshot.mode), "%s", s_rtty_prev_mode);
+            s_rtty_prev_mode[0] = '\0';
+        }
     } else if (cur == UI_MODE_WSPR) {
         wspr_rx_stop();               /* frees 8.6 MB and releases the capture */
         wspr_screen_view_hide();
@@ -21609,9 +21627,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
 
     if (next == UI_MODE_RTTY) {
         /* R006. The panadapter's widgets are the backdrop, as on the CW page,
-         * and so is its state: mode and zoom are not changed on entry (the
-         * dial is - see R021 below). From another overlay page the panadapter
-         * comes back first. */
+         * and so is its state: zoom is not changed on entry. The dial is (R021
+         * below) and, since 2026-11-15, the radio mode is: always DiGi (below).
+         * From another overlay page the panadapter comes back first. */
         if (cur == UI_MODE_FT8) {
             ft8_screen_view_hide();
             if (ft8) lv_obj_set_x(ft8, 0);
@@ -21637,6 +21655,17 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
                 ui_update_frequency(f);
             }
         }
+        /* ⛔ THE RADIO GOES TO DiGi ON EVERY ENTRY (operator, 2026-11-15:
+         * "radio should ALWAYS be in digi mode when you enter the rtty page").
+         * R006 left the mode alone, and with the radio in CW the QMX's own
+         * audio sat ~1.5 kHz below the mark/space lines - the operator heard
+         * a different signal from the one between the lines. The mode it had
+         * is given back to the panadapter on leaving (see the exit branch).
+         * Through the poll task, retried, exactly as FT8 forces it. */
+        if (strstr(s_current_mode, "DiGi") == NULL)
+            snprintf(s_rtty_prev_mode, sizeof(s_rtty_prev_mode), "%s", s_current_mode);
+        cat_request_mode("DIGI");
+        ui_update_mode("DiGi");   /* optimistic: no MD until the poll answers */
         if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
         recompute_zoom_pan();
         draw_label_ticks();
