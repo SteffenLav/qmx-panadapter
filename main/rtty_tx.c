@@ -6,12 +6,14 @@
 #include "rtty_tx.h"
 #include "rtty_tx_core.h"
 #include "rtty_rx.h"
+#include "cw_callsign.h"
 #include "tx_band_guard.h"
 #include "wspr_rx.h"
 #include "cat/cat.h"
 #include "storage/settings.h"
 #include "ui/ui.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -334,4 +336,78 @@ void rtty_tx_stop(void)
     if (!s_keyed) return;
     s_stop = true;          /* the task sees it within 1 ms tick, then TA0; RX; */
     ESP_LOGI(TAG, "stop requested");
+}
+
+/* ---- the station being worked + the four messages ------------------------ */
+
+static char     s_call[16];   /* guarded by s_mux */
+static uint32_t s_call_gen;
+
+bool rtty_tx_set_call(const char *call)
+{
+    char c[16] = "";
+    if (call && call[0]) {
+        size_t n = strlen(call);
+        if (n >= sizeof c) return false;
+        for (size_t i = 0; i <= n; i++) c[i] = (char)toupper((unsigned char)call[i]);
+        if (!cw_call_structure_ok(c)) return false;
+    }
+    portENTER_CRITICAL(&s_mux);
+    if (strcmp(s_call, c)) { memcpy(s_call, c, sizeof s_call); s_call_gen++; }
+    portEXIT_CRITICAL(&s_mux);
+    return true;
+}
+
+void rtty_tx_get_call(char *buf, size_t n)
+{
+    if (!buf || !n) return;
+    portENTER_CRITICAL(&s_mux);
+    snprintf(buf, n, "%s", s_call);
+    portEXIT_CRITICAL(&s_mux);
+}
+
+uint32_t rtty_tx_call_gen(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    uint32_t g = s_call_gen;
+    portEXIT_CRITICAL(&s_mux);
+    return g;
+}
+
+/* Moved here from rtty_screen_view.c's macro_cb() so the web page sends the
+ * same text (2026-11-15). The leading newline starts the over on a fresh
+ * line at the receiver. */
+esp_err_t rtty_tx_macro(rtty_msg_t which, char *err, size_t err_len)
+{
+    char my[16], grid[12], c[16], t[200];
+    settings_get_my_callsign(my, sizeof my);
+    settings_get_my_grid(grid, sizeof grid);
+    rtty_tx_get_call(c, sizeof c);
+    if (!my[0]) { snprintf(err, err_len, "no callsign set (Identity)"); return ESP_ERR_INVALID_STATE; }
+    if (which != RTTY_MSG_CQ && !c[0]) {
+        snprintf(err, err_len, "pick their callsign first");
+        return ESP_ERR_INVALID_STATE;
+    }
+    switch (which) {
+    case RTTY_MSG_CQ:
+        snprintf(t, sizeof t, "\nCQ CQ CQ DE %s %s %s\nCQ CQ CQ DE %s %s %s PSE K\n",
+                 my, my, my, my, my, my);
+        break;
+    case RTTY_MSG_ANSWER:
+        snprintf(t, sizeof t, "\n%s %s DE %s %s %s K\n", c, c, my, my, my);
+        break;
+    case RTTY_MSG_EXCH:
+        if (grid[0])
+            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599 QTH %.4s %.4s\n%s DE %s K\n",
+                     c, my, grid, grid, c, my);
+        else
+            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599\n%s DE %s K\n", c, my, c, my);
+        break;
+    default:
+        snprintf(t, sizeof t, "\n%s DE %s TNX FER QSO 73 GL\n%s DE %s SK\n", c, my, c, my);
+        break;
+    }
+    ESP_LOGI(TAG, "macro: %s", which == RTTY_MSG_CQ ? "CQ" : which == RTTY_MSG_ANSWER ? "Answer" :
+             which == RTTY_MSG_EXCH ? "Exch" : "73");
+    return rtty_tx_send(t, true, err, err_len);
 }

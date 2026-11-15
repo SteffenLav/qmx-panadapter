@@ -724,6 +724,19 @@
                 cursor: pointer; opacity: .55; }
   #rtty-clear:hover { opacity: 1; color: #30e0e0; border-color: #30e0e0; }
   #rtty-wrap button.on { background: #2d5a3f; color: #fff; }
+  /* What we sent, red, and callsigns in the text, clickable to make one the
+     station being worked - as the Tab5 (COL_TX, COL_CALL). Only the words
+     take the click; the rest of the box lets it through to the waterfall. */
+  #rtty-line .rtty-tx { color: #ff5050; }
+  #rtty-line .rtty-callw { pointer-events: auto; cursor: pointer; }
+  #rtty-line .rtty-callw:hover { text-decoration: underline dotted; }
+  #rtty-line .rtty-sel { outline: 1px solid #5fd4ff; outline-offset: 1px; color: #5fd4ff; }
+  #rtty-tx-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 8px; }
+  #rtty-tx-btns button { padding: 8px 0; font-weight: 600; }
+  #rtty-tx-btns button.dim { opacity: .4; }
+  #rtty-tx-btns button.sending { background: #c0601a; color: #fff; }
+  #rtty-stop { background: #4a1c1c; color: #b08080; }
+  #rtty-stop.keyed { background: #e02020; color: #fff; }
   #rtty-sig { display: inline-block; width: 120px; height: 10px; background: #252b34;
               vertical-align: middle; position: relative; }
   #rtty-sig > i { position: absolute; left: 0; top: 0; bottom: 0; background: #5f6670; }
@@ -1472,7 +1485,7 @@
        send a macro or free text, and (added on request) edit the six macros
        and switch which of the two sets (General/Contest) is active - the same
        things the Tab5's own long-press editor and set toggle do. -->
-  <!-- R007: RTTY page controls, the same set as the Tab5's pane. RX only. -->
+  <!-- R007: RTTY page controls, the same set as the Tab5's pane, and R010 send. -->
   <div id="rtty-wrap" style="display:none; width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
     <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <strong style="color:#E08AE0">RTTY</strong>
@@ -1491,6 +1504,33 @@
       <button id="rtty-sq" type="button" title="Print nothing while there is no RTTY signal">Squelch</button>
       <span style="color:var(--dim); font-size:13px; margin-left:auto;">Click the waterfall to tune: the signal goes to 1500 Hz audio</span>
     </div>
+    <!-- RTTY send: the Tab5 pane's TX block. The four messages are built on
+         the device (rtty_tx_macro), so both surfaces send the same text; the
+         station being worked ("To:") is one value shared with the Tab5. -->
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:12px;">
+      <strong style="color:#ffa040">RTTY send</strong>
+      <label for="rtty-call" style="color:var(--dim); font-size:13px;">To:</label>
+      <input id="rtty-call" type="text" maxlength="15" autocomplete="off" spellcheck="false"
+             placeholder="their callsign"
+             title="The station you are working - CALL in Answer, Exch and 73. Click a callsign in the text, or type it and press Enter. Shared with the Tab5."
+             style="width:10em; text-transform:uppercase; font-weight:700; color:#5fd4ff;">
+      <button id="rtty-call-clear" type="button" title="Forget this station">Clear</button>
+      <span id="rtty-tx-status" style="font-size:14px; margin-left:auto; max-width:55%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left;"></span>
+    </div>
+    <div id="rtty-tx-btns">
+      <button type="button" data-macro="cq" title="CQ CQ CQ DE MYCALL MYCALL MYCALL, twice, PSE K">CQ</button>
+      <button type="button" data-macro="answer" title="CALL CALL DE MYCALL MYCALL MYCALL K">Answer</button>
+      <button type="button" data-macro="exch" title="CALL DE MYCALL TNX FER CALL UR RST 599 599 QTH grid grid / CALL DE MYCALL K">Exch</button>
+      <button type="button" data-macro="73" title="CALL DE MYCALL TNX FER QSO 73 GL / CALL DE MYCALL SK">73</button>
+      <button type="button" id="rtty-stop" title="Stop now: tone off, back to receive, the rest dropped">STOP</button>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <input id="rtty-type" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Type: each key is sent as you type. Enter ends the over."
+             title="Starts an over on the first key. Backspace edits the field but cannot unsend. The over ends 3 s after the last key, on Enter, or on STOP."
+             style="flex:1; min-width:0;">
+    </div>
+    <div style="color:var(--dim); font-size:12px; margin-top:4px;">Sends on the decoder's tones - you transmit where you decode. DiGi part of the band only; the band guard applies. One over is at most 180 s.</div>
   </div>
 
   <div id="cw-tx-wrap" style="display:none; width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
@@ -8011,30 +8051,90 @@ function rttyCols() {
   box.removeChild(probe);
   return cw > 0 ? Math.max(20, Math.floor((box.clientWidth - 12) / cw) - 1) : 72;
 }
+/* The decoded text as a stream (since the web send, R010): the device
+   returns what came after the page's own cursors, received and sent apart,
+   so sent text is drawn red where it went, as on the Tab5. rttyBuf holds the
+   text, rttyMask one char per text char: "t" sent, "r" received. */
+let rttyBuf = "", rttyMask = "";
+let rttyCur = null;          /* {rx, tx, gen} once seeded */
+const RTTY_KEEP = 6000;
+function rttyAppend(t, m) {
+  if (!t) return;
+  t = t.replace(/\r/g, "");
+  rttyBuf += t; rttyMask += m.repeat(t.length);
+  if (rttyBuf.length > RTTY_KEEP) { rttyBuf = rttyBuf.slice(-RTTY_KEEP); rttyMask = rttyMask.slice(-RTTY_KEEP); }
+}
+function rttyStream(r) {
+  if (!rttyCur) {                     /* first reply: the received tail */
+    rttyBuf = ""; rttyMask = "";
+    rttyAppend(r.text || "", "r");
+  } else if (r.clear_gen !== rttyCur.gen) {
+    rttyBuf = ""; rttyMask = "";      /* a Clear from either surface */
+  } else {
+    rttyAppend(r.rx_new || "", "r");
+    rttyAppend(r.tx_new || "", "t");
+  }
+  rttyCur = { rx: r.rx_cur, tx: r.tx_cur, gen: r.clear_gen };
+}
+/* Shaped like a callsign: letters and digits, at least one of each, 3-12
+   long, '/' allowed. Loose on purpose - the device checks it properly
+   (cw_call_structure_ok) and refuses anything else. */
+const RTTY_CALL_RE = /^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9\/]{3,12}$/;
+function rttyRowEl(text, mask, cur, sel) {
+  const d = document.createElement("div");
+  if (cur) d.className = "rtty-cur";
+  if (!text) { d.textContent = " "; return d; }
+  /* Runs of the same kind; within received runs, callsign-shaped words
+     become clickable spans. */
+  let i = 0;
+  while (i < text.length) {
+    let j = i; while (j < text.length && mask[j] === mask[i]) j++;
+    const seg = text.slice(i, j);
+    if (mask[i] === "t") {
+      const sp = document.createElement("span"); sp.className = "rtty-tx"; sp.textContent = seg; d.appendChild(sp);
+    } else {
+      for (const w of seg.split(/([^A-Za-z0-9\/]+)/)) {
+        if (!w) continue;
+        const up = w.toUpperCase();
+        if (RTTY_CALL_RE.test(up)) {
+          const sp = document.createElement("span");
+          sp.className = "rtty-callw" + (up === sel ? " rtty-sel" : "");
+          sp.textContent = w;
+          sp.title = "Send to " + up;
+          sp.addEventListener("click", (ev) => { ev.stopPropagation(); rttySetCall(up); });
+          d.appendChild(sp);
+        } else d.appendChild(document.createTextNode(w));
+      }
+    }
+    i = j;
+  }
+  return d;
+}
+let rttyErr = "", rttyErrUntil = 0, rttyMacro = null;
+function rttyShowErr(e) { rttyErr = e || "refused"; rttyErrUntil = Date.now() + 8000; }
 function rttyRender(r) {
   if (!r || typeof r.text !== "string") return;
   lastRtty = r;
+  if (r._stream) rttyStream(r);
+  else if (!rttyCur) { rttyBuf = r.text.replace(/\r/g, ""); rttyMask = "r".repeat(rttyBuf.length); }
   const RTTY_COLS = rttyCols();
-  /* Lines as the device sent them, each wrapped at RTTY_COLS; the last
-     RTTY_ROWS rows are shown, the current (last) one cyan. */
+  /* Lines as they came, each wrapped at RTTY_COLS; the last RTTY_ROWS rows
+     are shown, the current (last) one cyan. */
   const rows = [];
-  for (const ln of r.text.replace(/\r/g, "").split("\n")) {
-    if (ln.length === 0) { rows.push(""); continue; }
-    for (let i = 0; i < ln.length; i += RTTY_COLS) rows.push(ln.slice(i, i + RTTY_COLS));
+  let p = 0;
+  for (const ln of rttyBuf.split("\n")) {
+    const mk = rttyMask.slice(p, p + ln.length); p += ln.length + 1;
+    if (ln.length === 0) { rows.push(["", ""]); continue; }
+    for (let i = 0; i < ln.length; i += RTTY_COLS) rows.push([ln.slice(i, i + RTTY_COLS), mk.slice(i, i + RTTY_COLS)]);
   }
   const show = rows.slice(-RTTY_ROWS);
   /* Always RTTY_ROWS high, as on the Tab5: an empty box that collapses to
      nothing reads as "no decoder" rather than "no signal yet". */
-  while (show.length < RTTY_ROWS) show.unshift("");
+  while (show.length < RTTY_ROWS) show.unshift(["", ""]);
   const box = document.getElementById("rtty-rows");
   if (box) {
     box.innerHTML = "";
-    show.forEach((t, i) => {
-      const d = document.createElement("div");
-      d.textContent = t || " ";
-      if (i === show.length - 1) d.className = "rtty-cur";
-      box.appendChild(d);
-    });
+    show.forEach((t, i) => box.appendChild(rttyRowEl(t[0], t[1], i === show.length - 1, r.call || "")));
   }
   const st = document.getElementById("rtty-status");
   if (st) {
@@ -8053,17 +8153,57 @@ function rttyRender(r) {
   const sel = (id, v) => { const e = document.getElementById(id); if (e && document.activeElement !== e) e.value = String(v); };
   sel("rtty-baud", r.baud === 45.45 ? "45.45" : Math.round(r.baud || 45.45));
   sel("rtty-shift", Math.round(r.shift || 170));
+  if (typeof r.call === "string") sel("rtty-call", r.call);
   const tog = (id, on) => { const e = document.getElementById(id); if (e) e.classList.toggle("on", !!on); };
   tog("rtty-rev", r.reverse); tog("rtty-afc", r.afc); tog("rtty-sq", r.squelch); tog("rtty-auto", r.auto);
+  /* Send panel: the same states as the Tab5 pane (tx_refresh). */
+  const tx = r.tx || {};
+  if (!tx.keyed) rttyMacro = null;
+  document.querySelectorAll("#rtty-tx-btns button[data-macro]").forEach((bt) => {
+    const m = bt.dataset.macro;
+    bt.classList.toggle("dim", m !== "cq" && !r.call);
+    bt.classList.toggle("sending", !!tx.keyed && m === rttyMacro);
+  });
+  const stop = document.getElementById("rtty-stop");
+  if (stop) stop.classList.toggle("keyed", !!tx.keyed);
+  const ts = document.getElementById("rtty-tx-status");
+  if (ts) {
+    if (tx.keyed) { ts.style.color = "#ff5050"; ts.textContent = "TX " + (tx.seconds || 0) + " s  " + (tx.echo || ""); }
+    else if (Date.now() < rttyErrUntil) { ts.style.color = "#ff9f40"; ts.textContent = rttyErr; }
+    else ts.textContent = "";
+  }
 }
+/* Every rtty request from this panel goes through here, so the stream
+   cursors travel with it and no reply skips text. Other callers (the
+   waterfall click, the keypad) send without them; rttyRender() then leaves
+   the stream alone. */
+async function rttyReq(p) {
+  const q = Object.assign({ action: "rtty" }, p || {});
+  if (rttyCur) { q.rx_cur = rttyCur.rx; q.tx_cur = rttyCur.tx; }
+  const r = await sendCmd(q);
+  if (r && typeof r.text === "string") r._stream = true;
+  if (r && r.call_error) rttyShowErr("not a callsign: " + (p && p.call));
+  rttyRender(r);
+  return r;
+}
+function rttySetCall(c) { return rttyReq({ call: c }); }
 async function rttyPoll() {
   if (rttyTimer) { clearTimeout(rttyTimer); rttyTimer = null; }
-  if (lastScreen !== "rtty") return;
-  rttyRender(await sendCmd({ action: "rtty" }));
-  rttyTimer = setTimeout(rttyPoll, 1000);
+  if (lastScreen !== "rtty") { rttyCur = null; return; }
+  const r = await rttyReq();
+  if (rttyTimer) return;   /* another call started a poll meanwhile */
+  /* Faster while sending, so the echo and STOP keep up. */
+  rttyTimer = setTimeout(rttyPoll, (r && r.tx && r.tx.keyed) ? 400 : 1000);
+}
+async function rttySend(body) {
+  const r = await sendCmd(Object.assign({ action: "rtty_send" }, body));
+  const ok = !!(r && r.ok);
+  if (!ok) rttyShowErr((r && r.error) || "no answer from the Tab5");
+  rttyPoll();
+  return ok;
 }
 (function wireRtty() {
-  const set = async (p) => rttyRender(await sendCmd(Object.assign({ action: "rtty" }, p)));
+  const set = (p) => rttyReq(p);
   const b = (id, fn) => { const e = document.getElementById(id); if (e) e.addEventListener("click", fn); };
   b("rtty-rev", () => set({ reverse: !document.getElementById("rtty-rev").classList.contains("on") }));
   b("rtty-afc", () => set({ afc: !document.getElementById("rtty-afc").classList.contains("on") }));
@@ -8073,6 +8213,45 @@ async function rttyPoll() {
   const c = (id, key) => { const e = document.getElementById(id);
     if (e) e.addEventListener("change", () => set({ [key]: parseFloat(e.value) })); };
   c("rtty-baud", "baud"); c("rtty-shift", "shift");
+
+  /* ⛔ KEYS THE RADIO: every one of these is a click or a key press. */
+  document.querySelectorAll("#rtty-tx-btns button[data-macro]").forEach((bt) =>
+    bt.addEventListener("click", async () => {
+      if (await rttySend({ macro: bt.dataset.macro })) rttyMacro = bt.dataset.macro;
+    }));
+  b("rtty-stop", async () => { await sendCmd({ action: "rtty_stop" }); rttyPoll(); });
+
+  const call = document.getElementById("rtty-call");
+  if (call) call.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); rttySetCall(call.value.trim().toUpperCase()); call.blur(); }
+  });
+  b("rtty-call-clear", () => rttySetCall(""));
+
+  /* Type: each new character is sent as typed (the Tab5's rule), batched
+     over 150 ms so a fast typist is not one request per key. Backspace only
+     edits the field. Enter ends the over once the text has gone. */
+  const ty = document.getElementById("rtty-type");
+  if (!ty) return;
+  let sentLen = 0, pend = "", timer = null;
+  const flush = async (end) => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    const t = pend; pend = "";
+    if (t && await rttySend({ text: t, end: false })) rttyMacro = null;
+    if (end && lastRtty && lastRtty.tx && lastRtty.tx.keyed) await rttySend({ text: "", end: true });
+  };
+  ty.addEventListener("input", () => {
+    const v = ty.value;
+    if (v.length > sentLen) { pend += v.slice(sentLen).toUpperCase(); if (!timer) timer = setTimeout(() => flush(false), 150); }
+    sentLen = v.length;
+    if (v.length > 160) { ty.value = ""; sentLen = 0; }
+  });
+  ty.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    pend += "\n";
+    ty.value = ""; sentLen = 0;
+    flush(true);
+  });
 })();
 
 (function wireScreenLinks() {

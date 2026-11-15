@@ -3386,8 +3386,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * appends while an over runs. Refusals, the dial move and the band
          * guard live in rtty_tx_send().
          *   {"action":"rtty_send","text":"CQ CQ DE ...","end":true}
+         *   {"action":"rtty_send","macro":"cq"}   (cq | answer | exch | 73)
          * "test":true sends R009's fixed text (THE QUICK BROWN FOX ... DE call)
          * once, end of over after it - the on-air check with fldigi. */
+        /* "macro":"cq"|"answer"|"exch"|"73" - the Tab5's four buttons, built
+         * by rtty_tx_macro() so both surfaces send the same text. */
+        cJSON *mj = cJSON_GetObjectItem(root, "macro");
+        if (cJSON_IsString(mj)) {
+            static const char *const MN[4] = { "cq", "answer", "exch", "73" };
+            int m = -1;
+            for (int i = 0; i < 4; i++) if (!strcmp(mj->valuestring, MN[i])) m = i;
+            cJSON_Delete(root);
+            char merr[160] = "unknown macro (cq, answer, exch, 73)";
+            esp_err_t mr = m < 0 ? ESP_ERR_INVALID_ARG : rtty_tx_macro((rtty_msg_t)m, merr, sizeof merr);
+            cJSON *res = cJSON_CreateObject();
+            cJSON_AddBoolToObject(res, "ok", mr == ESP_OK);
+            if (mr != ESP_OK) cJSON_AddStringToObject(res, "error", merr);
+            char *txt = cJSON_PrintUnformatted(res);
+            cJSON_Delete(res);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+            free(txt);
+            return ESP_OK;
+        }
         static char ttext[600];
         cJSON *tj = cJSON_GetObjectItem(root, "text");
         bool end = !cJSON_IsFalse(cJSON_GetObjectItem(root, "end"));
@@ -3688,7 +3709,8 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, body);
         return ESP_OK;
     } else if (action && strcmp(action, "rtty") == 0) {
-        /* RTTY receive, R005/R006 (TODO-RTTY.md). RX only - nothing here keys.
+        /* RTTY receive, R005/R006 (TODO-RTTY.md). Nothing here keys ("call"
+         * only names the station; rtty_send keys).
          *   {"action":"rtty","on":true,"offset_hz":1423,"reverse":false,
          *    "baud":45.45,"shift":170,"afc":true,"squelch":true}
          *   {"action":"rtty"}             -> status + the last decoded text
@@ -3725,7 +3747,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         /* "clear":true - the web page's Clear. Empties the shared text ring;
          * the Tab5 grid follows rtty_rx_text_clear_gen(). */
         if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) rtty_rx_text_clear();
+        /* "call": the station being worked ({CALL}, "To:"), shared with the
+         * Tab5 - a click on a callsign in the web text or one typed. "" clears.
+         * Not a callsign shape -> "call_error", nothing changed. */
+        bool call_bad = false;
+        if (cJSON_IsString(j = cJSON_GetObjectItem(root, "call")))
+            call_bad = !rtty_tx_set_call(j->valuestring);
+        /* Text stream for the web page: "rx_cur"/"tx_cur" are the counts it
+         * has read so far; the reply carries what came after each, so the
+         * page can show sent text in red where it went, as the Tab5 does.
+         * Without them the reply starts both cursors at "now". */
+        uint32_t rx_cur = rtty_rx_text_count(), tx_cur = rtty_tx_text_count();
+        bool want_rx = cJSON_IsNumber(j = cJSON_GetObjectItem(root, "rx_cur"));
+        if (want_rx) rx_cur = (uint32_t)j->valuedouble;
+        bool want_tx = cJSON_IsNumber(j = cJSON_GetObjectItem(root, "tx_cur"));
+        if (want_tx) tx_cur = (uint32_t)j->valuedouble;
         cJSON_Delete(root);
+        static char rx_new[1025], tx_new[513];
+        size_t rn = want_rx ? rtty_rx_text_read(&rx_cur, rx_new, sizeof rx_new - 1) : 0;
+        size_t tn = want_tx ? rtty_tx_text_read(&tx_cur, tx_new, sizeof tx_new - 1) : 0;
+        rx_new[rn] = 0; tx_new[tn] = 0;
         rtty_rx_status_t st;
         rtty_rx_status(&st);
         static char text[513];
@@ -3785,6 +3826,17 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             cJSON_AddBoolToObject(dm, "iq_recording", iqr);
         }
         cJSON_AddStringToObject(o, "text", text);
+        cJSON_AddNumberToObject(o, "rx_cur", rx_cur);
+        cJSON_AddNumberToObject(o, "tx_cur", tx_cur);
+        if (rn) cJSON_AddStringToObject(o, "rx_new", rx_new);
+        if (tn) cJSON_AddStringToObject(o, "tx_new", tx_new);
+        cJSON_AddNumberToObject(o, "clear_gen", rtty_rx_text_clear_gen());
+        {
+            char call[16];
+            rtty_tx_get_call(call, sizeof call);
+            cJSON_AddStringToObject(o, "call", call);
+            if (call_bad) cJSON_AddStringToObject(o, "call_error", "not a callsign");
+        }
         rtty_tx_status_t ts;
         rtty_tx_status(&ts);
         cJSON *tx = cJSON_AddObjectToObject(o, "tx");

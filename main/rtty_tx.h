@@ -47,3 +47,19 @@ bool rtty_tx_keyed(void);
 uint32_t rtty_tx_text_count(void);
 size_t   rtty_tx_text_read(uint32_t *cursor, char *buf, size_t n);
 void rtty_tx_status(rtty_tx_status_t *st);
+
+/* The station being worked - {CALL} in the macros, "To:" on both surfaces.
+ * One copy here so a callsign picked on the Tab5 (a tap in the text) or on
+ * the web page (a click, or typed) is the same one on both. set: "" clears;
+ * anything else must pass cw_call_structure_ok() (false = refused, nothing
+ * changed). gen bumps on every change, so a surface can notice the other's. */
+bool     rtty_tx_set_call(const char *call);
+void     rtty_tx_get_call(char *buf, size_t n);
+uint32_t rtty_tx_call_gen(void);
+
+/* The four fixed messages, built here so the Tab5 and the web send the same
+ * bytes. CALL = rtty_tx_get_call(), MY = Identity callsign, GRID = 4-char
+ * locator (left out when unset). Sends with end = true. ⛔ KEYS THE RADIO
+ * like rtty_tx_send(); every caller is a human press. */
+typedef enum { RTTY_MSG_CQ, RTTY_MSG_ANSWER, RTTY_MSG_EXCH, RTTY_MSG_73 } rtty_msg_t;
+esp_err_t rtty_tx_macro(rtty_msg_t which, char *err, size_t err_len);

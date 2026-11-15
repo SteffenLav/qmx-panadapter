@@ -86,7 +86,8 @@ static int       s_sending = -1;               /* s_tx_btn index lit while keyed
 static int       s_tx_style = -1;              /* last applied tx_style_key(), -1 = never */
 static int       s_typed_len;                  /* chars of s_kb_ta already sent */
 static bool      s_ta_resetting;               /* our own lv_textarea_set_text() */
-static char      s_call[16];                   /* {CALL}: the callsign tapped in the text */
+static char      s_call[16];                   /* copy of rtty_tx_get_call(): the station being worked */
+static uint32_t  s_call_gen;                   /* rtty_tx_call_gen() that s_call reflects */
 static char      s_err_shown[96];              /* rtty_tx's last refusal, as last shown */
 static uint32_t  s_err_until;                  /* lv_tick until which it stays up */
 static lv_timer_t *s_timer;
@@ -355,42 +356,16 @@ static bool tx_send(const char *text, bool end)
     return false;
 }
 
-/* The four fixed messages. CALL is the station tapped in the text box, MY
- * the callsign from Identity, GRID the locator (left out when unset). The
- * leading '\n' starts the over on a fresh line at the receiver. */
-enum { MSG_CQ, MSG_ANSWER, MSG_EXCH, MSG_73 };
-
+/* The four fixed messages: built in rtty_tx_macro() (rtty_tx.c), which the
+ * web page calls too, so both send the same text. */
 static void macro_cb(lv_event_t *e)
 {
     int which = (int)(intptr_t)lv_event_get_user_data(e);
-    char my[16], grid[12], t[200];
-    settings_get_my_callsign(my, sizeof my);
-    settings_get_my_grid(grid, sizeof grid);
-    if (!my[0]) { tx_show_err("no callsign set (Identity)"); return; }
-    if (which != MSG_CQ && !s_call[0]) { tx_show_err("tap their callsign in the text first"); return; }
-    const char *c = s_call;
-    switch (which) {
-    case MSG_CQ:
-        snprintf(t, sizeof t, "\nCQ CQ CQ DE %s %s %s\nCQ CQ CQ DE %s %s %s PSE K\n",
-                 my, my, my, my, my, my);
-        break;
-    case MSG_ANSWER:
-        snprintf(t, sizeof t, "\n%s %s DE %s %s %s K\n", c, c, my, my, my);
-        break;
-    case MSG_EXCH:
-        if (grid[0])
-            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599 QTH %.4s %.4s\n%s DE %s K\n",
-                     c, my, grid, grid, c, my);
-        else
-            snprintf(t, sizeof t, "\n%s DE %s TNX FER CALL UR RST 599 599\n%s DE %s K\n", c, my, c, my);
-        break;
-    default:
-        snprintf(t, sizeof t, "\n%s DE %s TNX FER QSO 73 GL\n%s DE %s SK\n", c, my, c, my);
-        break;
-    }
-    ESP_LOGI(TAG, "TX press: %s", which == MSG_CQ ? "CQ" : which == MSG_ANSWER ? "Answer" :
-             which == MSG_EXCH ? "Exch" : "73");
-    if (tx_send(t, true)) s_sending = which;
+    char err[96] = "";
+    ESP_LOGI(TAG, "TX press: %s", which == RTTY_MSG_CQ ? "CQ" : which == RTTY_MSG_ANSWER ? "Answer" :
+             which == RTTY_MSG_EXCH ? "Exch" : "73");
+    if (rtty_tx_macro((rtty_msg_t)which, err, sizeof err) == ESP_OK) s_sending = which;
+    else tx_show_err(err);
 }
 
 /* ⛔ HIDE, NEVER DELETE. This deleted s_kb_wrap, and it is called from the
@@ -557,7 +532,9 @@ static void text_tap_cb(lv_event_t *e)
     for (int i = 0; i < n; i++) w[i] = (char)toupper((unsigned char)ln[b + i]);
     w[n] = 0;
     if (!cw_call_structure_ok(w)) { ESP_LOGI(TAG, "tap on '%s': not a callsign", w); return; }
+    rtty_tx_set_call(w);   /* shape already checked; shared with the web */
     snprintf(s_call, sizeof s_call, "%s", w);
+    s_call_gen = rtty_tx_call_gen();
     s_call_row = row; s_call_col = b; s_call_len = n;
     s_text_dirty = true;   /* text_render() places the box */
     s_tx_style = -1;       /* undim Answer / Exch / 73, show To: */
@@ -633,6 +610,17 @@ static void timer_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_shown) return;
+
+    /* The station being worked, changed on the web page: take it, and drop
+     * the box (its row/column are only known for a tap here). */
+    uint32_t cg = rtty_tx_call_gen();
+    if (cg != s_call_gen) {
+        s_call_gen = cg;
+        rtty_tx_get_call(s_call, sizeof s_call);
+        s_call_row = -1;
+        s_text_dirty = true;
+        s_tx_style = -1;
+    }
 
     /* A Clear from either surface (this pane or the web page). */
     uint32_t g = rtty_rx_text_clear_gen();
