@@ -113,7 +113,7 @@ Threads need `SharedArrayBuffer`, so the page must be served with
 
 | Step | What | Done when | Cost |
 |---|---|---|---|
-| 0 | **Measure the shim surface.** Install Emscripten, compile `main/` + LVGL with empty stub headers, list unresolved symbols | the real list of functions to shim, by group | 1 day |
+| 0 ✅ | **Measure the shim surface.** Install Emscripten, compile `main/` + LVGL with empty stub headers, list unresolved symbols | the real list of functions to shim, by group | 1 day |
 | 1 | Panadapter only: I/Q + CAT -> FFT -> LVGL Tab5 screen on a canvas. Tune by mouse, band, mode, zoom by wheel | the canvas shows the same spectrum as a Tab5 on the same signal | 1-2 weeks |
 | 2 | Settings and log persistence (IDBFS); audio out | settings survive a reload | days |
 | 3 | Decoders: FT8/FT4 receive, then RTTY, CW, JS8, WSPR | decode counts match the Tab5 on the same band within a few % | 1-2 weeks |
@@ -123,6 +123,41 @@ Threads need `SharedArrayBuffer`, so the page must be served with
 
 Step 0 is the cheapest decisive instrument: it costs no hardware time and
 turns "how big is the port" from an estimate into a list.
+
+## 5a. Step 0 result (2026-11-15)
+
+`tools/sim/step0_surface.py` with Emscripten 4.0.10: every application
+source (main/, ft8_lib, LVGL, esp-dsp portable C) compiled to wasm with the
+exact flags of the Tab5 build, then every symbol used and not defined listed.
+
+**761 of 778 sources compile for WebAssembly unchanged.** What it took: a
+simulator `sdkconfig.h` with 1 core (the FreeRTOS Linux port is single-core),
+the FreeRTOS Linux-port headers, and three shim headers in
+`tools/sim/shim_include/` (`x86intrin.h`, `sys/cdefs.h`, `sys/queue.h`).
+The 17 that do not are all network clients, WiFi and mDNS (lwIP's
+`struct ifreq` clashes with the browser libc); a browser build replaces them.
+
+442 undefined symbols, by what supplies them:
+
+| Count | Group | In the simulator |
+|---:|---|---|
+| 44 | FreeRTOS kernel API (tasks, queues, mutexes, ring/stream buffers, notify) | **implement**: shim on pthreads |
+| 65 | ESP system services: timer, log, heap_caps, NVS (26), SPIFFS/VFS, restart, random, chip info | **implement**: small stubs; NVS and files on IDBFS |
+| 16 | Radio I/O: UAC host, CDC-ACM, USB host | **implement**: getUserMedia + Web Serial bridge |
+| 94 | Tab5 hardware: BSP display/touch, LCD, codec, I2C/I2S, GPIO, UART, BLE, USB HID | **replace or drop**: canvas display driver, mouse/keyboard input, Web Audio out; the rest stubbed |
+| 40 | HTTP server, sockets, MQTT | **drop** for the first steps |
+| 183 | Not platform: functions of the 17 network files (93), cJSON / esp-dsp tables / embedded files (51), libc (39) | compile them, or they leave with the network files |
+
+The 17 network files add their own ESP calls (HTTP client about 12, WiFi and
+netif about 40, OTA about 10, mDNS 5): **drop** for the first steps, `fetch`
+later where CORS allows.
+
+**So the port is 125 functions to write (FreeRTOS 44, system 65, radio I/O 16)
+plus a display/input/audio driver, with everything else stubbed or left out.**
+
+Not measured by step 0: run-time behaviour. About 24 firmware tasks pinned to
+two cores become browser threads; timing, priorities and the CPU cost of the
+decoders in WASM are step 1's question.
 
 ## 6. Decisions for the operator
 
