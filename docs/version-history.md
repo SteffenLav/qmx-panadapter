@@ -4850,3 +4850,15 @@ v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT
 - CW: the QMX has no command to stop text it already holds, so CW **STOP** drops only what the Tab5 still holds. RTTY STOP turns the tone off at once.
 
 Commits: `v1.26.3..v2.0.0` - RTTY receive (R003-R029), RTTY transmit (R010), Auto (R028), receive audio T201 (`e20bd084`, `02afa55b`, `16dad59b`, `01cda9cc`, `d68a6420`, `bd2ba553`, `83157f40`), T199 `64737527`, T200 `f345efa2`.
+
+### Shipped in v2.0.1 — 2026-11-15
+
+**A fix for the card-archive offer from v2.0.0 (T199, Randy N4OPI).**
+
+- **"Use them" and "Leave it" now work with WiFi on.** v2.0.0 applied the answer only in the card task's start-up pass. That pass stops once WiFi is up and the card is parked (about 12 s), and the question is asked at 45 s. So neither answer was applied, and the question came back 150 ms after each tap. An answered question no longer reads as open, and the parked task applies the answer: adopt (one header line in SPIFFS) or decline (NVS). Nothing on the device or card changed under v2.0.0.
+- The worked-before index is built on the next start (2.5 s for 2,903 contacts / 550 KB), not over live WiFi.
+- **The worked-before index names the archive it was built from (`qso-worked.idx` format QMXWIDX2).** QMXWIDX1 was accepted for any archive in that place: on bench1 a new archive kept 20 stale pairs and missed 7 real ones. The header now carries a fingerprint of the archive; a different file gives a rebuild. After a rotation MISMATCH the index is neither extended nor rebuilt. Old-format files are rebuilt once.
+
+Tested on bench1 with a 2,903-record, 550 KB archive and WiFi on: offer, Use them, next-start index (2,891 pairs, checked on the PC), steady-state start, a foreign archive, and relink.
+
+Commits: `v2.0.0..v2.0.1` - `0e1e3ade`, `a7876364`.

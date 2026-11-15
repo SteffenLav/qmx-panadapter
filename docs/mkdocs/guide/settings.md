@@ -877,13 +877,15 @@ one in your PC logger and for **Restore from SD**.
   cut during a write - it restores the log from the card.
 - Without a card nothing moves. From 300 KB the Tab5 shows **QSO log nearly full**: download
   the log, then clear it.
-- **A large old log can live on the card** *(v2.0.0, Randy N4OPI)*. A log too large to
-  restore into the Tab5 can be copied onto the card by hand as `qso-archive.adi`. At the next
-  start-up the Tab5 asks **N contacts on the card - use them as your log history?** With
-  **Use them**, the records stay on the card, count as worked before, and new QSOs are added
-  as usual. **Leave it** is remembered. The Tab5 never takes a file over without asking,
-  because the same file could be another station's card. Proven on the real log code in a
-  host test; not yet run on a Tab5.
+- **A large old log can live on the card** *(v2.0.0, Randy N4OPI; fixed in v2.0.1)*. A log
+  too large to restore into the Tab5 can be copied onto the card by hand as `qso-archive.adi`.
+  At the next start-up the Tab5 asks **N contacts on the card - use them as your log
+  history?** With **Use them**, the records stay on the card and new QSOs are added as usual.
+  They count as worked before from the next start, which is slower (about 2.5 s for 2,900
+  contacts). **Leave it** is remembered. The Tab5 never takes a file over without asking,
+  because the same file could be another station's card. Leave out the contacts that are
+  already on the Tab5, or the card's `qso.adi` lists them twice. Tested on a Tab5 with 2,903
+  contacts and WiFi on.
 
 **After inserting the SD card your Tab5 needs a restart.**
 

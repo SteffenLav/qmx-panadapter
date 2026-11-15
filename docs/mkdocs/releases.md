@@ -4,7 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v2.0.0** - 2026-11-15
+**v2.0.1** - 2026-11-15
+
+**A fix for the card-archive offer from v2.0.0.**
+
+- **"Use them" and "Leave it" now work with WiFi on** *(Randy N4OPI)*. In v2.0.0 the answer was never applied while WiFi was on, and the question came back after every tap. If that happened to you, nothing was changed on your Tab5 or card: after the update, answer the question once.
+- The archive's contacts count as worked before from the next start. That start is slower, about 2.5 s for 2,900 contacts.
+- The worked-before list on the card is now tied to the archive it was built from, so a replaced archive gets a new list. If your Tab5 has already moved QSOs to the card, the list is rebuilt once, at the first start after the update.
+
+Tested on a Tab5 with 2,903 contacts (550 KB) and WiFi on. See [Settings](guide/settings.md#the-qso-log-and-the-card).
+
+## Previous Releases
+
+### v2.0.0 - 2026-11-15
 
 **Every goal on the original roadmap is met. v2.0.0 adds MODE: RTTY, so the left drawer now holds the digital modes FT8, FT4, JS8, RTTY and WSPR, plus the CW page. Receive audio no longer breaks up on a busy band. No page is a beta any more.**
 
@@ -39,8 +51,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - RTTY Auto is proven on air against a clean and a damaged 75-baud station. It has not met a live contest pile-up or a real 50- or 100-baud station.
 - The card-archive offer is proven in a host test on the real log code; it has not yet run on a Tab5.
 - CW: the QMX has no command to stop text it already holds, so CW **STOP** drops only what the Tab5 still holds. RTTY STOP turns the tone off at once.
-
-## Previous Releases
 
 ### v1.26.3 - 2026-11-13
 
@@ -1332,7 +1342,7 @@ Every goal on the original roadmap is met in v2.0.0. What remains is proof on th
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.0.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.0.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

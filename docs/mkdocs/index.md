@@ -251,6 +251,9 @@ browser: tap a signal, and **Auto** follows its speed, shift and polarity; **CQ*
 **Exch** and **73** in one press, or type live. **Receive audio no longer breaks up or drifts
 in pitch on a busy band.** See [RTTY](guide/rtty.md) and [Releases](releases.md).
 
+**v2.0.1** fixes the card-archive offer: with WiFi on, **Use them** and **Leave it** now take
+effect. See [Releases](releases.md).
+
 **v1.26.3 makes the QSO log safe when it fills up**: a QSO is reported as logged only when it is saved, and with an SD card in, older QSOs move to the card. See [Releases](releases.md).
 
 **v1.26.2 kept a dB range for each band**, kept the voice at its level with web noise reduction on, and fixed a bottom-bar clock that could stop for up to 11 seconds. See [Releases](releases.md).
@@ -439,7 +442,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.0.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.0.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
