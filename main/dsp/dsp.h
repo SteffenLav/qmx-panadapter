@@ -170,6 +170,9 @@ void   dsp_rxaudio_forward(const int16_t *pairs, size_t n_pairs); // producer (a
 // Read up to n_pairs interleaved int16 stereo pairs into dst (dst holds
 // n_pairs*2 int16). Returns pairs actually read (0 on timeout).
 size_t dsp_rxaudio_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms);
+// Pairs dropped on a full ring and the lowest free space seen, since the last
+// call (the call resets both). For rx_audio's 10 s diag line.
+void   dsp_rxaudio_fwd_stats(uint32_t *drop_pairs, uint32_t *free_min_bytes);
 
 // ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
 // The fft_task mixes the pan-center down to DC, low-pass filters, decimates

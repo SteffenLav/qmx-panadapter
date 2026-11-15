@@ -495,6 +495,12 @@ static uint32_t s_out_sq_n = 0;
 /* Per-10-s-window counters - see the diag line. Reset every window on purpose:
    a running maximum cannot distinguish one stall from a thousand. */
 static volatile uint32_t s_write_late_win = 0;   /* writes over 25 ms */
+/* Per-window maxima (the s_*_max above are since boot), and the time the task
+ * spent AWAY from the forward ring between two reads - the number to hold
+ * against the ring's 128 ms (dsp.c RXAUDIO_RING_BYTES). 2026-11-15. */
+static uint32_t s_frame_max_win = 0, s_write_max_win = 0, s_away_max_win = 0;
+static uint32_t s_away_over100_win = 0;
+static int64_t  s_read_end_us = 0;
 static volatile uint32_t s_frames_win     = 0;   /* frames in this window */
 static volatile uint32_t s_pairs_win      = 0;   /* sample-pairs written this window */
 /* Clock-drift corrector state - see the rate-match block in the task loop. */
@@ -1829,7 +1835,13 @@ static void rx_audio_task(void *arg)
 
         s_loop_count++;
         int64_t read_start_us = esp_timer_get_time();
+        if (s_read_end_us) {
+            uint32_t away = (uint32_t)(read_start_us - s_read_end_us);
+            if (away > s_away_max_win) s_away_max_win = away;
+            if (away > 100000) s_away_over100_win++;
+        }
         int pairs = (int)dsp_rxaudio_read(s_rxbuf, DSP_FFT_SIZE, 60);
+        s_read_end_us = esp_timer_get_time();
         const int in_pairs = pairs;   /* INPUT count - `pairs` becomes the OUTPUT count below */
         uint32_t read_us = (uint32_t)(esp_timer_get_time() - read_start_us);
         if (read_us > s_read_us_max) s_read_us_max = read_us;
@@ -2418,6 +2430,7 @@ static void rx_audio_task(void *arg)
         // math itself keeping up with the 21.3 ms/frame budget" cleanly.
         uint32_t frame_us = (uint32_t)(esp_timer_get_time() - frame_start_us);
         if (frame_us > s_frame_us_max) s_frame_us_max = frame_us;
+        if (frame_us > s_frame_max_win) s_frame_max_win = frame_us;
         s_frame_us_sum += frame_us;
         s_frame_count++;
 
@@ -2681,6 +2694,7 @@ static void rx_audio_task(void *arg)
                 esp_codec_dev_write(s_codec, s_out, pairs * 2 * (int)sizeof(int16_t));
         uint32_t write_us = (uint32_t)(esp_timer_get_time() - write_start_us);
         if (write_us > s_write_us_max) s_write_us_max = write_us;
+        if (write_us > s_write_max_win) s_write_max_win = write_us;
         s_write_us_sum += write_us;
         /* ⭐ EVENT RATE, NOT A RUNNING MAXIMUM (2026-09-22).
          *
@@ -2752,6 +2766,17 @@ static void rx_audio_task(void *arg)
                              (unsigned long)s_out_sq_n,
                              (rl > 4 * (rr + 1) || rr > 4 * (rl + 1))
                                  ? "  <-- CHANNELS LOPSIDED" : "");
+                }
+                {
+                    uint32_t drop = 0, fmin = 0;
+                    dsp_rxaudio_fwd_stats(&drop, &fmin);
+                    ESP_LOGI(TAG, "diag: win fwd drop %lu pairs  ring free min %ld B  "
+                             "away max %lu us (>100ms %lu)  frame max %lu us  write max %lu us",
+                             (unsigned long)drop, fmin == UINT32_MAX ? -1L : (long)fmin,
+                             (unsigned long)s_away_max_win, (unsigned long)s_away_over100_win,
+                             (unsigned long)s_frame_max_win, (unsigned long)s_write_max_win);
+                    s_away_max_win = s_away_over100_win = 0;
+                    s_frame_max_win = s_write_max_win = 0;
                 }
                 s_out_sq_l = s_out_sq_r = 0; s_out_sq_n = 0;
                 s_write_late_win = 0;

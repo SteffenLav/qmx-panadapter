@@ -122,6 +122,8 @@ static uint32_t s_frames_this_period = 0;
 // penalty.
 #define RXAUDIO_RING_BYTES (24 * 1024)
 static RingbufHandle_t s_rxaudio_ring    = NULL;
+static volatile uint32_t s_rxaudio_drop_pairs = 0;          /* per diag window */
+static volatile uint32_t s_rxaudio_free_min   = UINT32_MAX;  /* per diag window */
 static volatile bool   s_rxaudio_forward = false;
 static int64_t  s_period_start_us = 0;
 
@@ -1098,7 +1100,23 @@ void dsp_rxaudio_forward_enable(bool en)
 void dsp_rxaudio_forward(const int16_t *pairs, size_t n_pairs)
 {
     if (!s_rxaudio_forward || s_rxaudio_ring == NULL || pairs == NULL || n_pairs == 0) return;
-    xRingbufferSend(s_rxaudio_ring, pairs, n_pairs * 2 * sizeof(int16_t), 0);
+    /* 2026-11-15: a full ring dropped the chunk with no trace. bench1 showed
+     * rx_audio intake 1-2 % short on a busy RTTY scene while the QMX delivered
+     * 48k pairs/s, and rx_audio frames reached 153-191 ms against this ring's
+     * 128 ms. Counted so that question has a number. */
+    size_t bytes = n_pairs * 2 * sizeof(int16_t);
+    size_t free_b = xRingbufferGetCurFreeSize(s_rxaudio_ring);
+    if (free_b < s_rxaudio_free_min) s_rxaudio_free_min = (uint32_t)free_b;
+    if (xRingbufferSend(s_rxaudio_ring, pairs, bytes, 0) != pdTRUE)
+        s_rxaudio_drop_pairs += (uint32_t)n_pairs;
+}
+
+void dsp_rxaudio_fwd_stats(uint32_t *drop_pairs, uint32_t *free_min_bytes)
+{
+    if (drop_pairs)     *drop_pairs = s_rxaudio_drop_pairs;
+    if (free_min_bytes) *free_min_bytes = s_rxaudio_free_min;
+    s_rxaudio_drop_pairs = 0;
+    s_rxaudio_free_min = UINT32_MAX;
 }
 
 // Consumer: fill up to n_pairs (loops over BYTEBUF wrap). Returns pairs read.
