@@ -42,19 +42,36 @@ static const char *TAG = "rx_audio";
 // backlog grow slot over slot, so later captures decoded time-shifted audio:
 // still found sync (jitter-tolerant) but failed LDPC decode (needs exact
 // symbol alignment). Root-caused 2026-06-25/26 (see CLAUDE.md, "CW audio
-// (shelved)"). This task is pinned BELOW fft_task instead, so FreeRTOS's
-// preemptive scheduler cannot hand it the CPU while fft_task is ready - not
-// "usually doesn't," structurally cannot. See rx_audio.h for the rest of the
-// design (blocked-not-polling while disabled, mode-aware filtering).
+// (shelved)"). This task was then pinned BELOW fft_task. Since 2026-11-15 it
+// is above it again (RX_AUDIO_TASK_PRIORITY, below) - which is safe ONLY
+// while fft_task still gets its share on average, i.e. its backlog stays
+// flat. ⛔ The check for any change here: /api/status audio_backlog_pairs
+// flat over minutes with audio on, and FT8 still decoding. See rx_audio.h
+// for the rest of the design (blocked-not-polling while disabled).
 // Stack for the short-lived core-1 task that opens the I2S channel + codec
 // (see rx_audio_preopen). 4096 overflowed on the first boot it was tried;
 // 16 KB is deliberately far more than the measured need, which the task logs
 // as a high water mark - this runs once at boot and is freed immediately.
 #define RXAUD_PREOPEN_STACK    16384
 
-#define RX_AUDIO_TASK_PRIORITY (DSP_FFT_TASK_PRIORITY - 1)
-_Static_assert(RX_AUDIO_TASK_PRIORITY < DSP_FFT_TASK_PRIORITY,
-               "rx_audio_task must never be able to preempt fft_task");
+/* ⛔ PRIORITY 6: ABOVE fft_task (4), render (3) and httpd/CAT (5), BELOW the
+ * RTTY keying task (7, rtty_tx.c). Operator, 2026-11-15: "Yes, try it".
+ *
+ * It was fft_task - 1 (3) with an assert that it must never preempt
+ * fft_task, because fft_task is the only consumer of the radio's sample ring
+ * and an earlier cw_audio_task at 6 that woke every 120 ms even when idle
+ * was blamed for starving it. Measured on bench1 2026-11-15 (busy 20 m, WAE
+ * contest): render (3, same as this task, so time-sliced) and fft_task held
+ * this task off long enough to overflow its 24 KB (~125 ms) forward ring -
+ * audible gaps, while core 1 still idled 25-45 %: latency, not CPU.
+ * fft_task's own input buffering is 1.34 s (UAC ring 1.0 s + audio.c 0.34 s,
+ * see dsp.c GAPFILL_BUCKET_US), and this task's DSP is <= ~11 ms of each
+ * 21 ms frame, so preempting fft_task cannot overflow fft_task's ring. When
+ * RX audio is off the task is fully blocked, so the cw_audio fault (idle
+ * wakeups at high priority) cannot recur. */
+#define RX_AUDIO_TASK_PRIORITY 6
+_Static_assert(RX_AUDIO_TASK_PRIORITY > DSP_FFT_TASK_PRIORITY,
+               "rx_audio_task must preempt fft_task - see above");
 
 // ---- Demod mode -----------------------------------------------------------
 typedef enum {
@@ -1709,11 +1726,9 @@ static void rx_audio_task(void *arg)
         if (!active) {
             if (active_prev) { dsp_rxaudio_forward_enable(false); active_prev = false; }
             // Enabled by the user but not currently in a supported mode (or
-            // the codec never opened). Safe to poll here even though it is
-            // not a full block: RX_AUDIO_TASK_PRIORITY sits strictly below
-            // fft_task's, so FreeRTOS cannot schedule this task while
-            // fft_task is ready - this can only ever spend core-1 idle time,
-            // never fft_task's, no matter how often it wakes.
+            // the codec never opened). A 200 ms sleep, so it costs nothing
+            // even at priority 6 (above fft_task since 2026-11-15): one
+            // wakeup of a few microseconds five times a second.
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }

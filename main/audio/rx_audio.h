@@ -18,12 +18,12 @@ extern "C" {
 //
 //   1. Mode-aware filtering (CW/CW-R narrow-band around the CW offset,
 //      USB/LSB a voice-width passband) instead of CW only.
-//   2. The consumer task is now STRUCTURALLY unable to preempt fft_task: it
-//      runs at a priority BELOW fft_task's (RX_AUDIO_TASK_PRIORITY <
-//      DSP_FFT_TASK_PRIORITY in dsp.h), so FreeRTOS's preemptive scheduler
-//      cannot hand it the CPU while fft_task is ready - regardless of wake
-//      cadence. On top of that, the task is fully BLOCKED (no wakeups at
-//      all) whenever RX audio is disabled, which is the default. The
+//   2. The consumer task was first set BELOW fft_task. Since 2026-11-15 it is
+//      priority 6, ABOVE fft_task (4) and render (3): below them it was held
+//      off long enough to overflow its own ~125 ms ring on a busy band, and
+//      fft_task's 1.34 s input buffer has room for its <= ~11 ms frames - see
+//      RX_AUDIO_TASK_PRIORITY in rx_audio.c. The task is fully BLOCKED
+//      whenever RX audio is disabled, which is the default. The
 //      original cw_audio_task's bug was priority 6 (ABOVE fft_task's 4)
 //      waking every 120 ms even when idle - see cw_audio.c's git history
 //      and CLAUDE.md's "CW audio (shelved)" section for the post-mortem.
