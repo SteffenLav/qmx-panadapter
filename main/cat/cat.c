@@ -2100,10 +2100,17 @@ static void qsk_read(void)
     s_mm_resp_len = 0;
     const char *qm = MM_QSK_MODE ";";
     if (cat_tx(qm, strlen(qm), 200) == ESP_OK && mm_answer_wait(30)) {
+        /* s_mm_resp keeps the terminator: the radio's answer arrives as
+         * "MMOFF;", so compare only up to the ';'. A plain strcmp() against
+         * "OFF" never matched, from T144 (155f97d6, v1.24.2) until the Tab5
+         * simulator's log showed "answered 'OFF;'" - the mode read back as
+         * "(unknown)" and every write reported "only PARTLY applied". */
         const char *v = s_mm_resp + 2;
+        size_t vlen = strcspn(v, ";");
         bool matched = false;
         for (int i = 0; i < CW_QSK_MODE_COUNT; i++) {
-            if (strcmp(v, s_qsk_modes[i]) == 0) {
+            if (strlen(s_qsk_modes[i]) == vlen && strncmp(v, s_qsk_modes[i], vlen) == 0) {
+                v = s_qsk_modes[i];
                 strncpy(s_qsk_mode, v, sizeof(s_qsk_mode) - 1);
                 s_qsk_mode[sizeof(s_qsk_mode) - 1] = '\0';
                 matched = true;
