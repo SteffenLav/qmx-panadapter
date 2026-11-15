@@ -497,7 +497,8 @@ static uint32_t s_out_sq_n = 0;
 static volatile uint32_t s_write_late_win = 0;   /* writes over 25 ms */
 /* Per-window maxima (the s_*_max above are since boot), and the time the task
  * spent AWAY from the forward ring between two reads - the number to hold
- * against the ring's 128 ms (dsp.c RXAUDIO_RING_BYTES). 2026-11-15. */
+ * against the ring slack (dsp.c RXAUDIO_RING_BYTES: ring minus one 12.8 KB
+ * producer chunk). 2026-11-15. */
 static uint32_t s_frame_max_win = 0, s_write_max_win = 0, s_away_max_win = 0;
 static uint32_t s_away_over100_win = 0;
 static int64_t  s_read_end_us = 0;
@@ -3088,7 +3089,7 @@ static void preopen_body(void)
     }
     s_volume = cfg.rx_audio_vol;
 
-    // Same reasoning as the I2S channel below: claim the forward ring's 24 KB
+    // Same reasoning as the I2S channel below: claim the forward ring (96 KB PSRAM)
     // now, before WiFi/BLE/spots fragment internal RAM. See dsp.c.
     dsp_rxaudio_ring_preinit();
 
