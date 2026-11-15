@@ -124,6 +124,8 @@ def main():
     ap.add_argument("--boot", help="only boots whose version contains this")
     ap.add_argument("--last", type=int, default=3, help="last N boots")
     ap.add_argument("--min-windows", type=int, default=6)
+    ap.add_argument("--from", dest="t_from", type=float, default=0, help="uptime s")
+    ap.add_argument("--to", dest="t_to", type=float, default=1e12, help="uptime s")
     a = ap.parse_args()
     bs = [b for b in boots(a.capture) if not a.boot or a.boot in b["ver"]]
     bs = bs[-a.last:]
@@ -132,6 +134,7 @@ def main():
         if not b["w"]:
             print(f"{b['ver']}: no fields (firmware older than 16dad59b?)")
             continue
+        b["w"] = [w for w in b["w"] if a.t_from <= w["t"] <= a.t_to] if (a.t_from or a.t_to < 1e12) else b["w"]
         res, info = judge(b, a.min_windows)
         if res is None:
             print(f"{b['ver']}: {info}")
