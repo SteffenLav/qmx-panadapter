@@ -44,7 +44,7 @@ Common terms and acronyms used throughout this guide.
 | **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
 | **PA** | Power Amplifier — the radio's final transmit stage. **Max. PA voltage** sets how hard it is driven, and so how much power comes out; see [WSPR](../guide/wspr.md) and Calibrate Power |
 | **OTA** | Over-The-Air update - the Tab5 fetching and installing new firmware over WiFi, with no cable |
-| **Page picker** | The list of pages (Panadapter, CW, FT8, FT4, JS8, WSPR) that opens with a swipe from the left edge or a tap on the left grip |
+| **Page picker** | The list of pages (Panadapter, CW, RTTY, FT8, FT4, JS8, WSPR) that opens with a swipe from the left edge or a tap on the left grip |
 | **Pileup** | Everyone calling you at once. The Tab5 collects them in a list so you can work them in turn |
 | **POTA** | Parks on the Air — portable operating activity from designated parks |
 | **PSK Reporter** | A worldwide database of who heard whom. The panadapter can send it your decodes, and reads it back to show who has heard **you** |
@@ -58,6 +58,7 @@ Common terms and acronyms used throughout this guide.
 | **RIT** | Receiver Incremental Tuning — shifts what you *hear* without moving what you would *transmit* on. The QMX has RIT but no XIT |
 | **RNNoise** | A small neural network that separates speech from noise, by Xiph.Org. The browser's Speech model noise reduction |
 | **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
+| **RTTY** | Radioteletype — a keyboard mode that sends Baudot (ITA2) text as two tones, mark and space. Decoded and sent on the device at 45.45, 50, 75 or 100 baud; see [RTTY](../guide/rtty.md) |
 | **Sidetone** | The tone the radio plays in your own headphones while you key CW |
 | **Slot** | The fixed window a digital mode transmits in - 15 s for FT8 and JS8, 7.5 s for FT4. Every station starts together, which is why the clock must be right |
 | **SNR** | Signal-to-Noise Ratio — signal strength relative to the noise floor; the FT8/FT4 signal report |

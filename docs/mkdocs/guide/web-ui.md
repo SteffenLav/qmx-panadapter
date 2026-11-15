@@ -625,7 +625,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 **Radio ▲** — the things that reach the radio itself:
 
-- **Switch to Panadapter / CW / FT8 / FT4 / JS8 / WSPR** — changes the Tab5’s own screen from the browser. *(v1.25.0: CW added to the list.)* The **Radio** menu lists all six pages, so each one is a single click; it no longer steps through them in sequence. Choosing a page is what enables it, and the menu follows the Tab5 if you switch there instead
+- **Switch to Panadapter / CW / RTTY / FT8 / FT4 / JS8 / WSPR** — changes the Tab5’s own screen from the browser. *(v1.25.0: CW added; v2.0.0: RTTY.)* The **Radio** menu lists all seven pages, in the order of the Tab5's left drawer, so each one is a single click; it no longer steps through them in sequence. Choosing a page is what enables it, and the menu follows the Tab5 if you switch there instead
 - **TX power** — transmit power on this band: a slider over the levels, with the
   wattage beside it. Drag it and let go to set. *(After v1.26.0: moved here from the
   top bar.)* The levels are the ones your own Calibrate Power sweep

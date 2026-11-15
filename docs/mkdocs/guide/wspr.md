@@ -63,7 +63,7 @@ The left pane is a log, not a live list of who is on frequency. Spots stay where
 Below the list:
 
 - **DX** — the furthest station of the session, which is usually the number you actually want.
-- **WSPRNET** — whether spots are being published, and how many can be. **"N of M publishable"** is the publication gate: a station is only sent to wsprnet once it has been heard **more than once**, so N is how many of the M calls heard so far are eligible. This is also why a site like wspr.rocks can show fewer unique calls than this page reports hearing — it only ever received the publishable ones.
+- **WSPRNET** — whether spots are being published, and how many can be. **"N of M publishable"** is the publication gate: a station is only sent to wsprnet once it has been heard **more than once**, so N is how many of the M calls heard so far are eligible. This is also why a site like wspr.rocks can show fewer unique calls than this page reports hearing — it only ever received the publishable ones. The **sent** count beside it is the total accepted by wsprnet since the Tab5 started *(v2.0.0)*, so after a night it shows the whole night, not the last two-minute pass. It starts again from zero after a restart. In `/api/wspr` it is `net.sent_total`.
 - **Flush** — empties the decode list. It asks first, because the list is also the upload queue: anything not yet sent to wsprnet goes with it, and the publishable count resets.
 
 !!! tip "With a mouse, point at a trace to see whose it is"

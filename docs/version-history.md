@@ -4812,3 +4812,41 @@ v0.19.4 — FT4 usability: four stacked faults, each masking the next (bench: FT
 - QSOs moved to the card cannot be edited or deleted on the Tab5. Edit `qso.adi` on the card with a PC.
 - The log window counts only the QSOs on the Tab5.
 - Moved QSOs are meant to keep a station marked as worked before. That is implemented, not yet proven on air.
+
+### Shipped in v2.0.0 — 2026-11-15
+
+**Every goal on the original roadmap is met. v2.0.0 adds MODE: RTTY, so the left drawer now holds the digital modes FT8, FT4, JS8, RTTY and WSPR, plus the CW page. Receive audio no longer breaks up on a busy band. No page is a beta any more.**
+
+**MODE: RTTY** - a page of its own in the left drawer, under MODE: CW. See [RTTY](mkdocs/guide/rtty.md).
+
+- **Receive on the device**, from the radio's I/Q, with no PC and no sound card. Tap a signal and the decoder locks on it; AFC holds the station through the gaps between overs; the speaker plays only the signal under the decoder's lines.
+- **Auto speed, shift and polarity.** 45.45, 50, 75 and 100 baud; 170 to 850 Hz shift. A new reading is tried for 5 s and kept only if the copy gets clearly better.
+- **Send.** Tap a callsign, then **CQ**, **Answer**, **Exch** or **73**, or type live from the on-screen, Bluetooth or snap-on keyboard. Sent text shows in red where it went. **STOP** ends an over at once; an over ends 3 s after the queue is empty, and after 180 s at most.
+- **In the browser too**: the same page, including sending, and the station you are working is shared with the Tab5.
+- The radio is switched to DiGi before an over, and both tones pass the **band guard** right before key-down. Each band keeps its own RTTY dial.
+
+**Receive audio** *(T201)*
+
+- **No more gaps or pitch drift on a busy band.** The audio rate was measured from what was read rather than what arrived, so lost audio slowed the rate further; on a busy band the pitch could walk off. Fixed, with a larger buffer from the radio.
+- The web server now runs below the audio. On a heavily loaded Tab5 the web page can answer slightly slower; the audio does not break up.
+
+**No betas**
+
+- CW, JS8 and the 3.5 mm line-in input lose the beta label. Where a limit remains, its guide page states it.
+
+**Also**
+
+- **WSPR: the wsprnet count is the total since start-up**, not the last two-minute pass.
+- **A large old QSO log can live on the card**: put it on the card as `qso-archive.adi`, and the Tab5 offers to use it as your log history *(Randy N4OPI)*. See [Settings](mkdocs/guide/settings.md#the-qso-log-and-the-card).
+- Typed RTTY and CW text from the browser is sent in the order typed.
+- The keypad reads a frequency typed without a dot in full (`14080000` was read as 140 Hz).
+- Spectrum scale labels are centred on their ticks at every zoom; peak hold redraws less.
+- CW Tune says "display busy" instead of "no spectrum yet" when the display is busy.
+
+**Known, not fixed**
+
+- RTTY Auto is proven on air against a clean and a damaged 75-baud station. It has not met a live contest pile-up or a real 50- or 100-baud station.
+- The card-archive offer is proven in a host test on the real log code; it has not yet run on a Tab5.
+- CW: the QMX has no command to stop text it already holds, so CW **STOP** drops only what the Tab5 still holds. RTTY STOP turns the tone off at once.
+
+Commits: `v1.26.3..v2.0.0` - RTTY receive (R003-R029), RTTY transmit (R010), Auto (R028), receive audio T201 (`e20bd084`, `02afa55b`, `16dad59b`, `01cda9cc`, `d68a6420`, `bd2ba553`, `83157f40`), T199 `64737527`, T200 `f345efa2`.

@@ -4,7 +4,7 @@
 
 A standalone real-time panadapter — spectrum analyser and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display).
 
-The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8/FT4/JS8 decoding and transmit, ADIF logging, and a matching browser web UI.
+The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8, FT4, JS8, RTTY and WSPR decoding and transmit, a CW page, ADIF logging, and a matching browser web UI.
 
 **Documentation:** [tab5.lav.dk](https://tab5.lav.dk) — the user guide, quick-start, and reference as plain web pages. A more approachable read than this page if you just want to set the device up; the source code and release downloads stay here on GitHub.
 
@@ -12,7 +12,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.26.3.** A complete, self-contained FT8/FT4/JS8 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v1.26.3 makes the QSO log safe when it fills up:** a QSO is reported as logged only when it is saved, and with an SD card in, older QSOs move to the card so the log no longer fills. **v1.26.1 makes WSPR decode every cycle again** (from v1.24.2 it decoded only the first cycle after the page opened), makes the WSPR search a third faster, and has the web spectrum follow your dB range. **v1.26.0 gave the browser noise reduction and an auto-notch**: a speech model for SSB and AM voice, a spectral noise reduction that also works on CW, and a notch that finds a carrier by itself. They run in the browser and cost the Tab5 nothing - see [Web DSP](#web-dsp). **Each band now remembers its frequency and its mode across a restart.** The CW page gets a Log button, a STOP for queued text, type-ahead sending from the browser, and a band guard on every CW send - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for the full list. v1.25.0 put the **MODE: CW page** on the web; v1.24.0 added it on the Tab5 (beta) with an internet **Web Radio** player.
+> **Release — v2.0.0.** Every goal on the original roadmap is met. A complete, self-contained station for the QMX: spectrum and waterfall, the digital modes **FT8, FT4, JS8, RTTY and WSPR** and a CW page - each one a page of its own in the left drawer - with on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v2.0.0 adds MODE: RTTY**: decoded and sent on the Tab5 and in the browser, with Auto speed, shift and polarity, CQ, Answer, Exch and 73 in one press, or typed live - see [RTTY](#rtty). **Receive audio no longer breaks up or drifts in pitch on a busy band.** **No page is a beta any more**: where a limit remains, the guide states it. v1.26.3 made the QSO log safe when it fills up, and v1.26.0 gave the browser noise reduction and an auto-notch - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for every release.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
@@ -33,7 +33,8 @@ items marked *(needs WiFi)* need a network.
 
 ### The short version
 
-- **A complete station with no PC.** A panadapter, FT8, FT4, JS8, WSPR and a CW page on a
+- **A complete station with no PC.** A panadapter, the digital modes **FT8, FT4, JS8, RTTY
+  and WSPR**, and a CW page - each one a page of its own in the left drawer - on a
   5-inch tablet that connects to the QMX with one USB cable. Decoding, transmitting,
   logging and uploading all run on the device.
 - **A real panadapter.** 48 kHz of spectrum and waterfall at 30 frames a second, a true
@@ -179,7 +180,7 @@ any frequency and mode.
 
 **A band guard on every transmission** — Before the Tab5 keys the radio it checks the
 frequency that will actually go out against your IARU region's band plan, and refuses if
-it is outside. This covers FT8, FT4, JS8, WSPR, Antenna Tune, power calibration and, from
+it is outside. This covers FT8, FT4, JS8, RTTY, WSPR, Antenna Tune, power calibration and, from
 v1.26.0, CW sent from a macro or the keyboard. A paddle or key on the QMX is not checked,
 because the radio keys itself. The guard needs your region, which is set by hand or taken
 from your grid. One checkbox turns it off for a licence the built-in plan does not know.
@@ -551,7 +552,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 
 | Gesture | From | Does |
 |---------|------|------|
-| Swipe → | Left edge | Open the **page picker** — tap Panadapter, CW, FT8, FT4, JS8 or WSPR |
+| Swipe → | Left edge | Open the **page picker** — tap Panadapter, CW, RTTY, FT8, FT4, JS8 or WSPR |
 | Swipe ← | Right edge | Open settings drawer |
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
@@ -1126,7 +1127,7 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall, Panadapter and CW pages | Zoom ×1.0–×24.0 **and** pan together — the midpoint between your fingers drives the pan, the spread drives the zoom |
 | Three-finger hold | Spectrum, any page with a simulator | Toggle Simulation Mode on/off (FT8's, or CW's on the CW page) |
-| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the pages directly, including CW |
+| Swipe → from left edge | Left edge strip | Open the **page picker** — tap any of the pages directly, including CW and RTTY |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap left grip handle | Left edge | Open the page picker (alternative) |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
@@ -1311,7 +1312,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.26.3 is here.** Next on the bench:
+**v2.0.0 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.
@@ -1382,7 +1383,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 | **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
 | **PA** | Power Amplifier — the radio's final transmit stage. **Max. PA voltage** sets how hard it is driven, and so how much power comes out; see [WSPR](docs/mkdocs/guide/wspr.md) and Calibrate Power |
 | **OTA** | Over-The-Air update - the Tab5 fetching and installing new firmware over WiFi, with no cable |
-| **Page picker** | The list of pages (Panadapter, CW, FT8, FT4, JS8, WSPR) that opens with a swipe from the left edge or a tap on the left grip |
+| **Page picker** | The list of pages (Panadapter, CW, RTTY, FT8, FT4, JS8, WSPR) that opens with a swipe from the left edge or a tap on the left grip |
 | **Pileup** | Everyone calling you at once. The Tab5 collects them in a list so you can work them in turn |
 | **POTA** | Parks on the Air — portable operating activity from designated parks |
 | **PSK Reporter** | A worldwide database of who heard whom. The panadapter can send it your decodes, and reads it back to show who has heard **you** |
@@ -1396,6 +1397,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 | **RIT** | Receiver Incremental Tuning — shifts what you *hear* without moving what you would *transmit* on. The QMX has RIT but no XIT |
 | **RNNoise** | A small neural network that separates speech from noise, by Xiph.Org. The browser's Speech model noise reduction |
 | **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
+| **RTTY** | Radioteletype — a keyboard mode that sends Baudot (ITA2) text as two tones, mark and space. Decoded and sent on the device at 45.45, 50, 75 or 100 baud; see [RTTY](#rtty) |
 | **Sidetone** | The tone the radio plays in your own headphones while you key CW |
 | **Slot** | The fixed window a digital mode transmits in - 15 s for FT8 and JS8, 7.5 s for FT4. Every station starts together, which is why the clock must be right |
 | **SNR** | Signal-to-Noise Ratio — signal strength relative to the noise floor; the FT8/FT4 signal report |

@@ -367,7 +367,7 @@ upper limit was 500 Hz low, which made the correct WSPR frequency look illegal.
     A QMX at 5 W is inside the 9.15 W figure anyway.
 
 !!! info "What it covers, and the one thing it does not"
-    FT8, FT4, JS8 and WSPR are checked, and so are **Antenna Tune** and
+    FT8, FT4, JS8, RTTY and WSPR are checked, and so are **Antenna Tune** and
     **Calibrate Power**. From **v1.26.0** a **CW message** sent from the Tab5 or
     the web page is checked too: outside the band, or with no IARU region set,
     it is refused with a `CW not sent:` message and any queued text is dropped.
@@ -877,6 +877,13 @@ one in your PC logger and for **Restore from SD**.
   cut during a write - it restores the log from the card.
 - Without a card nothing moves. From 300 KB the Tab5 shows **QSO log nearly full**: download
   the log, then clear it.
+- **A large old log can live on the card** *(v2.0.0, Randy N4OPI)*. A log too large to
+  restore into the Tab5 can be copied onto the card by hand as `qso-archive.adi`. At the next
+  start-up the Tab5 asks **N contacts on the card - use them as your log history?** With
+  **Use them**, the records stay on the card, count as worked before, and new QSOs are added
+  as usual. **Leave it** is remembered. The Tab5 never takes a file over without asking,
+  because the same file could be another station's card. Proven on the real log code in a
+  host test; not yet run on a Tab5.
 
 **After inserting the SD card your Tab5 needs a restart.**
 

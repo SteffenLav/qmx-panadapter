@@ -13,7 +13,7 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Open the **page picker** - tap Panadapter, FT8, FT4, JS8, WSPR or CW (CW only when enabled - see [CW](../guide/cw.md)) |
+| Swipe → | **Left edge** | Open the **page picker** - tap Panadapter, CW, RTTY, FT8, FT4, JS8 or WSPR (CW only when enabled - see [CW](../guide/cw.md)) |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 
