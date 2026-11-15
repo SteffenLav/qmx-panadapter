@@ -8182,6 +8182,10 @@ async function rttyReq(p) {
   if (rttyCur) { q.rx_cur = rttyCur.rx; q.tx_cur = rttyCur.tx; }
   const r = await sendCmd(q);
   if (r && typeof r.text === "string") r._stream = true;
+  /* A user action (any p) with no valid reply did nothing on the device, and
+     sendCmd returns null for that. Say so: on bench1 2026-11-15 a To: set was
+     lost this way and the page showed nothing. A failed poll stays quiet. */
+  else if (p && Object.keys(p).length) rttyShowErr("no answer from the Tab5 - try again");
   if (r && r.call_error) rttyShowErr("not a callsign: " + (p && p.call));
   rttyRender(r);
   return r;
@@ -8232,12 +8236,25 @@ async function rttySend(body) {
      edits the field. Enter ends the over once the text has gone. */
   const ty = document.getElementById("rtty-type");
   if (!ty) return;
-  let sentLen = 0, pend = "", timer = null;
-  const flush = async (end) => {
+  /* ⛔ ONE REQUEST AT A TIME, IN ORDER. Each batch was its own fetch, and a
+     batch started while the previous one was still in flight: two POSTs on
+     two connections reached the Tab5 in either order. bench1 2026-11-15 sent
+     "TES TDE O1ZL" for "TEST DE OZ1L". Every send now waits for the reply to
+     the one before it (sendQ); text typed meanwhile collects in pend. */
+  let sentLen = 0, pend = "", timer = null, sendQ = Promise.resolve();
+  const flush = (end) => {
     if (timer) { clearTimeout(timer); timer = null; }
-    const t = pend; pend = "";
-    if (t && await rttySend({ text: t, end: false })) rttyMacro = null;
-    if (end && lastRtty && lastRtty.tx && lastRtty.tx.keyed) await rttySend({ text: "", end: true });
+    sendQ = sendQ.then(async () => {
+      const t = pend; pend = "";
+      if (t && await rttySend({ text: t, end: false })) rttyMacro = null;
+      if (end) {
+        /* lastRtty may predate the over the text above just started, so
+           ask the device rather than trust it. */
+        const r = await sendCmd({ action: "rtty" });
+        if (r && r.tx && r.tx.keyed) await rttySend({ text: "", end: true });
+      }
+    });
+    return sendQ;
   };
   ty.addEventListener("input", () => {
     const v = ty.value;
@@ -10698,7 +10715,9 @@ function openKeyer() {
    follows the screen-change block above and this only fills it in. */
 function sendCwText(text) {
   if (!text) return;
-  sendCmd({ action: "cw_send", text: text });
+  /* Same queue as the type-ahead (cwLiveQ, below): two quick clicks, or a
+     macro then a typed word, reach the Tab5 in the order they were made. */
+  cwLiveQ = cwLiveQ.then(() => sendCmd({ action: "cw_send", text: text }));
 }
 
 /* Set (or with "" clear) the station the CW page is working. */
@@ -10911,8 +10930,16 @@ function cwLiveEcho(t) {
   const el = document.getElementById("cw-tx-sentline");
   if (el) el.textContent = cwLiveSent;
 }
-async function cwLiveSend(t) {
-  if (!t.trim()) return;
+/* ⛔ In order, one at a time: each word was its own unawaited fetch, so two
+   words typed quickly could reach the Tab5 swapped - the fault RTTY's Type
+   line showed on air 2026-11-15 ("TES TDE O1ZL"). cwLiveQ chains them. */
+let cwLiveQ = Promise.resolve();
+function cwLiveSend(t) {
+  if (!t.trim()) return cwLiveQ;
+  cwLiveQ = cwLiveQ.then(() => cwLiveSend1(t));
+  return cwLiveQ;
+}
+async function cwLiveSend1(t) {
   const r = await sendCmd({ action: "cw_send", text: t });
   if (r && r.ok === false) {
     const el = document.getElementById("cw-tx-sentline");
