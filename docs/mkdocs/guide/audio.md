@@ -1,6 +1,6 @@
 # Audio Features — Tab5 Real-Time Decoding
 
-Turns the radio's own I/Q into sound on the Tab5 itself, with no extra hardware: binaural CW, panoramic CW split, and AM demodulation. The line-in (3.5 mm jack) path is still beta - see the warning below.
+Turns the radio's own I/Q into sound on the Tab5 itself, with no extra hardware: binaural CW, panoramic CW split, and AM demodulation. Nothing has been decoded through the line-in (3.5 mm jack) path yet - see below.
 
 ## Getting audio — start here if you hear nothing
 
@@ -378,7 +378,7 @@ clip indicator beside it.
 | Source | State |
 |---|---|
 | **QMX USB** | The default, and what every earlier release did. |
-| **Line in (3.5 mm jack)** | **Declared beta** - see the warning below. |
+| **Line in (3.5 mm jack)** | Implemented. Nothing decoded through it yet - see below. |
 | Generic I/Q | Declared, not implemented. Selecting it is refused. |
 | Internal mics | Declared, not implemented. Selecting it is refused. |
 
@@ -391,7 +391,7 @@ The jack wiring is drawn on screen so you can see which contact carries what.
 
 ⚠ **No signal has been decoded through line in yet.** The path runs, samples flow and
 the levels read correctly with nothing plugged in - that is the whole of what has been
-verified. Treat it as unfinished. Changing the source needs a restart, and the Tab5
+verified. Changing the source needs a restart, and the Tab5
 does the restart itself when you press **Save**.
 
 ⛔ **In line-in mode the USB radio connection is off by design.** One or the other, not

@@ -81,7 +81,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   second and removes up to four at once. It all runs in the browser, so it costs the Tab5
   no CPU and no memory. ⚠ Spectral on SSB and the auto-notch are measured and not yet
   judged by ear on a live band *(Samuel W7STF)*. See [Web DSP](guide/web-dsp.md).
-- **Receive from the 3.5 mm jack** *(beta — Tony, @tony1tf, #17)* — the panadapter can take
+- **Receive from the 3.5 mm jack** *(Tony, @tony1tf, #17)* — the panadapter can take
   its signal from the Tab5's own headphone jack instead of the radio's USB audio. The jack
   is one real audio channel, not I/Q, so the second is synthesised by a 255-tap filter.
   Level meter, clip indicator, and the jack wiring drawn on screen.
