@@ -11829,6 +11829,7 @@ const char *ui_cw_tune_reason(ui_cw_tune_t r)
     case UI_CW_TUNE_NO_SPECTRUM: return "no spectrum yet";
     case UI_CW_TUNE_NO_SIGNAL:   return "no signal within 400 Hz";
     case UI_CW_TUNE_LISTENING:   return "listening for a signal";
+    case UI_CW_TUNE_BUSY:        return "display busy - press again";
     }
     return "?";
 }
@@ -11968,7 +11969,15 @@ ui_cw_tune_t ui_cw_tune_to_peak(int32_t *moved_hz)
     if (moved_hz) *moved_hz = 0;
     if (!strstr(s_current_mode, "CW"))  { s_cw_wait_until_us = 0; return UI_CW_TUNE_NOT_CW; }
     if (!s_last_qmx_freq_hz)            return UI_CW_TUNE_NO_FREQ;
-    if (!display_lock(50))              return UI_CW_TUNE_NO_SPECTRUM;
+    /* ⛔ A LOCK TIMEOUT IS NOT "NO SPECTRUM" (2026-11-15). The operator got
+     * "no spectrum yet" with a full spectrum on screen. The 'status' task
+     * holds the display lock 80-110 ms many times a minute (capture: "display
+     * lock held 99 ms by 'status'"), and this waited 50 ms. Wait 300 ms, and
+     * if it is still taken, say so. */
+    if (!display_lock(300)) {
+        ESP_LOGW(TAG, "CW tune: display lock busy for 300 ms");
+        return UI_CW_TUNE_BUSY;
+    }
     ui_cw_tune_t r = cw_tune_attempt(moved_hz);
     if (r == UI_CW_TUNE_NO_SIGNAL) {
         /* ⭐ KEEP LISTENING, because silence is normal. Operator: "can you
