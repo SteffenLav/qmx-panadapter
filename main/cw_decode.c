@@ -585,7 +585,20 @@ size_t cw_decode_line(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0) return 0;
     out[0] = '\0';
-    if (!s_ring) return 0;
+    /* ⛔ BEFORE cw_decode_init() THE WHOLE BUFFER IS BLANKED, not just out[0].
+     * ui_init() runs ~200 lines before cw_decode_init() in app_main, so a CW
+     * page restored from settings ticks in that window. Its caller reads every
+     * cell (`disp[g] ? disp[g] : ' '`), so an empty string left the rest of an
+     * uninitialised stack buffer on screen: "0 &", "Ad !j", "<{k" - characters
+     * the radio never sends (0 of 113082 TB frames in capture-bench1 had '{',
+     * '&' or lower case). Seen on the Tab5 briefly at boot, and in the Tab5
+     * simulator for as long as boot stalled (2026-11-15). */
+    if (!s_ring) {
+        size_t n = out_sz - 1 < CW_GRID_CELLS ? out_sz - 1 : CW_GRID_CELLS;
+        memset(out, ' ', n);
+        out[n] = '\0';
+        return n;
+    }
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t n = (size_t)grid_cells();
@@ -617,7 +630,7 @@ size_t cw_decode_line(char *out, size_t out_sz)
 size_t cw_decode_line_tx(uint8_t *out, size_t out_sz)
 {
     if (!out || out_sz == 0) return 0;
-    if (!s_ring) { out[0] = 0; return 0; }
+    if (!s_ring) { memset(out, 0, out_sz); return 0; }   /* as cw_decode_line(): no stale cells */
 
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t n = (size_t)grid_cells();
