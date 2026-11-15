@@ -709,6 +709,7 @@ static volatile uint32_t s_rate_win_refused = 0; /* T80: rate windows thrown out
 static volatile uint32_t s_rate_relocked    = 0; /* T80: forced re-seeds of the rate target */
 static uint32_t          s_rate_rail_run    = 0; /* consecutive frames pinned at the clamp */
 static uint32_t          s_rate_win_refuse_run = 0; /* consecutive rate windows refused */
+static bool              s_rate_seed_skipped   = false; /* first window after a reset discarded */
 /* Two refusals in a row still throw away a starved window; the THIRD is
  * accepted, because a gap does not last 30 s of continuous windows and a loop
  * that can never be corrected is worse than one corrected by a bad reading. */
@@ -1129,7 +1130,7 @@ static bool set_decim_factor(int d)
      * wrong ratio for up to a second, which is a second of wrong pitch. */
     s_up_inc       = 1.0f / (float)s_decim_d;
     s_up_phase     = 0.0f;
-    s_up_target    = 0.0f;
+    s_up_target    = 0.0f; s_rate_seed_skipped = false;
     s_in_pairs_win = 0;
     s_in_win_us    = 0;
 
@@ -1736,7 +1737,7 @@ static void rx_audio_task(void *arg)
             s_lim_gain = 1.0f;
             s_up_phase = 0.0f;
             s_up_inc   = 1.0f / (float)s_decim_d;
-            s_up_target = 0.0f; s_in_pairs_win = 0; s_in_win_us = 0;
+            s_up_target = 0.0f; s_rate_seed_skipped = false; s_in_pairs_win = 0; s_in_win_us = 0;
             s_noise   = 1.0f;
             s_last_up_v_l = 0.0f;
             s_last_up_v_r = 0.0f;
@@ -2645,8 +2646,20 @@ static void rx_audio_task(void *arg)
                                       "as the source rate", src_rate);
                         s_up_target = target;
                     } else {
-                        s_up_target = (s_up_target <= 0.0f) ? target
-                                                            : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
+                        /* ⛔ NEVER SEED FROM THE FIRST WINDOW (2026-11-15).
+                         * 16dad59b on bench1: the QMX stream ramps up at
+                         * 47.1-47.8k pairs/s for its first seconds; the first
+                         * window after audio start seeded the target WHOLE at
+                         * -2032 ppm, the 100 s EMA held it, consumption ran
+                         * ~0.2 % low and the backlog grew 6500 -> 12100 pairs
+                         * into a flush. The first window after any reset is
+                         * thrown away; the second seeds. Pitch stays nominal
+                         * meanwhile (s_up_inc is only set from a target). */
+                        if (s_up_target <= 0.0f && !s_rate_seed_skipped)
+                            s_rate_seed_skipped = true;
+                        else
+                            s_up_target = (s_up_target <= 0.0f) ? target
+                                                                : s_up_target + (target - s_up_target) * RATE_SMOOTH_A;
                     }
                     s_rate_win_refuse_run = 0;
                 }
@@ -2710,7 +2723,7 @@ static void rx_audio_task(void *arg)
                  * lands, so a genuinely out-of-spec unit cannot thrash. */
                 if (++s_rate_rail_run >= RATE_RAIL_RELOCK_FRAMES) {
                     s_rate_rail_run = 0;
-                    s_up_target     = 0.0f;
+                    s_up_target     = 0.0f; s_rate_seed_skipped = false;
                     s_in_win_us     = 0;
                     s_in_pairs_win  = 0;
                     s_rate_relocked++;
