@@ -186,7 +186,19 @@ void rtty_rx_apply(const rtty_rx_cfg_t *c)
     portEXIT_CRITICAL(&s_cfg_mux);
     if (!n.auto_mode) s_trial = false;   /* a hand-picked setting is never reverted */
     s_want_seq++;
-    save(&n);
+    /* ⛔ A TRIAL IS NEVER SAVED. bench1 2026-11-15: Auto started a trial to
+     * 50 Bd / 450 Hz / rev on noise, the board was flashed inside its 5 s,
+     * and the next boot restored the trial as if the operator had chosen it
+     * - nothing was left to revert it, and the next CQ went out at 50/450
+     * reversed. While a trial runs, NVS keeps the pre-trial speed, shift and
+     * polarity (anything else in this apply, e.g. a tap's offset, is saved);
+     * a kept trial is saved where it is kept. */
+    rtty_rx_cfg_t keep = n;
+    if (s_trial) {
+        keep.baud = s_trial_old.baud; keep.shift_hz = s_trial_old.shift_hz;
+        keep.reverse = s_trial_old.reverse;
+    }
+    save(&keep);
     ESP_LOGI(TAG, "%s offset %d Hz %.2f Bd %.0f Hz%s afc=%d sq=%d auto=%d", n.on ? "ON" : "off",
              n.offset_hz, (double)n.baud, (double)n.shift_hz, n.reverse ? " reverse" : "",
              (int)n.afc, (int)n.squelch, (int)n.auto_mode);
@@ -489,11 +501,12 @@ void rtty_rx_service(void)
             s_qs[s_qs_n % RTTY_AUTO_QS] = (rtty_qsnap_t){ s_conf_n, s_conf_sum };
             s_qs_n++;
             if (s_trial) {
-                if (rtty_tx_keyed()) { s_trial = false; ESP_LOGI(TAG, "auto: trial ended by TX - kept"); }
+                if (rtty_tx_keyed()) { s_trial = false; save(&cur); ESP_LOGI(TAG, "auto: trial ended by TX - kept"); }
                 else if (t_b - s_trial_us >= (int64_t)RTTY_AUTO_TRIAL_S * 1000000) {
                     float qa = rtty_auto_quality(s_conf_n - s_trial_n0, s_conf_sum - s_trial_c0);
                     s_trial = false;
                     if (rtty_auto_trial_keep(s_trial_qb, qa)) {
+                        save(&cur);        /* kept: now it is the setting */
                         ESP_LOGI(TAG, "auto: kept %.2f Bd %.0f Hz%s (quality %.2f -> %.2f)",
                                  (double)cur.baud, (double)cur.shift_hz,
                                  cur.reverse ? " rev" : "", (double)s_trial_qb, (double)qa);
@@ -515,8 +528,13 @@ void rtty_rx_service(void)
             }
             bool ok = s_st.auto_ok;
             float b = s_st.auto_baud, sh = s_st.auto_shift; bool rv = s_st.auto_reverse;
-            bool differs = ok && (fabsf(b - cur.baud) > 0.01f || fabsf(sh - cur.shift_hz) > 0.5f ||
-                                  rv != cur.reverse);
+            /* Only while a station is there (s_st.present: both tones >= 6 dB,
+             * the squelch's own test). Auto follows a station; on bench1
+             * 2026-11-15 noise held a reading for 3 s twice in 5 min and
+             * started a trial from "quality before 0.00". */
+            bool differs = ok && s_st.present &&
+                           (fabsf(b - cur.baud) > 0.01f || fabsf(sh - cur.shift_hz) > 0.5f ||
+                            rv != cur.reverse);
             /* The ignore covers speed + shift WHATEVER the polarity: on air a
              * damaged signal alternated "100 Bd" and "100 Bd rev", each banned
              * alone, so Auto tried 4 times in 40 s instead of twice. */
