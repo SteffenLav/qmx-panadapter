@@ -318,8 +318,15 @@ static esp_err_t start_over(char *err, size_t err_len)
     portEXIT_CRITICAL(&s_mux);
     s_stop = false;
     s_keyed = true;
-    /* Core 1, priority 5: above rx_audio (3), as R009 measured it. */
-    if (xTaskCreatePinnedToCore(over_task, "rtty_tx", 4096, NULL, 5, NULL, 1) != pdPASS) {
+    /* Core 1, priority 7: ABOVE httpd and render (5) and fft_task (4).
+     * Was 5 (R009, measured on bench2 with an idle web server). On bench1
+     * 2026-11-15 a typed web over (two HTTP requests per 150 ms) had bit
+     * edges off by >2.5 ms in 11 % of intervals (p95 3.9 ms) against 1.6 %
+     * for a one-request CQ, and fldigi lost a LTRS and a space: at equal
+     * priority FreeRTOS time-slices the keying task away at an edge. The
+     * busy-wait in wait_until() is <= 2 ms per edge, so <= 9 % of core 1,
+     * and only during an over. */
+    if (xTaskCreatePinnedToCore(over_task, "rtty_tx", 4096, NULL, 7, NULL, 1) != pdPASS) {
         s_keyed = false;
         snprintf(err, err_len, "could not start the task");
         return ESP_ERR_NO_MEM;

@@ -8199,11 +8199,14 @@ async function rttyPoll() {
   /* Faster while sending, so the echo and STOP keep up. */
   rttyTimer = setTimeout(rttyPoll, (r && r.tx && r.tx.keyed) ? 400 : 1000);
 }
-async function rttySend(body) {
+/* poll=false for typed batches: the 400 ms poll during an over already
+   shows them, and an extra request per batch is load on core 1 while the
+   radio keys (bench1 2026-11-15, see rtty_tx.c start_over). */
+async function rttySend(body, poll = true) {
   const r = await sendCmd(Object.assign({ action: "rtty_send" }, body));
   const ok = !!(r && r.ok);
   if (!ok) rttyShowErr((r && r.error) || "no answer from the Tab5");
-  rttyPoll();
+  if (poll || !ok) rttyPoll();
   return ok;
 }
 (function wireRtty() {
@@ -8246,7 +8249,7 @@ async function rttySend(body) {
     if (timer) { clearTimeout(timer); timer = null; }
     sendQ = sendQ.then(async () => {
       const t = pend; pend = "";
-      if (t && await rttySend({ text: t, end: false })) rttyMacro = null;
+      if (t && await rttySend({ text: t, end: false }, false)) rttyMacro = null;
       if (end) {
         /* lastRtty may predate the over the text above just started, so
            ask the device rather than trust it. */
