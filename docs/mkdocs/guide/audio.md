@@ -179,8 +179,8 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 !!! note "Which modes produce audio"
 
-    **CW, CW-R, USB, LSB and AM.** **FM is still silent** — there is no FM
-    demodulator, so an FM signal has to be listened to in USB or not at all.
+    **CW, CW-R, USB, LSB and AM.** There is no FM demodulator and none is planned,
+    so an FM signal has to be listened to in USB or not at all.
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
     bandwidth is set by the Tab5 and not by the filter in the radio. Tap **BW**

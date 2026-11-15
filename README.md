@@ -1323,8 +1323,6 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 - **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
   receive is close; transmit needs a different route, because the QDX has no equivalent of
   the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
-- **FM audio.** The demodulator handles CW, USB, LSB and - from v1.19.0 - AM. FM is
-  still silent, so an FM signal means listening to it in USB or not at all.
 
 ---
 
