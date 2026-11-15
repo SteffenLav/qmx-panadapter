@@ -1320,9 +1320,11 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 ### Longer term
 
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
-- **QDX / QDX-M support.** Asked for repeatedly. The QDX is I/Q over USB like the QMX, so
-  receive is close; transmit needs a different route, because the QDX has no equivalent of
-  the CAT tone command the Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
+- **Other I/Q transceivers.** The panadapter is built for the QMX/QMX+. Other radios that
+  send I/Q over USB are a possible later step, not part of the original plan. The QDX /
+  QDX-M is the nearest candidate and has been asked for: receive is close, but transmit
+  needs a different route, because the QDX has no equivalent of the CAT tone command the
+  Tab5 uses to key FT8. See `docs/qdx-vs-qmx-comparison.md`.
 
 ---
 
