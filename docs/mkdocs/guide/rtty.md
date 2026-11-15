@@ -38,7 +38,7 @@ To open the page, open the **page picker** (swipe right from the left edge, or t
 
 ## Auto speed and shift
 
-With **Auto** on (the default), the page measures the station's speed, shift and polarity. When the reading differs from the current setting and holds for 3 s, the page tries it for 5 s. The new setting stays only if the decoded characters get clearly better (a mean character confidence at least 0.08 higher). If they do not, the page goes back to the old setting and does not try again for 30 s.
+With **Auto** on (the default), the page measures the station's speed, shift and polarity. When a station is present (both tones clear of the noise) and the reading differs from the current setting for 3 s, the page tries it for 5 s. A setting under trial is not saved; only a kept one is. The new setting stays only if the decoded characters get clearly better (a mean character confidence at least 0.08 higher). If they do not, the page goes back to the old setting and does not try again for 30 s.
 
 A bad signal can therefore cost one 5-second trial every 30 seconds, never more. Choosing a speed or shift by hand turns Auto off; tap **Auto** in the picker to turn it on again.
 
