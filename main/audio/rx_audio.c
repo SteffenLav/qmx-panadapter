@@ -503,6 +503,7 @@ static uint32_t s_frame_max_win = 0, s_write_max_win = 0, s_away_max_win = 0;
 static uint32_t s_away_over100_win = 0;
 static int64_t  s_read_end_us = 0;
 static uint32_t s_backlog_max_win = 0;   /* forward-ring fill, pairs */
+static uint32_t s_backlog_flush_win = 0; /* backlog flushes this window */
 static volatile uint32_t s_frames_win     = 0;   /* frames in this window */
 static volatile uint32_t s_pairs_win      = 0;   /* sample-pairs written this window */
 /* Clock-drift corrector state - see the rate-match block in the task loop. */
@@ -781,6 +782,7 @@ static int64_t  s_in_win_us    = 0;      /* when that window started */
 #define RXA_BACKLOG_DEADBAND_PAIRS 6400u    /* 133 ms = 2 USB chunks */
 #define RXA_BACKLOG_GAIN           2.5e-7f  /* 0.3 % at 12000 pairs over */
 #define RXA_BACKLOG_TRIM_MAX       0.003f
+#define RXA_BACKLOG_FLUSH_PAIRS    12800u   /* 267 ms = 4 USB chunks */
 static float s_noise   = 1.0f;     // slow noise-floor estimate (for squelch)
 // Linear-interpolation upsample state, one per ear - the value each
 // channel's ramp ended on, carried forward so the next frame's ramp starts
@@ -1839,6 +1841,25 @@ static void rx_audio_task(void *arg)
         }
 
         s_loop_count++;
+        /* BACKLOG FLUSH (2026-11-15). 02afa55b on bench1: the boot left
+         * 22,900 pairs (480 ms) in the forward ring, and the 0.3 % trim took
+         * > 5 min to drain it - half a second of latency on every sound for
+         * that long. Above RXA_BACKLOG_FLUSH_PAIRS the oldest audio is thrown
+         * away down to the dead band in one step: one discontinuity, where the
+         * stall that caused it already was one. The trim handles the rest. */
+        {
+            uint32_t bl = dsp_rxaudio_backlog_pairs();
+            if (bl > RXA_BACKLOG_FLUSH_PAIRS) {
+                uint32_t left = bl - RXA_BACKLOG_DEADBAND_PAIRS;
+                while (left > 0) {
+                    size_t want = left > DSP_FFT_SIZE ? DSP_FFT_SIZE : left;
+                    size_t got = dsp_rxaudio_read(s_rxbuf, want, 0);
+                    if (got == 0) break;
+                    left -= (uint32_t)got;
+                }
+                s_backlog_flush_win++;
+            }
+        }
         int64_t read_start_us = esp_timer_get_time();
         if (s_read_end_us) {
             uint32_t away = (uint32_t)(read_start_us - s_read_end_us);
@@ -2813,13 +2834,14 @@ static void rx_audio_task(void *arg)
                     dsp_rxaudio_fwd_stats(&drop, &fmin);
                     ESP_LOGI(TAG, "diag: win fwd drop %lu pairs  ring free min %ld B  "
                              "away max %lu us (>100ms %lu)  frame max %lu us  write max %lu us  "
-                             "backlog max %lu now %lu pairs",
+                             "backlog max %lu now %lu pairs  flush %lu",
                              (unsigned long)drop, fmin == UINT32_MAX ? -1L : (long)fmin,
                              (unsigned long)s_away_max_win, (unsigned long)s_away_over100_win,
                              (unsigned long)s_frame_max_win, (unsigned long)s_write_max_win,
                              (unsigned long)s_backlog_max_win,
-                             (unsigned long)dsp_rxaudio_backlog_pairs());
-                    s_backlog_max_win = 0;
+                             (unsigned long)dsp_rxaudio_backlog_pairs(),
+                             (unsigned long)s_backlog_flush_win);
+                    s_backlog_max_win = 0; s_backlog_flush_win = 0;
                     s_away_max_win = s_away_over100_win = 0;
                     s_frame_max_win = s_write_max_win = 0;
                 }
