@@ -90,3 +90,16 @@ Copy-Item -Path $stored -Destination $target -Force
 
 Write-Host "Patched esp_hosted SDIO driver (oversize-length recovery)." -ForegroundColor Green
 Write-Host "  $target"
+
+# The copy above REPLACES the whole file, so it wipes any other sdio_drv.c patch
+# applied before it. At the v2.0.0 clean build (2026-11-15) the standard loop
+# `Get-ChildItem tools/patches/apply_*.ps1 | ...` ran copypayload_tolerant
+# first (alphabetical), this script then erased it, and check_patches refused
+# the build. Re-apply every other sdio_drv.c patch here (all are idempotent),
+# so the result no longer depends on the order the scripts run in.
+Get-ChildItem (Join-Path $PSScriptRoot "apply_esp_hosted_sdio_*.ps1") |
+    Where-Object { $_.Name -ne (Split-Path -Leaf $PSCommandPath) } |
+    ForEach-Object {
+        & powershell -ExecutionPolicy Bypass -File $_.FullName
+        if ($LASTEXITCODE -ne 0) { Write-Host "Re-apply failed: $($_.Name)" -ForegroundColor Red; exit 1 }
+    }
