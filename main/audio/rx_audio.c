@@ -1855,7 +1855,10 @@ static void rx_audio_task(void *arg)
              * stall added ~5000 pairs the 0.3 % trim could not drain, so the
              * backlog crept into a flush every few minutes). Drop it now. */
             static uint32_t s_ovf_seen = 0;
-            bool underrun = (s_i2s_ovf != s_ovf_seen);
+            /* Codec only: with web audio as the sole listener nothing writes the codec, its
+             * DMA underruns by design (~150/s), and flushing on that cut the web
+             * audio up (operator, CW, f3c7e7fd..d68a6420). */
+            bool underrun = codec_out && (s_i2s_ovf != s_ovf_seen);
             s_ovf_seen = s_i2s_ovf;
             if (bl > RXA_BACKLOG_FLUSH_PAIRS ||
                 (underrun && bl > RXA_BACKLOG_DEADBAND_PAIRS)) {
