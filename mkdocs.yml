@@ -31,9 +31,9 @@ nav:
     - Web DSP: guide/web-dsp.md
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
-    - CW (beta): guide/cw.md
+    - CW: guide/cw.md
     - Web Radio: guide/webradio.md
-    - JS8 (beta): guide/js8.md
+    - JS8: guide/js8.md
     - Time Sync: guide/time-sync.md
     - WSPR: guide/wspr.md
     - Radio Menus: guide/radio-menus.md

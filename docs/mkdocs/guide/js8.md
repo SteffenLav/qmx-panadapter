@@ -1,8 +1,8 @@
-# JS8 (beta)
+# JS8
 
 **JS8 Normal runs on the Tab5 itself** — the decoder, the error correction and the transmitter, with no PC in the loop. JS8 is a keyboard mode built on FT8's modulation: it carries free text rather than the fixed exchange FT8 uses, so stations hold short conversations with each other.
 
-JS8 arrived in v1.17.0 and is **declared a beta**. What is proven and what is not is spelled out in [section 7](#7-what-is-proven-and-what-is-not). Read that before relying on it.
+JS8 arrived in v1.17.0. What is proven and what is not is spelled out in [section 7](#7-what-is-proven-and-what-is-not). Read that before relying on it.
 
 ### 1. Selecting JS8
 
@@ -116,7 +116,7 @@ Your grid goes on the air as **four characters**, always. If you have entered a 
 
 ### 7. What is proven, and what is not
 
-Stated plainly, because "beta" on its own tells you nothing:
+Stated plainly:
 
 **Proven on air:**
 

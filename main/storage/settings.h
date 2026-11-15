@@ -443,10 +443,9 @@ typedef struct {
      * has NO WAY TO ABORT a message once sent (tested on the bench: neither
      * RX; nor a mode bounce stops one) - that has not changed.
      *
-     * DEFAULT ON from v1.24.0 (operator, same release): the CW page ships as
-     * the release's own beta rather than hidden behind a config line nobody
-     * would find. "Beta" is carried everywhere the page is documented
-     * BECAUSE the abort gap is still open, not instead of saying so.
+     * DEFAULT ON from v1.24.0 (operator, same release). It shipped labelled
+     * beta for the abort gap until the operator dropped the label
+     * (2026-11-15); the docs still state the gap plainly.
      *
      * ⚠ Off still does not mean "costs nothing" - the page's .bss is linked
      * in either way, exactly as wspr_en's note says.

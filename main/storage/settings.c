@@ -1105,10 +1105,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cw_serial_next = 1;
     out->cw_contest_name[0] = '\0';
     out->cw_sim_en = false;
-    /* ON from v1.24.0 (operator): ships as the release's beta, not hidden
-     * behind a config line nobody would find. It still has no abort for a
-     * message in flight - see cw_screen_view.c's header - and "beta" is
-     * carried everywhere the page is documented for exactly that reason. */
+    /* ON from v1.24.0 (operator). It still has no abort for a message in
+     * flight - see cw_screen_view.c's header. Shipped as a beta until the
+     * operator dropped the label (2026-11-15); the docs state the gap
+     * plainly instead. */
     out->cw_page_en = true;
     out->hound_mode   = 0;   // off: Hound changes TX behaviour, so it is opt-in
     out->cq_listen_every = 0;

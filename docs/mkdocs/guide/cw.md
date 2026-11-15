@@ -1,6 +1,6 @@
-# CW *(beta)*
+# CW
 
-To open the CW page, open the **page picker** (swipe right from the left edge, or tap the left grip) and tap **MODE: CW**. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships **on** and is a beta. Turn it off with `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}` over the API, if you would rather not have it yet.
+To open the CW page, open the **page picker** (swipe right from the left edge, or tap the left grip) and tap **MODE: CW**. The spectrum and waterfall keep running behind it, so you still see the band while you operate. The page ships **on**. Turn it off with `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}` over the API, if you would rather not have it yet.
 
 !!! warning "There is no abort for a message in progress"
     `KY` has no abort in the QMX's CAT manual. Tested on the bench: neither sending `RX;` nor bouncing the mode away from CW and back stops an in-flight send - both were tried and both simply had no effect, the keyer ran to completion either way. Once the radio holds a message, it sends to the end. What you *can* stop is text that is still queued on the Tab5 - see [STOP](#stop-and-the-send-queue). Keying the radio itself **is** confirmed working, off air, by the operator.

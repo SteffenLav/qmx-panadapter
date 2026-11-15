@@ -29,7 +29,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **Audio made on the device.** CW, SSB and AM demodulated from the I/Q, **binaural CW**
   that separates two stations by direction, and a CW peak filter ahead of the AGC. See
   [Audio](guide/audio.md).
-- **A CW page** *(beta)*. The radio's decoded text with a noise squelch, a hint line, a
+- **A CW page**. The radio's decoded text with a noise squelch, a hint line, a
   station card, two macro sets, one-tap logging, and type-ahead sending from the browser.
   See [CW](guide/cw.md).
 - **You see who is there, and who hears you** *(needs WiFi)*. POTA, RBN and DX cluster
@@ -88,7 +88,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   ⚠ **Nothing has been decoded through it yet** — the path runs and the levels read
   correctly, and that is all that is proven. ⛔ The USB radio connection is off in this
   mode by design. See [Audio](guide/audio.md).
-- **MODE: CW page** *(beta)* — on the Tab5 and in the browser. The radio's own decode
+- **MODE: CW page** — on the Tab5 and in the browser. The radio's own decode
   ticker with noise squelch, a copilot hint line, a station card, and two named macro
   sets (**General**/**Contest**). A **Log** button opens the log window with the station
   filled in, and a red **STOP** drops text that is still queued. In the browser you can
@@ -121,7 +121,7 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
   polite hold for a station already working someone else; grey-listing; an optional
   unattended auto-answer robot; a drag-to-pick TX tone with a live occupancy strip, TX
   Hold and an ANY/EVEN/ODD time-window choice; and ARRL Field Day mode.
-- **JS8 — a keyboard mode, on the device** *(beta)*. JS8 carries **free text** on FT8's
+- **JS8 — a keyboard mode, on the device**. JS8 carries **free text** on FT8's
   modulation, so stations hold short conversations instead of trading a fixed exchange.
   The whole of it runs on the Tab5: sync, LDPC error correction and the CRC check on the
   way in, and the encoder and transmitter on the way out. It is a sub-mode of the same

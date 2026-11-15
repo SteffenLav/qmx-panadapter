@@ -47,7 +47,7 @@ items marked *(needs WiFi)* need a network.
   noise reduction and an auto-notch**, and they cost the Tab5 nothing.
 - **Audio made on the device.** CW, SSB and AM demodulated from the I/Q, **binaural CW**
   that separates two stations by direction, and a CW peak filter ahead of the AGC.
-- **A CW page** *(beta)*. The radio's decoded text with a noise squelch, a hint line, a
+- **A CW page**. The radio's decoded text with a noise squelch, a hint line, a
   station card, two macro sets, one-tap logging, and type-ahead sending from the browser.
 - **You see who is there, and who hears you** *(needs WiFi)*. POTA, RBN and DX cluster
   spots drawn on the trace, and a world map of the stations that reported your signal.
@@ -233,7 +233,7 @@ dual-mode mouse works on its Low Energy channel.
 
 ### Work CW and the digital modes
 
-**The CW page** *(beta)* — A page of its own for CW, on the Tab5 and in the browser. The
+**The CW page** — A page of its own for CW, on the Tab5 and in the browser. The
 QMX's decoded text runs along a ticker with a noise squelch, a hint line points at a
 callsign or a report when one is heard, and a station card shows who you are working.
 Six keyer memories in two named sets, **General** and **Contest**, with fields such as
@@ -242,7 +242,7 @@ through a QSO one tap at a time. A **Log** button opens the log window with the 
 already filled in. In the browser you can type the other station's callsign, type ahead
 while the radio keys, and log the operator's name, QTH and remarks. Tuning on this page
 is held inside the CW and Digi parts of the band. ⚠ The QMX has no command to stop a
-message once the radio holds it, which is why the page is still a beta. See [CW](#cw).
+message once the radio holds it; STOP drops only what the Tab5 still holds. See [CW](#cw).
 
 
 **FT8 and FT4, receive** — Continuous on-device decoding in the same view as the
@@ -262,7 +262,7 @@ optional unattended auto-answer robot. Your TX tone is a permanent on-screen but
 a live occupancy strip, drag-to-pick tone selection, **TX Hold**, and a cycling
 **TXCQ ANY / EVEN / ODD** time-window choice. ARRL Field Day exchange mode included.
 
-**JS8 — a keyboard mode, on the device** *(beta)* — JS8 carries **free text** on FT8's
+**JS8 — a keyboard mode, on the device** — JS8 carries **free text** on FT8's
 modulation, so stations hold short conversations rather than trading a fixed exchange.
 All of it runs on the Tab5: sync, LDPC error correction and the CRC check on receive, the
 encoder and transmitter on send. It is a sub-mode of the FT8/FT4 page - pick **JS8** in
@@ -451,7 +451,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
 - [Audio](#audio) — binaural CW, panoramic split, AM, listening in the browser
-- [CW](#cw) — the MODE: CW page, decode ticker, keyer macros (beta)
+- [CW](#cw) — the MODE: CW page, decode ticker, keyer macros
 - [Web Radio](#web-radio) — an internet radio player on the Tab5, for when the bands are quiet
 - [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
 - [Spot map](#spot-map) — who is hearing YOU: RBN, PSK Reporter and WSPR reports of your own signal, on a world map
@@ -461,7 +461,7 @@ restore as a text file; and a settings reset that does not need a reflash.
 - [Hamlib rigctld](#hamlib-rigctld) — point a logger at the Tab5 on port 4532, no cable, no driver
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
-- [JS8](#js8) — keyboard mode on the device: decode, free text, CQ (beta)
+- [JS8](#js8) — keyboard mode on the device: decode, free text, CQ
 - [Time sync](#time-sync) — Unit GPS on PORT.A, WiFi/SNTP, Tab5 RTC, POTA/offline use
 - [Settings](#settings) — every drawer control, group by group
 - [WSPR](#wspr) — two-minute propagation beacon: where your signal actually goes
@@ -762,7 +762,7 @@ break-in delay, exposed in the settings drawer (six modes, a 0-999 delay
 value) for anyone running an amplifier or relay that needs the receiver
 quiet for the whole transmission.
 
-The page ships **on** and is a beta. Turn it off with
+The page ships **on**. Turn it off with
 `cw_page_enabled = no` in a config file, or `{"action":"cw_enable","on":false}`
 over the API, if you would rather not have it yet.
 
@@ -938,7 +938,7 @@ Pick **JS8** from the **Preset** dropdown in the FT8 view - the dropdown is thre
 
 With JS8 selected the right pane shows **three panes at once** from v1.23.0 *(Ryan KK6DZB)*: **Stations** (who is on the band, with grid and age), **Conversation** (what has been said - AGE, Hz, CALL, MESSAGE) and a **type box** you compose in. The Stations and Conversation tabs are gone; there is nothing left to switch between. The browser shows the same three.
 
-⚠ **JS8 is a beta.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been watched from both ends** - though the automatic exchange itself *is* implemented and has been since v1.17.0, which the v1.18.0 notes corrected publicly. **All four speeds - Slow, Normal, Fast and Turbo - are selectable from v1.19.0, and only Normal is proven on air.** Compound callsigns — `G0ABC/P`, `W1ABC/4`, special-event calls — are **read** from v1.18.0, where before they were discarded without trace. Proven on air: `SV2BBO/A` decoded twice on 20 m and entered the station list under its full callsign.
+⚠ **What is proven.** Receiving is proven on air, sending free text is proven on air, and a CQ from the Tab5 was decoded by a second station. **A full automatic two-way JS8 QSO has not been watched from both ends** - though the automatic exchange itself *is* implemented and has been since v1.17.0, which the v1.18.0 notes corrected publicly. **All four speeds - Slow, Normal, Fast and Turbo - are selectable from v1.19.0, and only Normal is proven on air.** Compound callsigns — `G0ABC/P`, `W1ABC/4`, special-event calls — are **read** from v1.18.0, where before they were discarded without trace. Proven on air: `SV2BBO/A` decoded twice on 20 m and entered the station list under its full callsign.
 
 **Sending free text.** Type into the box under the conversation pane - on the Tab5 or on the web page. The old **Free text** button under Call CQ is gone as of v1.23.0; with no physical keyboard, tapping the box opens the modal composer so the on-screen keyboard does not cover it. Both report how many frames the message takes and how many seconds it holds the frequency before anything is keyed, and show the normalised text the encoder will actually send - upper-cased, whitespace collapsed, unsendable characters dropped. One frame per 15-second slot, so a twelve-frame message is three minutes of transmitting. **Stop TX** aborts a run in flight and stays reachable while transmitting. Scriptable as `POST /api/cmd {"action":"js8_text","text":"..."}`, with `js8_text_plan` for the frame/second count without transmitting and `js8_text_cancel` to stop.
 
