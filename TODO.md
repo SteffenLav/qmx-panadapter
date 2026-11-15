@@ -836,7 +836,7 @@ it — which is the real open item, and is why they are not simply ticked.
 | 43 | Web-UI audio streaming + server mode (Sam W7STF, email 2026-07-15) | DECISION_OR_NOT_STARTED |
 | 4b | CW page — Phase 2: RX decode | DECISION_OR_NOT_STARTED |
 | 7 | Speaker/headphone audio (Tab5 jack) | DECISION_OR_NOT_STARTED |
-| 8 | Extended waterfall history | DECISION_OR_NOT_STARTED |
+| ~~8~~ | ~~Extended waterfall history~~ | DROPPED 2026-11-15 (operator) |
 | 9 | QMX (small) support | DECISION_OR_NOT_STARTED |
 
 ### ✔ CLOSED — row never got its tick (5)
@@ -1297,7 +1297,7 @@ measurements and the dead ends, which are still worth reading.
 | **Longer-Term Roadmap (Post v1.0)** | | | | |
 | 7 | Speaker/headphone audio (Tab5 jack) | ❌ Not started, blocked | Large | Demodulated CW/SSB passband audio from Tab5's own jack. Blocked on unshelving CW Audio (#6) |
 | 43 | Web-UI audio streaming + server mode (Sam W7STF, email 2026-07-15) | ⏸️ Phase 1 CODED + bench-verified 2026-07-15, **parked on branch `feat/web-audio-phase1`** (commit 0a945be) for v1.0.0 | Quality tuning + overnight soak before merge | **NOT blocked by #6/#7** — no I2S, no codec: the FT8 pre-ring in `dsp.c` is already a field-proven USB demodulator (fs/4 mix + 31-tap FIR + /4 decimate → 12 kHz); Phase 1 = run it in panadapter mode, µ-law encode, second binary frame type (0x02) on the existing `/ws` from the existing `ws_push_task` (prio 3, no new task), AudioWorklet player in `index.html`. ~96 kbps added to the ~82 kbps spectrum stream — release gate is an overnight WiFi-streaming soak (SDIO link is the scarce resource, not CPU; watch `SDIO RX oversize` recovery frequency). Phase 2: LSB/CW/AM + phasing demod (opposite-sideband rejection), server mode (= #34 display sleep + #39 render gate keyed on backlight-off). Compile-time server-only firmware fork REJECTED (maintenance tax; runtime mode equivalent). Sam's DNR wish = client-side WASM on the demodulated stream, any phase, zero P4 cost. Full design: `docs/web-audio-feasibility.md` |
-| 8 | Extended waterfall history | ❌ Not started | Medium | PSRAM has room for several minutes of scrollback; two-finger drag to scrub through |
+| ~~8~~ | ~~Extended waterfall history~~ | ✖ DROPPED 2026-11-15 (operator), not in 2.0.0 or after | — | PSRAM has room for several minutes of scrollback; two-finger drag to scrub through |
 | 9 | QMX (small) support | ❌ Not started | Medium | Same UI, different USB endpoint config and band table |
 | 10 | JS8 mode | ❌ Not started | Large | Heavily reuses `ft8_lib` per feasibility doc; has 10/15/30/60s slot variants. Do after FT4 (#5) to reuse its slot-abstraction work. See `docs/js8-feasibility.md` |
 | 11 | DSP polish (noise reduction, auto-notch) | ❌ Not started | Medium | New algorithms, no design started |

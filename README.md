@@ -1319,7 +1319,6 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Longer term
 
-- **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
 - **Other I/Q transceivers.** The panadapter is built for the QMX/QMX+. Other radios that
   send I/Q over USB are a possible later step, not part of the original plan. The QDX /
   QDX-M is the nearest candidate and has been asked for: receive is close, but transmit
