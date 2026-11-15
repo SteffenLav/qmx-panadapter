@@ -202,6 +202,10 @@ CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
 #
 CONFIG_MDNS_MAX_INTERFACES=1
 CONFIG_MDNS_MAX_SERVICES=2
+# mdns >= 1.15 adds a browse daemon, default ON. We only advertise qmx.local
+# (no mdns_browse_* anywhere in main/), so it is ~3-4 KB of flash for nothing.
+# Off, 2026-11-15. A tree still on mdns 1.11 does not know the option.
+# CONFIG_MDNS_ENABLE_BROWSE is not set
 
 # Monospace font for the on-device manual's code/diagram blocks. The montserrat
 # fonts are proportional, so every ASCII drawing in the manual came out ragged.
