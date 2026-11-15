@@ -10037,6 +10037,13 @@ esp_err_t webserver_start(void)
      * list, and 80 costs 80 pointers of PSRAM-backed config. */
     config.max_uri_handlers = WEB_MAX_URI_HANDLERS;
     config.lru_purge_enable = true;
+    /* ⛔ BELOW rx_audio (3), 2026-11-15 (T201). The IDF default is 5 with no
+     * core affinity, so a request could run on core 1 above the audio task.
+     * Measured on bench1 (f3c7e7fd, per-frame task snapshot): in an 87 ms
+     * rx_audio frame httpd ran 35 ms, rx_audio itself 19 ms - one of the
+     * ~60 s stalls that each made a codec underrun. At 2 a request uses
+     * core-1 idle time (25-45 %); keying runs in its own tasks (rtty_tx 7). */
+    config.task_priority   = 2;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
     // session can be LRU-purged instead of bouncing new connects off ENFILE.

@@ -1660,53 +1660,6 @@ int rx_audio_web_read(int16_t *dst, int max)
 
 uint32_t rx_audio_web_dropped(void) { return s_web_dropped; }
 
-/* T201 DIAGNOSTIC (2026-11-15): WHO RAN DURING A SLOW FRAME. 01cda9cc on
- * bench1 showed an 80-166 ms stall inside the DSP frame about every 60 s, each
- * one a codec underrun. Snapshot every task's run-time counter at frame start;
- * if the frame then exceeds SLOWF_US, snapshot again and log the tasks that
- * ran in between. rx_audio's own share says CPU-bound (high) or waiting /
- * preempted (low). ~2 snapshots' cost per frame; remove once T201 closes. */
-#define SLOWF_US  70000
-#define SLOWF_CAP 96
-static TaskStatus_t *s_slowf_a, *s_slowf_b;
-static UBaseType_t   s_slowf_na;
-static uint32_t      s_slowf_t0;
-static void slowf_snap_start(void)
-{
-    if (!s_slowf_a) {
-        s_slowf_a = heap_caps_calloc(SLOWF_CAP, sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_slowf_b = heap_caps_calloc(SLOWF_CAP, sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_slowf_a || !s_slowf_b) return;
-    }
-    s_slowf_na = uxTaskGetSystemState(s_slowf_a, SLOWF_CAP, &s_slowf_t0);
-}
-static void slowf_report(uint32_t frame_us)
-{
-    if (!s_slowf_a || !s_slowf_b || !s_slowf_na) return;
-    uint32_t t1 = 0;
-    UBaseType_t nb = uxTaskGetSystemState(s_slowf_b, SLOWF_CAP, &t1);
-    char line[256]; int pos = 0;
-    for (int pass = 0; pass < 5; pass++) {          /* top 5 by run time */
-        int best = -1; uint32_t bd = 0;
-        for (UBaseType_t i = 0; i < nb; i++) {
-            for (UBaseType_t j = 0; j < s_slowf_na; j++) {
-                if (s_slowf_a[j].xHandle != s_slowf_b[i].xHandle) continue;
-                uint32_t d = s_slowf_b[i].ulRunTimeCounter - s_slowf_a[j].ulRunTimeCounter;
-                if (d > bd) { bd = d; best = (int)i; }
-                break;
-            }
-        }
-        if (best < 0 || bd < 2000) break;
-        pos += snprintf(line + pos, sizeof(line) - pos, " %s(c%d p%u) %lums",
-                        s_slowf_b[best].pcTaskName, (int)s_slowf_b[best].xCoreID,
-                        (unsigned)s_slowf_b[best].uxCurrentPriority, (unsigned long)(bd / 1000));
-        for (UBaseType_t j = 0; j < s_slowf_na; j++)   /* exclude from next pass */
-            if (s_slowf_a[j].xHandle == s_slowf_b[best].xHandle) s_slowf_a[j].ulRunTimeCounter = s_slowf_b[best].ulRunTimeCounter;
-        if (pos >= (int)sizeof(line) - 40) break;
-    }
-    ESP_LOGW(TAG, "slow frame %lu ms, ran:%s", (unsigned long)(frame_us / 1000), line);
-}
-
 static void rx_audio_task(void *arg)
 {
     (void)arg;
@@ -2047,7 +2000,6 @@ static void rx_audio_task(void *arg)
         ever_got_data = true;
 
         int64_t frame_start_us = esp_timer_get_time();
-        slowf_snap_start();
 
         // NCO1: shift the wanted signal all the way down to complex baseband 0
         // (removes the QMX's +12 kHz IF AND the mode's own center/offset in
@@ -2514,7 +2466,6 @@ static void rx_audio_task(void *arg)
         uint32_t frame_us = (uint32_t)(esp_timer_get_time() - frame_start_us);
         if (frame_us > s_frame_us_max) s_frame_us_max = frame_us;
         if (frame_us > s_frame_max_win) s_frame_max_win = frame_us;
-        if (frame_us > SLOWF_US) slowf_report(frame_us);
         s_frame_us_sum += frame_us;
         s_frame_count++;
 
