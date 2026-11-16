@@ -27,6 +27,7 @@
 #include "storage/settings.h"
 #include "ui_theme.h"
 #include "ui.h"
+#include "ui_mode.h"
 #include "lvgl.h"
 #include "esp_log.h"
 #include <ctype.h>
@@ -59,17 +60,21 @@ static bool      s_from_pick = false;
  * is rejected by LoTW and is awkward to repair by hand later. */
 static const char *radio_mode(void)
 {
+    /* R030: on the RTTY page the radio is in DiGi (the page puts it there),
+     * and "DiGi" is not an ADIF mode - LoTW rejects the record. The page says
+     * what is being sent, so the log says RTTY. */
+    if (ui_mode_get() == UI_MODE_RTTY) return "RTTY";
     const char *m = cat_get_mode_str();
     return (m && m[0]) ? m : "";
 }
 
-/* "599" for CW, "59" for anything else. The QMX's mode strings are "CW",
+/* "599" for CW and RTTY, "59" for anything else. The QMX's mode strings are "CW",
  * "CW-R", "USB", "LSB", "DiGi" and "AM"; only the CW pair take the readability
  * -strength-tone form. */
 static const char *default_rst(void)
 {
     const char *m = radio_mode();
-    return (m[0] == 'C' || m[0] == 'c') ? "599" : "59";
+    return (m[0] == 'C' || m[0] == 'c' || m[0] == 'R') ? "599" : "59";   /* CW, RTTY: RST */
 }
 
 /* T120 - THE RECEIVED REPORT'S S DIGIT IS MEASURED, THE OTHER TWO ARE NOT.
@@ -104,7 +109,7 @@ static void measured_rst_rcvd(char *buf, size_t len)
     if (units > 9) units = 9;
 
     const char *m = radio_mode();
-    bool cw = (m[0] == 'C' || m[0] == 'c');
+    bool cw = (m[0] == 'C' || m[0] == 'c' || m[0] == 'R');   /* RTTY reports RST too */
     /* R stays 5 and T stays 9 - the defaults the operator would have typed. */
     if (cw) snprintf(buf, len, "5%d9", units);
     else    snprintf(buf, len, "5%d",  units);

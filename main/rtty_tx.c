@@ -6,6 +6,7 @@
 #include "rtty_tx.h"
 #include "rtty_tx_core.h"
 #include "rtty_rx.h"
+#include "rtty_log.h"
 #include "cw_callsign.h"
 #include "tx_band_guard.h"
 #include "wspr_rx.h"
@@ -415,7 +416,21 @@ esp_err_t rtty_tx_macro(rtty_msg_t which, char *err, size_t err_len)
         snprintf(err, err_len, "pick their callsign first");
         return ESP_ERR_INVALID_STATE;
     }
-    switch (which) {
+    /* R030 contest mode: the short forms a contest station expects. The
+     * exchange is the serial (advanced on LOG, rtty_log.c, so a repeat sends
+     * the same number) or the fixed text set for the contest. */
+    settings_rtty_contest_t ct;
+    settings_get_rtty_contest(&ct);
+    if (ct.on) {
+        char ex[16];
+        rtty_log_sent_exch(ex, sizeof ex);
+        switch (which) {
+        case RTTY_MSG_CQ:     snprintf(t, sizeof t, "\nCQ TEST %s %s CQ\n", my, my); break;
+        case RTTY_MSG_ANSWER: snprintf(t, sizeof t, "\n%s %s\n", my, my); break;
+        case RTTY_MSG_EXCH:   snprintf(t, sizeof t, "\n%s 599 %s %s\n", c, ex, ex); break;
+        default:              snprintf(t, sizeof t, "\nTU %s\n", my); break;
+        }
+    } else switch (which) {
     case RTTY_MSG_CQ:
         snprintf(t, sizeof t, "\nCQ CQ CQ DE %s %s %s\nCQ CQ CQ DE %s %s %s PSE K\n",
                  my, my, my, my, my, my);
@@ -434,7 +449,7 @@ esp_err_t rtty_tx_macro(rtty_msg_t which, char *err, size_t err_len)
         snprintf(t, sizeof t, "\n%s DE %s TNX FER QSO 73 GL\n%s DE %s SK\n", c, my, c, my);
         break;
     }
-    ESP_LOGI(TAG, "macro: %s", which == RTTY_MSG_CQ ? "CQ" : which == RTTY_MSG_ANSWER ? "Answer" :
-             which == RTTY_MSG_EXCH ? "Exch" : "73");
+    ESP_LOGI(TAG, "macro: %s%s", which == RTTY_MSG_CQ ? "CQ" : which == RTTY_MSG_ANSWER ? "Answer" :
+             which == RTTY_MSG_EXCH ? "Exch" : "73", ct.on ? " (contest)" : "");
     return rtty_tx_send(t, true, err, err_len);
 }

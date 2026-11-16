@@ -275,3 +275,11 @@ void adif_log_report_lost_no_card(void);
 // a private copy could disagree with the records it's reasoning about. Returns a
 // pointer to static storage; do not free.
 const char *adif_log_band_for_freq(uint32_t hz);
+
+// R030. Calls cb(call, band) for every record in the DEVICE log whose
+// CONTEST_ID is `contest` (and MODE is `mode`, when given). Returns how many.
+// The card archive is not read: a contest QSO rotated off at a boot is not
+// seen. Used for the RTTY contest dupe list. Reads SPIFFS - LVGL task only
+// at contest start, never per frame.
+int adif_log_scan_contest(const char *contest, const char *mode,
+                          void (*cb)(const char *call, const char *band, void *ctx), void *ctx);

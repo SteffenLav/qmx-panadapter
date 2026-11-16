@@ -2337,7 +2337,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             while (n > 0 && ucall[n - 1] == ' ') n--;
             ucall[n] = '\0';
         }
-        const char *mode = cat_get_mode_str();
+        /* R030: on the RTTY page the radio is in DiGi, which is not an ADIF
+         * mode - the same rule as manual_log_modal.c's radio_mode(). */
+        const char *mode = ui_mode_get() == UI_MODE_RTTY ? "RTTY" : cat_get_mode_str();
         const char *err = NULL;
         if (!ucall[0])            err = "Enter a callsign";
         else if (!mode || !mode[0]) err = "No CAT - the radio must be connected to log";

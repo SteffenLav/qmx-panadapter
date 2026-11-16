@@ -186,6 +186,19 @@ typedef struct {
                              * settings come back as defaults (never released) */
 } settings_rtty_t;
 
+/* RTTY contest mode (R030). Its own blob, NOT the CW page's contest name or
+ * serial: a CW contest left set must not stamp RTTY QSOs, and the CW counter
+ * advances on SEND while this one advances on LOG (a repeated Exch must send
+ * the same number). exch = the sent exchange: "" sends the serial (%03u),
+ * anything else is sent as it is (a zone, a state). */
+typedef struct {
+    uint8_t  on;
+    uint8_t  pad;
+    uint16_t serial_next;   /* 1-based; 0 = never set, read as 1 */
+    char     name[24];      /* CONTEST_ID, e.g. "WAE-DX-RTTY" */
+    char     exch[12];
+} settings_rtty_contest_t;
+
 typedef struct {
     bool incl_en[2];
     char incl_text[2][FT8_FILTER_TEXT_LEN];
@@ -455,6 +468,7 @@ typedef struct {
      * an imported config file. */
     bool     cw_page_en;
     settings_rtty_t rtty;   /* R019 - see the type */
+    settings_rtty_contest_t rtty_contest;   /* R030 - see the type */
     // FT8 Fox/Hound (DXpedition) mode - the HOUND side only. Fox is impossible on
     // this radio: it needs up to five simultaneous signals and we emit one CAT
     // "TA" tone per symbol. 0 = off, 1 = guided, 2 = automatic. See ft8_hound.h.
@@ -1121,6 +1135,9 @@ bool settings_get_cw_page_en(void);
  * from the LVGL task and the httpd worker. */
 void settings_set_rtty(const settings_rtty_t *r);
 void settings_get_rtty(settings_rtty_t *out);
+/* R030. Narrow, same reason. */
+void settings_set_rtty_contest(const settings_rtty_contest_t *c);
+void settings_get_rtty_contest(settings_rtty_contest_t *out);
 
 // CW phantom-practice toggle. Deliberately its OWN flag, not sim_mode_en:
 // enabling CW practice must not arm the FT8 phantoms when swiping to that

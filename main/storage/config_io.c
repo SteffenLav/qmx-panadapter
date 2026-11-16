@@ -87,6 +87,11 @@ char *config_io_export(size_t *out_len)
         APP("rtty_squelch       = %s\n", yn(c.rtty.squelch));
         APP("rtty_auto          = %s\n", yn(c.rtty.auto_mode));
     }
+    /* R030. Always printed: off is a state worth restoring. */
+    APP("rtty_contest       = %s\n", yn(c.rtty_contest.on));
+    APP("rtty_contest_name  = %s\n", c.rtty_contest.name);
+    APP("rtty_contest_exch  = %s\n", c.rtty_contest.exch);
+    APP("rtty_contest_next  = %u\n", (unsigned)(c.rtty_contest.serial_next ? c.rtty_contest.serial_next : 1));
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -461,6 +466,19 @@ int config_io_import(char *text)
             /* R019. Export writes all six together, but each line stands
                alone. Ranges are clamped by rtty_rx_apply(), which reads these
                at the next boot. */
+            /* R030. Before the rtty_ branch below, which would eat these. */
+            else if (!strncasecmp(key, "rtty_contest", 12)) {
+                settings_rtty_contest_t r;
+                settings_get_rtty_contest(&r);
+                if      (!strcasecmp(key, "rtty_contest"))      r.on = to_bool(val);
+                else if (!strcasecmp(key, "rtty_contest_name")) snprintf(r.name, sizeof r.name, "%s", val);
+                else if (!strcasecmp(key, "rtty_contest_exch")) snprintf(r.exch, sizeof r.exch, "%s", val);
+                else if (!strcasecmp(key, "rtty_contest_next")) {
+                    int v = atoi(val);
+                    r.serial_next = (uint16_t)(v < 1 ? 1 : v > 9999 ? 9999 : v);
+                }
+                settings_set_rtty_contest(&r);
+            }
             else if (!strncasecmp(key, "rtty_", 5)) {
                 settings_rtty_t r;
                 settings_get_rtty(&r);

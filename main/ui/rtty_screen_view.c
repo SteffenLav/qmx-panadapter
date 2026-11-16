@@ -13,6 +13,9 @@
 #include "ui_mode.h"
 #include "rtty_rx.h"
 #include "rtty_tx.h"
+#include "rtty_qso.h"
+#include "rtty_log.h"
+#include "rtty_log_modal.h"
 #include "cat/cat.h"
 #include "cw_callsign.h"
 #include "storage/settings.h"
@@ -81,6 +84,13 @@ static lv_obj_t *s_tx_btn[5], *s_tx_lbl[5];    /* CQ, Answer, Exch, 73, Type... 
 static lv_obj_t *s_btn_stop, *s_lbl_stop;
 static lv_obj_t *s_lbl_to, *s_lbl_call;        /* "To:" + the tapped call, on the divider */
 static lv_obj_t *s_call_box;                   /* outline round the tapped call in the text */
+static lv_obj_t *s_lbl_tx;                     /* "TX" on the divider; "TX #013" in contest mode */
+/* R030 QSO card: over the waterfall above the text box, the CW station
+ * card's place (cw_screen_view.c). Shown while a call is picked. */
+static lv_obj_t *s_card, *s_card_call, *s_card_mark, *s_card_heard;
+static bool      s_card_dupe, s_card_worked;   /* for s_call, worked out once per pick */
+static char      s_card_shown[72];             /* what the card last showed */
+static char      s_tx_shown[24];               /* last divider text */
 static int       s_call_row = -1, s_call_col, s_call_len;
 static int       s_sending = -1;               /* s_tx_btn index lit while keyed, -1 none */
 static int       s_tx_style = -1;              /* last applied tx_style_key(), -1 = never */
@@ -275,6 +285,7 @@ static void speed_pick_cb(lv_event_t *e)
 }
 
 static void speed_close_cb(lv_event_t *e) { (void)e; speed_close(); }
+static void speed_contest_cb(lv_event_t *e) { (void)e; speed_close(); rtty_contest_modal_open(); }
 
 static void speed_open_cb(lv_event_t *e)
 {
@@ -332,6 +343,8 @@ static void speed_open_cb(lv_event_t *e)
         if ((float)SHIFTS[i] == c.shift_hz) lv_obj_set_style_bg_color(bt, lv_color_hex(BTN_ON), 0);
     }
     mk_btn(p, 650, 216, 150, 56, "Close", speed_close_cb, NULL, NULL);
+    /* R030: the contest settings, reachable from here and from the "TX" label. */
+    mk_btn(p, 0, 216, 200, 56, "Contest...", speed_contest_cb, NULL, NULL);
 }
 
 /* ---- TX (R010) ------------------------------------------------------------
@@ -364,8 +377,15 @@ static void macro_cb(lv_event_t *e)
     char err[96] = "";
     ESP_LOGI(TAG, "TX press: %s", which == RTTY_MSG_CQ ? "CQ" : which == RTTY_MSG_ANSWER ? "Answer" :
              which == RTTY_MSG_EXCH ? "Exch" : "73");
-    if (rtty_tx_macro((rtty_msg_t)which, err, sizeof err) == ESP_OK) s_sending = which;
-    else tx_show_err(err);
+    if (rtty_tx_macro((rtty_msg_t)which, err, sizeof err) == ESP_OK) {
+        s_sending = which;
+        /* R030: 73/TU ends the QSO - ask to log it. Only from THIS press, not
+         * from rtty_tx_macro(): a 73 sent from the web page must not pop a
+         * dialog on a Tab5 nobody may be looking at. */
+        if (which == RTTY_MSG_73) rtty_log_modal_open();
+    } else {
+        tx_show_err(err);
+    }
 }
 
 /* ⛔ HIDE, NEVER DELETE. This deleted s_kb_wrap, and it is called from the
@@ -504,6 +524,81 @@ static void stop_cb(lv_event_t *e)
     type_close(false);
 }
 
+/* R030. A new station: start the exchange capture from what is on screen
+ * now - its report may already be in the line the call was tapped in. Sent
+ * rows are left out: our own 599 is not theirs. */
+static void qso_seed_from_grid(void)
+{
+    rtty_qso_reset();
+    for (int r = 0; r < TXT_ROWS; r++) {
+        if (s_row_tx[r] || !s_lines[r][0]) continue;
+        rtty_qso_feed(s_lines[r], strlen(s_lines[r]));
+        rtty_qso_feed(" ", 1);
+    }
+}
+
+/* Dupe / worked-before for the picked call, once per pick (the first dupe
+ * check of a contest scans the device log). */
+static void card_new_call(void)
+{
+    uint32_t hz = cat_get_frequency();
+    s_card_dupe = rtty_log_is_dupe(s_call, hz);
+    s_card_worked = !s_card_dupe && rtty_log_worked_on_band(s_call, hz);
+    s_card_shown[0] = 0;
+}
+
+static void card_log_cb(lv_event_t *e) { (void)e; if (s_call[0]) rtty_log_modal_open(); }
+static void contest_open_cb(lv_event_t *e) { (void)e; rtty_contest_modal_open(); }
+
+static void card_refresh(void)
+{
+    if (!s_card) return;
+    if (!s_call[0]) { lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN); return; }
+    settings_rtty_contest_t ct;
+    settings_get_rtty_contest(&ct);
+    char my[16], rst[8], ex[16], h[40];
+    bool me;
+    settings_get_my_callsign(my, sizeof my);
+    if (rtty_qso_get(my, rst, sizeof rst, ex, sizeof ex, &me))
+        snprintf(h, sizeof h, "Rcvd %s %s", rst, ct.on ? ex : "");
+    else
+        snprintf(h, sizeof h, "Rcvd -");
+    char sent[12] = "";
+    if (ct.on) rtty_log_sent_exch(sent, sizeof sent);
+    /* the key holds everything shown, so only a change re-sets the labels */
+    char key[sizeof s_card_shown];
+    snprintf(key, sizeof key, "%s|%s|%s|%d%d%d", s_call, h, sent, s_card_dupe, s_card_worked, ct.on);
+    if (strcmp(key, s_card_shown) != 0) {
+        snprintf(s_card_shown, sizeof s_card_shown, "%s", key);
+        lv_label_set_text(s_card_call, s_call);
+        lv_label_set_text(s_card_heard, h);
+        char m[24];
+        uint32_t mc;
+        if (s_card_dupe)        { snprintf(m, sizeof m, "DUPE"); mc = 0xFF5050; }
+        else if (ct.on)         { snprintf(m, sizeof m, "Send %s", sent); mc = 0xFF9F40; }
+        else if (s_card_worked) { snprintf(m, sizeof m, "Worked on band"); mc = 0x8A93A0; }
+        else                    { snprintf(m, sizeof m, "New"); mc = 0x30E060; }
+        lv_label_set_text(s_card_mark, m);
+        lv_obj_set_style_text_color(s_card_mark, lv_color_hex(mc), 0);
+        lv_obj_set_style_border_color(s_card, lv_color_hex(s_card_dupe ? 0xFF5050 : 0x555555), 0);
+    }
+    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* The divider's "TX" says when contest mode is on, and what goes out next. */
+static void tx_label_refresh(void)
+{
+    settings_rtty_contest_t ct;
+    settings_get_rtty_contest(&ct);
+    char t[24];
+    if (ct.on) { char ex[12]; rtty_log_sent_exch(ex, sizeof ex); snprintf(t, sizeof t, "TX #%s", ex); }
+    else       snprintf(t, sizeof t, "TX");
+    if (!strcmp(t, s_tx_shown)) return;
+    snprintf(s_tx_shown, sizeof s_tx_shown, "%s", t);
+    lv_label_set_text(s_lbl_tx, t);
+    lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(ct.on ? 0xFF9F40 : 0x8A93A0), 0);
+}
+
 /* CALL: a tap on a callsign in the decoded text (approved). The word under
  * the finger is taken from the text grid; it must be shaped like a callsign
  * (cw_call_structure_ok - shape only, the test the CW page uses). */
@@ -535,6 +630,8 @@ static void text_tap_cb(lv_event_t *e)
     rtty_tx_set_call(w);   /* shape already checked; shared with the web */
     snprintf(s_call, sizeof s_call, "%s", w);
     s_call_gen = rtty_tx_call_gen();
+    qso_seed_from_grid();
+    card_new_call();
     s_call_row = row; s_call_col = b; s_call_len = n;
     s_text_dirty = true;   /* text_render() places the box */
     s_tx_style = -1;       /* undim Answer / Exch / 73, show To: */
@@ -617,6 +714,8 @@ static void timer_cb(lv_timer_t *t)
     if (cg != s_call_gen) {
         s_call_gen = cg;
         rtty_tx_get_call(s_call, sizeof s_call);
+        qso_seed_from_grid();
+        card_new_call();
         s_call_row = -1;
         s_text_dirty = true;
         s_tx_style = -1;
@@ -636,6 +735,7 @@ static void timer_cb(lv_timer_t *t)
     while ((n = rtty_rx_text_read(&s_cursor, buf, sizeof buf)) > 0) {
         if (!rx_any) { text_source(false); rx_any = true; }
         for (size_t i = 0; i < n; i++) text_put(buf[i]);
+        if (s_call[0]) rtty_qso_feed(buf, n);
     }
     bool tx_any = false;
     while ((n = rtty_tx_text_read(&s_tx_cursor, buf, sizeof buf)) > 0) {
@@ -700,6 +800,8 @@ static void timer_cb(lv_timer_t *t)
     if (strcmp(lv_label_get_text(s_lbl_status), s) != 0) lv_label_set_text(s_lbl_status, s);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(tx_line ? 0xFF5050 : 0xC8CCD2), 0);
     tx_refresh(tx.keyed);
+    card_refresh();
+    tx_label_refresh();
     if (type_is_open() && ui_phys_kbd_active() != s_kb_phys) type_layout();
     place_markers(&st, dial);
 }
@@ -867,7 +969,16 @@ void rtty_screen_view_init(lv_obj_t *parent)
      * of 145x52 at a 58 px pitch. Layout approved 2026-11-14. */
     /* Round 2: a "TX" divider at y 378 with the tapped call at its right
      * end, then 56 px rows at a 62 px pitch - the RX rows' size and pitch. */
-    mk_label(s_pane, 14, 366, &lv_font_montserrat_22, 0x8A93A0, "TX");
+    s_lbl_tx = mk_label(s_pane, 14, 366, &lv_font_montserrat_22, 0x8A93A0, "TX");
+    /* R030: a tap on it opens the contest settings. It sits over the
+     * divider line, so it gets the pane colour behind, and a finger-sized
+     * hit area round a 22 px label. */
+    lv_obj_set_style_bg_color(s_lbl_tx, lv_color_hex(0x14181e), 0);
+    lv_obj_set_style_bg_opa(s_lbl_tx, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_right(s_lbl_tx, 8, 0);
+    lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_lbl_tx, 18);
+    lv_obj_add_event_cb(s_lbl_tx, contest_open_cb, LV_EVENT_CLICKED, NULL);
     mk_rect(s_pane, 50, 377, 260, 2, 0x3a414c);
     s_lbl_call = mk_label(s_pane, 0, 0, &lv_font_montserrat_24, COL_CALL, "");
     lv_obj_align(s_lbl_call, LV_ALIGN_TOP_RIGHT, -10, 364);
@@ -916,6 +1027,24 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_width(s_call_box, 2, 0);
     lv_obj_set_style_border_color(s_call_box, lv_color_hex(COL_CALL), 0);
     lv_obj_add_flag(s_call_box, LV_OBJ_FLAG_HIDDEN);
+
+    /* R030 QSO card, 330 x 122, right-aligned with the text box, just above it. */
+    s_card = mk_rect(s_container, TXT_BOX_X2 - 330, s_txt_top - 132, 330, 122, 0x1c2128);
+    lv_obj_set_style_border_width(s_card, 2, 0);
+    lv_obj_set_style_border_color(s_card, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_radius(s_card, 8, 0);
+    lv_obj_add_flag(s_card, LV_OBJ_FLAG_CLICKABLE);   /* eats taps: not a waterfall tune */
+    s_card_call  = mk_label(s_card, 10, 6,  &lv_font_montserrat_28, COL_CALL, "");
+    s_card_mark  = mk_label(s_card, 10, 46, &lv_font_montserrat_22, 0x30E060, "");
+    s_card_heard = mk_label(s_card, 10, 80, &lv_font_montserrat_22, 0xE8E8E8, "");
+    lv_obj_t *cl[3] = { s_card_call, s_card_mark, s_card_heard };
+    for (int i = 0; i < 3; i++) {
+        lv_label_set_long_mode(cl[i], LV_LABEL_LONG_DOT);
+        lv_obj_set_width(cl[i], 190);
+    }
+    lv_obj_t *lb = mk_btn(s_card, 206, 8, 112, 102, "Log", card_log_cb, NULL, NULL);
+    lv_obj_set_style_bg_color(lb, lv_color_hex(UI_COLOR_SUCCESS), 0);
+    lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
     text_clear();
     text_render();
     refresh_buttons();
@@ -952,6 +1081,7 @@ void rtty_screen_view_hide(void)
      * it transmits on is switched off just below). */
     rtty_tx_stop();
     type_close(false);
+    rtty_log_modal_close();   /* R030; the contest dialog saves as it closes */
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_shown = false;
     rtty_rx_cfg_t c;
