@@ -18,6 +18,14 @@
 // ⭐ IT STAYS OPEN AFTER LOGGING. A run of CW contacts is not one dialog at a
 // time: Log writes the record, clears the callsign, keeps the reports, and
 // says what it wrote. Closing is a separate, deliberate press.
+//
+// ⭐ IT DOES NOT BLOCK THE SCREEN, AND IT MOVES (T204, Pete WK8S 2026-11-16:
+// "it covers the next signal I may want to work. I'd like to keep the log
+// window open while I move to next signal"). Keeping it open was useless
+// while a full-screen dimmed layer under it caught every tap: the waterfall,
+// the spectrum and the spots could not be reached. That layer is now
+// transparent and lets taps through, and the window can be dragged by its
+// body (ui_drag.c). It keeps its place between opens.
 
 #include "manual_log_modal.h"
 #include "activation_modal.h"
@@ -27,6 +35,7 @@
 #include "storage/settings.h"
 #include "ui_theme.h"
 #include "ui.h"
+#include "ui_drag.h"
 #include "ui_mode.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -166,6 +175,8 @@ static void ta_focused_cb(lv_event_t *e)
     if (!s_keyboard) return;
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
+    /* A window dragged low would end up under the on-screen keyboard (280 px). */
+    if (!ui_phys_kbd_active()) ui_drag_keep_above(s_panel, 720 - 280);
     ui_osk_show(s_keyboard);
 }
 
@@ -315,8 +326,10 @@ static void modal_build(void)
     s_modal = lv_obj_create(scr);
     lv_obj_set_size(s_modal, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(s_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_modal, UI_OPA_MODAL_SCRIM, 0);
+    /* A holder, not a scrim: transparent and not clickable, so a tap that
+     * misses the window reaches the page under it (T204). */
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);
@@ -335,6 +348,10 @@ static void modal_build(void)
     lv_obj_set_style_radius(s_panel, 10, 0);
     lv_obj_set_style_pad_all(s_panel, 20, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
+    /* With no dimmed layer behind it, a shadow keeps it reading as on top. */
+    lv_obj_set_style_shadow_width(s_panel, 24, 0);
+    lv_obj_set_style_shadow_color(s_panel, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(s_panel, LV_OPA_70, 0);
 
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "Log a contact");
@@ -391,6 +408,7 @@ static void modal_build(void)
     }
     lv_obj_add_state(s_btn_log, LV_STATE_DISABLED);
     ui_kbd_set_buttons(s_btn_log, btn_close);
+    ui_drag_enable(s_panel);   /* T204: after its children, at its built place */
 
     /* The project's keyboard, not LVGL's default - the three calls are copied
      * from js8_text_modal.c rather than reinvented. */

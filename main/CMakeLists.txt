@@ -34,6 +34,7 @@ idf_component_register(
         "ui/cw_screen_view.c"
         "ui/rtty_screen_view.c"
         "ui/rtty_log_modal.c"
+        "ui/ui_drag.c"
         "cw_qso.c"
         "cw_callsign.c"
         "ui/wspr_screen_view.c"
