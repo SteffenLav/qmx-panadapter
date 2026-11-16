@@ -997,6 +997,11 @@ void rtty_screen_view_init(lv_obj_t *parent)
     lv_obj_set_ext_click_area(s_lbl_tx, 18);
     lv_obj_add_event_cb(s_lbl_tx, contest_open_cb, LV_EVENT_CLICKED, NULL);
     mk_rect(s_pane, 50, 377, 260, 2, 0x3a414c);
+    /* The line is made after the label, so it drew across "TX #007" (bench1
+     * 2026-11-16, R030): the label goes back on top, its pane-coloured
+     * background then hides the line under it. "TX" alone ended left of x 50,
+     * which is why this never showed before contest mode. */
+    lv_obj_move_foreground(s_lbl_tx);
     s_lbl_call = mk_label(s_pane, 0, 0, &lv_font_montserrat_24, COL_CALL, "");
     lv_obj_align(s_lbl_call, LV_ALIGN_TOP_RIGHT, -10, 364);
     s_lbl_to = mk_label(s_pane, 0, 0, &lv_font_montserrat_24, 0x8A93A0, "To: ");
