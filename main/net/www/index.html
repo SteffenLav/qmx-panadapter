@@ -12413,7 +12413,10 @@ function bpSolveView(wantCenterHz) {
      whole band on the CW page instead of staying inside CW+Digi (operator,
      2026-11-09). Same fix, same reason, both ends of the one gesture. */
   if (lastBandplan) {
-    const r = bpEffectiveRange(lastBandplan);
+    /* RTTY: the whole band, as effective_drag_edges() in ui.c, which narrows
+       on the CW page only - the RTTY track is a strip, never a tune clamp. */
+    const r = (lastScreen === "rtty") ? { lo: lastBandplan.lo, hi: lastBandplan.hi }
+                                      : bpEffectiveRange(lastBandplan);
     d = Math.max(r.lo, Math.min(r.hi, d));
   }
   return { dial: d, center: d + pan };
@@ -12433,14 +12436,39 @@ function bpSolveView(wantCenterHz) {
    a pointer px meant a different Hz to each: the knob moved faster than the
    pointer, and clamping to the full band let it drag past the strip's own
    edges (operator, 2026-11-09). One pair of functions, used everywhere. */
+/* RTTY page track - same arithmetic as rtty_strip_range() in main/ui/ui.c:
+   the FIRST Digi segment plus half its width on each side, grown to include
+   the visible window, clipped to the band. ⛔ This was "Digi only" (R007)
+   after the Tab5 had moved to the wider track on 2026-11-14, so the web strip
+   painted a window outside Digi (e.g. 7.078-7.084 MHz, Phone) as Digi
+   (operator, 2026-11-16: "the web band plan is not synced with the Tab5").
+   Null when the band has no Digi row. bpRttyFrozen holds the track from the
+   pointer-down while a drag runs, as ui.c uses s_bp_drag_start_view_hz -
+   otherwise the track moves under the finger. */
+let bpRttyFrozen = null;
+function bpRttyTrack(bp) {
+  if (bpRttyFrozen) return bpRttyFrozen;
+  const d = bp.segs.find(s => s.l === "Digi");
+  if (!d) return null;
+  const spanHz = lastView ? lastView.span : 48000 / lastZoom;
+  const c = lastView ? lastView.lo + lastView.span / 2
+                     : lastFreqHz + lastPanBins * HZ_PER_BIN;
+  const m = (d.hi - d.lo) / 2;
+  let lo = Math.min(d.lo - m, c - spanHz / 2), hi = Math.max(d.hi + m, c + spanHz / 2);
+  lo = Math.max(lo, bp.segs[0].lo);
+  hi = Math.min(hi, bp.segs[bp.segs.length - 1].hi);
+  return hi > lo ? { lo, hi } : null;
+}
 function bpEffectiveSegs(bp) {
-  /* RTTY page (R007): DiGi only, as the Tab5's strip on that page - RTTY's
-     segment in every IARU plan. The drag below maps onto the same range,
-     which is the rule written above. Falls back to the whole band if a band
-     has no DiGi row. */
   if (lastScreen === "rtty") {
-    const d = bp.segs.filter(s => s.l === "Digi");
-    return d.length ? d : bp.segs;
+    const t = bpRttyTrack(bp);
+    if (!t) return bp.segs;
+    const out = [];
+    bp.segs.forEach(s => {
+      const lo = Math.max(s.lo, t.lo), hi = Math.min(s.hi, t.hi);
+      if (hi > lo) out.push({ ...s, lo, hi });
+    });
+    return out.length ? out : bp.segs;
   }
   return (lastScreen === "cw")
     ? bp.segs.filter(s => s.l === "CW" || s.l === "Digi")
@@ -12634,6 +12662,8 @@ function drawBandplanOob(ctx, W, H, dpr) {
                     ? lastView.lo + lastView.span / 2
                     : lastFreqHz;
     targetCenter = startCenter;
+    bpRttyFrozen = null;
+    if (lastScreen === "rtty" && lastBandplan) bpRttyFrozen = bpRttyTrack(lastBandplan);
     canvas.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
@@ -12758,11 +12788,13 @@ function drawBandplanOob(ctx, W, H, dpr) {
       commit(clamp(r.lo + (startX - rect.left) * hzPerPx));
     }
     bpDragging = false;
+    bpRttyFrozen = null;   /* commit*() above drew with the frozen track; the next poll recomputes */
   });
 
   canvas.addEventListener("pointercancel", () => {
     active = false;
     bpDragging = false;
+    bpRttyFrozen = null;
     bpOobOffPx = 0;      // detent back to centre, same as a release (#216)
     canvas.classList.remove("dragging");
     drawBandplan();
