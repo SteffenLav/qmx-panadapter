@@ -71,6 +71,45 @@ A bad signal can therefore cost one 5-second trial every 30 seconds, never more.
 
 **When an over ends:** 3 s after the queue is empty, on **STOP**, or after **180 s** at most, whatever is still queued. Every over starts with a press or a key: nothing on the RTTY page transmits by itself.
 
+## Logging
+
+When you pick a station, a card shows above the text box, at the right:
+
+- the callsign
+- **New**, **Worked on band** (in your log on this band before), or **DUPE** (contest mode: already logged on this band in this contest)
+- **Rcvd**: the report (and, in contest mode, the exchange) the decoder found in their text
+- a **Log** button
+
+**73** (or **TU** in contest mode) and **Log** open **Log this QSO?**. Nothing is logged until you press **Log** in it. The fields come filled in: RST sent 599, RST rcvd and the received exchange only when the decoder found them. Check them: RTTY errors damage numbers. A lost figures shift prints `599 001` as `TOO QPP`; the Tab5 reads letters on the number keys back as digits, but cannot know every error.
+
+**To correct a field, tap the word in the text.** While the dialog is open, a tapped word goes where it belongs: a report to **RST rcvd**, a callsign to **Callsign**, a number to **Exch rcvd**. The line under the fields says what went where. Tap a field to type instead.
+
+The record gets mode **RTTY**, the dial frequency and the time from the device. **Log** clears the station, ready for the next one. **STOP** stays in reach while the dialog is open.
+
+The drawer's **Manual log** on this page also logs mode RTTY with RST 599.
+
+### Contest mode
+
+Tap **TX** above the send buttons (or **Contest...** in the speed picker) to set it:
+
+- **Contest mode** on or off
+- **Contest name** - written to every QSO as `CONTEST_ID`, for example `WAE-DX-RTTY`
+- **Next serial**
+- **Sent exch** - leave empty to send the serial, or enter a fixed exchange (a zone, a state)
+
+While it is on, **TX #013** above the buttons shows what you send next, and the messages are the short contest forms:
+
+| Button | Sends |
+|---|---|
+| **CQ** | `CQ TEST MYCALL MYCALL CQ` |
+| **Answer** | `MYCALL MYCALL` |
+| **Exch** | `CALL 599 013 013` |
+| **73** | `TU MYCALL`, then asks to log |
+
+**The serial moves on when a QSO is logged**, not when it is sent, so a repeated **Exch** sends the same number. Logged contest QSOs also carry `STX_STRING` and `SRX_STRING`.
+
+**Dupes** are this contest's RTTY QSOs on the band - contacts from other days and other contests do not count. The list comes from the log on the Tab5 and, at each start, from the archive on the microSD card (older records move there). Without a card at start, QSOs moved at an earlier start are not seen.
+
 ## In the browser
 
 The browser's RTTY page has the same controls as the Tab5 pane, and the same text box over the waterfall: received text green and cyan, your own text red.
@@ -80,6 +119,7 @@ The browser's RTTY page has the same controls as the Tab5 pane, and the same tex
 - **Send:** **CQ**, **Answer**, **Exch**, **73** and **STOP** under the controls. The device builds the messages, so the browser and the Tab5 send exactly the same text.
 - **Type:** the **Type** line sends each key as you type (in small batches). **Enter** ends the over.
 - While sending, the line beside **To:** shows `TX n s` and the last characters sent, in red. A refusal shows there in orange for 8 s.
+- **Log:** the line under the buttons shows what the Tab5 card shows (New / Worked on band / DUPE, Rcvd). **73** and **Log...** open the same form as on the Tab5; while it is open, click a word in the text to fill its field. **Contest...** sets contest mode, shared with the Tab5.
 
 ## Settings and API
 
@@ -93,6 +133,11 @@ Scripts use `POST /api/cmd`:
 | `rtty` | any of `baud`, `shift`, `reverse`, `afc`, `squelch`, `auto`, `offset_hz`, `tune_hz`, `mark_hz`, `clear`, `call` | Changes settings and returns the decoder status, the last decoded text and the send state (`tx`). `call` sets the station being worked (`""` clears). Receive only - it never keys. |
 | `rtty_send` | `text` (and `end`), or `macro: "cq"/"answer"/"exch"/"73"` | **Keys the radio.** Starts an over, or adds to the one that runs. |
 | `rtty_stop` | *(none)* | Tone off and back to receive, now. |
+| `rtty_log` | `call`, `rst_sent`, `rst_rcvd`, `stx`, `srx` | Logs the QSO (mode RTTY, dial frequency, now) and clears the station. `stx`/`srx` only in contest mode. |
+| `rtty_contest` | any of `on`, `name`, `next`, `exch` | Contest mode settings. |
+| `rtty_word` | `word` | Which log field a word belongs in: `{"kind":"rst"/"call"/"exch"/"none","value":...}`. |
+
+The `rtty` reply also carries `qso` (what the Tab5 card shows) and `contest`. In a config file, contest mode is `rtty_contest`, `rtty_contest_name`, `rtty_contest_next` and `rtty_contest_exch`.
 
 ## Limits
 

@@ -87,6 +87,9 @@
 #include "rx_audio.h"          // live AGC/clip tuning - /api/cmd "rxaudio"
 #include "rtty_rx.h"           // /api/cmd "rtty" - R005
 #include "rtty_tx.h"           // /api/cmd "rtty_send" / "rtty_stop" - R010, keys the radio
+#include "rtty_log.h"          // /api/cmd "rtty_log" / "rtty_contest" - R030
+#include "rtty_qso.h"          // /api/cmd "rtty_word" - R030 tap-to-fill
+#include "cw_callsign.h"       // cw_call_structure_ok() for rtty_word
 #include "ui/rtty_screen_view.h" // /api/cmd "rtty" tune_hz - the Tab5 tap, shared
 #include "webradio.h"          // /api/cmd "webradio_play" - a stream without the directory
 #include "util/mic_probe.h"    // /api/cmd "mic_probe" - GitHub #17
@@ -3435,6 +3438,93 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
         free(txt);
         return ESP_OK;
+    } else if (action && strcmp(action, "rtty_log") == 0) {
+        /* R030. The web page's confirmation dialog pressed Log - never sent
+         * without the operator seeing the fields, the Tab5's rule.
+         *   {"action":"rtty_log","call":"DK2OY","rst_sent":"599","rst_rcvd":"599",
+         *    "stx":"013","srx":"1340"}
+         * MODE RTTY, the dial frequency and the time come from the device.
+         * On success the station is cleared, here and on the Tab5. */
+        char call[16] = "", rs[8] = "", rr[8] = "", xs[16] = "", xr[16] = "";
+        struct { const char *k; char *d; size_t n; } F[] = {
+            { "call", call, sizeof call }, { "rst_sent", rs, sizeof rs }, { "rst_rcvd", rr, sizeof rr },
+            { "stx", xs, sizeof xs }, { "srx", xr, sizeof xr } };
+        for (size_t i = 0; i < sizeof F / sizeof F[0]; i++) {
+            const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(root, F[i].k));
+            size_t n = 0;
+            if (v) {
+                while (*v == ' ') v++;
+                while (*v && n + 1 < F[i].n) { char ch = *v++; F[i].d[n++] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch; }
+                while (n && F[i].d[n - 1] == ' ') n--;
+            }
+            F[i].d[n] = 0;
+        }
+        cJSON_Delete(root);
+        char lerr[96] = "";
+        bool ok = rtty_log_record(call, rs, rr, xs, xr, lerr, sizeof lerr);
+        if (ok) rtty_tx_set_call("");
+        cJSON *res = cJSON_CreateObject();
+        cJSON_AddBoolToObject(res, "ok", ok);
+        if (ok) cJSON_AddNumberToObject(res, "count", adif_log_count());
+        else    cJSON_AddStringToObject(res, "error", lerr);
+        char *txt = cJSON_PrintUnformatted(res);
+        cJSON_Delete(res);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, txt ? txt : "{\"ok\":false}");
+        free(txt);
+        return ESP_OK;
+    } else if (action && strcmp(action, "rtty_contest") == 0) {
+        /* R030 contest settings, the Tab5's contest dialog:
+         *   {"action":"rtty_contest","on":true,"name":"WAE-DX-RTTY","next":13,"exch":""}
+         * Each key is optional. */
+        settings_rtty_contest_t c;
+        settings_get_rtty_contest(&c);
+        bool was_on = c.on;
+        char was_name[sizeof c.name];
+        snprintf(was_name, sizeof was_name, "%s", c.name);
+        cJSON *j;
+        if (cJSON_IsBool(j = cJSON_GetObjectItem(root, "on"))) c.on = cJSON_IsTrue(j);
+        if (cJSON_IsString(j = cJSON_GetObjectItem(root, "name"))) snprintf(c.name, sizeof c.name, "%s", j->valuestring);
+        if (cJSON_IsString(j = cJSON_GetObjectItem(root, "exch"))) snprintf(c.exch, sizeof c.exch, "%s", j->valuestring);
+        if (cJSON_IsNumber(j = cJSON_GetObjectItem(root, "next")) && j->valuedouble >= 1 && j->valuedouble <= 9999)
+            c.serial_next = (uint16_t)j->valuedouble;
+        cJSON_Delete(root);
+        for (char *p = c.name; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+        for (char *p = c.exch; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
+        settings_set_rtty_contest(&c);
+        if (was_on != (bool)c.on || strcmp(was_name, c.name)) rtty_log_contest_changed();
+        ESP_LOGI(TAG, "web: rtty contest %s '%s' next %u exch '%s'", c.on ? "ON" : "off", c.name,
+                 (unsigned)c.serial_next, c.exch);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "rtty_word") == 0) {
+        /* R030 tap-to-fill: which log field a clicked word belongs in - the
+         * same classifier as the Tab5 (rtty_qso_word, then the call shape).
+         *   {"action":"rtty_word","word":"TOO"} -> {"kind":"rst","value":"599"} */
+        char w[24] = "";
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(root, "word"));
+        if (v) {
+            size_t n = 0;
+            while (*v && n + 1 < sizeof w) { char ch = *v++; w[n++] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : ch; }
+            w[n] = 0;
+        }
+        cJSON_Delete(root);
+        char val[16] = "";
+        const char *kind = "none";
+        rtty_word_t k = rtty_qso_word(w, val, sizeof val);
+        if (k == RTTY_WORD_RST)            kind = "rst";
+        else if (cw_call_structure_ok(w)) { kind = "call"; snprintf(val, sizeof val, "%s", w); }
+        else if (k == RTTY_WORD_EXCH)      kind = "exch";
+        cJSON *res = cJSON_CreateObject();
+        cJSON_AddStringToObject(res, "kind", kind);
+        cJSON_AddStringToObject(res, "value", val);
+        char *txt = cJSON_PrintUnformatted(res);
+        cJSON_Delete(res);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, txt ? txt : "{\"kind\":\"none\"}");
+        free(txt);
+        return ESP_OK;
     } else if (action && strcmp(action, "rtty_stop") == 0) {
         cJSON_Delete(root);
         rtty_tx_stop();
@@ -3838,6 +3928,29 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             rtty_tx_get_call(call, sizeof call);
             cJSON_AddStringToObject(o, "call", call);
             if (call_bad) cJSON_AddStringToObject(o, "call_error", "not a callsign");
+            /* R030: what the Tab5's QSO card shows, for the same station only
+             * (the snapshot lags a pick by one 200 ms tick). */
+            rtty_log_heard_t hs;
+            rtty_log_get_heard(&hs);
+            if (call[0] && !strcmp(hs.call, call)) {
+                cJSON *q = cJSON_AddObjectToObject(o, "qso");
+                cJSON_AddBoolToObject(q, "heard", hs.heard);
+                cJSON_AddStringToObject(q, "rst", hs.rst);
+                cJSON_AddStringToObject(q, "exch", hs.exch);
+                cJSON_AddBoolToObject(q, "to_me", hs.to_me);
+                cJSON_AddBoolToObject(q, "dupe", hs.dupe);
+                cJSON_AddBoolToObject(q, "worked", hs.worked);
+            }
+            settings_rtty_contest_t ct;
+            settings_get_rtty_contest(&ct);
+            char sent[16];
+            rtty_log_sent_exch(sent, sizeof sent);
+            cJSON *c = cJSON_AddObjectToObject(o, "contest");
+            cJSON_AddBoolToObject(c, "on", ct.on);
+            cJSON_AddStringToObject(c, "name", ct.name);
+            cJSON_AddStringToObject(c, "exch", ct.exch);
+            cJSON_AddNumberToObject(c, "next", ct.serial_next);
+            cJSON_AddStringToObject(c, "sent", sent);
         }
         rtty_tx_status_t ts;
         rtty_tx_status(&ts);

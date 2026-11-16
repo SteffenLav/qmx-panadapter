@@ -17,6 +17,10 @@ void      rtty_screen_view_init(lv_obj_t *parent);
 void      rtty_screen_view_show(void);
 void      rtty_screen_view_hide(void);
 lv_obj_t *rtty_screen_view_get_container(void);
+/* R030: screen y of the decoded-text box top. The log dialog stops its scrim
+ * there, so the text stays tappable while it is open. */
+int rtty_screen_view_text_top_y(void);
+int rtty_screen_view_text_bottom_y(void);   /* ...and its bottom */
 
 /* The waterfall area left visible by the pane and the text box (2 rects), for
  * ui.c's carpet shift; false while the page is not shown. See the CW page's

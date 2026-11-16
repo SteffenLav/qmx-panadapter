@@ -144,6 +144,16 @@ static bool ends_with_call(const char *tok, const char *call)
     return lc && lt >= lc && !strcmp(tok + lt - lc, call);
 }
 
+rtty_word_t rtty_qso_word(const char *w, char *out, size_t out_sz)
+{
+    if (out && out_sz) out[0] = 0;
+    if (!w) return RTTY_WORD_NONE;
+    tok_t t;
+    if (tokenize(w, &t, 1) != 1) return RTTY_WORD_NONE;
+    if (is_rst(&t)) { snprintf(out, out_sz, "599"); return RTTY_WORD_RST; }
+    return exch_of(&t, out, out_sz) ? RTTY_WORD_EXCH : RTTY_WORD_NONE;
+}
+
 bool rtty_qso_parse(const char *text, const char *mycall, char *rst, size_t rst_sz,
                     char *exch, size_t exch_sz, bool *to_me)
 {

@@ -553,16 +553,26 @@ static void contest_open_cb(lv_event_t *e) { (void)e; rtty_contest_modal_open();
 static void card_refresh(void)
 {
     if (!s_card) return;
-    if (!s_call[0]) { lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN); return; }
+    rtty_log_heard_t hs;
+    memset(&hs, 0, sizeof hs);
+    if (!s_call[0]) {
+        rtty_log_set_heard(&hs);   /* the web shows nothing either */
+        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
     settings_rtty_contest_t ct;
     settings_get_rtty_contest(&ct);
     char my[16], rst[8], ex[16], h[40];
     bool me;
     settings_get_my_callsign(my, sizeof my);
-    if (rtty_qso_get(my, rst, sizeof rst, ex, sizeof ex, &me))
-        snprintf(h, sizeof h, "Rcvd %s %s", rst, ct.on ? ex : "");
-    else
-        snprintf(h, sizeof h, "Rcvd -");
+    bool heard = rtty_qso_get(my, rst, sizeof rst, ex, sizeof ex, &me);
+    if (heard) snprintf(h, sizeof h, "Rcvd %s %s", rst, ct.on ? ex : "");
+    else       snprintf(h, sizeof h, "Rcvd -");
+    /* The same facts for the web page's log line (R030). */
+    snprintf(hs.call, sizeof hs.call, "%s", s_call);
+    if (heard) { snprintf(hs.rst, sizeof hs.rst, "%s", rst); snprintf(hs.exch, sizeof hs.exch, "%s", ex); }
+    hs.heard = heard; hs.to_me = heard && me; hs.dupe = s_card_dupe; hs.worked = s_card_worked;
+    rtty_log_set_heard(&hs);
     char sent[12] = "";
     if (ct.on) rtty_log_sent_exch(sent, sizeof sent);
     /* the key holds everything shown, so only a change re-sets the labels */
@@ -626,6 +636,9 @@ static void text_tap_cb(lv_event_t *e)
     if (n >= (int)sizeof w) return;
     for (int i = 0; i < n; i++) w[i] = (char)toupper((unsigned char)ln[b + i]);
     w[n] = 0;
+    /* R030: with the log dialog up, a tapped word fills its field instead of
+     * picking a new station. */
+    if (rtty_log_modal_is_open()) { rtty_log_modal_fill_word(w); return; }
     if (!cw_call_structure_ok(w)) { ESP_LOGI(TAG, "tap on '%s': not a callsign", w); return; }
     rtty_tx_set_call(w);   /* shape already checked; shared with the web */
     snprintf(s_call, sizeof s_call, "%s", w);
@@ -716,6 +729,10 @@ static void timer_cb(lv_timer_t *t)
         rtty_tx_get_call(s_call, sizeof s_call);
         qso_seed_from_grid();
         card_new_call();
+        /* The station changed on the web page - or it logged the QSO there,
+         * which clears the call. A dialog still open here is for the old one
+         * and would log it a second time: close it. */
+        rtty_log_modal_close_log();
         s_call_row = -1;
         s_text_dirty = true;
         s_tx_style = -1;
@@ -1091,6 +1108,9 @@ void rtty_screen_view_hide(void)
 }
 
 lv_obj_t *rtty_screen_view_get_container(void) { return s_container; }
+
+int rtty_screen_view_text_top_y(void) { return MID_Y + s_txt_top; }
+int rtty_screen_view_text_bottom_y(void) { return MID_Y + MID_H - BANDPLAN_H; }
 
 /* The part of the waterfall NOT under the pane or the text box, for ui.c's
  * carpet shift - the CW page's rule (cw_screen_view_carpet_visible), for the

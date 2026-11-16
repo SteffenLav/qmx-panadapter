@@ -78,6 +78,19 @@ static int run_cases(void)
     pass = ok && !strcmp(ex, "777");
     printf("%s  overflow keeps the newest -> %s\n", pass ? "PASS" : "FAIL", ok ? ex : "(none)");
     if (!pass) fail++;
+    /* tap-to-fill: one word */
+    static const struct { const char *w; rtty_word_t k; const char *out; } W[] = {
+        { "599", RTTY_WORD_RST, "599" }, { "TOO", RTTY_WORD_RST, "599" }, { "5NN", RTTY_WORD_RST, "599" },
+        { "1340", RTTY_WORD_EXCH, "1340" }, { "QWE", RTTY_WORD_EXCH, "123" }, { "MA", RTTY_WORD_EXCH, "MA" },
+        { "TU", RTTY_WORD_NONE, "" }, { "7)U", RTTY_WORD_NONE, "" }, { "DKILR", RTTY_WORD_NONE, "" },
+    };
+    for (size_t i = 0; i < sizeof W / sizeof W[0]; i++) {
+        char o[16];
+        rtty_word_t k = rtty_qso_word(W[i].w, o, sizeof o);
+        bool p = k == W[i].k && !strcmp(o, W[i].out);
+        printf("%s  word '%s' -> %d '%s'\n", p ? "PASS" : "FAIL", W[i].w, (int)k, o);
+        if (!p) fail++;
+    }
     printf("%d failed\n", fail);
     return fail ? 1 : 0;
 }

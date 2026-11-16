@@ -35,6 +35,7 @@
 // storage -> net is the same direction net/webserver.c already goes the other way
 // (it takes sd_archive_lock() for uploads); both live in the `main` component.
 #include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
+#include "rtty_log.h"         // R030 contest dupes from the archive
 #include "audio/rx_audio.h"  // rx_audio_any_listener() - no SD holds while listening
 
 static const char *TAG = "sd_arch";
@@ -2144,6 +2145,10 @@ static void sd_archive_task(void *arg)
             s_rotation_tried = true;
             adif_log_rotate(SD_ARC_PATH);
             adif_log_worked_index_sync(SD_WIDX_PATH, SD_ARC_PATH);
+            /* R030: contest QSOs the rotation just moved (or moved at an
+             * earlier boot) are on the card only. Nothing when RTTY contest
+             * mode is off. Here, not parked: the read is the whole archive. */
+            rtty_log_scan_archive(SD_ARC_PATH);
         }
 
         // The adoption offer, and the answer to it. See adoption_check().

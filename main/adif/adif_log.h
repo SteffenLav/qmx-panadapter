@@ -278,8 +278,11 @@ const char *adif_log_band_for_freq(uint32_t hz);
 
 // R030. Calls cb(call, band) for every record in the DEVICE log whose
 // CONTEST_ID is `contest` (and MODE is `mode`, when given). Returns how many.
-// The card archive is not read: a contest QSO rotated off at a boot is not
-// seen. Used for the RTTY contest dupe list. Reads SPIFFS - LVGL task only
+// The card archive is read separately (adif_log_scan_contest_file). Used for
+// the RTTY contest dupe list. Reads SPIFFS - LVGL task only
 // at contest start, never per frame.
 int adif_log_scan_contest(const char *contest, const char *mode,
                           void (*cb)(const char *call, const char *band, void *ctx), void *ctx);
+// The same for any one-record-per-line ADIF file (the card archive).
+int adif_log_scan_contest_file(const char *path, const char *contest, const char *mode,
+                               void (*cb)(const char *call, const char *band, void *ctx), void *ctx);

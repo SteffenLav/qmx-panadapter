@@ -2003,14 +2003,25 @@ const char *adif_log_band_for_freq(uint32_t hz)
 int adif_log_scan_contest(const char *contest, const char *mode,
                           void (*cb)(const char *call, const char *band, void *ctx), void *ctx)
 {
-    if (!s_mounted || !contest || !contest[0] || !cb) return 0;
-    FILE *f = fopen(FILE_PATH, "r");
-    if (!f) return 0;
+    if (!s_mounted) return 0;
+    return adif_log_scan_contest_file(FILE_PATH, contest, mode, cb, ctx);
+}
+
+/* Any file of one-record-per-line ADIF: the device log, or the card archive
+ * (rotation moves records into it byte for byte). The line buffer is on the
+ * heap: the LVGL task and the SD task can both be in here at once. */
+int adif_log_scan_contest_file(const char *path, const char *contest, const char *mode,
+                               void (*cb)(const char *call, const char *band, void *ctx), void *ctx)
+{
+    if (!path || !contest || !contest[0] || !cb) return 0;
+    char *line = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!line) return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) { free(line); return 0; }
     char needle[48];
     snprintf(needle, sizeof needle, "<CONTEST_ID:%u>%s", (unsigned)strlen(contest), contest);
-    static char line[1024];   /* static: callers are on the LVGL task */
     int n = 0;
-    while (fgets(line, sizeof line, f)) {
+    while (fgets(line, 1024, f)) {
         if (!strstr(line, needle)) continue;
         char call[16] = "", band[8] = "", md[12] = "";
         adif_log_extract_field(line, "CALL", call, sizeof call);
@@ -2021,6 +2032,7 @@ int adif_log_scan_contest(const char *contest, const char *mode,
         n++;
     }
     fclose(f);
+    free(line);
     return n;
 }
 

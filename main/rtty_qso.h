@@ -34,6 +34,12 @@ void rtty_qso_feed(const char *s, size_t n);
 bool rtty_qso_get(const char *mycall, char *rst, size_t rst_sz,
                   char *exch, size_t exch_sz, bool *to_me);
 
+/* One tapped word, for the log dialog's tap-to-fill: a report (written as
+ * "599"), or an exchange (letter-shift forms mapped to digits). A callsign
+ * is NOT judged here - the page checks the call shape first. */
+typedef enum { RTTY_WORD_NONE, RTTY_WORD_RST, RTTY_WORD_EXCH } rtty_word_t;
+rtty_word_t rtty_qso_word(const char *w, char *out, size_t out_sz);
+
 /* The parser itself, on any text. Same outputs as rtty_qso_get(). */
 bool rtty_qso_parse(const char *text, const char *mycall, char *rst, size_t rst_sz,
                     char *exch, size_t exch_sz, bool *to_me);

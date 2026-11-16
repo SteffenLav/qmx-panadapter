@@ -15,6 +15,8 @@
 #include "rtty_log.h"
 #include "rtty_qso.h"
 #include "rtty_tx.h"
+#include "rtty_screen_view.h"
+#include "cw_callsign.h"
 #include "adif/adif_log.h"
 #include "cat/cat.h"
 #include "storage/settings.h"
@@ -35,10 +37,13 @@ static const char *TAG = "rtty_log_ui";
 
 /* ---- shared ------------------------------------------------------------------ */
 
-static lv_obj_t *mk_scrim(void)
+/* h = how far down the scrim reaches. The log dialog stops it above the
+ * decoded text, so a tap on a word there still reaches the page and fills a
+ * field (rtty_log_modal_fill_word). */
+static lv_obj_t *mk_scrim(int h)
 {
     lv_obj_t *m = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(m, AREA_W, 720);
+    lv_obj_set_size(m, AREA_W, h);
     lv_obj_set_pos(m, PANE_W, 0);
     lv_obj_set_style_bg_color(m, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(m, UI_OPA_MODAL_SCRIM, 0);
@@ -95,12 +100,15 @@ static lv_obj_t *mk_button(lv_obj_t *parent, const char *txt, uint32_t col, int 
     return b;
 }
 
-static lv_obj_t *mk_keyboard(lv_obj_t *scrim, lv_event_cb_t cb)
+/* On the top layer, not in the scrim: the log dialog's scrim no longer
+ * reaches the bottom of the screen. Hidden until a field is tapped; while it
+ * is up it covers the text, and Cancel on it uncovers the text again. */
+static lv_obj_t *mk_keyboard(lv_event_cb_t cb)
 {
-    lv_obj_t *kb = lv_keyboard_create(scrim);
+    lv_obj_t *kb = lv_keyboard_create(lv_layer_top());
     ui_theme_style_keyboard(kb);
     lv_obj_set_size(kb, AREA_W, 280);
-    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_pos(kb, PANE_W, 720 - 280);
     ui_theme_keyboard_attach_caps_cycle_upper(kb);
     lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
@@ -148,6 +156,7 @@ static void clean(const char *in, char *out, size_t out_sz)
 
 /* ---- log confirmation ---------------------------------------------------------- */
 
+static lv_obj_t *s_log_low;   /* scrim below the text box (band strip, bottom bar) */
 static lv_obj_t *s_log, *s_log_panel, *s_log_kb, *s_log_hdr, *s_log_note, *s_log_heard;
 static lv_obj_t *s_ta_call, *s_ta_rs, *s_ta_rr, *s_ta_xs, *s_ta_xr;
 static lv_obj_t *s_lbl_xs, *s_lbl_xr;
@@ -158,6 +167,7 @@ static void log_close(void)
     if (!s_log) return;
     lv_obj_add_flag(s_log_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_log, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_log_low, LV_OBJ_FLAG_HIDDEN);
 }
 
 bool rtty_log_modal_is_open(void)
@@ -204,6 +214,36 @@ static void log_do_cb(lv_event_t *e)
 
 static void log_close_cb(lv_event_t *e) { (void)e; log_close(); }
 
+/* A word tapped in the decoded text while the dialog is up. It goes where it
+ * belongs, so no field has to be focused first: a report to RST rcvd, a
+ * callsign to Callsign, a number (letter-shift mapped) to Exch rcvd. The
+ * line under the fields says what went where. */
+void rtty_log_modal_fill_word(const char *w)
+{
+    if (!rtty_log_modal_is_open() || !w || !w[0]) return;
+    char v[16], note[64];
+    lv_obj_t *ta = NULL;
+    const char *what = "";
+    rtty_word_t k = rtty_qso_word(w, v, sizeof v);
+    if (k == RTTY_WORD_RST) {
+        ta = s_ta_rr; what = "RST rcvd";
+    } else if (cw_call_structure_ok(w)) {
+        snprintf(v, sizeof v, "%s", w); ta = s_ta_call; what = "Callsign";
+    } else if (k == RTTY_WORD_EXCH && !lv_obj_has_flag(s_ta_xr, LV_OBJ_FLAG_HIDDEN)) {
+        ta = s_ta_xr; what = "Exch rcvd";
+    }
+    if (!ta) {
+        snprintf(note, sizeof note, "'%s' is not a call, report or exchange", w);
+    } else {
+        lv_textarea_set_text(ta, v);
+        snprintf(note, sizeof note, "%s <- %s", what, v);
+        log_refresh_enabled();
+    }
+    lv_label_set_text(s_log_note, note);
+    lv_obj_set_style_text_color(s_log_note, lv_color_hex(ta ? 0x5FD4FF : UI_COLOR_TEXT_SECONDARY), 0);
+    ESP_LOGI(TAG, "tap-fill '%s': %s", w, note);
+}
+
 static void log_kb_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -217,7 +257,9 @@ static void log_kb_cb(lv_event_t *e)
 static void log_build(void)
 {
     if (s_log) return;
-    s_log = mk_scrim();
+    s_log = mk_scrim(rtty_screen_view_text_top_y());
+    s_log_low = mk_scrim(720 - rtty_screen_view_text_bottom_y());
+    lv_obj_set_y(s_log_low, rtty_screen_view_text_bottom_y());
     s_log_panel = mk_panel(s_log, 330);
     mk_text(s_log_panel, &lv_font_montserrat_28, UI_COLOR_TEXT, 0, 0, "Log this QSO?");
     s_log_hdr = mk_text(s_log_panel, &lv_font_montserrat_22, UI_COLOR_TEXT_SECONDARY, 0, 0, "");
@@ -248,7 +290,7 @@ static void log_build(void)
     s_btn_cancel = mk_button(s_log_panel, "Cancel", UI_COLOR_DANGER, 180, 64, log_close_cb, NULL);
     lv_obj_align(s_btn_cancel, LV_ALIGN_BOTTOM_RIGHT, -196, 0);
 
-    s_log_kb = mk_keyboard(s_log, log_kb_cb);
+    s_log_kb = mk_keyboard(log_kb_cb);
 }
 
 void rtty_log_modal_open(void)
@@ -296,7 +338,8 @@ void rtty_log_modal_open(void)
     lv_label_set_text(s_log_hdr, b);
 
     bool dupe = rtty_log_is_dupe(call, hz);
-    lv_label_set_text(s_log_note, dupe ? "DUPE - already logged on this band in this contest" : "");
+    lv_label_set_text(s_log_note, dupe ? "DUPE - already logged on this band in this contest"
+                                       : "Tap a word in the text to fill its field");
     lv_obj_set_style_text_color(s_log_note, lv_color_hex(dupe ? 0xFF5050 : UI_COLOR_TEXT_SECONDARY), 0);
 
     log_refresh_enabled();
@@ -304,10 +347,18 @@ void rtty_log_modal_open(void)
      * contest dialog registers its own, and neither is ever deleted. */
     ui_kbd_set_buttons(s_btn_log, s_btn_cancel);
     lv_obj_clear_flag(s_log, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_log_low, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_log);
+    lv_obj_move_foreground(s_log_low);
     ESP_LOGI(TAG, "confirm: %s rst %s exch '%s'%s%s", call, heard ? rst : "-", ex,
              me ? " (after our call)" : "", dupe ? " DUPE" : "");
     /* No pre-focus and no keyboard until a field is tapped (ui_theme.h). */
+}
+
+void rtty_log_modal_close_log(void)
+{
+    if (rtty_log_modal_is_open()) ESP_LOGI(TAG, "confirm closed: the station changed elsewhere");
+    log_close();
 }
 
 void rtty_log_modal_close(void)
@@ -369,7 +420,7 @@ static void ct_kb_cb(lv_event_t *e)
 static void ct_build(void)
 {
     if (s_ct) return;
-    s_ct = mk_scrim();
+    s_ct = mk_scrim(720);
     lv_obj_t *p = mk_panel(s_ct, 300);
     mk_text(p, &lv_font_montserrat_28, UI_COLOR_TEXT, 0, 0, "RTTY contest");
     s_ct_btn_on = mk_button(p, "", 0x2a2f37, 300, 56, ct_toggle_cb, &s_ct_lbl_on);
@@ -385,7 +436,7 @@ static void ct_build(void)
             "a QSO is logged. Dupes are this contest's QSOs on the band.");
     s_ct_close = mk_button(p, "Close", UI_COLOR_PRIMARY, 180, 64, ct_close_cb, NULL);
     lv_obj_align(s_ct_close, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
-    s_ct_kb = mk_keyboard(s_ct, ct_kb_cb);
+    s_ct_kb = mk_keyboard(ct_kb_cb);
 }
 
 void rtty_contest_modal_open(void)

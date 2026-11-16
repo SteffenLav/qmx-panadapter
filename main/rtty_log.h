@@ -10,8 +10,8 @@
  * and keeps a dupe list. The serial advances when a QSO is LOGGED, not when
  * it is sent: a repeated Exch sends the same number.
  *
- * All functions: LVGL task (the RTTY page), except the read-only
- * rtty_log_sent_exch(), which rtty_tx_macro() also calls from the httpd. */
+ * Callers: the RTTY page (LVGL task) and the web page (httpd task); the
+ * list and the serial are under a mutex. */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -24,7 +24,8 @@ void rtty_log_sent_exch(char *out, size_t out_sz);
 /* Dupe in contest mode: this call is already logged on this band IN THIS
  * CONTEST (CONTEST_ID match, mode RTTY). Outside contest mode: false. The
  * list is built from the device log on first use after the contest name
- * changes; QSOs rotated to the card archive at a boot are not seen. */
+ * changes, plus the card archive's part read at boot (rtty_log_scan_archive).
+ * Without a card at boot, QSOs rotated off at an earlier boot are not seen. */
 bool rtty_log_is_dupe(const char *call, uint32_t freq_hz);
 
 /* Worked before on this band, any time, any mode (outside contest mode the
@@ -38,5 +39,23 @@ bool rtty_log_worked_on_band(const char *call, uint32_t freq_hz);
 bool rtty_log_record(const char *call, const char *rst_sent, const char *rst_rcvd,
                      const char *stx, const char *srx, char *err, size_t err_sz);
 
+/* What the Tab5's QSO card shows, handed to the web page so it shows the
+ * same: set by the RTTY page each tick, read by the httpd. */
+typedef struct {
+    char call[16];      /* the station it is for; "" = none picked */
+    char rst[8], exch[16];
+    bool heard, to_me, dupe, worked;
+} rtty_log_heard_t;
+void rtty_log_set_heard(const rtty_log_heard_t *h);
+void rtty_log_get_heard(rtty_log_heard_t *h);
+
 /* The contest settings changed (name, on/off): rebuild the dupe list on next use. */
 void rtty_log_contest_changed(void);
+
+/* Boot rotation moves the OLDEST records to the card archive until the device
+ * log is down to ROT_LOW_BYTES (96 KB, ~370 contest QSOs). A long contest with
+ * a reboot in it therefore has QSOs only the archive holds. sd_archive.c calls
+ * this once per boot, right after the rotation, while the card is not yet
+ * parked and under its mutex: it reads the archive for this contest's RTTY
+ * QSOs, only when contest mode is on with a name. SD task. */
+void rtty_log_scan_archive(const char *arc_path);

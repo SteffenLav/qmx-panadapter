@@ -9,8 +9,31 @@
 #include <time.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "rtty_log";
+
+/* The Tab5 page (LVGL task) and the web page (httpd task) both log and both
+ * ask about dupes, so the list and the serial's read-modify-write are under
+ * one mutex. Made on first use; the spinlock only guards that making. */
+static SemaphoreHandle_t s_mx;
+static portMUX_TYPE      s_mx_init = portMUX_INITIALIZER_UNLOCKED;
+static StaticSemaphore_t s_mx_buf;
+static void lock(void)
+{
+    if (!s_mx) {
+        taskENTER_CRITICAL(&s_mx_init);
+        if (!s_mx) s_mx = xSemaphoreCreateMutexStatic(&s_mx_buf);
+        taskEXIT_CRITICAL(&s_mx_init);
+    }
+    xSemaphoreTake(s_mx, portMAX_DELAY);
+}
+static void unlock(void) { xSemaphoreGive(s_mx); }
+
+/* What the Tab5's QSO card shows, for the web page (rtty_log_set_heard). */
+static portMUX_TYPE   s_heard_mux = portMUX_INITIALIZER_UNLOCKED;
+static rtty_log_heard_t s_heard;
 
 /* Dupe list: this contest's RTTY QSOs, call + band. PSRAM - the internal heap
  * is the scarce one (T198). 2000 x 20 B = 40 KB at most, grown in steps. */
@@ -21,6 +44,14 @@ static dupe_t *s_dupes;
 static int     s_ndupes, s_capdupes;
 static char    s_loaded_for[24];   /* contest name the list was built for */
 static bool    s_loaded;
+
+/* The archive's part (rtty_log_scan_archive): written once by the SD task,
+ * then s_arc_ready is set and nothing writes it again. Readers check the
+ * flag first and the name second, so a list for an older contest is ignored. */
+static dupe_t       *s_arc;
+static int           s_narc, s_caparc;
+static char          s_arc_for[24];
+static volatile bool s_arc_ready;
 
 static void dupe_add(const char *call, const char *band)
 {
@@ -51,13 +82,64 @@ static void dupes_ensure(const settings_rtty_contest_t *c)
     snprintf(s_loaded_for, sizeof s_loaded_for, "%s", c->name);
     s_loaded = true;
     if (!c->name[0]) return;   /* no name, no CONTEST_ID to match */
-    int64_t t0 = esp_log_timestamp();
+    uint32_t t0 = esp_log_timestamp();
     int n = adif_log_scan_contest(c->name, "RTTY", scan_cb, NULL);
     ESP_LOGI(TAG, "dupe list for '%s': %d QSOs from the device log, %lu ms", c->name, n,
              (unsigned long)(esp_log_timestamp() - t0));
 }
 
-void rtty_log_contest_changed(void) { s_loaded = false; }
+void rtty_log_contest_changed(void) { lock(); s_loaded = false; unlock(); }
+
+void rtty_log_set_heard(const rtty_log_heard_t *h)
+{
+    taskENTER_CRITICAL(&s_heard_mux);
+    s_heard = *h;
+    taskEXIT_CRITICAL(&s_heard_mux);
+}
+
+void rtty_log_get_heard(rtty_log_heard_t *h)
+{
+    taskENTER_CRITICAL(&s_heard_mux);
+    *h = s_heard;
+    taskEXIT_CRITICAL(&s_heard_mux);
+}
+
+static void arc_cb(const char *call, const char *band, void *ctx)
+{
+    (void)ctx;
+    if (s_narc >= s_caparc) {
+        if (s_caparc >= DUPE_MAX) return;
+        dupe_t *p = heap_caps_realloc(s_arc, (size_t)(s_caparc + DUPE_STEP) * sizeof(dupe_t),
+                                      MALLOC_CAP_SPIRAM);
+        if (!p) return;
+        s_arc = p;
+        s_caparc += DUPE_STEP;
+    }
+    snprintf(s_arc[s_narc].call, sizeof s_arc[0].call, "%s", call);
+    snprintf(s_arc[s_narc].band, sizeof s_arc[0].band, "%s", band ? band : "");
+    s_narc++;
+}
+
+void rtty_log_scan_archive(const char *arc_path)
+{
+    if (s_arc_ready) return;   /* once per boot */
+    settings_rtty_contest_t c;
+    settings_get_rtty_contest(&c);
+    if (!c.on || !c.name[0]) return;
+    uint32_t t0 = esp_log_timestamp();
+    snprintf(s_arc_for, sizeof s_arc_for, "%s", c.name);
+    int n = adif_log_scan_contest_file(arc_path, c.name, "RTTY", arc_cb, NULL);
+    s_arc_ready = true;
+    ESP_LOGI(TAG, "archive: %d QSOs of '%s' on the card, %lu ms", n, c.name,
+             (unsigned long)(esp_log_timestamp() - t0));
+}
+
+static bool in_list(const dupe_t *l, int n, const char *call, const char *band)
+{
+    for (int i = 0; i < n; i++)
+        if (!strcasecmp(l[i].call, call) && (!band[0] || !strcasecmp(l[i].band, band))) return true;
+    return false;
+}
 
 void rtty_log_sent_exch(char *out, size_t out_sz)
 {
@@ -73,12 +155,12 @@ bool rtty_log_is_dupe(const char *call, uint32_t freq_hz)
     settings_rtty_contest_t c;
     settings_get_rtty_contest(&c);
     if (!c.on) return false;
-    dupes_ensure(&c);
     const char *band = adif_log_band_for_freq(freq_hz);
-    for (int i = 0; i < s_ndupes; i++)
-        if (!strcasecmp(s_dupes[i].call, call) &&
-            (!band[0] || !strcasecmp(s_dupes[i].band, band))) return true;
-    return false;
+    lock();
+    dupes_ensure(&c);
+    bool d = in_list(s_dupes, s_ndupes, call, band);
+    unlock();
+    return d || (s_arc_ready && !strcmp(s_arc_for, c.name) && in_list(s_arc, s_narc, call, band));
 }
 
 bool rtty_log_worked_on_band(const char *call, uint32_t freq_hz)
@@ -96,6 +178,7 @@ bool rtty_log_record(const char *call, const char *rst_sent, const char *rst_rcv
      * than one not made (manual_log_modal.c's rule). */
     if (hz == 0) { snprintf(err, err_sz, "No CAT - the radio must be connected to log"); return false; }
 
+    lock();   /* to the end: the serial is read here and moved on below */
     settings_rtty_contest_t c;
     settings_get_rtty_contest(&c);
     char my[16], grid[12];
@@ -121,6 +204,7 @@ bool rtty_log_record(const char *call, const char *rst_sent, const char *rst_rcv
 #undef NZ
     if (!adif_log_record(&q)) {
         snprintf(err, err_sz, "NOT logged - log full: download it, then clear");
+        unlock();
         return false;
     }
     ESP_LOGI(TAG, "logged %s RTTY %lu Hz rst %s/%s stx '%s' srx '%s'%s%s", call, (unsigned long)hz,
@@ -139,5 +223,6 @@ bool rtty_log_record(const char *call, const char *rst_sent, const char *rst_rcv
             settings_set_rtty_contest(&c);
         }
     }
+    unlock();
     return true;
 }
