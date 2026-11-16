@@ -339,19 +339,20 @@ static void modal_build(void)
     /* Top-aligned for the same reason js8_text_modal is: the on-screen keyboard
      * owns the bottom 280 px, and a centred panel ends up behind it. */
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 900, 340);
+    /* 300, was 340: the buttons sit right under the fields now (operator,
+     * 2026-11-16: remove the dead space, centre the buttons). */
+    lv_obj_set_size(s_panel, 900, 300);
     lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 70);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(s_panel, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_border_width(s_panel, 2, 0);
     lv_obj_set_style_radius(s_panel, 10, 0);
     lv_obj_set_style_pad_all(s_panel, 20, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
-    /* With no dimmed layer behind it, a shadow keeps it reading as on top. */
-    lv_obj_set_style_shadow_width(s_panel, 24, 0);
-    lv_obj_set_style_shadow_color(s_panel, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_shadow_opa(s_panel, LV_OPA_70, 0);
+    /* No dimmed layer behind it: a brighter, wider border keeps it reading
+     * as on top. NOT a shadow - a 24 px shadow is redrawn on every drag step
+     * and made the drag lag (bench1 2026-11-16). */
+    lv_obj_set_style_border_color(s_panel, lv_color_hex(0x8a93a0), 0);
+    lv_obj_set_style_border_width(s_panel, 3, 0);
 
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "Log a contact");
@@ -375,20 +376,21 @@ static void modal_build(void)
 
     s_note_lbl = lv_label_create(s_panel);
     lv_label_set_long_mode(s_note_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_note_lbl, 520);
-    lv_obj_align(s_note_lbl, LV_ALIGN_TOP_LEFT, 0, 152);
+    lv_obj_set_width(s_note_lbl, 820);
+    lv_obj_set_style_text_align(s_note_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_note_lbl, LV_ALIGN_TOP_MID, 0, 224);   /* under the buttons */
     lv_obj_set_style_text_font(s_note_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(s_note_lbl, "");
 
     struct { const char *lbl; uint32_t col; lv_event_cb_t cb; int dx; } btns[2] = {
-        { "Log",   UI_COLOR_SUCCESS, log_cb,   0    },
-        { "Close", UI_COLOR_DANGER,  close_cb, -196 },
+        { "Log",   UI_COLOR_SUCCESS, log_cb,    98 },   /* centred pair, 16 px apart */
+        { "Close", UI_COLOR_DANGER,  close_cb, -98 },
     };
     lv_obj_t *btn_close = NULL;
     for (int i = 0; i < 2; i++) {
         lv_obj_t *b = lv_button_create(s_panel);
         lv_obj_set_size(b, 180, 64);
-        lv_obj_align(b, LV_ALIGN_BOTTOM_RIGHT, btns[i].dx, 0);
+        lv_obj_align(b, LV_ALIGN_TOP_MID, btns[i].dx, 150);   /* right under the fields (end at 138) */
         lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_border_width(b, 0, 0);

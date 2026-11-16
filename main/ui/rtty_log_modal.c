@@ -338,7 +338,7 @@ void rtty_log_modal_open(void)
     lv_label_set_text(s_log_hdr, b);
 
     bool dupe = rtty_log_is_dupe(call, hz);
-    lv_label_set_text(s_log_note, dupe ? "DUPE - already logged on this band in this contest"
+    lv_label_set_text(s_log_note, dupe ? "DUPE: logged on this band, this contest"
                                        : "Tap a word in the text to fill its field");
     lv_obj_set_style_text_color(s_log_note, lv_color_hex(dupe ? 0xFF5050 : UI_COLOR_TEXT_SECONDARY), 0);
 
