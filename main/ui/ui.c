@@ -8549,9 +8549,20 @@ static bool grip_touch_tap(lv_event_t *e, lv_obj_t *grip, int start_x)
            p.y >= a.y1 - GRIP_TAP_SLOP_Y_PX && p.y <= a.y2 + GRIP_TAP_SLOP_Y_PX;
 }
 
-/* The BOTTOM grip: a touch tap opens Memory Channels, as the mouse click
- * already did (operator, 2026-11-16: "should be clickable to open by mouse or
- * finger ... but it might conflict with the GPS status").
+/* The BOTTOM grip: a tap or a click opens Memory Channels (operator,
+ * 2026-11-16: "should be clickable to open by mouse or finger ... but it
+ * might conflict with the GPS status").
+ *
+ * ⛔ THE MOUSE WAS BROKEN HERE TOO, AND THE FIRST FIX MISSED IT. There was a
+ * grip_mouse_click() branch for the pointer below, and it had not worked
+ * since the UTC field became a tap target: clock_field_hit() tests an X RANGE
+ * AND NO Y, the clock is centred, the grip is centred, and the clock is
+ * tested first - so every click on the handle opened the GPS page's check
+ * instead and the memories never came. Measured in the simulator 2026-11-16:
+ * a click at (640,714) logs "UTC field tapped". Adding the finger and leaving
+ * the pointer's own branch where it was fixed half of it; the operator found
+ * the other half in one minute. ONE test now serves both devices, and the old
+ * branch is gone rather than left to fire in some third case.
  *
  * ⛔ IT DOES CONFLICT, AND THE BAR IS TOO SHORT FOR BOTH TO BE COMFORTABLE.
  * Measured: the bar is 36 px tall - about 3 mm on the glass - the clock is
@@ -8568,17 +8579,21 @@ static bool grip_touch_tap(lv_event_t *e, lv_obj_t *grip, int start_x)
  * 120 px line and a finger is not a stylus. */
 #define BOTTOM_GRIP_TAP_SLOP_Y_PX  12
 #define BOTTOM_GRIP_TAP_SLOP_X_PX  60
-static bool bottom_grip_touch_tap(lv_event_t *e, int start_x)
+static bool bottom_grip_tap(lv_event_t *e, int start_x)
 {
     lv_obj_t *grip = s_bottom_edge_grip;
     lv_indev_t *indev = lv_event_get_indev(e);
-    if (!indev || indev == s_mouse_indev || start_x < 0) return false;
+    if (!indev) return false;
     if (!grip || lv_obj_has_flag(grip, LV_OBJ_FLAG_HIDDEN)) return false;
     lv_point_t p;
     lv_indev_get_point(indev, &p);
+    /* A short swipe is not a tap. A pointer does not travel between press and
+     * release at all, so this only ever rejects a finger - but it is tested
+     * for both, because a start_x of -1 means nothing was pressed here. */
+    if (start_x < 0) return false;
     int dx = (int)p.x - start_x;
     if (dx < 0) dx = -dx;
-    if (dx > GRIP_TAP_MAX_DX_PX) return false;      /* a short swipe is not a tap */
+    if (dx > GRIP_TAP_MAX_DX_PX) return false;
     lv_area_t a;
     lv_obj_get_coords(grip, &a);
     return p.x >= a.x1 - BOTTOM_GRIP_TAP_SLOP_X_PX &&
@@ -14996,12 +15011,13 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             //
             ESP_LOGI("ui", "update line tapped (x=%d)", (int)p.x);
             s_update_tap_cb();
-        } else if (be_decided == 0 && bottom_grip_touch_tap(e, be_start_x)) {
-            /* Ahead of the clock on purpose: the clock's target is an x range
-             * over the whole 36 px bar, so whichever is tested first wins the
-             * overlap. The grip's test is the bottom 20 px, which is the
-             * split - see bottom_grip_touch_tap(). */
-            ESP_LOGI("ui", "bottom grip tapped (touch)");
+        } else if (be_decided == 0 && bottom_grip_tap(e, be_start_x)) {
+            /* Ahead of the clock on purpose, and this ORDER IS THE WHOLE FIX:
+             * the clock's target is an x range over the whole 36 px bar, so
+             * whichever is tested first wins the overlap, and the clock won
+             * it for every click and every tap. The grip's test is the bottom
+             * 20 px - see bottom_grip_tap(). */
+            ESP_LOGI("ui", "bottom grip tapped");
             ui_show_memories();
         } else if (be_decided == 0 && be_start_x >= 0 && clock_field_hit(be_start_x)) {
             /* The UTC field opens the GPS page - but only when a GNSS receiver
@@ -15011,9 +15027,12 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
              * decision itself, so there is one place it lives. */
             ESP_LOGI("ui", "UTC field tapped (x=%d)", (int)be_start_x);
             gps_status_view_open();
-        } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
-            ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }
+        /* The pointer's own branch used to sit here, after the clock, and so
+         * never fired - bottom_grip_tap() above now serves the mouse and the
+         * finger from one test. Deleted rather than left behind: a duplicate
+         * that only misbehaves in a third case outlives everyone's memory of
+         * why it existed. */
         // A pure tap (be_decided==0) from a FINGER anywhere ELSE along this
         // strip still does nothing - so reaching for the swipe grip can't
         // accidentally retune. Only the grip's own 20 px acts (2026-11-16).
