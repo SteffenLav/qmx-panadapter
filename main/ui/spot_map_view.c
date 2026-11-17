@@ -2554,12 +2554,29 @@ static void build_settings_drawer(lv_obj_t *parent)
 // overlay because sync_nav_affordances() already hides the main app's strip
 // while this overlay is on screen (spot_map_view_is_active()).
 //
-// No mouse-click affordance (grip_mouse_click() in ui.c is private to that
-// file, and a BLE mouse on this screen is a secondary path) - a known,
-// deliberate simplification, not a silent omission.
+// ⛔ IT OPENS ON A TAP AS WELL AS A SWIPE, since 2026-11-17. It was swipe-only
+// until then: settings_swipe_cb() acted on PRESSING after SS_EDGE_MIN_DX and
+// its RELEASED branch did nothing but reset. The main screen's right edge has
+// had a tap since T186 (right_edge_swipe_cb in ui.c), so the grip LOOKED
+// identical here - same UI_EDGE_GRIP_PX bar, same breathing - and answered a
+// finger differently. Operator found it on the glass: "it does only slide open
+// - not tap open". A copied affordance has to copy the behaviour too.
+//
+// The tap test deliberately does NOT exclude the pointer, so one test serves a
+// finger and a mouse - the shape c1469992 settled on for the bottom grip after
+// a separate pointer branch had been written and found dead. That also closes
+// the "no mouse-click affordance" gap this comment used to record as a
+// deliberate simplification; ui.c's grip_mouse_click() stays private to ui.c
+// and is not needed here.
 static lv_obj_t *s_settings_strip = NULL;
 static lv_obj_t *s_settings_scrim = NULL;
+static lv_obj_t *s_settings_grip  = NULL;   /* the CLOSED-state bar, for the tap test */
 static int       s_settings_swipe_start_x = -1;
+
+/* Same numbers as ui.c's grip_touch_tap(): a tap has not travelled, and a
+ * fingertip is wider than an 8 px bar. */
+#define SS_GRIP_TAP_MAX_DX  15
+#define SS_GRIP_TAP_SLOP_Y  24
 
 /* ⛔ THREE REAL BUGS FOUND FROM ONE REPORT, 2026-09-13, and the first pass at
  * fixing them was itself wrong twice over. Operator: "make the drawer go
@@ -2658,6 +2675,21 @@ static void settings_swipe_cb(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        /* A tap on the grip opens it too. Only on RELEASED - a PRESS_LOST means
+         * the gesture was taken away from us, which is not a tap. Only when
+         * closed: with the drawer open its own panel and scrim cover this edge,
+         * so a press here never reaches the strip anyway, and testing for it
+         * would be a branch that cannot fire. */
+        if (code == LV_EVENT_RELEASED && !s_settings_open && s_settings_grip &&
+            !s_settings_swipe_fired && s_settings_swipe_start_x >= 0) {
+            int dx = (int)p.x - s_settings_swipe_start_x;
+            if (dx < 0) dx = -dx;
+            lv_area_t a;
+            lv_obj_get_coords(s_settings_grip, &a);
+            if (dx <= SS_GRIP_TAP_MAX_DX &&
+                p.y >= a.y1 - SS_GRIP_TAP_SLOP_Y && p.y <= a.y2 + SS_GRIP_TAP_SLOP_Y)
+                settings_open();
+        }
         s_settings_swipe_start_x = -1;
         return;
     }
@@ -2682,7 +2714,9 @@ static void grip_breathe_anim_cb(void *obj, int32_t v)
 
 // The CLOSED-state grip: byte-for-byte ui.c's s_burger_btn and its
 // grip_start_breathing() (both static there, hence the copy). Non-clickable -
-// the press lands on the edge strip beneath it, exactly as on the main screen.
+// the press lands on the edge strip beneath it, exactly as on the main screen,
+// and settings_swipe_cb() recognises a tap by this object's COORDS rather than
+// by an event on it. That is why it is kept in s_settings_grip.
 static void build_settings_grip(lv_obj_t *parent)
 {
     lv_obj_t *grip = lv_obj_create(parent);
@@ -2707,6 +2741,8 @@ static void build_settings_grip(lv_obj_t *parent)
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_start(&a);
+
+    s_settings_grip = grip;   /* settings_swipe_cb() reads its coords for the tap */
 }
 
 // Covers the tabview (MAP/LIST/PROP) area to the LEFT of the drawer -
