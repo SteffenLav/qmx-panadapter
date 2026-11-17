@@ -295,10 +295,23 @@ static void ota_task(void *arg)
 
     /* ⛔ REFUSE AN IMAGE THAT CANNOT FIT, BEFORE WRITING A BYTE.
      *
-     * The Tab5's app slots are 4 MB. A release built against the larger
-     * partition layout - the one that claims the 2.81 MB at the end of the
-     * flash, which needs a partition table rewrite and therefore a USB cable -
-     * is bigger than that and can never install here. Without this check the
+     * ⛔ THE SIZE COMES FROM THE PARTITION TABLE, NOT FROM THIS COMMENT, and
+     * this comment was wrong: it said "the Tab5's app slots are 4 MB" until
+     * 2026-11-17. partitions.csv has ota_0 at 0x800000 (8,388,608 B) and
+     * ota_1 at 0x6D0000 (7,143,424 B), and an OTA writes the slot it is not
+     * running from - so 7,143,424 is the real ceiling. The guard below reads
+     * slot->size, so no device was ever affected; what the wrong figure cost
+     * was a reader who believed it (the simulator's own copy refused the
+     * published v2.0.1 asset, which every user has installed).
+     *
+     * For scale, since the point of the guard is the margin: v2.0.1 is
+     * 6,072,544 B, 85 % of ota_1, leaving about 1.02 MiB. It grew 89,040 B
+     * from v1.26.3 to v2.0.1.
+     *
+     * A release built against the larger partition layout - the one that
+     * claims the 2.81 MB at the end of the flash, which needs a partition
+     * table rewrite and therefore a USB cable - is bigger than the slot it
+     * would have to fit, and can never install here. Without this check the
      * operator watches a multi-megabyte download run to the end and fail on
      * the verify, with no way to tell why, and the same thing happens again
      * the next time they press the button.
