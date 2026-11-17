@@ -920,7 +920,17 @@ void webradio_resume(void)
 {
     if (!s_paused || !s_url[0]) return;
     s_paused = false;
-    webradio_play(s_url, s_name);
+    /* ⛔ COPY FIRST - THIS WAS PASSING s_url TO A FUNCTION THAT WRITES s_url.
+     * webradio_play() does snprintf(s_url, sizeof s_url, "%s", url), and here
+     * url IS s_url. Both arguments are `restrict`, so a self-copy is
+     * undefined, and it is not theoretical: in the simulator (musl) it left
+     * s_url EMPTY, the request went out with no address, and the player said
+     * "Station did not answer" on every resume. Found 2026-11-16 in the
+     * browser; whether the Tab5's newlib survives it is luck, not design. */
+    char url[sizeof s_url], name[sizeof s_name];
+    snprintf(url, sizeof url, "%s", s_url);
+    snprintf(name, sizeof name, "%s", s_name);
+    webradio_play(url, name);
 }
 
 bool webradio_is_paused(void) { return s_paused; }
