@@ -38,6 +38,15 @@ if [ -z "$ESPTOOL" ]; then
     exit 1
 fi
 
+# esptool v5+ renamed the subcommands (write_flash -> write-flash,
+# erase_flash -> erase-flash). This script hardcoded the old names, so it
+# failed outright for anyone on esptool 5. flash.command already handled it.
+ESPTOOL_VER="$("$ESPTOOL" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+case "$ESPTOOL_VER" in
+    [5-9].*|[1-9][0-9].*) WRITE_FLASH="write-flash"; ERASE_FLASH="erase-flash" ;;
+    *)                    WRITE_FLASH="write_flash"; ERASE_FLASH="erase_flash" ;;
+esac
+
 # Check for recovery files
 if [ ! -f "$SCRIPT_DIR/bootloader.bin" ]; then
     echo ""
@@ -77,8 +86,10 @@ for f in bootloader.bin partition-table.bin qmx_panadapter.bin ota_data_initial.
     fi
 done
 
-"$ESPTOOL" --chip esp32p4 -b 460800 erase_flash || {
+"$ESPTOOL" --chip esp32p4 -b 460800 "$ERASE_FLASH" || {
     echo "ERROR: Erase failed. Check USB connection."
+    echo "       A full erase needs esptool's flasher stub, so --no-stub is"
+    echo "       not a way round this. Update esptool: pip3 install -U esptool"
     exit 1
 }
 
@@ -89,7 +100,7 @@ echo "════════════════════════�
 echo ""
 
 "$ESPTOOL" --chip esp32p4 -b 460800 \
-    write_flash \
+    "$WRITE_FLASH" \
     0x2000 "$SCRIPT_DIR/bootloader.bin" \
     0x8000 "$SCRIPT_DIR/partition-table.bin" \
     0x10000 "$SCRIPT_DIR/qmx_panadapter.bin" \

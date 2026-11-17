@@ -130,6 +130,20 @@ tools, no Python.
    be holding the COM port, then try again.
  - Unplug, replug, and re-run.
 
+ macOS / Linux: it stops at "Running stub..." and never moves
+ - Your esptool is too old for the ESP32-P4. The flasher now
+   detects this and switches to --no-stub by itself, but the fix
+   is to update esptool:
+       pip3 install -U esptool
+   (Mint/Ubuntu: the apt package is old. If pip refuses with
+   "externally-managed-environment", use  pipx install esptool .)
+   The firmware is built and tested with esptool 4.12.
+ - A --no-stub flash cannot ERASE, so a CLEAN flash needs an
+   up-to-date esptool. The flasher says so if it has to drop it.
+ - Linux only: ModemManager can grab /dev/ttyACM0 as the Tab5
+   appears and stall the flash. If it does:
+       sudo systemctl stop ModemManager
+
  No internet (offline flashing):
  - The FIRST run on Windows needs internet to fetch esptool. After
    that, esptool is cached in the "esptool" subfolder and reused.
