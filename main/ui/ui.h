@@ -17,6 +17,18 @@
 #define UI_WATERMARK_X       (1280 - UI_WATERMARK_MARGIN - UI_WATERMARK_W)
 #define UI_WATERMARK_GAP     8
 
+/* Thickness and length of the CLOSED-state edge grips - the three on the main
+ * screen (left, bottom, right) and the spot map's own copy. 4 px was drawn for
+ * a fingertip, which does not need to SEE the line to hit the 30 px gesture
+ * strip behind it. A mouse pointer does: the operator aims at the line itself.
+ * Doubled to 8 px on 2026-11-16 at his ask, after driving the simulator with a
+ * PC mouse. The grips stay non-clickable and the gesture zones are unchanged,
+ * so this costs a finger nothing.
+ * ⛔ Every closed-state grip must use these - spot_map_view.c's copy was
+ * written "byte-for-byte" from ui.c's and would otherwise drift again. */
+#define UI_EDGE_GRIP_PX       8
+#define UI_EDGE_GRIP_LEN_PX 120
+
 void ui_init(lv_display_t *disp);
 
 // Create the LVGL pointer (mouse) input device + on-screen cursor. Call once,

@@ -6531,7 +6531,7 @@ static void build_top_bar(lv_obj_t *parent)
     // LVGL skips non-clickable objects during hit-testing, so touches here
     // fall through to that strip underneath.
     s_burger_btn = lv_obj_create(parent);  /* parent = screen; reused as the grip handle */
-    lv_obj_set_size(s_burger_btn, 4, 120);
+    lv_obj_set_size(s_burger_btn, UI_EDGE_GRIP_PX, UI_EDGE_GRIP_LEN_PX);
     lv_obj_align(s_burger_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_color(s_burger_btn, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_bg_opa(s_burger_btn, LV_OPA_30, 0);
@@ -8241,7 +8241,7 @@ static void build_edge_swipe_strips(lv_obj_t *scr)
         // Tiny grip handle indicator, vertically centered, flush with the
         // screen's left edge.
         lv_obj_t *grip = lv_obj_create(strip);
-        lv_obj_set_size(grip, 4, 120);
+        lv_obj_set_size(grip, UI_EDGE_GRIP_PX, UI_EDGE_GRIP_LEN_PX);
         lv_obj_align(grip, LV_ALIGN_LEFT_MID, 0, 0);
         lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
@@ -8273,7 +8273,7 @@ static void build_edge_swipe_strips(lv_obj_t *scr)
         // Tiny grip handle indicator, horizontally centered, flush with the
         // screen's bottom edge.
         lv_obj_t *grip = lv_obj_create(strip);
-        lv_obj_set_size(grip, 120, 4);
+        lv_obj_set_size(grip, UI_EDGE_GRIP_LEN_PX, UI_EDGE_GRIP_PX);
         lv_obj_align(grip, LV_ALIGN_BOTTOM_MID, 0, 0);
         lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);

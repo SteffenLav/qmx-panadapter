@@ -2686,7 +2686,7 @@ static void grip_breathe_anim_cb(void *obj, int32_t v)
 static void build_settings_grip(lv_obj_t *parent)
 {
     lv_obj_t *grip = lv_obj_create(parent);
-    lv_obj_set_size(grip, 4, 120);
+    lv_obj_set_size(grip, UI_EDGE_GRIP_PX, UI_EDGE_GRIP_LEN_PX);
     lv_obj_align(grip, LV_ALIGN_RIGHT_MID, 0, HEADER_H / 2);   // centred on the area below the header
     lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
