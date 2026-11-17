@@ -4874,6 +4874,10 @@ static bool      s_rit_armed     = false;
 static int       s_rit_stash_hz  = 0;
 static lv_obj_t *s_rit_pill      = NULL;
 static lv_obj_t *s_rit_pill_lbl  = NULL;
+/* The Panadapter page's own Log button (operator, 2026-11-17: the CW page has
+ * had one since T185 and he wanted the same one tap here). Top-right of the
+ * WATERFALL, not the spectrum - his placement. */
+static lv_obj_t *s_log_btn       = NULL;
 static lv_obj_t *s_rit_wf_marker = NULL;  // RIT position over the waterfall, same overlay
                                           // reasoning (and same colour) as the spectrum line
 static lv_obj_t *s_rit_wf_lbl    = NULL;  // the offset as a number, beside that marker
@@ -6162,7 +6166,48 @@ static void rit_pill_sync(void)
     }
 }
 
-static void rit_pill_tick_cb(lv_timer_t *t) { (void)t; rit_pill_sync(); }
+/* Show the Log button only where it belongs, and only when nothing covers it.
+ *
+ * Same stand-down set as the pill above and for the same reason: this button is
+ * created LAST (it has to out-rank the waterfall, which owns every press in that
+ * area for tap-to-tune), which puts it above every window built during ui_init -
+ * so a drawer, the Reader or a modal would otherwise have a live Log button
+ * floating on top of it. See CLAUDE.md on LVGL hit-testing children in reverse
+ * creation order.
+ *
+ * PANADAPTER ONLY. The CW page has its own Log button (T185) which opens the
+ * window with that page's target station already filled in, so showing a second
+ * one there would be two buttons doing almost-but-not-quite the same thing. The
+ * FT8/JS8 pages log from their own QSO flow, and on WSPR there is no QSO to log. */
+static void log_btn_sync(void)
+{
+    if (!s_log_btn) return;
+    bool want_hidden = ui_mode_get() != UI_MODE_PANADAPTER || s_drawer_open ||
+                       reader_view_is_active() || help_triage_is_open() ||
+                       any_modal_open();
+    bool hidden = lv_obj_has_flag(s_log_btn, LV_OBJ_FLAG_HIDDEN);
+    if (want_hidden == hidden) return;                  /* change-detected: this runs on a timer */
+    if (want_hidden) lv_obj_add_flag(s_log_btn, LV_OBJ_FLAG_HIDDEN);
+    else             lv_obj_clear_flag(s_log_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* One timer for both: the two controls stand down on the same conditions, and a
+ * second 250 ms timer to ask the same questions would be pure cost. */
+static void rit_pill_tick_cb(lv_timer_t *t) { (void)t; rit_pill_sync(); log_btn_sync(); }
+
+/* ⭐ NO TARGET STATION, DELIBERATELY. manual_log_modal_show() already fills the
+ * callsign from spots_last_pick() when the operator got here by tapping a spot,
+ * guarded by the dial still being within 500 Hz of where that tap put it - which
+ * is exactly the Panadapter page's own way of arriving at a station. The CW page
+ * passes its decoder's target instead because it HAS one; this page does not,
+ * and inventing one from the dial frequency would be a guess.
+ *
+ * The MODE needs nothing from here either. The window reads the radio
+ * (cat_get_mode_str()) and derives the report form from it - 599 for CW and
+ * RTTY, 59 for USB/LSB/AM/DiGi - with the received report's S digit measured off
+ * the S-meter. So this one button logs a QSO in whatever mode the panadapter is
+ * being run in, with no mode knowledge in ui.c at all. */
+static void log_btn_clicked_cb(lv_event_t *e) { (void)e; manual_log_modal_show(); }
 
 // The pill is the arm/clear control. Three-way, and the order of the tests is
 // the behaviour: if RIT is engaged, the operator wants OUT (back to the run
@@ -9387,6 +9432,52 @@ void ui_init(lv_display_t *disp)
         // in the common case.
         rit_pill_sync();
         lv_timer_create(rit_pill_tick_cb, 250, NULL);
+    }
+
+    /* The Panadapter page's Log button. Operator's placement, 2026-11-17: top
+     * right of the WATERFALL. Same 140x52 and the same column as the RIT pill
+     * above it, so the two read as one stack of corner controls.
+     *
+     * ⛔ y IS NOT THE WATERFALL'S TOP EDGE, AND THE 30 PX IS MEASURED.
+     * s_rit_wf_lbl - the "+250 Hz" RIT offset readout - is a child of the
+     * waterfall pinned at its y=2 (see ui_push_spectrum), and
+     * lv_font_montserrat_18.line_height is 21, so that readout owns the
+     * waterfall's top 23 px wherever the marker happens to sit: its x tracks the
+     * marker line and flips to rx-84 near the right edge, so it lands in this
+     * corner whenever RIT is engaged with the marker to the right. This button
+     * is created last and therefore DRAWS OVER it, which would hide the number.
+     * Dropping 30 px clears it by 7. The alternative - teaching the readout to
+     * dodge a second x range - was rejected with the operator: a number that
+     * jumps sideways while being read is worse than a button sitting lower.
+     *
+     * Clear of the right-edge swipe strip too (x >= 1250), so the settings
+     * drawer's gesture still works along this edge. */
+    {
+        const int log_y = TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H + 30;   /* 322 */
+        s_log_btn = lv_obj_create(scr);
+        lv_obj_set_size(s_log_btn, 140, 52);
+        lv_obj_set_pos(s_log_btn, 1088, log_y);
+        lv_obj_set_style_bg_color(s_log_btn, lv_color_hex(0x101820), 0);
+        lv_obj_set_style_bg_opa(s_log_btn, LV_OPA_80, 0);   /* over the waterfall, same as the pill */
+        lv_obj_set_style_border_color(s_log_btn, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_border_width(s_log_btn, 2, 0);
+        lv_obj_set_style_radius(s_log_btn, 8, 0);
+        lv_obj_set_style_pad_all(s_log_btn, 0, 0);
+        lv_obj_clear_flag(s_log_btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_log_btn, LV_OBJ_FLAG_CLICKABLE);
+        /* SHORT_CLICKED, not CLICKED, for the same reason as the pill and the
+         * top-bar hit zones: CLICKED also arrives after a long press. There is
+         * no long-press action here, and this keeps it that way on purpose -
+         * a drag that starts on this button is a missed tap, not a gesture. */
+        lv_obj_add_event_cb(s_log_btn, log_btn_clicked_cb, LV_EVENT_SHORT_CLICKED, NULL);
+
+        lv_obj_t *log_lbl = lv_label_create(s_log_btn);
+        lv_label_set_text(log_lbl, "Log");
+        lv_obj_set_style_text_font(log_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(log_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_center(log_lbl);
+
+        log_btn_sync();
     }
 
     // Edge-swipe gesture strips are built first (see build_edge_swipe_strips,
