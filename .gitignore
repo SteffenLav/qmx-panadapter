@@ -134,5 +134,7 @@ build_wasm/
 # host harness binaries
 tools/spiffs_host/*.exe
 
-# Tab5 simulator build output (tools/sim)
+# Not part of this repository: kept in a separate tree
 build-sim/
+tools/sim/
+tools/browser_probe/
