@@ -15026,6 +15026,18 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             // pack_manual.py fails the build if that heading is ever renamed.
             ESP_LOGI("ui", "SD indicator tapped (x=%d)", (int)be_start_x);
             help_open(HELP_SD_BENEFITS);
+        } else if (be_decided == 0 && bottom_grip_tap(e, be_start_x)) {
+            /* Ahead of the clock AND of the update line on purpose, and this
+             * ORDER IS THE WHOLE FIX: both of those targets are an x range
+             * over the whole 36 px bar, so whichever is tested first wins the
+             * overlap - the clock won it for every click and every tap, and
+             * the update line won the grip's left slop whenever its wording
+             * ran long. The grip's test is the bottom 20 px of its own 240 px
+             * window, so it can only ever take from inside that - see
+             * bottom_grip_tap(), and the measured widths at the update line
+             * below. */
+            ESP_LOGI("ui", "bottom grip tapped");
+            ui_show_memories();
         } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb &&
                    update_line_hit(s_update_press_x)) {
             // #239: a SHORT TAP now acts, and that is the whole point of the
@@ -15035,16 +15047,34 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             // a download or restarting a radio) costs a dismissible window
             // instead. The label can finally say "tap" and mean it.
             //
+            /* ⛔ BELOW THE GRIP, AND THAT ORDER IS LOAD-BEARING. This label is
+             * centred at x=390 (LV_ALIGN_CENTER, -250) and its hit range is its
+             * OWN DRAWN BOX plus 20 px, so it grows with the wording. Measured
+             * from lv_font_montserrat_24's adv_w table:
+             *
+             *   "v2.0.1"                    63 px -> hit 339..442
+             *   "v2.0.1 -> v2.1.0  tap?"   229 px -> hit 255..525
+             *   "v2.0.1-19-gc1469992"      233 px -> hit 253..527   (bench build)
+             *   "Server busy - tap retries" 289 px -> hit 226..554
+             *
+             * The bottom grip's tap window starts at x=520 (grip 580..699 plus
+             * 60 px of slop), so the three long wordings reached INTO it and,
+             * being tested first, took the tap. Aiming at the grip and missing
+             * left by 30 px opened ota_modal instead of Memory Channels.
+             * Operator, 2026-11-17: "Fix it".
+             *
+             * Swapping the two tests is the whole fix and its blast radius is
+             * exactly this pair: bottom_grip_tap() is the only test here with
+             * a y-bound of its own (y >= 700) AND an x-bound, so it fires only
+             * inside its own 240x20 window. Outside that window this label
+             * keeps everything it had, including the 16 px above the grip.
+             * The clock stays below both and is unaffected.
+             *
+             * ⚠ Do NOT "fix" this by trimming the 20 px margin instead. The
+             * overlap is real glyphs: "Server busy - tap retries" DRAWS to
+             * x=534, past the 520 boundary, with no margin at all. */
             ESP_LOGI("ui", "update line tapped (x=%d)", (int)p.x);
             s_update_tap_cb();
-        } else if (be_decided == 0 && bottom_grip_tap(e, be_start_x)) {
-            /* Ahead of the clock on purpose, and this ORDER IS THE WHOLE FIX:
-             * the clock's target is an x range over the whole 36 px bar, so
-             * whichever is tested first wins the overlap, and the clock won
-             * it for every click and every tap. The grip's test is the bottom
-             * 20 px - see bottom_grip_tap(). */
-            ESP_LOGI("ui", "bottom grip tapped");
-            ui_show_memories();
         } else if (be_decided == 0 && be_start_x >= 0 && clock_field_hit(be_start_x)) {
             /* The UTC field opens the GPS page - but only when a GNSS receiver
              * is actually disciplining the clock. On NTP the tap is ignored:
