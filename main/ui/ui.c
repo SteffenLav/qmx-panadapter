@@ -8585,6 +8585,32 @@ static bool bottom_grip_tap(lv_event_t *e, int start_x)
     lv_indev_t *indev = lv_event_get_indev(e);
     if (!indev) return false;
     if (!grip || lv_obj_has_flag(grip, LV_OBJ_FLAG_HIDDEN)) return false;
+
+    /* ⛔ NOT WHILE THE SETTINGS DRAWER IS OPEN, AND THE ADJACENCY BELOW IS NOT
+     * A SUBSTITUTE FOR THIS TEST.
+     *
+     * The drawer occupies x 760..1279 and s_drawer_scrim x 0..759. This
+     * function's window is x 520..759 (grip 580..699 plus 60 px of slop), so
+     * the two happen to abut with ONE pixel to spare. That is arithmetic, not
+     * design: DRAWER_W is 520 because the WiFi button and the smoothing slider
+     * have to fit, and the slop is 60 because the grip is a 120 px line and a
+     * finger is not a stylus. Neither number knows about the other. Change
+     * either and the drawer's bottom-left corner silently starts losing taps.
+     *
+     * The scrim cannot defend itself here. It is built during ui_init and
+     * ui_raise_edge_strips() puts s_bottom_edge_strip back on top of it (see
+     * the call near the end of ui_init, whose comment names the drawer), so in
+     * the bottom 36 px the strip takes the press and the scrim never sees it.
+     * Before the grip tap existed that cost nothing - the tap did nothing at
+     * all down there. With the tap it meant tap-outside-to-dismiss ALSO opened
+     * Memory Channels, because ui_show_memories() does drawer_close() first.
+     * Operator, 2026-11-17, asked what should happen: "No, suppress it".
+     *
+     * s_drawer_open goes false at the START of the 250 ms close animation, at
+     * the same moment the scrim is hidden, so the window reopens while the
+     * drawer is still sliding out. That is deliberate: by then the bottom edge
+     * belongs to the page again. */
+    if (s_drawer_open) return false;
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     /* A short swipe is not a tap. A pointer does not travel between press and
