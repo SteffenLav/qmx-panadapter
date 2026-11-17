@@ -8529,8 +8529,9 @@ static bool grip_mouse_click(lv_event_t *e, lv_obj_t *grip)
  * The event is already on the 30 px strip, so x needs no test; y must be on the
  * grip (a fingertip is wider than the mouse's 10 px slop), and the touch must
  * not have travelled - a short swipe is not a tap.
- * ⛔ NOT the bottom grip: a tap there must keep doing nothing, see
- * grip_mouse_click(). */
+ * The bottom grip has its own test below - its strip is the full width of the
+ * screen and shares that strip with the clock, so it cannot borrow this
+ * one's "x needs no test". */
 #define GRIP_TAP_SLOP_Y_PX  24
 #define GRIP_TAP_MAX_DX_PX  15
 static bool grip_touch_tap(lv_event_t *e, lv_obj_t *grip, int start_x)
@@ -8546,6 +8547,43 @@ static bool grip_touch_tap(lv_event_t *e, lv_obj_t *grip, int start_x)
     lv_obj_get_coords(grip, &a);
     return dx <= GRIP_TAP_MAX_DX_PX &&
            p.y >= a.y1 - GRIP_TAP_SLOP_Y_PX && p.y <= a.y2 + GRIP_TAP_SLOP_Y_PX;
+}
+
+/* The BOTTOM grip: a touch tap opens Memory Channels, as the mouse click
+ * already did (operator, 2026-11-16: "should be clickable to open by mouse or
+ * finger ... but it might conflict with the GPS status").
+ *
+ * ⛔ IT DOES CONFLICT, AND THE BAR IS TOO SHORT FOR BOTH TO BE COMFORTABLE.
+ * Measured: the bar is 36 px tall - about 3 mm on the glass - the clock is
+ * CENTRED in it and its tap target is an x range only (clock_field_hit), and
+ * the grip is 120x8 px centred at the very bottom. They sit on top of each
+ * other. So the bar is split by HEIGHT (operator's choice, 2026-11-16): the
+ * grip owns the bottom 20 px, the clock the 16 px above it. Neither is near
+ * the 8 mm a fingertip wants; a 3 mm bar cannot give it.
+ *
+ * The x test is this function's own, unlike the left/right grips above: that
+ * strip IS the grip's column, while this one runs the full 1280 px, so
+ * without it a tap anywhere along the bottom edge would open the memories.
+ * The x slop is generous (half a grip either side) because the grip is a
+ * 120 px line and a finger is not a stylus. */
+#define BOTTOM_GRIP_TAP_SLOP_Y_PX  12
+#define BOTTOM_GRIP_TAP_SLOP_X_PX  60
+static bool bottom_grip_touch_tap(lv_event_t *e, int start_x)
+{
+    lv_obj_t *grip = s_bottom_edge_grip;
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev || indev == s_mouse_indev || start_x < 0) return false;
+    if (!grip || lv_obj_has_flag(grip, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    int dx = (int)p.x - start_x;
+    if (dx < 0) dx = -dx;
+    if (dx > GRIP_TAP_MAX_DX_PX) return false;      /* a short swipe is not a tap */
+    lv_area_t a;
+    lv_obj_get_coords(grip, &a);
+    return p.x >= a.x1 - BOTTOM_GRIP_TAP_SLOP_X_PX &&
+           p.x <= a.x2 + BOTTOM_GRIP_TAP_SLOP_X_PX &&
+           p.y >= a.y1 - BOTTOM_GRIP_TAP_SLOP_Y_PX;
 }
 
 // One wheel click moves this many pixels. A touch UI has large rows, so a
@@ -14958,6 +14996,13 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             //
             ESP_LOGI("ui", "update line tapped (x=%d)", (int)p.x);
             s_update_tap_cb();
+        } else if (be_decided == 0 && bottom_grip_touch_tap(e, be_start_x)) {
+            /* Ahead of the clock on purpose: the clock's target is an x range
+             * over the whole 36 px bar, so whichever is tested first wins the
+             * overlap. The grip's test is the bottom 20 px, which is the
+             * split - see bottom_grip_touch_tap(). */
+            ESP_LOGI("ui", "bottom grip tapped (touch)");
+            ui_show_memories();
         } else if (be_decided == 0 && be_start_x >= 0 && clock_field_hit(be_start_x)) {
             /* The UTC field opens the GPS page - but only when a GNSS receiver
              * is actually disciplining the clock. On NTP the tap is ignored:
@@ -14969,8 +15014,9 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
             ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }
-        // A pure tap (be_decided==0) from a FINGER still does nothing - so
-        // reaching for the swipe grip can't accidentally retune.
+        // A pure tap (be_decided==0) from a FINGER anywhere ELSE along this
+        // strip still does nothing - so reaching for the swipe grip can't
+        // accidentally retune. Only the grip's own 20 px acts (2026-11-16).
         update_hold_clear();        // #218: drop any hold feedback, whatever happened
         s_touch_on_bandplan = false;
         s_bottom_edge_swipe_start_y = -1;
