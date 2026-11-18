@@ -41,6 +41,23 @@ void ui_mouse_init(void);
  * on this must be an extra rather than the only way to learn something. */
 bool ui_mouse_pointer(lv_point_t *out);
 
+/* Whether the firmware draws the mouse pointer into the framebuffer. Default
+ * true, so the Tab5 is unchanged. Set false when something outside the
+ * framebuffer draws the pointer instead - a host that scales this 1280x720
+ * image to a window of another size, where the thin two-colour arrow does not
+ * survive the resampling but a native-resolution one does.
+ *
+ * It hides the POINTER IMAGE ONLY. The mouse keeps working in full:
+ * hid_cursor_present() stays true, ui_mouse_pointer() keeps reporting the
+ * position, the wheel, the edge-grip hover and the hot test all keep running. */
+void ui_set_pointer_drawn(bool on);
+bool ui_get_pointer_drawn(void);
+
+/* True while the pointer is over something CLICKABLE - the green pointer state.
+ * Valid even when ui_set_pointer_drawn(false) has turned the image off, which
+ * is exactly when an outside drawer needs it to colour its own pointer. */
+bool ui_pointer_is_hot(void);
+
 // Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
 // Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // and audio/cat init have completed.

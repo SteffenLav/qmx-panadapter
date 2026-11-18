@@ -8400,6 +8400,20 @@ static void build_resource_monitor(lv_obj_t *scr)
 // _270 depending on "Flip 180", and the inverse differs between them - see
 // util/hid_rotate.h. The cursor object is hidden until a mouse is enumerated.
 static lv_obj_t *s_mouse_cursor = NULL;
+// Draw the pointer image, or not. Default TRUE - on the Tab5 nothing ever calls
+// the setter, so the pointer behaves exactly as it always has. False is for a
+// host that blits this framebuffer into a window of a DIFFERENT size: a thin
+// two-colour arrow does not survive that resampling, so the host draws its own
+// at native resolution and asks this one to stand down.
+//
+// It hides the IMAGE ONLY. hid_cursor_present(), ui_mouse_pointer(), the wheel,
+// the edge-grip hover and the hot/clickable test all keep running - turning the
+// pointer off is not turning the mouse off.
+static bool s_pointer_drawn = true;
+// Published by cursor_set_hot() so the host can colour its own pointer. Valid
+// whether or not the image is drawn, and whether or not the image exists at all
+// (the dot fallback never swaps a bitmap but is still over things).
+static bool s_pointer_hot = false;
 // Which indev is the mouse. Kept so the edge grips can offer CLICK activation to
 // a pointer without changing what a finger does - see grip_mouse_click().
 static lv_indev_t *s_mouse_indev = NULL;
@@ -8695,6 +8709,12 @@ static lv_point_t s_mouse_pt;
 // ui_push_spectrum's passband-fade fix).
 static void cursor_set_hot(bool hot)
 {
+    // Published FIRST, above every early return: the dot fallback and a
+    // host-drawn pointer both have no bitmap to swap, and those are exactly the
+    // cases where ui_pointer_is_hot() is the only way to learn the state.
+    // A plain bool store, so it costs nothing on the LVGL thread.
+    s_pointer_hot = hot;
+
     static int last = -1;
     if (!s_mouse_cursor || !s_cursor_is_image || (int)hot == last) return;
     last = hot;
@@ -9197,11 +9217,33 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     s_mouse_pt.x = lx;
     s_mouse_pt.y = ly;
 
+    // Change-detected. This runs on EVERY indev read, and lv_obj_add_flag/
+    // remove_flag(HIDDEN) invalidates the object, so an unconditional write here
+    // is a continuous invalidate on the LVGL thread - the same cost
+    // cursor_set_hot() above is change-detected to avoid, and which this file
+    // has already paid for once (ui_push_spectrum's passband fade).
     if (s_mouse_cursor) {
-        if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
-        else                         lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+        const bool show = hid_cursor_present() && s_pointer_drawn;
+        static int last_show = -1;
+        if ((int)show != last_show) {
+            last_show = show;
+            if (show) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+            else      lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
+
+void ui_set_pointer_drawn(bool on)
+{
+    // No LVGL call here: this can be called from any task. The next indev read
+    // (every ~30 ms while a mouse exists) applies it on the LVGL thread, which
+    // is the only thread allowed to touch the object.
+    s_pointer_drawn = on;
+}
+
+bool ui_get_pointer_drawn(void) { return s_pointer_drawn; }
+
+bool ui_pointer_is_hot(void)    { return s_pointer_hot; }
 
 bool ui_mouse_pointer(lv_point_t *out)
 {
