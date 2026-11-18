@@ -138,3 +138,6 @@ tools/spiffs_host/*.exe
 build-sim/
 tools/sim/
 tools/browser_probe/
+
+# test/lotw_harness.c writes these scratch files in the cwd on every run
+hx_*.bin
