@@ -103,7 +103,7 @@ See [site deploy](../../../memory/project_site_git_import_deploy.md).
 ## ⛔ Every transmit path must pass the band guard
 
 `python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
-out without checking the band**, and it runs PRE_BUILD. Today: 6 keying sites,
+out without checking the band**, and it runs PRE_BUILD. 2026-11-18: 9 keying sites,
 1 exempt (with its reason written in the script, not in prose).
 
 Out-of-band transmission is **his licence**, not a cosmetic defect: *"TX'ing out
@@ -123,7 +123,7 @@ the checker by adding to EXEMPT without writing why.
 `docs/unattended-tx-inventory.md` — **run it for the number**. This line said
 11 arming sites while the checker and the inventory both said 12 (corrected
 2026-10-17); a count in prose cannot keep up, the same rot the patches section
-above records. Today: 13 sites, **6 unattended** (12 -> 13 at v1.20.2, where `docs/unattended-tx-inventory.md` last changed - NOT at v1.21.0, as this line claimed; the prose has now been stale three times, which is why the checker is the authority). Run it
+above records. 2026-11-18: 15 sites, **6 unattended** (12 -> 13 at v1.20.2, where `docs/unattended-tx-inventory.md` last changed - NOT at v1.21.0, as this line claimed; the prose has now been stale three times, which is why the checker is the authority). Run it
 every release; if the table changed, say so in the notes. ⛔ Never call a
 capability "not completed" or "not yet": say implemented or not, then proven or
 not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
