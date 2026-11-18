@@ -50,7 +50,8 @@
  *     change.
  *   - a deliberate remote station behind a tunnel legitimately arrives from
  *     outside the subnet.
- * The operator decides the default; this is not it being decided for him.
+ * DECIDED BY THE OPERATOR, 2026-11-18: it stays OFF. Opt-in, per device. Do not
+ * flip the default, and do not re-open the question.
  */
 
 /* May the request on this socket key the radio?

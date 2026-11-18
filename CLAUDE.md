@@ -132,10 +132,11 @@ not a guest on the WiFi. Real remote access belongs in a tunnel or a TLS reverse
 proxy: over plain HTTP a password crosses in clear and a token can be replayed to
 key a transmitter.
 
-⛔ **Default OFF, and that is deliberate** - Jim KC9KKO's QMX-PanadapterShared
-fork drives this firmware's radio across a network, and a remote station behind a
-tunnel legitimately arrives from outside the subnet. **The default is the
-operator's decision, not ours.**
+⛔ **Default OFF, and the operator DECIDED that on 2026-11-18.** Jim KC9KKO's
+QMX-PanadapterShared fork drives this firmware's radio across a network, and a
+remote station behind a tunnel legitimately arrives from outside the subnet - so
+default-on would silently remove TX from working stations on upgrade. **Do not
+flip it, and do not re-open the question.** It is opt-in, per device.
 
 ⛔ Stops are never interlocked (`cancel`, `pause`, `skip`, `tune_stop`,
 `rtty_stop`): refusing a stop would hold a transmitter on the air.
