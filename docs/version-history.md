@@ -4887,4 +4887,6 @@ Commits: `v2.0.0..v2.0.1` - `0e1e3ade`, `a7876364`.
 - RTTY tap-to-fill on the Tab5 was not tried on a live signal.
 - T205: host-harness tested; the stub hang on Mark's machine is unexplained.
 
+**What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). Its web row now says that, with **Refuse TX from off-network** on, a request that would transmit must come from the Tab5's own network. The RTTY Log and Contest controls do not transmit.
+
 Commits: `v2.0.1..v2.0.2`.

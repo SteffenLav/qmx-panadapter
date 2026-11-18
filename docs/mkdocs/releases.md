@@ -25,6 +25,8 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - Refuse TX from off-network is tested on a Tab5 only for requests from the Tab5's own network, which pass. A refusal was tested only in a host test, because no second network was available.
 - Tapping a decoded word on the Tab5 to fill a log field was not tried on a live signal. It works in the browser and in a host test.
 
+**What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). Its web row now says that, with **Refuse TX from off-network** on, a request that would transmit must come from the Tab5's own network. The RTTY Log and Contest controls do not transmit.
+
 ## Previous Releases
 
 ### v2.0.1 - 2026-11-15
