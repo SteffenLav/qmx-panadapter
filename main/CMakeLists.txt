@@ -175,6 +175,9 @@ idf_component_register(
         "ft8_sim.c"
         "js8_sim.c"
         "audio/webradio.c"
+        # minimp3 (CC0) instantiated once, and the only place its
+        # memory placement is decided. See the file for why.
+        "audio/minimp3_impl.c"
         "net/radio_browser.c"
         "wspr_proto.c"
         "wspr_fano.c"
@@ -240,6 +243,7 @@ idf_component_register(
         mbedtls
         json
         ft8_lib
+        minimp3       # vendored CC0 MP3 decoder - components/minimp3
         spiffs
         bt            # NimBLE host for the BLE mouse (controller is on the C6)
         esp_hid

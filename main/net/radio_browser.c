@@ -414,7 +414,7 @@ int radio_browser_fetch(rb_station_t *out, int max, int radius_km)
 
         const cJSON *jcodec = cJSON_GetObjectItemCaseSensitive(it, "codec");
         if (!cJSON_IsString(jcodec) || strcasecmp(jcodec->valuestring, "MP3") != 0)
-            continue;                       /* Helix decodes MP3 and nothing else */
+            continue;                       /* minimp3 decodes MP3 and nothing else */
 
         const cJSON *jname = cJSON_GetObjectItemCaseSensitive(it, "name");
         const cJSON *jurl  = cJSON_GetObjectItemCaseSensitive(it, "url_resolved");

@@ -21,7 +21,11 @@
 // this. Measured on field 2026-11-01, idle1 while playing (61-85%) is
 // indistinguishable from idle1 while stopped (54-89%).
 //
-// ⭐ IT WAS SETTLED BY COMPARISON, NOT BY THEORY. dmatking/esp32-p4-webradio
+// ⭐ IT WAS SETTLED BY COMPARISON, NOT BY THEORY. (⚠ HISTORY: this paragraph
+// is the 2026-11-01 investigation, when the decoder here was still Helix. It
+// is kept because the fix it produced - the ring below - is still the design.
+// The decoder was swapped to minimp3 on 2026-11-18 for licence reasons; see
+// the include block.) dmatking/esp32-p4-webradio
 // v2.0.1 runs the same Helix decoder on the same Tab5 and sounds perfect; the
 // operator had it cable-flashed on the field bench the same day. Reading its
 // source (main/stream.c, main/mp3_decoder.c) the difference is one thing:
@@ -32,7 +36,7 @@
 // so the DMA depth was never the difference. Four seconds of decoupling was.
 //
 // ⚠ Two parts of its design we CANNOT copy. It calls
-// audio_set_sample_rate(fi.samprate) and reopens the codec at the stream's
+// audio_set_sample_rate() per stream and reopens the codec at the stream's
 // rate; ours is opened once at boot at 48 kHz and cannot be reopened
 // (webradio.h says why), so the resampler below stays. And its reader drops
 // an ICY block that straddles two reads; the state machine below carries it
@@ -54,8 +58,31 @@
 #include "freertos/idf_additions.h"   /* xStreamBufferCreateWithCaps - PSRAM */
 #include "util/psram_task.h"          /* reapable tasks - see webradio_play() */
 
-#include "mp3dec.h"               /* chmorgan/esp-libhelix-mp3 */
-#include "mp3common.h"            /* MP3DecInfo - public, and it holds the 8 */
+/* ---- the decoder: minimp3, CC0, vendored at components/minimp3 ----------
+ *
+ * ⛔ IT REPLACED HELIX ON 2026-11-18 FOR ONE REASON: THE LICENCE. This
+ * firmware is GPL-3 (relicensed 2026-10-09 for the JS8 coding tables).
+ * chmorgan/esp-libhelix-mp3 is labelled Apache-2.0 on the Component
+ * Registry, but that covers the wrapper only - its submodule ships
+ * RealNetworks' Helix DNA decoder under the RealNetworks Public Source
+ * License 1.0, which is copyleft over combined works (§4.1) and
+ * GPL-incompatible. minimp3 is CC0 1.0: no copyleft, no disclosure, no
+ * attribution, no notice.
+ *
+ * ⛔ IT IS NOT A PERFORMANCE FIX, AND NOTHING BELOW CLAIMS IT IS. The
+ * 95.8%-of-core-1 break-up measured on 2026-11-01 was memory PLACEMENT - see
+ * the long note at webradio_task() - and a standing patch fixed it by moving
+ * Helix's hot buffers to PSRAM. That patch is deleted along with the library.
+ * minimp3 is a FLOAT decoder where Helix was fixed-point, and its speed on
+ * this chip is UNMEASURED. Do not read this swap as an audio improvement in
+ * either direction until something has run on a Tab5.
+ *
+ * ⛔ IT IS NOT REENTRANT. The vendored header's one local modification makes
+ * the 16,256 B per-call scratch a static so it can live in PSRAM instead of
+ * on this task's 12,288 B internal-RAM stack, where it would not have fit at
+ * all. One stream, one task; do not add a second caller. */
+#include "minimp3.h"
+#include "minimp3_impl.h"         /* where the scratch landed - print it */
 #include "util/mem_where.h"       /* LP SRAM is not L2. T133/T134 */
 
 #include <stdlib.h>
@@ -95,12 +122,37 @@ static char s_err[80]    = "";
  *
  * RING_BYTES is the jitter buffer and the whole point of this file's second
  * version: 64 KB = 4.0 s at 128 kbps, the same figure the reference uses.
- * IN_BYTES only has to hold a frame or two for the decoder; the largest MP3
- * frame is MAINBUF_SIZE. */
+ *
+ * ⛔ IN_BYTES IS 16 KB BECAUSE minimp3 ASKS FOR IT, and it is not the 7.7 KB
+ * that was enough for Helix. minimp3's README: "Short buffers may cause false
+ * sync and can produce 'squealing' artefacts. The bigger the size of the
+ * input buffer, the more reliable the sync procedure. We recommend having as
+ * many as 10 consecutive MP3 frames (~16KB) in the input buffer at a time."
+ * Its sync check (mp3d_match_frame) walks up to MAX_FRAME_SYNC_MATCHES = 10
+ * headers forward before it believes a sync, so a buffer short of that many
+ * frames makes it accept weaker evidence. The buffer is in PSRAM and costs
+ * nothing scarce, so there is no reason to clip it. */
 #define RING_BYTES  (64 * 1024)
 #define NET_CHUNK   2048                       /* one socket read - 128 ms   */
-#define IN_BYTES    (MAINBUF_SIZE * 4)
-#define PCM_SAMPLES (MAX_NGRAN * MAX_NSAMP * MAX_NCHAN)   /* one frame, 2304 */
+#define IN_BYTES    (16 * 1024)                /* ~10 frames at 128 kbps     */
+#define PCM_SAMPLES MINIMP3_MAX_SAMPLES_PER_FRAME         /* one frame, 2304 */
+
+/* ⛔ DO NOT CALL THE DECODER WITH LESS THAN ONE WHOLE FRAME IN THE BUFFER.
+ *
+ * Read from mp3dec_decode_frame(): when mp3d_find_frame() locates a valid
+ * header but the frame runs past the end of the buffer, it does NOT report
+ * "insufficient data" - it keeps scanning, finds nothing it can confirm, and
+ * returns frame_bytes = mp3_bytes. The caller, obeying the documented rule to
+ * drop frame_bytes, would then THROW THE WHOLE BUFFER AWAY, which is an
+ * audible hole plus a resync. Only the three-case contract in the README is
+ * documented; this is from the source.
+ *
+ * So the loop waits for this much before calling. The largest MP3 frame is
+ * 320 kbps at 32 kHz = 1440 B plus a padding byte, and free format can reach
+ * MAX_FREE_FORMAT_FRAME_SIZE = 2304; 4 KB clears both with a header's margin.
+ * The only call below this threshold is the deliberate end-of-stream flush,
+ * where discarding a partial trailing frame is the correct outcome. */
+#define DEC_MIN_BYTES 4096
 /* The resampler expands when the stream is slower than the channel: 48/8 kHz
  * is the worst legal MPEG2.5 case, and a truncated write is a click, so this
  * is sized for it rather than clipped. */
@@ -461,7 +513,7 @@ done:
 }
 
 /* =========================================================================
- * THE DECODER. Ring -> Helix -> resample -> codec. Never touches the socket.
+ * THE DECODER. Ring -> minimp3 -> resample -> codec. Never touches the socket.
  * ========================================================================= */
 
 /* ⭐ ONE LINE A SECOND, AND IT IS THE INSTRUMENT THIS FILE WAS MISSING.
@@ -537,7 +589,7 @@ static void stats_report(dec_stats_t *s, int64_t window_us)
     unsigned pct  = want ? (unsigned)((uint64_t)s->frames * 100 / want) : 0;
     ESP_LOGI(TAG, "loop: ring %u/%u/%u B of %d | frames %u of %u (%u%%) | "
                   "ms ring %d dec %d write %d (min %d, fast %u) | "
-                  "gap max %d ms late %u/%u | resync %u underflow %u",
+                  "gap max %d ms late %u/%u | resync %u underflow %u | stack %u B free",
              (unsigned)(s->ring_n ? s->ring_min : 0),
              (unsigned)(s->ring_n ? s->ring_sum / s->ring_n : 0),
              (unsigned)s->ring_max, RING_BYTES,
@@ -545,7 +597,20 @@ static void stats_report(dec_stats_t *s, int64_t window_us)
              (int)(s->t_ring / 1000), (int)(s->t_dec / 1000), (int)(s->t_wr / 1000),
              (int)(s->writes ? s->wr_min_us / 1000 : 0), (unsigned)s->wr_fast,
              (int)(s->gap_max_us / 1000), (unsigned)s->gap_late, (unsigned)s->writes,
-             (unsigned)s->resync, (unsigned)s->underflow);
+             (unsigned)s->resync, (unsigned)s->underflow,
+             /* ⭐ THE HEADROOM ON THIS TASK, ONCE A SECOND, AND THE REASON IT
+              * IS HERE. minimp3's scratch is 16,256 B and upstream puts it in
+              * mp3dec_decode_frame()'s STACK FRAME - measured 17,280 B for
+              * the whole function. This task's stack is 12,288 B, so upstream
+              * would not merely have been tight, it would have overflowed on
+              * the first frame. The vendored header makes it a static in
+              * PSRAM instead, and this number is what proves the stack is
+              * clear - a figure from the board, not from the compiler.
+              *
+              * ⛔ stats_report() runs ON the webradio task, so NULL is the
+              * right handle. Called from anywhere else it would measure the
+              * wrong stack. */
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
     memset(s, 0, sizeof(*s));
     s->ring_min  = 0xffffffffu;
     s->wr_min_us = INT64_MAX;
@@ -555,45 +620,29 @@ static void webradio_task(void *arg)
 {
     (void)arg;
 
-    HMP3Decoder dec = MP3InitDecoder();
+    /* ⛔ mp3dec_t IS 6,668 B AND IT GOES IN PSRAM, DELIBERATELY.
+     *
+     * It is not small enough to ignore on a board that runs within ~30 KB of
+     * empty internal RAM (#65), and nothing in it is DMA. Its two big members
+     * are mdct_overlap (2,304 B) and qmf_state (3,840 B), both touched once
+     * per granule rather than per sample, so they are warm, not hot. The hot
+     * working set is grbuf and syn, and those are inside the scratch.
+     *
+     * ⭐ THERE IS A MEASURED PRECEDENT FOR PSRAM BEING ENOUGH HERE. The
+     * standing patch this change deletes moved Helix's ~20 KB of hot
+     * per-frame structures from LP SRAM to PSRAM and the radio kept up. The
+     * same note explains why PSRAM and not L2: taking 6.7 KB of L2 nearly
+     * empties the pool USB host and the display need, and MALLOC_CAP_DMA is
+     * the scarcest pool on the board.
+     *
+     * ⛔ UNVERIFIED ON HARDWARE. If the radio breaks up, the log line below
+     * is the first thing to read and 24 ms of CPU per frame is the number to
+     * beat. Do not guess - print the addresses, as the Helix hunt had to. */
+    mp3dec_t *dec = heap_caps_malloc(sizeof(mp3dec_t), MALLOC_CAP_SPIRAM);
     bool claimed = false;
 
     if (!dec) { set_err("No memory for the MP3 decoder"); goto done; }
-
-    /* ⛔ WHERE HELIX'S OWN STATE LANDED, AND WHY IT IS WORTH A LOG LINE.
-     *
-     * MEASURED on field 2026-11-01: MP3Decode burns 95.8% of core 1 and needs
-     * 30.6 ms of CPU per 24 ms frame - 1.28x too slow in real time, which is
-     * the 75% of samples the operator hears as break-up. The same library on
-     * the same chip keeps up in dmatking/esp32-p4-webradio, and our build is
-     * the MORE optimised one (-O2 against its -Og), with identical CPU, PSRAM
-     * and flash settings. So the difference is not the library.
-     *
-     * AllocateBuffers() makes EIGHT PLAIN mallocs, all under
-     * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384, so every one lands in
-     * "internal" RAM - a lottery on this board that includes LP SRAM at 2.5x
-     * slower than cached PSRAM (T133). HuffmanInfo, IMDCTInfo and SubbandInfo
-     * are the per-frame hot state. The reference wins that lottery for free:
-     * 4.5 kLOC of firmware and a roomy L2 heap, where ours runs ~30 KB free.
-     *
-     * ⭐ NO STANDING PATCH IS NEEDED TO SEE THIS. MP3DecInfo is a PUBLIC
-     * struct and it holds all eight pointers, so the addresses can be read
-     * straight off the handle. Only moving them would need to touch
-     * buffers.c, and that is not worth doing until these lines say it is. */
-    {
-        MP3DecInfo *di = (MP3DecInfo *)dec;
-        ESP_LOGW(TAG, "helix: dec %p %s | huff %p %s | imdct %p %s | subband %p %s",
-                 (void *)di, mem_where(di),
-                 di->HuffmanInfoPS, mem_where(di->HuffmanInfoPS),
-                 di->IMDCTInfoPS,   mem_where(di->IMDCTInfoPS),
-                 di->SubbandInfoPS, mem_where(di->SubbandInfoPS));
-        ESP_LOGW(TAG, "helix: fh %p %s | si %p %s | sfi %p %s | dq %p %s | in %s pcm %s out %s",
-                 di->FrameHeaderPS,     mem_where(di->FrameHeaderPS),
-                 di->SideInfoPS,        mem_where(di->SideInfoPS),
-                 di->ScaleFactorInfoPS, mem_where(di->ScaleFactorInfoPS),
-                 di->DequantInfoPS,     mem_where(di->DequantInfoPS),
-                 mem_where(s_in), mem_where(s_pcm), mem_where(s_out));
-    }
+    mp3dec_init(dec);
 
     s_state = WEBRADIO_CONNECTING;
     s_title[0] = '\0';
@@ -664,77 +713,104 @@ static void webradio_task(void *arg)
             have += got;
         }
 
-        if (have < 128) {
-            /* The reader is the authority on whether more is coming. */
-            if (s_net_done && xStreamBufferBytesAvailable(s_ring) == 0) break;
+        /* The reader is the authority on whether more is coming. */
+        bool draining = s_net_done && xStreamBufferBytesAvailable(s_ring) == 0;
+
+        if (have < 128 && draining) break;
+
+        /* ⛔ ONE WHOLE FRAME OR NOTHING - see DEC_MIN_BYTES. Below that the
+         * decoder can silently consume the entire buffer instead of saying
+         * "insufficient data", which costs audio AND a resync. The one
+         * exception is the end of the stream, where the tail is all there
+         * will ever be and dropping a partial trailing frame is right. */
+        if (have < DEC_MIN_BYTES && !draining) continue;
+        if (have < 4) continue;
+
+        mp3dec_frame_info_t fi;
+        int64_t t0 = esp_timer_get_time();
+        int samples = mp3dec_decode_frame(dec, s_in, have, s_pcm, &fi);
+        st.t_dec += esp_timer_get_time() - t0;
+
+        /* ---- the three documented outcomes, all of them handled ----------
+         *
+         * minimp3's README, verbatim on the combinations:
+         *   >0 samples, frame_bytes >  0 : successful decode
+         *    0 samples, frame_bytes >  0 : ID3 or invalid data was skipped
+         *    0 samples, frame_bytes == 0 : insufficient data
+         *
+         * ⛔ frame_bytes MUST come off the front of the buffer before the
+         * next call, in every case where it is non-zero. It is the offset the
+         * decoder skipped PLUS the frame it used, not just the frame. */
+        if (fi.frame_bytes <= 0) {
+            /* Insufficient data. Keep everything and read more. If the buffer
+             * is already full and the decoder still cannot find a frame then
+             * it never will with this alignment, so step one byte and let the
+             * sync search move - otherwise the loop spins for ever on a
+             * stream whose framing we have lost. */
+            st.underflow++;
+            if (have >= IN_BYTES) {
+                memmove(s_in, s_in + 1, (size_t)(have - 1));
+                have--;
+                st.resync++;
+            }
+            if (draining) break;        /* no more is coming */
             continue;
         }
 
-        int off = MP3FindSyncWord(s_in, have);
-        if (off < 0) { have = 0; st.resync++; continue; }
-        if (off > 0) { memmove(s_in, s_in + off, (size_t)(have - off)); have -= off; }
+        if (fi.frame_bytes > have) fi.frame_bytes = have;   /* cannot happen; cheap */
+        int skipped = fi.frame_offset;
+        memmove(s_in, s_in + fi.frame_bytes, (size_t)(have - fi.frame_bytes));
+        have -= fi.frame_bytes;
 
-        uint8_t *p = s_in;
-        int left = have;
-        int64_t t0 = esp_timer_get_time();
-        int rc = MP3Decode(dec, &p, &left, s_pcm, 0);
-        st.t_dec += esp_timer_get_time() - t0;
-
-        if (rc != ERR_MP3_NONE) {
-            if (rc == ERR_MP3_INDATA_UNDERFLOW || rc == ERR_MP3_MAINDATA_UNDERFLOW) {
-                /* Not an error - the frame is simply not all here yet. Keep
-                 * it and read more. If the buffer is already full and still
-                 * short, the sync word was false: step past it. */
-                st.underflow++;
-                if (have >= IN_BYTES) {
-                    memmove(s_in, s_in + 1, (size_t)(have - 1));
-                    have--;
-                }
-                continue;
-            }
-            /* A corrupt frame is normal on a lossy link. Step one byte past
-             * this sync word and look for the next.
+        if (samples <= 0) {
+            /* ID3, an APE tag or garbage was skipped. Normal at the start of
+             * a stream and after a lossy patch, and already paid for above.
              *
-             * ⭐ NAME THE ERROR AND SHOW THE HEADER, rate-limited. A resync
-             * costs a whole frame - 24 ms of audio - so one or two a second
-             * IS the click the operator hears, and the counter alone cannot
-             * say whether the stream is corrupt or our framing is wrong. An
-             * INVALID_FRAMEHEADER on a false sync inside audio data is
-             * expected and harmless to find; anything else is ours. */
-            /* ⭐ THE OUTPUT SAMPLE INDEX, so the log and the rxcap recording
+             * ⭐ THE OUTPUT SAMPLE INDEX, so the log and the rxcap recording
              * share one timeline. Without it the two instruments could not be
              * compared at all: the capture came back clean while the resync
              * counter said 1-2 a second, and there was no way to tell whether
              * they described the same moments. Arm rxcap BEFORE play and
              * sample 0 lines up with the first write. */
-            ESP_LOGW(TAG, "resync: rc=%d at out sample %llu (%.3f s) "
+            st.resync++;
+            ESP_LOGW(TAG, "skip %d B at out sample %llu (%.3f s) "
                           "hdr %02x %02x %02x %02x have %d",
-                     rc, (unsigned long long)s_tot_out,
+                     fi.frame_bytes, (unsigned long long)s_tot_out,
                      (double)s_tot_out / (double)DSP_SAMPLE_RATE_HZ,
                      s_in[0], s_in[1], s_in[2], s_in[3], have);
-            memmove(s_in, s_in + 1, (size_t)(have - 1));
-            have--;
-            st.resync++;
             continue;
         }
-        /* Consume exactly what Helix used. */
-        memmove(s_in, p, (size_t)left);
-        have = left;
 
-        MP3FrameInfo fi;
-        MP3GetLastFrameInfo(dec, &fi);
-        if (fi.outputSamps <= 0 || fi.samprate <= 0 ||
-            (fi.nChans != 1 && fi.nChans != 2)) continue;
-        if (fi.samprate != reported_rate) {
-            reported_rate = fi.samprate;
-            ESP_LOGI(TAG, "stream: %d Hz, %d ch, %d kbps", fi.samprate, fi.nChans,
-                     fi.bitrate / 1000);
+        /* A non-zero frame_offset on a GOOD frame means bytes were thrown
+         * away to resync - the click the operator hears. Count it, because
+         * the decode itself succeeded and nothing else would record it. */
+        if (skipped > 0) st.resync++;
+
+        if (fi.hz <= 0 || (fi.channels != 1 && fi.channels != 2)) continue;
+        if (fi.hz != reported_rate) {
+            reported_rate = fi.hz;
+            ESP_LOGI(TAG, "stream: %d Hz, %d ch, %d kbps (layer %d)",
+                     fi.hz, fi.channels, fi.bitrate_kbps, fi.layer);
+            /* ⭐ WHERE THE DECODER'S MEMORY ACTUALLY IS, once per stream and
+             * only after a frame has run - minimp3_scratch_addr() is NULL
+             * until the first decode. The scratch is the 16,256 B that used
+             * to be a stack frame; this line is what proves EXT_RAM_BSS_ATTR
+             * did what it was asked. A section attribute is a request to the
+             * linker, an address is a measurement. */
+            ESP_LOGW(TAG, "minimp3: dec %p %s (%u B) | scratch %p %s (%u B) | "
+                          "in %s pcm %s out %s",
+                     (void *)dec, mem_where(dec), (unsigned)sizeof(mp3dec_t),
+                     minimp3_scratch_addr(), mem_where(minimp3_scratch_addr()),
+                     (unsigned)minimp3_scratch_size(),
+                     mem_where(s_in), mem_where(s_pcm), mem_where(s_out));
         }
 
-        /* Helix gives MONO as one channel; the output is stereo, so a mono
-         * stream is duplicated rather than played at half rate. */
-        int frames = (fi.nChans == 2) ? fi.outputSamps / 2 : fi.outputSamps;
-        if (fi.nChans == 1) {
+        /* minimp3 returns samples PER CHANNEL and writes them interleaved, so
+         * `samples` is already the frame count. (Helix returned the total,
+         * which is why this used to divide by two.) The output is stereo, so
+         * a mono stream is duplicated rather than played at half rate. */
+        int frames = samples;
+        if (fi.channels == 1) {
             for (int i = frames - 1; i >= 0; i--) {
                 int16_t v = s_pcm[i];
                 s_pcm[i * 2] = v;
@@ -742,7 +818,7 @@ static void webradio_task(void *arg)
             }
         }
 
-        int wrote = resample_to_channel(s_pcm, frames, fi.samprate, s_out, OUT_FRAMES);
+        int wrote = resample_to_channel(s_pcm, frames, fi.hz, s_out, OUT_FRAMES);
         if (wrote > 0) {
             t0 = esp_timer_get_time();
             rx_audio_aux_write(s_out, wrote);
@@ -775,7 +851,7 @@ static void webradio_task(void *arg)
                 s_tot_out += (uint64_t)wrote;
                 s_tot_in  += (uint64_t)frames;
                 s_tot_mp3 += 1;
-                s_tot_src_rate = fi.samprate;
+                s_tot_src_rate = fi.hz;
                 if (t1 >= s_rate_next_us) {
                     int64_t el = t1 - s_play_t0_us;
                     /* Hz x1000 in integer, so no float in a log line. */
@@ -805,7 +881,7 @@ static void webradio_task(void *arg)
 
 done:
     if (claimed) rx_audio_aux_claim(false);
-    if (dec) MP3FreeDecoder(dec);
+    if (dec) heap_caps_free(dec);
     if (s_state != WEBRADIO_ERROR) s_state = WEBRADIO_STOPPED;
     s_title[0] = '\0';
     s_task = NULL;

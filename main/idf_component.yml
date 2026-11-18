@@ -14,10 +14,15 @@ dependencies:
 
   espressif/esp-dsp: "^1.6.0"
 
-  # Helix MP3, for the web-radio player (main/audio/webradio.c). Fixed-point
-  # and small - the same decoder dmatking/esp32-p4-webradio uses on this exact
-  # board, which is why it is this one and not a guess.
-  chmorgan/esp-libhelix-mp3: "^1.0.3"
+  # ⛔ NO MP3 DECODER HERE ANY MORE, AND THAT IS THE POINT.
+  # chmorgan/esp-libhelix-mp3 was removed 2026-11-18. The Component Registry
+  # labels it Apache-2.0, but the label covers the WRAPPER: its submodule
+  # ships RealNetworks' Helix DNA decoder under the RealNetworks Public
+  # Source License 1.0, which is copyleft over combined works (§4.1) and
+  # GPL-incompatible. This firmware is GPL-3.
+  # The web radio now uses minimp3 (CC0 1.0), vendored in the tree at
+  # components/minimp3. In-tree on purpose: a registry entry would put the
+  # licence back behind a manifest label, and the label was the whole fault.
 
   # mDNS: reach the Tab5 as qmx.local instead of hunting an IP that changes with
   # the network. Added after an evening lost to exactly that (roamed onto a hotel

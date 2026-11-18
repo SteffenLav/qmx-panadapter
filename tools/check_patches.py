@@ -68,13 +68,15 @@ PATCHES = [
      "marker is the COUNTER symbol because a silent tolerant patch is "
      "indistinguishable from a missing one (#189/#329)"),
 
-    ("apply_helix_hot_buffers_psram.ps1", "repo",
-     "managed_components/chmorgan__esp-libhelix-mp3/libhelix-mp3/real/buffers.c",
-     "PATCHED (qmx-panadapter, 2026-11-01) helix hot buffers",
-     "libhelix-mp3's three per-frame hot buffers come from plain malloc and "
-     "landed in LP SRAM on this board (measured 0x501084a8/0x501097ac/"
-     "0x5010b3b0) - 2.5x slower than cached PSRAM, which made MP3Decode "
-     "30.6 ms per 24 ms frame and the web radio broke up continuously"),
+    # apply_helix_hot_buffers_psram.ps1 was HERE and is deliberately gone.
+    # The web radio's MP3 decoder was swapped from chmorgan/esp-libhelix-mp3
+    # to the vendored CC0 minimp3 on 2026-11-18 (a licence fix: Helix is RPSL
+    # 1.0, GPL-incompatible). With the library gone the patch had nothing to
+    # patch, so it was deleted in the same commit as the swap rather than left
+    # to rot - a standing patch for a library that is not there is exactly the
+    # duplicate-that-outlives-its-reason this project keeps getting bitten by.
+    # minimp3 needs no patch: it is in the tree, so its one local
+    # modification is just source, and managed_components/ cannot wipe it.
 
     ("apply_esp_hosted_sdio_recovery.ps1", "repo",
      "managed_components/espressif__esp_hosted/host/drivers/transport/sdio/sdio_drv.c",

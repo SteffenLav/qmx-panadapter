@@ -13,7 +13,7 @@
 // measured 2026-11-01 for DK: 65 DR-family entries in the top 200, including
 // P6 Beat and P8 Jazz, which have no FM transmitter at all.
 //
-// ⛔ MP3 ONLY. The decoder is Helix, which is an MP3 decoder; the directory
+// ⛔ MP3 ONLY. The decoder is minimp3, which is an MP3 decoder; the directory
 // also carries AAC (DR P3 has an AAC entry at 324 kbps). An AAC row in the
 // list would be a station that cannot play, so they are filtered out here
 // rather than failing at the stream.
