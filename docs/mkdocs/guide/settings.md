@@ -454,6 +454,19 @@ that keeps working too — a web listener overrides the suspend.
 remembered across a reboot, deliberately: a unit that boots with a dark screen
 and no explanation looks broken.
 
+**Refuse TX from off-network** *(under Server mode, off by default, v2.0.2; in the
+browser: Settings > Station > Refuse transmit from outside this network)* — the
+web API can key the radio and has no password. With this on, a request that
+would transmit is refused unless it comes from the Tab5's own network, and the
+caller is told why. Receive, the display and every read-only call are not
+affected. Stopping a transmission is never refused.
+
+!!! warning "It is not a login"
+    Anyone on the same WiFi still passes. For real remote access, put the Tab5
+    behind a VPN or tunnel and use this as a second lock. Leave it off if you
+    drive this radio from another network on purpose, for example through a
+    shared-radio front end. See [Web API](../reference/web-api.md#transmitting-from-off-your-network).
+
 **CW-Tune** *(a long press on the bandwidth in the top bar - not a drawer setting)*
 - puts the dial on the nearest CW signal, searching **±400 Hz** either side of where
 you are.
@@ -1140,7 +1153,9 @@ to type. **CW and phone are not like that**, and until now there was no way to
 get them into the log at all *(Gyula HA3HZ, Brian KB9WFS)*.
 
 Open the settings drawer and tap **Log a contact (CW/SSB)**, or use keyboard
-shortcut **26**. In the browser it is **Log a contact** in the menu.
+shortcut **26**. On the Panadapter page, the **Log** button at the top right of
+the waterfall opens it in one tap *(v2.0.2)*; it logs in the radio's current
+mode. In the browser it is **Log a contact** in the menu.
 
 You type **the callsign and the two reports. Nothing else.** The frequency,
 mode, band, date, time, your own callsign and grid, and the running activation
@@ -1157,6 +1172,10 @@ reference all come from the radio and the device.
 - Clearing a report logs the contact *without* it rather than with a wrong one.
 - The window **stays open** after Log, with the callsign cleared and the
   reports kept. A run of contacts is not one dialog at a time.
+- **The window does not block the screen** *(v2.0.2, Pete WK8S)*. Drag it by
+  its body to anywhere on the screen; it keeps its place the next time it
+  opens. Taps outside it reach the page, so you can tune with it open. While
+  you type, it moves up above the on-screen keyboard.
 - **Tapping a spot** in the spots lane opens this window with that callsign
   already filled in.
 - It is **refused when the radio is not connected**, because the record would

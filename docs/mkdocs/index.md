@@ -251,6 +251,10 @@ browser: tap a signal, and **Auto** follows its speed, shift and polarity; **CQ*
 **Exch** and **73** in one press, or type live. **Receive audio no longer breaks up or drifts
 in pitch on a busy band.** See [RTTY](guide/rtty.md) and [Releases](releases.md).
 
+**v2.0.2 logs RTTY contacts**, on the Tab5 and in the browser, with a contest mode. The log
+window moves out of the way, the Panadapter page has a **Log** button, and the web radio has a
+new MP3 decoder. See [Releases](releases.md).
+
 **v2.0.1** fixes the card-archive offer: with WiFi on, **Use them** and **Leave it** now take
 effect. See [Releases](releases.md).
 
@@ -442,7 +446,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.0.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.0.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

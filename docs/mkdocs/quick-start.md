@@ -132,7 +132,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
 
-You'll see faint "breathing" grip handles on the edges — they show you where to swipe. A tap on the left or right grip opens the same thing as the swipe.
+You'll see faint "breathing" grip handles on the edges — they show you where to swipe. A tap on the left, right or bottom grip opens the same thing as the swipe.
 
 !!! note "This is the short version"
     [Gestures & Controls](reference/gestures.md) is the authoritative list and

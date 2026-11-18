@@ -4862,3 +4862,29 @@ Commits: `v1.26.3..v2.0.0` - RTTY receive (R003-R029), RTTY transmit (R010), Aut
 Tested on bench1 with a 2,903-record, 550 KB archive and WiFi on: offer, Use them, next-start index (2,891 pairs, checked on the PC), steady-state start, a foreign archive, and relink.
 
 Commits: `v2.0.0..v2.0.1` - `0e1e3ade`, `a7876364`.
+
+### Shipped in v2.0.2 — 2026-11-18
+
+**RTTY logging, a movable log window, and the web radio's MP3 decoder replaced for licence reasons.**
+
+- **RTTY QSO logging and contest mode (R030).** A QSO card over the waterfall (call, New / Worked on band / DUPE, parsed report and exchange, Log). 73 (TU in contest mode) or Log opens a confirmation dialog; nothing is logged unseen. `rtty_qso.c` parses the exchange: letter-shift misprints back to digits, the repeat when the first copy is damaged, a pair after our call wins. Tap-to-fill: with the dialog open, a tapped word goes to its field. Contest mode in its own NVS blob: `CQ TEST`, `CALL 599 NNN NNN`, `TU MYCALL`; the serial advances on Log. Dupes are this contest's RTTY QSOs on the band, from the device log and, once per boot, the card archive. Web: heard line, Log and Contest forms, `/api/cmd` `rtty_log`, `rtty_contest`, `rtty_word`. `13597952`, `e7acfa16`, `ce4a29f9`, `2b5b6131`.
+- **Log a contact window (T204, Pete WK8S, GitHub #23).** No dimmed layer, so taps outside reach the page; dragged by its body (`ui/ui_drag.c`), clamped to the screen, keeps its place; moves above the on-screen keyboard. Compact layout, 340 -> 300 px. `c127b592`, `2b5b6131`.
+- **Log button on the Panadapter page**, top right of the waterfall (140x52 at 1088,322, under the RIT readout). Opens the same window, which reads the mode from the radio. `61df2e2b`.
+- **Edge grips.** A tap on the bottom grip opens Memory Channels; it answers a mouse click too, never opens over an open drawer, and no longer takes taps from the update line. The SelfSpotter map's right grip answers a tap. All closed-state grips 8 px from one constant. `54b4c7d3`, `c1469992`, `4338a30c`, `3db37b06`, `81dc3eda`, `eca834ac`.
+- **RTTY page puts the radio in DiGi on entry** and at boot restore, as FT8 does; the previous mode returns to the panadapter on leaving. With the QMX in CW its audio sat ~1.5 kHz below the mark/space lines. `9e049996`.
+- **TX interlock (T206), default OFF.** `tx_subnet_interlock` refuses a web request that would transmit unless its peer, from `getpeername()` on the request's socket and never from a header, is on the Tab5's subnet. 403 + `tx_interlock:true`. Stops are never interlocked. Drawer row under Server mode and Settings > Station in the browser. `check_tx_guard.py` refuses a build where a web TX site skips it. `1541d443`, `018dce35`.
+- **Web radio MP3 decoder: Helix -> minimp3 (CC0), vendored at `components/minimp3`.** `chmorgan/esp-libhelix-mp3` is Apache-2.0 only as a wrapper; the Helix decoder in it is RealNetworks Public Source License 1.0, GPL-incompatible. Its standing patch is deleted (28 patches). Scratch hoisted to a static in PSRAM: decode-frame stack 17,312 -> 1,120 B on the target. Host A/B 15/15 bit-identical to upstream. On bench1, six stations: 2.6-4.8 ms decode per 26 ms frame, 0 underflows, 9.2 KB of 12 KB task stack free. `c030cfff`.
+- **Linux/macOS flasher (T205, Mark N5OBC).** `flash.command` probes the stub with a time-limited `flash_id` and falls back to `--no-stub`; a requested clean flash drops to a normal one and says so, because `--no-stub` cannot erase. `flash-recovery.command` uses esptool 5 command names. `c44747f9`.
+- Fixed: CW page showed stray characters at start-up (`cw_decode_line()` before `cw_decode_init()` left the grid copy uninitialised). `a8b37007`.
+- Fixed: Semi QSK readback compared `OFF;` against `OFF`, so the mode was always unknown (since v1.24.2). `0797c9e1`.
+- Fixed: web RTTY band-plan strip uses the Tab5's track (DiGi + margin + view). `964f57db`.
+- Fixed: saved UI settings restored at boot under `display_lock`. `1c4037e4`.
+- Fixed: web radio resume passed its own URL buffer as source and destination of a copy. `4d20ee1f`.
+
+**Known, not fixed**
+
+- T206's refusal has run only in `test/net_guard_harness.c`; bench1 has no second network.
+- RTTY tap-to-fill on the Tab5 was not tried on a live signal.
+- T205: host-harness tested; the stub hang on Mark's machine is unexplained.
+
+Commits: `v2.0.1..v2.0.2`.

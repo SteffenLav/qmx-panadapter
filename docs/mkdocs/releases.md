@@ -4,7 +4,30 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v2.0.1** - 2026-11-15
+**v2.0.2** - 2026-11-18
+
+**RTTY contacts go into the log, the log window no longer blocks the screen, and the web radio has a new MP3 decoder.**
+
+- **Log RTTY contacts**, on the Tab5 and in the browser. **73** (or **TU** in contest mode) and **Log** open **Log this QSO?** with the callsign, reports and exchange filled in from the decoded text. Nothing is logged until you press **Log**. To correct a field, tap the word in the text. **Contest mode** sends `CQ TEST`, `599` and a serial number, and marks dupes. See [RTTY](guide/rtty.md#logging).
+- **The log window moves** *(Pete WK8S)*. Drag it by its body to anywhere on the screen. It keeps its place, and taps outside it reach the page, so you can tune with it open. It is also smaller. See [Settings](guide/settings.md#log-a-contact-by-hand-cw-and-ssb).
+- **A Log button on the Panadapter page**, at the top right of the waterfall. It logs in the radio's current mode.
+- **A tap on the bottom grip opens Memory Channels.** On the SelfSpotter map, a tap on the right grip now opens its drawer, as a swipe does.
+- **Opening the RTTY page puts the radio in DiGi mode.** With the radio left in CW, the signal sat about 1.5 kHz away from the decoder's lines. The radio's previous mode comes back when you leave the page.
+- **New setting: Refuse TX from off-network** *(off by default)*. The web API can key the radio and has no password. With this setting on, a transmit request that does not come from the Tab5's own network is refused. It is not a login: anyone on your WiFi still passes. See [Settings](guide/settings.md#panadapter-zoom).
+- **The web radio's MP3 decoder is now minimp3.** The previous decoder (Helix) is under a licence that is not compatible with this project's GPL-3 licence. Six stations were played on a Tab5 with no gaps.
+- **Linux and macOS flasher** *(Mark N5OBC)*: if esptool stops at "Running stub...", the flasher now uses esptool's slower mode, which does not need the stub. A clean flash (erase) is not possible in that mode, and the flasher says so.
+- Fixed: stray characters in the CW page's text at start-up.
+- Fixed: the browser's RTTY band-plan strip now matches the Tab5's.
+- Fixed: the radio's Semi QSK setting always read back as unknown.
+
+**Known, not fixed**
+
+- Refuse TX from off-network is tested on a Tab5 only for requests from the Tab5's own network, which pass. A refusal was tested only in a host test, because no second network was available.
+- Tapping a decoded word on the Tab5 to fill a log field was not tried on a live signal. It works in the browser and in a host test.
+
+## Previous Releases
+
+### v2.0.1 - 2026-11-15
 
 **A fix for the card-archive offer from v2.0.0.**
 
@@ -13,8 +36,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - The worked-before list on the card is now tied to the archive it was built from, so a replaced archive gets a new list. If your Tab5 has already moved QSOs to the card, the list is rebuilt once, at the first start after the update.
 
 Tested on a Tab5 with 2,903 contacts (550 KB) and WiFi on. See [Settings](guide/settings.md#the-qso-log-and-the-card).
-
-## Previous Releases
 
 ### v2.0.0 - 2026-11-15
 
@@ -1342,7 +1363,7 @@ Every goal on the original roadmap is met in v2.0.0. What remains is proof on th
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.0.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.0.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

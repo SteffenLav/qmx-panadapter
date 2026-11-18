@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v2.0.1.** v2.0.1 fixes the card-archive offer: with WiFi on, **Use them** and **Leave it** now take effect. Every goal on the original roadmap is met. A complete, self-contained station for the QMX: spectrum and waterfall, the digital modes **FT8, FT4, JS8, RTTY and WSPR** and a CW page - each one a page of its own in the left drawer - with on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v2.0.0 adds MODE: RTTY**: decoded and sent on the Tab5 and in the browser, with Auto speed, shift and polarity, CQ, Answer, Exch and 73 in one press, or typed live - see [RTTY](#rtty). **Receive audio no longer breaks up or drifts in pitch on a busy band.** **No page is a beta any more**: where a limit remains, the guide states it. v1.26.3 made the QSO log safe when it fills up, and v1.26.0 gave the browser noise reduction and an auto-notch - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for every release.
+> **Release — v2.0.2.** v2.0.2 logs RTTY contacts on the Tab5 and in the browser, lets the log window move out of the way, and replaces the web radio's MP3 decoder for licence reasons. Every goal on the original roadmap is met. A complete, self-contained station for the QMX: spectrum and waterfall, the digital modes **FT8, FT4, JS8, RTTY and WSPR** and a CW page - each one a page of its own in the left drawer - with on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v2.0.0 adds MODE: RTTY**: decoded and sent on the Tab5 and in the browser, with Auto speed, shift and polarity, CQ, Answer, Exch and 73 in one press, or typed live - see [RTTY](#rtty). **Receive audio no longer breaks up or drifts in pitch on a busy band.** **No page is a beta any more**: where a limit remains, the guide states it. v1.26.3 made the QSO log safe when it fills up, and v1.26.0 gave the browser noise reduction and an auto-notch - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for every release.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v2.0.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v2.0.2.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -382,6 +382,11 @@ and waterfall come from the DSP rather than from the Tab5's canvases, and a brow
 listening to the audio overrides the suspend. Touch the Tab5 to come back. It is not
 remembered across a reboot, deliberately: a unit that boots dark looks broken.
 
+**Refuse TX from off-network** (under Server mode, off by default) — the web API can key
+the radio and has no password. With this on, a request that would transmit is refused
+unless it comes from the Tab5's own network. It is not a login: anyone on your WiFi still
+passes. For remote access, use a VPN or tunnel.
+
 ### Know what time it is
 
 **A GPS of your own, and a sky view** — Two receivers work, and both are confirmed on
@@ -557,7 +562,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
 
-Slim "breathing" grip handles on each edge show where to swipe — faint enough not to clutter the display, visible if you look for them. A tap on the left grip opens the page picker and a tap on the right grip opens the settings drawer. The bottom grip is swipe only.
+Slim "breathing" grip handles on each edge show where to swipe — faint enough not to clutter the display, visible if you look for them. A tap on the left grip opens the page picker, a tap on the right grip opens the settings drawer, and a tap on the bottom grip opens the memory channel picker.
 
 The top bar reads **Band · Mode · BW · Freq · Signal · Zoom** left to right. Tap any item to open a selector — **Freq** opens the frequency keypad; **Mode** switches USB/LSB/CW/DiGi, plus AM on QMX firmware 1.04 or later; **BW** selects SSB filter width (USB/LSB only); **Band** jumps to a configured band; **Zoom** selects a zoom preset.
 
@@ -800,12 +805,17 @@ no PC and no sound card.
   tones stand clear of the noise.
 - **Send:** tap their callsign in the text, then **CQ**, **Answer**, **Exch** or
   **73**; or **Type...** and each key goes out as you type. **STOP** ends the over
-  at once. You transmit on the decoder's tones. The radio is put in DiGi mode if
-  needed, the band guard checks both tones right before key-down, and one over is
-  at most 180 s.
-- **In the browser:** the same controls and the same text, with sending. A
-  callsign picked in the browser is the one the Tab5 sends to, and the other way
-  round.
+  at once. You transmit on the decoder's tones. The band guard checks both tones
+  right before key-down, and one over is at most 180 s.
+- **Log:** **73** (or **TU** in contest mode) and **Log** open **Log this QSO?**
+  with the callsign, reports and exchange filled in from the decoded text. Nothing
+  is logged until you press **Log**; a tapped word in the text fills its field.
+  **Contest mode** sends `CQ TEST`, `599` and a serial number, and marks dupes.
+- **In the browser:** the same controls and the same text, with sending and
+  logging. A callsign picked in the browser is the one the Tab5 sends to, and the
+  other way round.
+- Opening the page puts the radio in DiGi mode; its previous mode comes back when
+  you leave.
 - The Tab5 speaker plays the signal under the decoder's lines, not the whole
   passband.
 
@@ -1131,6 +1141,7 @@ clock that is wrong, WiFi that will not hold, a card that stops being written.
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap left grip handle | Left edge | Open the page picker (alternative) |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
+| Tap bottom grip handle | Bottom edge | Open memory channel picker (alternative) |
 | Two-finger double-tap | Anywhere | Blank the display |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |
 | Swipe ↑ from bottom edge | Bottom edge strip | Open memory channel picker |
@@ -1312,7 +1323,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v2.0.1 is here.** Next on the bench:
+**v2.0.2 is here.** Next on the bench:
 
 - **A full two-way JS8 QSO, watched from both ends.** Receiving, sending free text and calling CQ are all proven on air, and the automatic exchange **is implemented** - with automatic replies on, the Tab5 answers JS8 callers by itself and has since v1.17.0. What is missing is a complete exchange observed end to end, not the code to do it. An earlier version of this line said the exchange "is not written yet", which was wrong and was corrected publicly in the v1.18.0 notes after Gyula HA3HZ found four stations answered unattended in his own log.
 - **JS8 Slow, Fast and Turbo on the air.** All four speeds are selectable from v1.19.0 and they transmit, but no contact has been made on anything but Normal. The Tab5's own side of Turbo is measured and fast enough; the radio's side is not.

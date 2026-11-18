@@ -19,7 +19,9 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 Slim **breathing grip handles** on these three edges show where to swipe.
 From **v1.26.0** a **tap on the left or right grip** opens the same thing as the
-swipe, as a Bluetooth mouse click always did. The bottom grip is swipe only.
+swipe, as a Bluetooth mouse click always did. From **v2.0.2** a tap on the
+bottom grip opens the memory channel picker, and on the SelfSpotter map a tap on
+the right grip opens its drawer.
 
 !!! note "There is no top-edge swipe any more"
     Earlier versions opened the [spot map](../guide/spot-map.md) with a swipe

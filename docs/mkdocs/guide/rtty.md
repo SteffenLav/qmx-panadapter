@@ -14,7 +14,8 @@ To open the page, open the **page picker** (swipe right from the left edge, or t
 - After a station is decoded, the decoder holds on it. It does not jump to a neighbour in the gaps between overs. A new tap releases the hold.
 - **Frequency readout:** on this page the top bar shows the **mark** frequency, not the dial. The keypad works the same way: the number you type is the mark.
 - The page keeps one RTTY dial per band. A band change on this page goes back to the last RTTY dial you used on that band, or to the middle of the band's digital segment the first time.
-- The band-plan strip shows the digital segment only, and the spot labels show RTTY spots only.
+- The band-plan strip shows the digital segment with a margin on each side, and always includes the part of the band on screen, so you can drag to stations just outside the band plan's digital segment. The spot labels show RTTY spots only.
+- **Opening the page puts the radio in DiGi mode** *(v2.0.2)*. In another mode the radio's audio sits away from the decoder's lines. The radio's previous mode comes back when you leave the page.
 - The Tab5 speaker plays the signal under the orange lines (±250 Hz around them), not the radio's whole passband. The QMX headphone jack still plays the radio's own passband.
 
 ## The screen

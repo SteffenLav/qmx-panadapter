@@ -212,7 +212,7 @@ earns nothing when `Band: ---` in the top-left already tells you that.
 
 #### Memory Channels
 
-Swipe ↑ from the bottom edge to open the memory picker — a 4×8 grid of 32 channels, each free to hold any frequency/mode (not tied to a band). Each channel stores:
+Swipe ↑ from the bottom edge, or tap the bottom grip, to open the memory picker — a 4×8 grid of 32 channels, each free to hold any frequency/mode (not tied to a band). Each channel stores:
 
 - Frequency
 - Mode (USB, LSB, CW, DiGi)
@@ -305,7 +305,7 @@ The background behind the keypad is intentionally semi-transparent (40% dim) so 
 
 ### 6. Memory Channels
 
-32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker.
+32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge, or tap the bottom grip, to open the memory picker.
 
 Each slot shows its **label in large text**, with the mode and frequency dimmed beneath. Mode is also colour-coded — CW (blue), DiGi (amber), USB (brick red), LSB (purple) and AM (teal) — so the grid is scannable at a glance without reading every label.
 
