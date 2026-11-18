@@ -70,6 +70,7 @@
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "adif/cloudlog_upload.h" // cloudlog_upload_pending (#171)
 #include "util/net_guard.h"   // net_url_parse - save-time URL sanity only
+#include "tx_subnet.h"        // T206 TX interlock - off-subnet requests may not key
 #include "util/ip_guard.h"    // #307: a static IP must not lock the operator out
 #include "util/sock_probe.h"  // #313: how many LWIP sockets are left
 #include "util/sock_owners.h"  // #313: and WHO is holding them
@@ -642,6 +643,43 @@ static void add_ft8_tx_status(cJSON *root)
 // two numbers that must agree, so there is only one of them.
 #define WEB_TUNE_LIMIT_US (60 * 1000000LL)
 
+/* The TX interlock pre-flight for an /api/cmd action that can transmit (T206).
+ * tx_subnet.h holds the whole argument; this is only the HTTP half of it.
+ *
+ * Returns true to carry on. On a refusal it has ALREADY answered the request
+ * with 403 and the reason in words, and deleted `root` - because a refusal
+ * that reaches only the device log is invisible to the browser that was
+ * refused. That is T94 exactly: the terminal door's refusals went into a field
+ * nothing off the relevant screen could read, so the operator saw a silent
+ * nothing. `tx_interlock` is in the body as well so a page can tell this
+ * refusal from the band guard's without parsing English.
+ *
+ * NOT applied to the actions that STOP something - tune_stop, rtty_stop,
+ * cw_cancel, js8_text_cancel, and qso_override's cancel/pause/skip. Refusing a
+ * stop would be the interlock holding a transmitter on the air, and nothing is
+ * worth that; "never leave the radio transmitting" outranks who is asking. */
+static bool tx_subnet_cmd_ok(httpd_req_t *req, cJSON *root, const char *what)
+{
+    char serr[220];
+    if (tx_subnet_allows_req(req, what, serr, sizeof serr)) return true;
+    if (root) cJSON_Delete(root);
+    cJSON *rj = cJSON_CreateObject();
+    if (rj) {
+        cJSON_AddBoolToObject(rj, "ok", false);
+        cJSON_AddStringToObject(rj, "error", serr);
+        cJSON_AddBoolToObject(rj, "tx_interlock", true);
+    }
+    char *rs = rj ? cJSON_PrintUnformatted(rj) : NULL;
+    if (rj) cJSON_Delete(rj);
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, rs ? rs :
+        "{\"ok\":false,\"tx_interlock\":true,"
+        "\"error\":\"refused: this request is not on the Tab5's own network\"}");
+    if (rs) free(rs);
+    return false;
+}
+
 static volatile bool s_web_tune_active = false;
 static char          s_web_tune_prior[8] = "USB";
 static esp_timer_handle_t s_web_tune_timer = NULL;
@@ -669,8 +707,13 @@ static void web_tune_timeout_cb(void *arg)
     web_tune_stop(true);
 }
 
-static bool web_tune_start(void)
+/* `req` is the request that asked for the tune, for the TX interlock (T206):
+ * the check belongs AT the keying site, the same shape as the band guard call
+ * below, not only in the dispatcher that called this. `tune_err` carries the
+ * refusal back so the browser is told, not just the log. */
+static bool web_tune_start(httpd_req_t *req, char *tune_err, size_t tune_err_len)
 {
+    if (tune_err && tune_err_len) tune_err[0] = 0;
     if (!cat_qmx_fw_at_least(1, 4, 0)) return false;
     if (s_web_tune_active) return true;               // idempotent
     // Never over an FT8 burst - the poll pause and the mode write would fight.
@@ -681,6 +724,16 @@ static bool web_tune_start(void)
     /* ⛔ BAND GUARD (T48), and the browser path needs it at least as much as
      * the Tab5's: nobody is standing in front of the radio. Tune keys a
      * carrier on the DIAL in MD8 - no audio offset. */
+    /* T206 TX INTERLOCK. Tune keys a carrier for up to a minute with nobody in
+     * the room; if the request did not come from this network it does not get
+     * to do that. Read from the SOCKET, never from a header - see tx_subnet.h. */
+    {
+        char serr[220];
+        if (!tx_subnet_allows_req(req, "Antenna Tune", serr, sizeof serr)) {
+            if (tune_err && tune_err_len) snprintf(tune_err, tune_err_len, "%s", serr);
+            return false;
+        }
+    }
     {
         char gerr[160];
         uint32_t d = cat_get_frequency();
@@ -2501,6 +2554,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         /* Transmit free text. Deferred to the LVGL task exactly like cq_start
          * - js8_ftx_start() encodes and arms, and ft8_tx_arm() blocks briefly,
          * so neither may run here. The outcome returns via /api/status. */
+        if (!tx_subnet_cmd_ok(req, root, "JS8 free text")) return ESP_OK;
         const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
         if (!txt || !txt[0]) {
             cJSON_Delete(root);
@@ -2517,6 +2571,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * none of it safe to run on this task. Only takes effect while the
          * Tab5 is actually on the CW page (its own 500 ms timer drains the
          * request) - switch it there first with set_screen. */
+        if (!tx_subnet_cmd_ok(req, root, "CW send")) return ESP_OK;
         const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
         if (!txt || !txt[0]) {
             cJSON_Delete(root);
@@ -2602,6 +2657,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // or hit its call limit otherwise needs a walk back to the Tab5. Deferred to
         // the LVGL task inside ft8_screen_view - do NOT call the QSO machine from
         // this HTTP task.
+        if (!tx_subnet_cmd_ok(req, root, "CQ run")) return ESP_OK;
         ft8_screen_view_request_cq();
     } else if (action && strcmp(action, "cq_parity") == 0) {
         // Randy N4OPI: choose the CQ slot window from the browser. -1 any,
@@ -2777,6 +2833,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                  * abandon a live exchange to take this station instead
                  * (Randy N4OPI). A single click still sends the ordinary
                  * pick, which keeps refusing while busy. */
+                if (!tx_subnet_cmd_ok(req, root, "FT8/JS8 reply")) return ESP_OK;
                 cJSON *rt = cJSON_GetObjectItem(root, "retarget");
                 if (cJSON_IsTrue(rt)) ft8_screen_view_request_reply_retarget(call);
                 else                  ft8_screen_view_request_reply(call);
@@ -2792,8 +2849,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         /* The SNR macro. One message, armed - never the auto-sequencer, which
          * is what these buttons exist to replace. Deferred to the LVGL task
          * like every other arming path. */
+        if (!tx_subnet_cmd_ok(req, root, "JS8 SNR report")) return ESP_OK;
         ft8_screen_view_request_js8_macro(0);
     } else if (action && strcmp(action, "js8_grid") == 0) {
+        if (!tx_subnet_cmd_ok(req, root, "JS8 grid message")) return ESP_OK;
         ft8_screen_view_request_js8_macro(1);
     } else if (action && strcmp(action, "js8_cmd") == 0) {
         /* {"action":"js8_cmd","cmd":"GRID?"} - the macro sheet's directives,
@@ -2810,6 +2869,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             cJSON_Delete(root);   /* every early return owns root - 2026-11-11 sweep */
             return ESP_OK;
         }
+        if (!tx_subnet_cmd_ok(req, root, "JS8 directive")) return ESP_OK;
         ft8_screen_view_request_js8_directive(cmd);
     } else if (action && strcmp(action, "js8_flush") == 0) {
         /* The browser's Flush. Ryan KK6DZB, 2026-10-14: "No flush button in
@@ -2940,6 +3000,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 "{\"ok\":false,\"err\":\"Not in FT8 mode\"}");
             return ESP_OK;
         }
+        /* T206: only the three that TRANSMIT. cancel (4), pause (5) and skip
+         * (6) are how a remote operator STOPS the station, and the interlock
+         * must never be the reason a transmitter stays keyed. */
+        if (what >= 1 && what <= 3 &&
+            !tx_subnet_cmd_ok(req, root, "FT8 override (transmits)")) return ESP_OK;
         ft8_screen_view_request_override(what);
     } else if (action && strcmp(action, "sd_eject") == 0) {
         /* ⭐ PUT THE CARD DOWN SO IT CAN BE TAKEN OUT SAFELY.
@@ -3073,9 +3138,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // ft8_tx_clear_swr_trip() is a plain flag clear, safe from any task.
         ft8_tx_clear_swr_trip();
     } else if (action && strcmp(action, "tune_start") == 0) {
-        if (!web_tune_start()) {
+        if (!tx_subnet_cmd_ok(req, root, "Antenna Tune")) return ESP_OK;
+        char tune_err[220] = "";
+        if (!web_tune_start(req, tune_err, sizeof tune_err)) {
             cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+            /* Its own reason when it has one (the interlock writes one), rather
+             * than the firmware-version sentence for every possible refusal. */
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, tune_err[0] ? tune_err :
                 "Tune needs QMX firmware 1.04+ and an idle transmitter");
             return ESP_FAIL;
         }
@@ -3396,6 +3465,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * once, end of over after it - the on-air check with fldigi. */
         /* "macro":"cq"|"answer"|"exch"|"73" - the Tab5's four buttons, built
          * by rtty_tx_macro() so both surfaces send the same text. */
+        if (!tx_subnet_cmd_ok(req, root, "RTTY TX")) return ESP_OK;
         cJSON *mj = cJSON_GetObjectItem(root, "macro");
         if (cJSON_IsString(mj)) {
             static const char *const MN[4] = { "cq", "answer", "exch", "73" };
@@ -4249,13 +4319,17 @@ static esp_err_t cmd_handler(httpd_req_t *req)
          * arriving over HTTP never is. Discovery is still the point of this
          * action; keying never was. cat_send_external_cmd() is the guarded
          * door, and the checker now refuses a direct raw send from this file. */
-        char why[96];
-        esp_err_t e = cat_send_external_cmd(c, why, sizeof(why));
+        /* T206: the fd, not an address and never a header. cat_send_external_cmd()
+         * resolves the peer itself - a caller that could hand it an address
+         * could hand it a local one. */
+        char why[220];
+        esp_err_t e = cat_send_external_cmd(c, httpd_req_to_sockfd(req), why, sizeof(why));
         cJSON_Delete(root);
         if (e == ESP_ERR_NOT_ALLOWED) {
             cJSON *rj = cJSON_CreateObject();
             cJSON_AddBoolToObject(rj, "ok", false);
-            cJSON_AddStringToObject(rj, "error", why[0] ? why : "refused by the band guard");
+            cJSON_AddStringToObject(rj, "error", why[0] ? why :
+                                    "refused by the band guard or the TX interlock");
             char *rs = cJSON_PrintUnformatted(rj);
             cJSON_Delete(rj);
             httpd_resp_set_status(req, "403 Forbidden");
@@ -4749,6 +4823,7 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 "WSPR will not transmit without them\"}");
         }
 
+        if (!tx_subnet_cmd_ok(req, root, "WSPR test transmission")) return ESP_OK;
         wspr_tx_request_t wt_req;
         char wt_err[80] = "";
         char out[192];
@@ -7338,6 +7413,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
     cJSON_AddBoolToObject(root, "tx_band_guard_off", c.tx_band_guard_off);
+    cJSON_AddBoolToObject(root, "tx_subnet_interlock", c.tx_subnet_interlock);
     // #221 API AUDIT, read side: these were WRITE-ONLY - settable but not
     // readable, so a script could change them and never confirm what it had
     // done, and could not restore what it found. An API that only writes is
@@ -8080,6 +8156,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cw_contest_name"))))
         settings_set_cw_contest_name(s);
     BOOLTOP("tx_band_guard_off", settings_set_tx_band_guard_off);
+    BOOLTOP("tx_subnet_interlock", settings_set_tx_subnet_interlock);
     BOOLTOP("qmx_gps",           settings_set_qmx_gps);
     // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool
     // because it is a ladder, not a switch - see ft8_hound.h.
@@ -9879,6 +9956,27 @@ static esp_err_t term_post_handler(httpd_req_t *req)
     } else if (!strcmp(action, "key")) {
         /* ⛔ T65: a refused key is NOT "no session". Saying so would send the
          * operator power-cycling the radio over a guard doing its job. */
+        /* T206: the terminal door refuses the menu rows it KNOWS transmit, by
+         * label, from the manual - and its own note says a reworded row is
+         * unguarded and several of those rows key at full PA voltage with no
+         * SWR protection. So the interlock applies here too: off-subnet gets
+         * no keystrokes into the radio's menus at all. */
+        if (!tx_subnet_allows_req(req, "QMX terminal key", term_err, sizeof(term_err))) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            cJSON *rj = cJSON_CreateObject();
+            if (rj) {
+                cJSON_AddBoolToObject(rj, "ok", false);
+                cJSON_AddStringToObject(rj, "err", term_err);
+                cJSON_AddBoolToObject(rj, "tx_interlock", true);
+            }
+            char *rs = rj ? cJSON_PrintUnformatted(rj) : NULL;
+            if (rj) cJSON_Delete(rj);
+            httpd_resp_sendstr(req, rs ? rs : "{\"ok\":false,\"tx_interlock\":true}");
+            if (rs) free(rs);
+            return ESP_OK;
+        }
         const cJSON *jk = cJSON_GetObjectItem(root, "key");
         ok = cJSON_IsString(jk) &&
              qmx_term_key_checked(jk->valuestring, term_err, sizeof(term_err));
@@ -9886,6 +9984,23 @@ static esp_err_t term_post_handler(httpd_req_t *req)
     } else if (!strcmp(action, "text")) {
         // Typing a value into a menu field. One character at a time through the
         // same path as a key, so there is a single place that writes to the port.
+        /* Same interlock as "key" - this IS a key, one character at a time. */
+        if (!tx_subnet_allows_req(req, "QMX terminal text", term_err, sizeof(term_err))) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "403 Forbidden");
+            httpd_resp_set_type(req, "application/json");
+            cJSON *rj = cJSON_CreateObject();
+            if (rj) {
+                cJSON_AddBoolToObject(rj, "ok", false);
+                cJSON_AddStringToObject(rj, "err", term_err);
+                cJSON_AddBoolToObject(rj, "tx_interlock", true);
+            }
+            char *rs = rj ? cJSON_PrintUnformatted(rj) : NULL;
+            if (rj) cJSON_Delete(rj);
+            httpd_resp_sendstr(req, rs ? rs : "{\"ok\":false,\"tx_interlock\":true}");
+            if (rs) free(rs);
+            return ESP_OK;
+        }
         const cJSON *jt = cJSON_GetObjectItem(root, "text");
         if (cJSON_IsString(jt)) {
             ok = true;

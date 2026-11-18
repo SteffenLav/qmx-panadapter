@@ -26,6 +26,7 @@
 #include "webserver_ws.h"
 #include "net/net_quiet.h"
 #include "util/net_guard.h"
+#include "util/net_ifaddr.h"   // net_own_ipv4 - our own address, host order
 #include "esp_netif.h"
 
 // Pause between image chunks. 1 ms was enough to stop the hardware watchdog
@@ -123,21 +124,6 @@ void ota_update_mark_valid(void)
 }
 
 
-// Our IPv4 and netmask in HOST order. esp_netif stores NETWORK order, and
-// getting that wrong is not theoretical - it shipped in v1.8.7 and made every
-// LAN address fail the subnet test (Mark G4MEM). net_ipv4_from_network_order()
-// is the one place that conversion lives.
-static bool own_ipv4(uint32_t *ip_out, uint32_t *mask_out)
-{
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (!netif) return false;
-    esp_netif_ip_info_t info;
-    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) return false;
-    *ip_out   = net_ipv4_from_network_order(info.ip.addr);
-    *mask_out = net_ipv4_from_network_order(info.netmask.addr);
-    return true;
-}
-
 // Firmware may come from GitHub over https, or from a server on the operator's
 // OWN network over plain http - the identical rule Cloudlog uses, and the same
 // host-tested net_guard that backs it. A firmware image is the most
@@ -158,7 +144,7 @@ static bool source_allowed(const char *url, char *why, size_t why_sz)
     if (scheme == NET_SCHEME_HTTPS) return true;
 
     uint32_t target = 0, ours = 0, mask = 0;
-    if (!own_ipv4(&ours, &mask)) {
+    if (!net_own_ipv4(&ours, &mask)) {
         snprintf(why, why_sz, "no network address yet - connect to WiFi first");
         return false;
     }

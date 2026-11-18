@@ -40,7 +40,7 @@ and called it "the automatic reply function", which is exactly what it is.
 |---|---|---|---|
 | `main/ui/ft8_tx_modal.c` | `transmit_btn_cb` | yes | The operator pressed Transmit. |
 | `main/ui/ft8_screen_view.c` | `web_reply_drain` | yes | A reply the browser asked for, drained on the LVGL task. A remote human is still a human. |
-| `main/net/webserver.c` | `cmd_handler` | yes | An `/api/cmd` request. Remote, deliberate. Includes `rtty_send` (R010 RTTY TX): text typed in the browser's RTTY panel or from a script, or `"macro"` - one of the four RTTY messages, a click in the browser; one over, unkeyed 3 s after the queue empties and at 180 s at the latest, Puts the radio in DiGi mode first if it is not; band-guarded after any dial move. The rest of an over (diddles, queued text) is a continuation of that request. |
+| `main/net/webserver.c` | `cmd_handler` | yes | An `/api/cmd` request. Remote, deliberate. ⚠ **Who may make it is now a setting (T206, `tx_subnet_interlock`, DEFAULT OFF).** With it on, an `/api/cmd` action that transmits is refused unless the request arrived from the Tab5's own subnet, and the refusal goes back as 403 with `tx_interlock:true` - not only to the log. `cancel`, `pause`, `skip`, `tune_stop` and `rtty_stop` are deliberately NOT interlocked: refusing a stop would be the interlock holding a transmitter on the air. ⛔ It is a subnet test, NOT a login - it stops the internet, not a guest on the WiFi (`main/tx_subnet.h`). Includes `rtty_send` (R010 RTTY TX): text typed in the browser's RTTY panel or from a script, or `"macro"` - one of the four RTTY messages, a click in the browser; one over, unkeyed 3 s after the queue empties and at 180 s at the latest, Puts the radio in DiGi mode first if it is not; band-guarded after any dial move. The rest of an over (diddles, queued text) is a continuation of that request. |
 | `main/ui/rtty_screen_view.c` | `macro_cb` | yes | RTTY page TX pane (R010): a press of CQ / Answer / Exch / 73 (text built by `rtty_tx_macro()`, shared with the web). Every call is a touch. One over, unkeyed 3 s after the queue empties and at 180 s at the latest; STOP and leaving the page stop it at once. Puts the radio in DiGi mode first if it is not; band-guarded after any dial move. |
 | `main/ui/rtty_screen_view.c` | `tx_send` | yes | RTTY page TX pane (R010): a key typed after Type... (each key is sent as typed; closing the keyboard ends the over). Every call is a touch. One over, unkeyed 3 s after the queue empties and at 180 s at the latest; STOP and leaving the page stop it at once. Puts the radio in DiGi mode first if it is not; band-guarded after any dial move. |
 | `main/ft8_qso.c` | `ft8_qso_override_next` | yes | The operator overrode the next message. |
@@ -70,6 +70,14 @@ and called it "the automatic reply function", which is exactly what it is.
 - ⛔ **It cannot see a path that keys the radio without going through
   `ft8_tx_arm()` or `wspr_tx_arm()`.** A new TX route must be added to
   `ARMING_CALLS` in the checker, or it is invisible to all of this.
+- ⚠ **`human: yes` on the web row means a person asked, not that the person
+  was entitled to.** Until T206 nothing checked where the request came from,
+  and the API has no password, so "a remote human is still a human" was true
+  of any human on the internet who could reach the port. The interlock is the
+  second lock and it is off by default; the first lock is a tunnel or a TLS
+  reverse proxy, which is not firmware work. `tools/check_tx_guard.py` is the
+  authority over which web TX sites consult it - and a new web TX route it
+  cannot name is invisible to that too.
 
 ## The release rule this implies
 

@@ -25,6 +25,7 @@
 #include "adif_log.h"
 #include "settings.h"
 #include "util/net_guard.h"
+#include "util/net_ifaddr.h"   // net_own_ipv4 - was a private copy here until T206
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -83,27 +84,6 @@ static size_t json_escape(const char *src, char *dst, size_t dst_sz)
     return o;
 }
 
-// Our current IPv4 address and netmask, converted to the SAME convention
-// net_ipv4_parse() produces.
-//
-// ⛔ esp_netif hands these back in NETWORK byte order, and this function used to
-// pass them straight through. On this little-endian CPU that made 192.168.1.8
-// read as 0x0801A8C0 against a parsed 0xC0A80108, and turned a 255.255.255.0
-// netmask into 0x00FFFFFF - so the masked equality compared the wrong end of the
-// address and every upload to a LAN server was refused with "is not on this
-// network". Reported by Mark G4MEM within hours of v1.8.7, with the cause
-// correctly identified. Do not remove the conversion.
-static bool own_ipv4(uint32_t *ip_out, uint32_t *mask_out)
-{
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (!netif) return false;
-    esp_netif_ip_info_t info;
-    if (esp_netif_get_ip_info(netif, &info) != ESP_OK) return false;
-    *ip_out   = net_ipv4_from_network_order(info.ip.addr);
-    *mask_out = net_ipv4_from_network_order(info.netmask.addr);
-    return true;
-}
-
 // Decides whether `url` may be contacted at all, and says why not in words the
 // operator can act on. Re-run for every upload - see the header note.
 static bool address_is_acceptable(const char *url, char *why, size_t why_sz)
@@ -120,7 +100,7 @@ static bool address_is_acceptable(const char *url, char *why, size_t why_sz)
 
     // Plain HTTP. Allowed only onto our own subnet.
     uint32_t target = 0, ours = 0, mask = 0;
-    if (!own_ipv4(&ours, &mask)) {
+    if (!net_own_ipv4(&ours, &mask)) {
         snprintf(why, why_sz, "no network address yet - connect to WiFi first");
         return false;
     }

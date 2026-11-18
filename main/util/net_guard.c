@@ -52,6 +52,23 @@ bool net_plaintext_allowed(uint32_t target_ip, uint32_t our_ip, uint32_t netmask
     return net_same_subnet(target_ip, our_ip, netmask);
 }
 
+bool net_tx_peer_allowed(uint32_t peer_ip, uint32_t our_ip, uint32_t netmask)
+{
+    // The device talking to its own web API. 127.0.0.0/8, not just 127.0.0.1:
+    // lwip hands out the whole block and a request from any of it came from
+    // this board. It is never on the WiFi subnet, so without this the device
+    // would refuse itself.
+    if ((peer_ip & 0xFF000000u) == 0x7F000000u) return true;
+
+    // Every "we don't know" answers NO - and the zero netmask has to be
+    // rejected BEFORE the masked comparison, which it would otherwise make
+    // true for every address on earth.
+    if (our_ip == 0 || peer_ip == 0) return false;
+    if (netmask == 0) return false;
+
+    return net_same_subnet(peer_ip, our_ip, netmask);
+}
+
 bool net_url_parse(const char *url, net_scheme_t *scheme_out,
                    char *host_out, size_t host_sz, uint16_t *port_out)
 {

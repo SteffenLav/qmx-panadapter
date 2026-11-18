@@ -86,6 +86,27 @@ uint32_t net_ipv4_from_network_order(uint32_t net_order);
 // to prevent.
 bool net_plaintext_allowed(uint32_t target_ip, uint32_t our_ip, uint32_t netmask);
 
+// The TX INTERLOCK's decision (T206): may a request that arrived from
+// `peer_ip` key the transmitter? True only when we know our own address and
+// mask and the peer sits on our own subnet, or the peer is this device itself.
+//
+// ⚠ IT IS NOT AUTHENTICATION AND MUST NEVER BE DESCRIBED AS ANY. It stops the
+// internet. It does not stop a guest on the same WiFi, a phone on the same
+// hotspot, or anyone who has the WiFi key - all of those are "on the subnet".
+// Its whole value is that a request forwarded in from outside the LAN cannot
+// put RF on the antenna.
+//
+// ⛔ SEPARATE FROM net_plaintext_allowed() ON PURPOSE, even though the masked
+// comparison is the same today. One answers "may credentials go out in the
+// clear", the other "may this request transmit"; they differ already (loopback
+// is allowed here and meaningless there) and a future change to one must not
+// silently move the other.
+//
+// Refuses on every "don't know", like net_plaintext_allowed(): a zero netmask
+// would match every address on earth, and an unknown peer is exactly the case
+// this exists to refuse.
+bool net_tx_peer_allowed(uint32_t peer_ip, uint32_t our_ip, uint32_t netmask);
+
 #ifdef __cplusplus
 }
 #endif

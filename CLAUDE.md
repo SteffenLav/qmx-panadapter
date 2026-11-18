@@ -103,8 +103,11 @@ See [site deploy](../../../memory/project_site_git_import_deploy.md).
 ## ⛔ Every transmit path must pass the band guard
 
 `python tools/check_tx_guard.py` — **it refuses the build if anything can put RF
-out without checking the band**, and it runs PRE_BUILD. 2026-11-18: 9 keying sites,
-1 exempt (with its reason written in the script, not in prose).
+out without checking the band**, and it runs PRE_BUILD. ⛔ **Never a count here -
+run it for the number.** This line said 6 keying sites while the checker said 9
+(corrected 2026-11-18), the same rot as the patch count above. It now checks two
+things: the band guard (T48, which band), and the TX interlock (T206, whose
+request). Exemptions carry their reason in the script, not in prose.
 
 Out-of-band transmission is **his licence**, not a cosmetic defect: *"TX'ing out
 of band no matter what mode is a legal thing that potentially can fall back on
@@ -117,13 +120,34 @@ An unknown region REFUSES, exactly as a missing callsign or grid already does.
 ⛔ Never add a keying site without `tx_band_guard_allows()`, and never silence
 the checker by adding to EXEMPT without writing why.
 
+## ⛔ A web TX path also checks WHO asked (T206, default OFF)
+
+The web API can key the radio and has **no authentication and no TLS**. The TX
+interlock refuses a transmit request that did not arrive from the Tab5's own
+subnet - peer from `getpeername()`, **never** a header, because a header is
+supplied by the thing being checked. `main/tx_subnet.h` holds the argument.
+
+⚠ **It is NOT a login and must never be worded as one.** It stops the internet,
+not a guest on the WiFi. Real remote access belongs in a tunnel or a TLS reverse
+proxy: over plain HTTP a password crosses in clear and a token can be replayed to
+key a transmitter.
+
+⛔ **Default OFF, and the operator DECIDED that on 2026-11-18.** Jim KC9KKO's
+QMX-PanadapterShared fork drives this firmware's radio across a network, and a
+remote station behind a tunnel legitimately arrives from outside the subnet - so
+default-on would silently remove TX from working stations on upgrade. **Do not
+flip it, and do not re-open the question.** It is opt-in, per device.
+
+⛔ Stops are never interlocked (`cancel`, `pause`, `skip`, `tune_stop`,
+`rtty_stop`): refusing a stop would hold a transmitter on the air.
+
 ## ⛔ What can key the radio is a FILE, not a memory
 
 `python tools/check_unattended_tx.py` is the authority over
 `docs/unattended-tx-inventory.md` — **run it for the number**. This line said
 11 arming sites while the checker and the inventory both said 12 (corrected
 2026-10-17); a count in prose cannot keep up, the same rot the patches section
-above records. 2026-11-18: 15 sites, **6 unattended** (12 -> 13 at v1.20.2, where `docs/unattended-tx-inventory.md` last changed - NOT at v1.21.0, as this line claimed; the prose has now been stale three times, which is why the checker is the authority). Run it
+above records. ⛔ **NO COUNT HERE EVER.** It has now been wrong FOUR times: it said 11, then 12, then 13, and the checker says 15 (2026-11-18). Run it
 every release; if the table changed, say so in the notes. ⛔ Never call a
 capability "not completed" or "not yet": say implemented or not, then proven or
 not — [why](../../../memory/feedback_the_operator_must_never_learn_his_own_release_from_a_user.md).
