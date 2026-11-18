@@ -220,6 +220,94 @@ static void test_url_parse(void)
           "over-long host must fail, not truncate\n");
 }
 
+/* The TX interlock's arithmetic (T206). This is the half of the interlock that
+ * can be tested without hardware, and it is the half that decides everything:
+ * an off-subnet HTTP request CANNOT be produced on the bench without a second
+ * network, so the bench can only ever show the allow case. Everything below is
+ * the refuse case.
+ *
+ * It links the real net_tx_peer_allowed(). The address-reading half
+ * (getpeername, the v4-mapped-v6 unwrap, the setting) is in main/tx_subnet.c
+ * and is NOT covered here - it needs lwip.
+ */
+static void test_tx_peer_allowed(void)
+{
+    printf("net_tx_peer_allowed\n");
+
+    const uint32_t ours = ip(192,168,1,50);
+    const uint32_t m24  = ip(255,255,255,0);
+
+    /* The ordinary case: a browser on the same /24. */
+    CHECK(net_tx_peer_allowed(ip(192,168,1,8), ours, m24), "same /24 must be allowed\n");
+    CHECK(net_tx_peer_allowed(ours, ours, m24), "our own address must be allowed\n");
+
+    /* The case this exists for: a request forwarded in from the internet. */
+    CHECK(!net_tx_peer_allowed(ip(203,0,113,7), ours, m24), "public address must be refused\n");
+
+    /* ⛔ ONE OCTET OUTSIDE, not a far-away address - a neighbouring subnet is
+     * the realistic hostile case on a router that bridges two networks, and it
+     * is the one a byte-order slip would let through. */
+    CHECK(!net_tx_peer_allowed(ip(192,168,2,8), ours, m24), "adjacent /24 must be refused\n");
+    CHECK(!net_tx_peer_allowed(ip(192,168,0,255), ours, m24), "the /24 below must be refused\n");
+
+    /* A wider mask legitimately includes both. */
+    CHECK(net_tx_peer_allowed(ip(192,168,2,8), ours, ip(255,255,0,0)),
+          "a /16 covers 192.168.2.8\n");
+
+    /* A /32: nothing but ourselves, and that must not break. */
+    CHECK(net_tx_peer_allowed(ours, ours, ip(255,255,255,255)), "/32 allows ourselves\n");
+    CHECK(!net_tx_peer_allowed(ip(192,168,1,51), ours, ip(255,255,255,255)),
+          "/32 refuses the neighbour\n");
+
+    /* Loopback: the device talking to its own API. It is never on the WiFi
+     * subnet, so without the explicit case it would refuse itself. The WHOLE
+     * 127/8 block, because lwip hands out more than 127.0.0.1. */
+    CHECK(net_tx_peer_allowed(ip(127,0,0,1), ours, m24), "127.0.0.1 must be allowed\n");
+    CHECK(net_tx_peer_allowed(ip(127,1,2,3), ours, m24), "all of 127/8 must be allowed\n");
+    /* ⚠ And it must be allowed even with NOTHING else known - that is the one
+     * situation where a loopback request is the only kind there can be. */
+    CHECK(net_tx_peer_allowed(ip(127,0,0,1), 0, 0), "loopback with no WiFi must be allowed\n");
+    /* 126/8 and 128/8 are ordinary public space - an off-by-one in the mask
+     * would hand them the radio. */
+    CHECK(!net_tx_peer_allowed(ip(126,255,255,255), ours, m24), "126/8 is not loopback\n");
+    CHECK(!net_tx_peer_allowed(ip(128,0,0,1), ours, m24), "128/8 is not loopback\n");
+
+    /* Every "don't know" refuses. The zero netmask is the important one: it
+     * makes the masked equality true for every address on earth, which would
+     * turn the interlock into a no-op precisely when WiFi has no address yet. */
+    CHECK(!net_tx_peer_allowed(ip(203,0,113,7), ours, 0), "a zero netmask must refuse\n");
+    CHECK(!net_tx_peer_allowed(ip(192,168,1,8), ours, 0), "zero netmask refuses even a LAN address\n");
+    CHECK(!net_tx_peer_allowed(ip(192,168,1,8), 0, m24), "no address of our own must refuse\n");
+    CHECK(!net_tx_peer_allowed(0, ours, m24), "an unknown peer must refuse\n");
+
+    /* ⛔ THE BYTE-ORDER TRAP, END TO END. net_ipv4_from_network_order() is what
+     * the interlock runs the peer address and our own address through; feeding
+     * it the wire layout must land on the same verdict as the host-order form.
+     * v1.8.7 shipped this conversion missing one layer up and every LAN
+     * address failed the subnet test (Mark G4MEM). The interlock's failure
+     * would be the mirror image and worse: it refuses the operator's own
+     * browser and allows nothing, or - with the mask reversed - compares the
+     * wrong end and allows the internet. */
+    {
+        /* 192.168.1.8 and 255.255.255.0 as esp_netif hands them over: first
+         * octet in byte 0. Built byte-wise, not with htonl(), so the test does
+         * not depend on the host machine's endianness. */
+        uint8_t wire_ip[4]   = {192,168,1,8};
+        uint8_t wire_mask[4] = {255,255,255,0};
+        uint8_t wire_pub[4]  = {203,0,113,7};
+        uint32_t nip, nmask, npub;
+        memcpy(&nip,   wire_ip,   4);
+        memcpy(&nmask, wire_mask, 4);
+        memcpy(&npub,  wire_pub,  4);
+        CHECK(net_tx_peer_allowed(net_ipv4_from_network_order(nip),
+                                  ours, net_ipv4_from_network_order(nmask)),
+              "wire-order LAN peer + wire-order mask must be allowed\n");
+        CHECK(!net_tx_peer_allowed(net_ipv4_from_network_order(npub),
+                                   ours, net_ipv4_from_network_order(nmask)),
+              "wire-order public peer must be refused\n");
+    }
+}
+
 int main(void)
 {
     printf("net_guard harness\n\n");
@@ -228,6 +316,7 @@ int main(void)
     test_plaintext_allowed();
     test_ipv4_parse();
     test_url_parse();
+    test_tx_peer_allowed();
     printf("\n%s (%d failure%s)\n", g_fail ? "FAILED" : "PASS", g_fail, g_fail == 1 ? "" : "s");
     return g_fail ? 1 : 0;
 }

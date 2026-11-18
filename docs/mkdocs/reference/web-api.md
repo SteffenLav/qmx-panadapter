@@ -325,6 +325,33 @@ writer to the radio's serial port. For one raw CAT string there is the developer
 action `cat_raw` with a `cmd` field; its reply appears in the diagnostic log,
 and a command that would transmit passes the band guard first.
 
+## Transmitting from off your network
+
+This API has **no password**, and it can key the radio. The **TX interlock**
+(Settings > Station > *Refuse transmit from outside this network*) refuses any
+request that transmits unless it arrived from the Tab5's own subnet. The refusal
+is **HTTP 403** with `{"ok":false,"tx_interlock":true,"error":"..."}`, so a
+client can tell it apart from a band-guard refusal. Receive, the display and
+every read-only call are untouched.
+
+It is **off by default**, because driving this radio across a network is a
+legitimate thing to do - a shared-radio front end, or your own station behind a
+tunnel.
+
+The actions that **stop** something are never interlocked: `tune_stop`,
+`rtty_stop`, `cw_cancel`, `js8_text_cancel`, and `qso_override` with `cancel`,
+`pause` or `skip`. Refusing a stop would leave a transmitter on the air.
+
+!!! warning "It is not a login"
+    It stops the internet. It does not stop anyone else on your WiFi - they are
+    on the same subnet and they pass. The peer address is read from the TCP
+    connection, so `X-Forwarded-For` and friends cannot fake it, and that also
+    means a reverse proxy on your LAN passes as a local caller. For real remote
+    access put the Tab5 behind a VPN, a tunnel or a proxy that does the
+    authentication, and leave this on as the second lock. Over plain HTTP a
+    password would cross in clear and the token could be replayed to key your
+    transmitter.
+
 ## FT8 Endpoints
 
 The decode list is `GET /api/decodes` (above). Transmit from the browser is

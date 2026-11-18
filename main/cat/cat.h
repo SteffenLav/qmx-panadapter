@@ -348,7 +348,11 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...);
  * @param err_len  its size
  * @return ESP_OK when sent, ESP_ERR_NOT_ALLOWED when the guard refused.
  */
-esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len);
+/* sockfd: the socket the text arrived on, for the TX interlock (T206). The
+ * door resolves the peer itself with getpeername() - a caller that could
+ * pass an ADDRESS could pass a local-looking one, and a header is worth
+ * even less. A negative fd refuses keying text while the interlock is on. */
+esp_err_t cat_send_external_cmd(const char *cmd, int sockfd, char *err, size_t err_len);
 
 /**
  * @brief Query the QMX's instantaneous power output and SWR (PC; and SW;).

@@ -1,6 +1,7 @@
 #include "cat.h"
 #include "cat_keying_cmds.h"
 #include "tx_band_guard.h"
+#include "tx_subnet.h"      /* T206 - the TX interlock, consulted before the band guard */
 #include "cw_txq.h"
 #include "util/cat_restore.h"   // what the band scan sends to undo itself
 
@@ -879,7 +880,7 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
  * cat_send_raw_cmd() under main/net/, which is what keeps the next pass-through
  * (T63) honest.
  */
-esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len)
+esp_err_t cat_send_external_cmd(const char *cmd, int sockfd, char *err, size_t err_len)
 {
     if (err && err_len) err[0] = '\0';
     if (!cmd || !cmd[0]) return ESP_ERR_INVALID_ARG;
@@ -888,6 +889,19 @@ esp_err_t cat_send_external_cmd(const char *cmd, char *err, size_t err_len)
     cat_keying_t k;
     cat_keying_classify(cmd, &k);
     if (k.keys) {
+        /* T206 TX INTERLOCK, FIRST. Who is asking is settled before anything
+         * about what they asked for, because the cheapest refusal is the one
+         * that never looked at the dial. The fd is the request's own socket
+         * and the peer comes from getpeername(); a NEGATIVE fd is a refusal
+         * while the interlock is on - this door exists for text from OUTSIDE
+         * the firmware, so "no socket" means the caller cannot be placed,
+         * which is exactly the case to refuse. */
+        char serr[220];
+        if (!tx_subnet_allows_fd(sockfd, "raw CAT", serr, sizeof serr)) {
+            ESP_LOGW("cat", "external cmd REFUSED by the TX interlock (%s): %s", k.verb, cmd);
+            if (err && err_len) snprintf(err, err_len, "%s", serr);
+            return ESP_ERR_NOT_ALLOWED;
+        }
         /* ⛔ The dial is the only thing we know about what this will emit, so
          * not knowing it is a refusal here. The internal paths are documented
          * to pass in that case - a guard that blocks every burst on a flaky

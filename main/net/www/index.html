@@ -5203,6 +5203,13 @@ const SET_FIELDS = [
      "The map of who has heard you. The Tab5 has had this switch since the map was added"],
   /* T48. Worded as turning the CHECK OFF, not the guard on, so the default
      reads correctly: unchecked = the Tab5 refuses out-of-band transmissions. */
+  /* T206 TX interlock. Worded as what it DOES - refuse requests from off the
+     network - and deliberately NOT as "require a login" or "secure the API",
+     because it is neither. It stops the internet; it does not stop a guest on
+     your WiFi. Default off: anyone already driving this API from another
+     subnet (Jim KC9KKO's shared-radio fork) keeps working until they tick it. */
+  ["Station", "tx_subnet_interlock", "bool", "Refuse transmit from outside this network",
+   "The Tab5's web API can key the radio, and it has no password. With this ticked, a request that did not arrive from the Tab5's own network is refused and told why - transmit only, receive and the display are untouched. \u26a0 It is not a login: anyone on the same WiFi still passes, so for real remote access put the Tab5 behind a VPN or tunnel and leave this on as the second lock. Leave it OFF if you drive this radio over the network on purpose, for example through a shared-radio front end on another subnet"],
   ["Station", "tx_band_guard_off", "bool", "Allow transmitting outside the band plan",
    "Normally the Tab5 refuses to key the radio if the transmission would fall outside your IARU region's allocation, and says so. Tick this only if your licence gives you access the built-in band plan does not know about - it is a coarse table and has been wrong at a band edge before. With the guard on you must also have the IARU region set (or a grid, from the GPS), because the band cannot be checked without it"],
 

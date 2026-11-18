@@ -681,6 +681,20 @@ typedef struct {
      * A guard that cannot be switched off would eventually stop a legal
      * transmission with no way round it. */
     bool     tx_band_guard_off;
+    /* TX INTERLOCK (T206): refuse keying for a web request that did not arrive
+     * from this subnet. See tx_subnet.h for the whole argument - including
+     * that it is NOT authentication and must never be worded as any.
+     *
+     * STORED POSITIVE, the OPPOSITE convention to tx_band_guard_off above,
+     * and the inversion is the point. tx_band_guard_off is negative so a zero
+     * from an old NVS blob leaves the band guard ON, which is what that guard
+     * needs. Here a zero blob must mean OFF, because enforcing on upgrade
+     * would silently take TX away from anyone already driving this API across
+     * subnets - Jim KC9KKO's QMX-PanadapterShared fork exists to do exactly
+     * that. A negative name (tx_subnet_interlock_off) would have made the
+     * old-blob default ON. So: true = enforce, default false, and the name
+     * says what it does rather than what it does not. */
+    bool     tx_subnet_interlock;
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
     bool     spots_en;        // draw live POTA (later RBN) spots on the spectrum (default true)
     bool     rbn_en;          // add RBN (CW skimmer) spots as a second source, via spothole.app
@@ -1329,6 +1343,8 @@ void settings_set_greylist_en(bool v);
 bool settings_get_greylist_en(void);    // narrow: row_activate_ex() runs on taskLVGL's small stack
 void settings_set_tx_band_guard_off(bool v);
 bool settings_get_tx_band_guard_off(void);
+void settings_set_tx_subnet_interlock(bool v);   /* T206 - see tx_subnet.h */
+bool settings_get_tx_subnet_interlock(void);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 bool settings_get_spots_en(void);       // narrow: spots_any_source_enabled() runs on render (4096 B stack)

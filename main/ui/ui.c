@@ -4413,6 +4413,7 @@ static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
 static lv_obj_t *s_slider_charge_limit_pct = NULL;
 static lv_obj_t *s_check_distance_miles = NULL;
 static lv_obj_t *s_check_wspr_miles     = NULL;   /* DRAWER_SEC_WSPRDIST */
+static lv_obj_t *s_check_tx_subnet = NULL;   /* T206 TX interlock, drawer row */
 static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panadapter only)
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
@@ -4710,6 +4711,7 @@ static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
+static void drawer_check_tx_subnet_cb(lv_event_t *e);
 static void drawer_check_still_cb(lv_event_t *e);
 static void drawer_check_server_cb(lv_event_t *e);
 static void drawer_still_refresh_label(void);
@@ -17843,7 +17845,11 @@ static void drawer_build(void)
     /* Server mode (T19). Measured: core 0 idle 10-13 % -> 67 %, core 1
      * 42-56 % -> 72 %, with a browser on the page the whole time. */
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SERVER, y, 124);
+        /* 124 -> 260: the TX interlock shares this section rather than taking
+         * one of its own. It belongs with Server mode because both are about
+         * what the browser may do, and a new DRAWER_SEC_* would also have to
+         * be threaded through drawer_set_ft8_mode()'s keep[] lists. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SERVER, y, 260);
         lv_obj_t *lbl = lv_label_create(sec);
         lv_label_set_text(lbl, "Server mode");
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
@@ -17862,7 +17868,37 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         lv_obj_set_style_text_font(note, &lv_font_montserrat_20, 0);
         lv_obj_align(note, LV_ALIGN_TOP_LEFT, 0, 52);
-        y += 124;
+
+        /* T206 TX INTERLOCK. Read at build like Server mode above; the web
+         * settings page is the other way in and the two write the same stored
+         * flag, so they cannot disagree about the value - only about when each
+         * last looked at it, which is why this row is rebuilt from settings
+         * every time the drawer is built.
+         *
+         * The label says what it refuses, NOT "secure" or "login". It is not
+         * authentication: see tx_subnet.h. */
+        lv_obj_t *il_lbl = lv_label_create(sec);
+        lv_label_set_text(il_lbl, "Refuse TX from off-network");
+        lv_obj_set_style_text_color(il_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(il_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(il_lbl, LV_ALIGN_TOP_LEFT, 0, 128);
+        qmx_settings_t ilcfg;
+        settings_load_all(&ilcfg);
+        s_check_tx_subnet = make_drawer_checkbox(sec, ilcfg.tx_subnet_interlock,
+                                                 drawer_check_tx_subnet_cb, NULL);
+        lv_obj_align(s_check_tx_subnet, LV_ALIGN_TOP_RIGHT, 0, 124);
+
+        lv_obj_t *il_note = lv_label_create(sec);
+        lv_label_set_long_mode(il_note, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(il_note, DRAWER_W - 80);
+        lv_label_set_text(il_note,
+            "The web API can key the radio and has no password. On, a transmit "
+            "request from outside this network is refused. Not a login - "
+            "anyone on this WiFi still passes.");
+        lv_obj_set_style_text_color(il_note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(il_note, &lv_font_montserrat_20, 0);
+        lv_obj_align(il_note, LV_ALIGN_TOP_LEFT, 0, 170);
+        y += 260;
     }
 
     /* Power off, directly under Restart. They are the same control with
@@ -19973,6 +20009,17 @@ static void drawer_check_still_cb(lv_event_t *e)
      * notice has done its job and must not appear again. */
     settings_set_still_notice_done(true);
     drawer_still_refresh_label();
+}
+
+/* T206. Writes the stored flag and nothing else: the interlock reads the
+ * setting on every request, so there is no live state to poke and no reason to
+ * touch the radio. */
+static void drawer_check_tx_subnet_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_tx_subnet_interlock(on);
+    ui_toast(on ? "Transmit requests from outside this network will be refused"
+                : "Transmit requests from any network are allowed again");
 }
 
 static void drawer_switch_flat_cb(lv_event_t *e)
