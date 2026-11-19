@@ -776,8 +776,9 @@ static void row_activate_ex(int idx, bool direct)
     // Intelligent Transmit: build the correct NEXT message for this row (grid /
     // report / R-report / RR73 / 73) from what the station last sent us, so the
     // Transmit button steps the QSO forward instead of always resending our
-    // grid. Auto Pounce (the full auto-sequencer) is still offered for a fresh
-    // CQ; the modal derives that from the request (see ft8_tx_modal_show).
+    // grid. Auto Pounce (the full auto-sequencer) is offered for every rung
+    // but the closing 73; the modal derives that from the request's kind (see
+    // ft8_tx_modal_show), the same rule web_reply_drain() below already uses.
     ft8_tx_request_t req;
     char err[64];
     if (ft8_qso_build_manual_reply(match, reply_freq_hz, &req, NULL, err, sizeof(err))) {

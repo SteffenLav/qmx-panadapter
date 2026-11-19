@@ -581,7 +581,14 @@ static void make_roger(const char *their_report, char *out, size_t len)
 // machine uses (see WAIT_RPT/cqrun_answer). Field Day mode keeps the plain TX1
 // build (its class+section exchange isn't mirrored here); Auto Pounce still
 // runs the full FD sequence. *is_fresh_grid, if non-NULL, is set true only for
-// the TX1-grid case - the one where "Auto Pounce" still makes sense.
+// the TX1-grid case.
+//
+// ⚠ is_fresh_grid is NOT the Auto Pounce gate and has not been since
+// 2026-09-25 - it only says "this answers a CQ", for logging. Both surfaces
+// now offer the sequencer for every kind but the closing 73 (web:
+// web_reply_drain(); Tab5: ft8_tx_modal_show()). The old wording here said
+// it was "the one where Auto Pounce still makes sense", which is how the
+// stale gate survived in the modal for two months.
 bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
                                 ft8_tx_request_t *out, bool *is_fresh_grid,
                                 char *err, size_t err_len)

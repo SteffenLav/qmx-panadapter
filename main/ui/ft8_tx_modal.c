@@ -33,7 +33,7 @@ static lv_obj_t   *s_lbl_message   = NULL;
 static lv_obj_t   *s_lbl_detail    = NULL;
 static lv_obj_t   *s_lbl_countdown = NULL;
 static lv_obj_t   *s_lbl_error     = NULL;
-static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (fresh-grid REPLY only)
+static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (REPLY + ROGER_RPT)
 static lv_obj_t   *s_pounce_swatch = NULL;  // legend swatch, hidden with the button
 static lv_obj_t   *s_pounce_legend = NULL;  // legend text, hidden with the button
 static lv_obj_t   *s_btn_nudge_up  = NULL;  // re-target the row above (REPLY only)
@@ -354,7 +354,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cancel_lbl);
 
-    // Auto Pounce — visible only for REPLY kind (hidden initially, shown in show())
+    // Auto Pounce — visible for REPLY and ROGER_RPT (hidden initially, shown in show())
     s_btn_pounce = lv_btn_create(s_panel);
     lv_obj_set_size(s_btn_pounce, 220, 72);
     lv_obj_align(s_btn_pounce, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -448,13 +448,41 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
     // Row-nudge makes sense for any reply built from a decode-list row (REPLY
     // kind); hide it for a CQ (we *are* the caller — no row to nudge between).
     bool is_reply = (s_pending_req.kind == FT8_TX_KIND_REPLY);
-    // Auto Pounce (the full auto-sequencer) is offered for any REPLY-kind
-    // request: a grid TX1 (extra empty) starts in WAIT_RPT, and a report-first
-    // reply (extra = "+NN"/"-NN" - Skip-TX1 manual build, pileup modal, or a
-    // tapped their-grid row) is honoured as-is by ft8_qso_start() and starts
-    // in WAIT_ROGER. Only the later ladder steps (ROGER_RPT / 73 kinds) would
-    // mis-seed the state machine - those get single Transmit only.
-    bool is_fresh_pounce = is_reply;
+    // Auto Pounce (the full auto-sequencer) is offered for every rung of the
+    // ladder that still has something left to automate:
+    //
+    //   REPLY      - a grid TX1 (extra empty) starts in WAIT_RPT, and a
+    //                report-first reply (extra = "+NN"/"-NN" - Skip-TX1 manual
+    //                build, pileup modal, or a tapped their-grid row) is
+    //                honoured as-is by ft8_qso_start() and starts in WAIT_ROGER.
+    //   ROGER_RPT  - extra = "R+NN"/"R-NN", seeded to WAIT_RR73 by
+    //                ft8_qso_start()'s #234 branch (Roy KI0ER / K7FD).
+    //
+    // ⚠ THE OLD COMMENT HERE WAS STALE AND HID A WORKING PATH. It said
+    // ROGER_RPT "would mis-seed the state machine" - true before #234, false
+    // since: ft8_qso_start() has had the explicit ROGER_RPT -> WAIT_RR73 branch
+    // ever since. Nothing in the engine changed for this; the same ROGER_RPT
+    // request has been run through ft8_qso_start() all along by the long-press
+    // shortcut (ft8_screen_view.c row_activate_ex, direct=true), by the
+    // auto-pileup drain and by the web reply queue. Only this button hid it.
+    // Don WB0LQW asked for it on groups.io, 2026-11-18.
+    //
+    // ⭐ THE WEB PAGE HAS RUN THIS RULE SINCE 2026-09-25. web_reply_drain()
+    // (ft8_screen_view.c) hands EVERY kind but 73 to ft8_qso_start(), for
+    // Randy N4OPI's "it is forever in manual QSO mode" report - the identical
+    // question, answered the identical way, and shipped. This modal was the
+    // last surface still gating on the opening message. Both now say:
+    // everything but the closing 73 starts a QSO.
+    //
+    // 73 stays single-Transmit: there is no next message to sequence, and
+    // transmit_btn_cb() already logs it via ft8_qso_notify_manual_final().
+    //
+    // ⛔ Every ROGER_RPT that can reach this modal is built by
+    // ft8_qso_build_manual_reply(), which always fills extra with
+    // make_roger(<report>). If a new builder ever produces a ROGER_RPT with a
+    // different extra_field it falls through ft8_qso_start()'s branch to
+    // WAIT_RPT, which is the #234 forever-loop. Check that before adding one.
+    bool is_fresh_pounce = is_reply || (s_pending_req.kind == FT8_TX_KIND_ROGER_RPT);
     lv_obj_t *pounce_objs[] = { s_btn_pounce, s_pounce_swatch, s_pounce_legend };
     for (unsigned i = 0; i < sizeof(pounce_objs) / sizeof(pounce_objs[0]); i++) {
         if (!pounce_objs[i]) continue;

@@ -73,7 +73,7 @@ note: amber | Transmit sends this message once; Auto Pounce runs the whole excha
 - **▲ / ▼ Nudge** — move the target to the row above or below, without closing the modal and redoing the selection gesture
 - **Cancel** — abort
 
-**Transmit is intelligent (v1.3.0)** — it builds the correct *next* message from what that station last sent, exactly like a WSJT-X double-click: their CQ -> your grid (or your report, with Skip TX1 on), their grid -> your report, their report -> `R`+your report, their `R`-report -> `RR73`, their `RR73`/`73` -> `73`. You can run a whole QSO one Transmit tap at a time — and sending the closing `RR73`/`73` **logs the QSO to ADIF** just like an automatic contact. Auto Pounce is offered on any first reply; once you're mid-exchange with a station, its rows offer Transmit only.
+**Transmit is intelligent (v1.3.0)** — it builds the correct *next* message from what that station last sent, exactly like a WSJT-X double-click: their CQ -> your grid (or your report, with Skip TX1 on), their grid -> your report, their report -> `R`+your report, their `R`-report -> `RR73`, their `RR73`/`73` -> `73`. You can run a whole QSO one Transmit tap at a time — and sending the closing `RR73`/`73` **logs the QSO to ADIF** just like an automatic contact. Auto Pounce is offered on every message except the closing `RR73`/`73` — so you can take over a half-finished exchange and hand the rest to the sequencer, not only start one from scratch. On a closing row there is nothing left to sequence, so it offers Transmit only (and sending it still logs the QSO).
 
 **A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
 

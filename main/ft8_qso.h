@@ -270,7 +270,8 @@ void ft8_qso_fmt_report(int snr_db, char *out, size_t len);
 // their report -> R+our report; their R-report -> RR73; their RR73/73 -> 73.
 // The report value is OUR measured SNR of them (heard->last_snr_db), not an
 // echo. reply_freq_hz is the audio tone for our TX. *is_fresh_grid (optional)
-// is set true only for the TX1-grid case (where Auto Pounce still applies).
+// is set true only for the TX1-grid case ("this answers a CQ", for logging -
+// it is NOT the Auto Pounce gate; both surfaces sequence every kind but 73).
 // Returns false + err on identity/encode failure. LVGL thread only.
 bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
                                 ft8_tx_request_t *out, bool *is_fresh_grid,
