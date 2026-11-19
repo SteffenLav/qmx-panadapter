@@ -826,6 +826,14 @@ static void edge_r_click_cb(lv_event_t *e) { (void)e; tune_to_spot(&s_off_r, "sp
 
 // ---- build -----------------------------------------------------------------
 
+/* One container holds every tick, label and hit zone, so the whole lane rides
+ * the pan gesture by moving this single object - the same way s_label_bar and
+ * the spectrum canvas do. Nothing is recomputed: the drag is whole pixels. */
+void spots_lane_set_stroll_x(int off)
+{
+    if (s_lane) lv_obj_set_x(s_lane, off);
+}
+
 void spots_lane_build(lv_obj_t *parent, int y, int h)
 {
     s_w = heap_caps_calloc(1, sizeof(work_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

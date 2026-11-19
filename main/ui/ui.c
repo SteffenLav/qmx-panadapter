@@ -9802,7 +9802,31 @@ static void stroll_apply_offset(int off)
      * anchor away and slide the history off by WF_MARGIN. */
     s_wf_stroll_off = off;
     wf_apply_x();
+
+    /* ⛔ EVERY FREQUENCY-POSITIONED OVERLAY HAS TO MOVE HERE, NOT ON ITS
+     * OWN TIMER. The pan is LOCAL while the button or finger is down - no DSP,
+     * no CAT - so ui_get_pan_offset_hz() does not change until the release.
+     * An overlay that derives its x from that number therefore stands still
+     * for the whole drag and snaps into place afterwards.
+     *
+     * The operator found it on the RTTY page, 2026-11-19: "everything moves
+     * smoothly with the mouse pointer except the two orange guide lines -
+     * they only jump to the right position after releasing."
+     *
+     * Anything PAINTED INTO s_spec_canvas (VFO cursor, passband, curve) rides
+     * along for free. Separate LVGL objects do not, and there are two kinds:
+     *   - a whole container that can be slid bodily, like the spots lane;
+     *   - single markers that must add ui_stroll_offset_px() where they are
+     *     positioned, because their parent carries other content too.
+     * A new overlay has to pick one of the two. */
+    spots_lane_set_stroll_x(off);
+    rtty_screen_view_pan_moved();
 }
+
+/* The live pan drag in pixels - how far the spectrum has been slid from where
+ * the committed pan says it is. 0 whenever nothing is being dragged. See
+ * stroll_apply_offset() for why an overlay needs it. */
+int ui_stroll_offset_px(void) { return s_wf_stroll_off; }
 
 /* Abandon a one-finger pan WITHOUT applying it: no retune, no view move, and
  * everything the drag painted live (tooltip, band strip, the freq readout in
@@ -13351,9 +13375,14 @@ void ui_push_spectrum(const float *bins, int n_bins)
             // waterfall). An overlay object rather than pixels in the bitmap, for the
             // reason s_wf_cursor is one: rows scroll, so a drawn line would trail.
             // Positioned from this same pass so the two can never disagree.
+            /* The spectrum's RIT line is drawn into s_spec_canvas, which
+             * slides with the drag; these two are objects over the waterfall
+             * and are not. Without the offset the one line comes apart into
+             * two during every pan. */
+            const int rwx = rx + ui_stroll_offset_px();
             if (s_rit_wf_marker) {
-                if (rx >= X0 && rx < DISPLAY_H_RES) {
-                    lv_obj_set_x(s_rit_wf_marker, rx);
+                if (rwx >= X0 && rwx < DISPLAY_H_RES) {
+                    lv_obj_set_x(s_rit_wf_marker, rwx);
                     lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
                 } else {
                     lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
@@ -13364,14 +13393,14 @@ void ui_push_spectrum(const float *bins, int n_bins)
             // the honest place for it, since this is where the marker already says
             // WHERE you are listening and the number says how far.
             if (s_rit_wf_lbl) {
-                if (rx >= 0 && rx < DISPLAY_H_RES) {
+                if (rwx >= 0 && rwx < DISPLAY_H_RES) {
                     char rb[16];
                     snprintf(rb, sizeof rb, "%+d Hz", rit_hz_now);
                     const char *cur = lv_label_get_text(s_rit_wf_lbl);
                     if (!cur || strcmp(cur, rb) != 0) lv_label_set_text(s_rit_wf_lbl, rb);
                     // Flip to the left of the line when it would run off the right
                     // edge - about 80 px covers "+9999 Hz" at montserrat_18.
-                    int lx = (rx + 4 + 80 <= DISPLAY_H_RES) ? rx + 6 : rx - 84;
+                    int lx = (rwx + 4 + 80 <= DISPLAY_H_RES) ? rwx + 6 : rwx - 84;
                     if (lx < 0) lx = 0;
                     lv_obj_set_pos(s_rit_wf_lbl, lx, 2);
                     lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);

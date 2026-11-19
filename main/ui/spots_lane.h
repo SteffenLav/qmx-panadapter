@@ -69,3 +69,9 @@ int spots_lane_top_hit_y(void);
 // code, and a wrong mapping would point callsigns at the wrong frequencies while
 // looking perfectly plausible.
 void spots_lane_selftest(void);
+
+// Slide the whole lane sideways by off px, or 0 to put it back. Called only
+// by the pan gesture: the lane's spots are positioned from a view that does
+// not move until the drag is released, so without this the callsigns sit
+// still over a spectrum that is sliding under them.
+void spots_lane_set_stroll_x(int off);

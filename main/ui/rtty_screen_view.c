@@ -696,17 +696,55 @@ static int hz_to_x(int64_t hz)
     return x0 + (int)((hz - lo) * (int64_t)(MID_W - x0) / span);
 }
 
+/* The two tones in absolute Hz, cached so a pan can re-place the lines
+ * without a status fetch. 0 = nothing to draw yet. */
+static int64_t s_marker_hz[2];
+
+/* ⛔ POSITION FROM THE LIVE DRAG, NOT FROM THE COMMITTED PAN. While the
+ * spectrum is being dragged the canvas slides bodily by whole pixels and
+ * ui_get_pan_offset_hz() has not moved yet, so hz_to_x() alone leaves these
+ * lines standing where the view used to be until the release. Operator,
+ * 2026-11-19: "everything moves smoothly with the mouse pointer except the
+ * two orange guide lines". */
+static void markers_redraw(void)
+{
+    int64_t lo; int32_t span;
+    ui_screen_view_hz(&lo, &span);
+    const int off = ui_stroll_offset_px();
+    for (int i = 0; i < 2; i++) {
+        if (!s_marker[i]) continue;
+        const bool on = (s_marker_hz[i] > 0 && span > 0);
+        const int  x  = on ? hz_to_x(s_marker_hz[i]) + off : 0;
+        /* ⛔ The clamp runs AFTER the offset, never before: a line being
+         * dragged in from off-screen has a negative hz_to_x() and a positive
+         * offset, and testing the unshifted x would keep it hidden the whole
+         * way in. */
+        if (!on || x < ui_spec_x0() || x >= MID_W - 1) {
+            lv_obj_add_flag(s_marker[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_clear_flag(s_marker[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(s_marker[i], x - 1);
+    }
+}
+
 static void place_markers(const rtty_rx_status_t *st, uint32_t dial)
 {
     float half = st->cfg.shift_hz * 0.5f;
     float centre = (float)st->cfg.offset_hz + st->afc_hz;
     for (int i = 0; i < 2; i++) {
         float off = centre + (i ? half : -half);
-        int x = dial ? hz_to_x((int64_t)dial + (int64_t)off) : -1;
-        if (x < ui_spec_x0() || x >= MID_W - 1) { lv_obj_add_flag(s_marker[i], LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_clear_flag(s_marker[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_x(s_marker[i], x - 1);
+        s_marker_hz[i] = dial ? (int64_t)dial + (int64_t)off : 0;
     }
+    markers_redraw();
+}
+
+/* The spectrum is being dragged. Called from the gesture at its own rate -
+ * the page timer runs at 200 ms, which over a 33 Hz drag would step the lines
+ * along in visible jumps behind a smoothly sliding canvas. */
+void rtty_screen_view_pan_moved(void)
+{
+    if (s_shown) markers_redraw();
 }
 
 static void set_bar(lv_obj_t *bar, float frac)

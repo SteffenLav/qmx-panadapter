@@ -209,6 +209,13 @@ bool ui_pan_view_current(pan_view_cfg_t *c, pan_view_t *v, int n_bins);
  * See ui.c for the four separate bug reports that came from the browser having
  * no viewport at all above zoom x1. */
 void ui_screen_view_hz(int64_t *lo_out, int32_t *span_out);
+
+/* How far the spectrum is slid from where ui_get_pan_offset_hz() says it is,
+ * in pixels: the pan gesture while the button or finger is down, 0 otherwise.
+ * An overlay drawn as its own LVGL object - rather than painted into the
+ * spectrum canvas, which slides bodily - has to add this where it sets its x,
+ * or it stands still for the whole drag. See stroll_apply_offset(). */
+int ui_stroll_offset_px(void);
 /* The on-device spectrum viewport. The CW page's keyer pane covers columns
  * [0, CW_PANE_W), so the Tab5 draws the view into [ui_spec_x0(), 1280) and the
  * WEB keeps the full width - see the block comment in ui.c. Anything drawing on

@@ -54,3 +54,9 @@ void      rtty_screen_view_dial_moved(void);
 /* Tune so the MARK tone is at mark_hz (keypad, spot tap, web keypad on the
  * RTTY page): the centre goes to mark -/+ shift/2 by rtty_screen_view_tap_hz. */
 void      rtty_screen_view_tune_mark_hz(uint32_t mark_hz);
+
+/* The spectrum was slid by the pan gesture. Re-places the two tone markers
+ * against the live drag offset, because they are LVGL objects over the page
+ * container rather than pixels in the spectrum canvas, which rides along by
+ * itself. No-op off the RTTY page. LVGL task only. */
+void      rtty_screen_view_pan_moved(void);
