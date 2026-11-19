@@ -93,9 +93,28 @@ static const char *TAG = "spots";
 #define SOTA_BACKOFF_MAX_S 900
 
 // RBN + DX cluster, moved here 2026-11-06 from their own telnet clients
-// (net/rbn.c, net/dxcluster.c - both deleted). ONE query serves both: spothole
-// already splits a spot's `source` field into "RBN" or "Cluster" for us, so
-// one fetch and two spots_publish() calls replaces two sockets.
+// (net/rbn.c, net/dxcluster.c - both deleted).
+//
+// ⛔ THE WRONG TURN, and it cost from 2026-11-06 to 2026-11-19: this said
+// "spothole already splits a spot's `source` field into RBN or Cluster for us,
+// so ONE query serves both". It does not. `source` holds the PROVIDER's name -
+// "RBN FT8" and "RBN CW/RTTY", never the bare "RBN" we asked for and compared
+// against. Both the URL filter and collect_spothole_source() matched it
+// exactly, so the RBN half collected NOTHING for thirteen days. It went
+// unnoticed because Ian had RBN disabled on his server for most of that time,
+// which made an empty result look like the expected one.
+//
+// ⛔ AND ONE QUERY CANNOT SERVE BOTH ANYWAY. Measured 2026-11-19 with the
+// source names corrected, at this file's own limit of 80 on one band:
+//
+//     20m   RBN FT8 65 | RBN CW/RTTY 15 | Cluster  0
+//     40m   RBN FT8 67 | RBN CW/RTTY 12 | Cluster  1
+//
+// RBN FT8 is a firehose and takes the whole budget, so a shared query silently
+// starves the DX cluster - the half that works today and carries the spots the
+// operator actually uses. Hence TWO fetches, each with its own limit. Ian ships
+// both RBN providers with enabled_by_default_in_web_ui:false for the same
+// reason.
 //
 //   band=<current band only>  RBN especially is a global firehose - the old
 //                             telnet client kept only the currently-tuned
@@ -112,7 +131,42 @@ static const char *TAG = "spots";
 #define RBN_CLUSTER_PERIOD_S      60
 #define RBN_CLUSTER_BACKOFF_MAX_S 900
 #define RBN_CLUSTER_MAX_AGE_S     900
-#define RBN_CLUSTER_LIMIT         80
+#define RBN_LIMIT                 80   // was RBN_CLUSTER_LIMIT, shared
+#define CLUSTER_LIMIT             30   // its own budget, no longer starved
+
+// ⛔ The RBN providers by their EXACT names. `source=RBN` returns [] (2 bytes,
+// measured): the server matches the provider name, not a category. Listed in
+// full rather than guessed at, and the client-side match below is a PREFIX so
+// an "RBN PSK" added tomorrow arrives without a firmware change.
+// ⛔ "+" FOR THE SPACE, NOT "%20". This string is concatenated INTO a
+// snprintf format, where "%20F" is a conversion (width 20, 'F') and the build
+// correctly refused it. Both encodings were measured to work on the server;
+// "+" is the one that is also safe here. For the same reason the "/" in
+// CW/RTTY is left raw rather than written "%2F".
+#define RBN_SOURCES    "RBN+FT8,RBN+CW/RTTY"
+#define RBN_PREFIX     "RBN"
+
+// ⭐ Ask for the fields we parse and nothing else. A spothole record carries 44
+// fields; collect_spothole_source() reads 7 and the self-spot parser 6.
+// Measured 2026-11-19 on one RBN query: 60,942 B -> 6,451 B, a 9.4x cut. That
+// is what makes the split affordable - with the trim the two fetches together
+// cost +7.8 KB/min over the old single one, without it +86 KB/min.
+//
+// ⛔ WHY THE BYTES AND NOT IAN'S REQUEST COUNT ARE THE BUDGET: http_get_json()
+// below measures the shared SDIO link to the C6 at a median 32.5 KB/s and the
+// spectrum stream at 10.3 KB/s - a third of it. An untrimmed 88 KB RBN poll is
+// 2.7 s of that link every minute, competing with the waterfall. With the trim
+// it is 0.3 s.
+//
+// ⚠ This is a SIZE optimisation and never a correctness one. If a future
+// spothole ignores `fields` it returns whole records silently; at ~88 KB those
+// still fit RESP_CAP (160 KB), so it degrades rather than breaks. Do not make
+// any parse depend on a field being absent.
+//
+// ⚠ `rbn=true` looked like the cleaner filter and is NOT one - it returned 4
+// POTA records in the same measurement. Name the sources.
+#define SPOT_FIELDS    "&fields=source,freq,dx_call,qrt,mode,mode_type,time"
+#define SELF_FIELDS    "&fields=dx_call,de_call,freq,de_latitude,de_longitude,time"
 
 // Self-spotting (ui/spot_map_view.c) - "who hears my own CQ", independent of
 // the band filter above (operator wants to know regardless of what the
@@ -709,15 +763,21 @@ static bool fetch_sota(void)
 // since SOTA's own position/reference handling does not apply here and
 // duplicating ~15 lines is cheaper than risking the already-verified SOTA
 // path in a refactor.
-static int collect_spothole_source(cJSON *root, const char *want_source,
+// `prefix` selects a family of providers rather than one. See RBN_SOURCES:
+// the RBN arrives as "RBN FT8"/"RBN CW/RTTY" and this compared it exactly to
+// "RBN" until 2026-11-19, so it collected nothing. Cluster stays exact.
+static int collect_spothole_source(cJSON *root, const char *want_source, bool prefix,
                                    spot_source_t src_enum, spot_t *out, int max)
 {
     int n = 0;
+    size_t wl = strlen(want_source);
     cJSON *it = NULL;
     cJSON_ArrayForEach(it, root) {
         if (n >= max) break;
         const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(it, "source"));
-        if (!src || strcasecmp(src, want_source) != 0) continue;
+        if (!src) continue;
+        if (prefix ? (strncasecmp(src, want_source, wl) != 0)
+                   : (strcasecmp(src, want_source) != 0)) continue;
 
         const cJSON *jf = cJSON_GetObjectItem(it, "freq");
         double hz = 0;
@@ -755,47 +815,99 @@ static int collect_spothole_source(cJSON *root, const char *want_source,
 // want_rbn/want_cluster let the caller skip publishing a source whose
 // checkbox is off without skipping the OTHER one's fetch, same as the old
 // two-client setup let one run without the other.
+// How full the shared store is, for the log line below. Takes the lock the
+// same way spots_get() does - s_count is written by this task but read by the
+// UI's, so an unlocked peek would be a data race for a diagnostic.
+static int store_count(void)
+{
+    if (!lock()) return -1;
+    int n = s_count;
+    unlock();
+    return n;
+}
+
 static bool fetch_rbn_cluster(bool want_rbn, bool want_cluster)
 {
+    // Band filter: RBN especially is a global firehose. Omitted when the band
+    // is unknown ("---"), failing OPEN rather than fetching nothing - the call
+    // the old rbn.c's refresh_band() made.
     const char *band = ui_get_band_str();
-    char url[192];
+    char bandq[24] = "";
     if (band && band[0] && strcmp(band, "---") != 0)
-        snprintf(url, sizeof(url),
-                 "%s/spots?source=RBN,Cluster&band=%s&dedupe=true&max_age=%d&limit=%d",
-                 SPOTHOLE_BASE, band, RBN_CLUSTER_MAX_AGE_S, RBN_CLUSTER_LIMIT);
-    else
-        // Band unknown - fail OPEN (no band filter) rather than fetch nothing,
-        // same call the old rbn.c's refresh_band() made.
-        snprintf(url, sizeof(url),
-                 "%s/spots?source=RBN,Cluster&dedupe=true&max_age=%d&limit=%d",
-                 SPOTHOLE_BASE, RBN_CLUSTER_MAX_AGE_S, RBN_CLUSTER_LIMIT);
+        snprintf(bandq, sizeof(bandq), "&band=%s", band);
 
-    char *buf = NULL;
-    int len = http_get_json(url, &buf);
-    if (len < 0) return false;
+    bool all_ok = true;
+    int  nr = 0, nc = 0;
+    unsigned bytes = 0;
 
-    cJSON *root = cJSON_Parse(buf);
-    heap_caps_free(buf);
-    if (!cJSON_IsArray(root)) {
-        if (root) cJSON_Delete(root);
-        ESP_LOGW(TAG, "RBN/cluster: unparseable JSON");
-        return false;
+    // ⛔ TWO fetches, not one. See the constants' comment: shared, RBN FT8
+    // takes the whole limit and the cluster gets nothing. Each is gated on its
+    // own toggle, so a user with only one checkbox on pays for only one
+    // request - which the old single query could not do either.
+    //
+    // s_scratch is reused between them: spots_publish() copies it into the
+    // store before returning, so it is free again the instant each call comes
+    // back. Same pattern the one-fetch version used, just twice.
+    if (want_rbn) {
+        char url[256];
+        snprintf(url, sizeof(url),
+                 "%s/spots?source=" RBN_SOURCES "%s&dedupe=true&max_age=%d&limit=%d" SPOT_FIELDS,
+                 SPOTHOLE_BASE, bandq, RBN_CLUSTER_MAX_AGE_S, RBN_LIMIT);
+        char *buf = NULL;
+        int len = http_get_json(url, &buf);
+        if (len < 0) {
+            all_ok = false;
+        } else {
+            bytes += (unsigned)len;
+            cJSON *root = cJSON_Parse(buf);
+            heap_caps_free(buf);
+            if (!cJSON_IsArray(root)) {
+                if (root) cJSON_Delete(root);
+                ESP_LOGW(TAG, "RBN: unparseable JSON");
+                all_ok = false;
+            } else {
+                nr = collect_spothole_source(root, RBN_PREFIX, true,
+                                             SPOT_SRC_RBN, s_scratch, SPOTS_MAX);
+                spots_publish(SPOT_SRC_RBN, s_scratch, nr);
+                cJSON_Delete(root);
+            }
+        }
     }
 
-    // s_scratch is reused between the two calls: spots_publish() copies its
-    // contents into the store before returning, so it is free again the
-    // instant each call comes back - same pattern as the old rbn.c reusing
-    // one publish-staging buffer for one source, just twice here.
-    int nr = want_rbn     ? collect_spothole_source(root, "RBN",     SPOT_SRC_RBN,     s_scratch, SPOTS_MAX) : 0;
-    spots_publish(SPOT_SRC_RBN, s_scratch, nr);
-    int nc = want_cluster ? collect_spothole_source(root, "Cluster", SPOT_SRC_CLUSTER, s_scratch, SPOTS_MAX) : 0;
-    spots_publish(SPOT_SRC_CLUSTER, s_scratch, nc);
+    if (want_cluster) {
+        char url[256];
+        snprintf(url, sizeof(url),
+                 "%s/spots?source=Cluster%s&dedupe=true&max_age=%d&limit=%d" SPOT_FIELDS,
+                 SPOTHOLE_BASE, bandq, RBN_CLUSTER_MAX_AGE_S, CLUSTER_LIMIT);
+        char *buf = NULL;
+        int len = http_get_json(url, &buf);
+        if (len < 0) {
+            all_ok = false;
+        } else {
+            bytes += (unsigned)len;
+            cJSON *root = cJSON_Parse(buf);
+            heap_caps_free(buf);
+            if (!cJSON_IsArray(root)) {
+                if (root) cJSON_Delete(root);
+                ESP_LOGW(TAG, "cluster: unparseable JSON");
+                all_ok = false;
+            } else {
+                nc = collect_spothole_source(root, "Cluster", false,
+                                             SPOT_SRC_CLUSTER, s_scratch, SPOTS_MAX);
+                spots_publish(SPOT_SRC_CLUSTER, s_scratch, nc);
+                cJSON_Delete(root);
+            }
+        }
+    }
 
-    cJSON_Delete(root);
-    s_last_ok_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "RBN/cluster: %d RBN, %d cluster spots (%u bytes, band=%s)",
-             nr, nc, (unsigned)len, (band && band[0]) ? band : "all");
-    return true;
+    if (all_ok) s_last_ok_us = esp_timer_get_time();
+    // store=N is here deliberately: SPOTS_MAX is 200 and spots_publish() DROPS
+    // silently once full, so this is the only way to see RBN squeezing POTA or
+    // SOTA out. Watch it on a busy band before raising any limit above.
+    ESP_LOGI(TAG, "RBN/cluster: %d RBN, %d cluster (%u bytes, band=%s, store=%d/%d)",
+             nr, nc, bytes, (band && band[0]) ? band : "all",
+             store_count(), SPOTS_MAX);
+    return all_ok;
 }
 
 // Self-spotting: "who hears my own CQ" - see spots.h. dx_call_includes narrows
@@ -816,9 +928,13 @@ static bool fetch_rbn_self(void)
     settings_get_my_callsign(my_call, sizeof(my_call));
     if (!my_call[0]) return true;   // nothing to ask for - not a fetch failure
 
-    char url[224];
+    // Same corrected source names as above - this carried the bare "RBN" too,
+    // so "who hears my CQ" has been empty since 2026-11-06 for the same reason.
+    // ⚠ UNPROVEN on content: the only test available returned 0 records because
+    // the operator was not transmitting. The string is proven on the band query.
+    char url[320];
     snprintf(url, sizeof(url),
-             "%s/spots?source=RBN&dx_call_includes=%s&dedupe=true&max_age=%d&limit=%d",
+             "%s/spots?source=" RBN_SOURCES "&dx_call_includes=%s&dedupe=true&max_age=%d&limit=%d" SELF_FIELDS,
              SPOTHOLE_BASE, my_call, RBN_SELF_MAX_AGE_S, RBN_SELF_LIMIT);
 
     char *buf = NULL;
