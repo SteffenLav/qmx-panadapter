@@ -14,6 +14,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -705,9 +706,59 @@ static const char *cat_mode_for_spot(uint8_t mode, uint32_t hz)
 // reloads it on a mode CHANGE, so the right width follows from the mode by
 // itself - and forcing one would collide with the hard-won SSB filter dance
 // (MMSSB|Filter RX + MMSSB|Bandwidth + FW; suppression, see CLAUDE.md).
+/* ⛔ A SPOT TAP IS AN EXPENSIVE RE-FRAME, AND TAPS MUST NOT OUTRUN IT.
+ *
+ * This runs on the LVGL thread, from a click callback inside lv_timer_handler,
+ * and ui_update_frequency() below was written for the CAT task. Measured on
+ * bench1 2026-11-19, one tap:
+ *
+ *     W display: display lock held 1012 ms by 'taskLVGL' in ui_update_frequency()
+ *
+ * One second in which LVGL rendered nothing. The operator then tapped
+ * "< spots (73)" a few more times - the only way to reach an off-screen spot
+ * is one tap per spot - and the panadapter fell to 0.8 fps and STAYED there
+ * until a reboot.
+ *
+ * ⚠ THIS IS A MITIGATION, NOT THE CURE, and must not be read as one. Why
+ * taskLVGL then spins at 88% of core 0 with BOTH canvases hidden and the lane
+ * off is UNEXPLAINED - see memory/project_bench1_panadapter_latches_at_08fps.md.
+ * What is settled is narrower and sufficient to justify this guard: a tap
+ * costs up to ~1 s of held display lock, so accepting taps faster than that is
+ * wrong whatever the latch turns out to be.
+ *
+ * Eliminated while looking, so nobody re-walks them:
+ *   - a stuck still-view flag. s_sv_jump_pending / s_sv_reframe_pending are
+ *     consumed unconditionally on BOTH branches (ui.c:2302, ui.c:10616).
+ *   - settings_set_last_vfo() being a synchronous NVS write. It is not; it
+ *     sets a pending field and calls mark_dirty().
+ *   - more drawing work. The invalidation RATE is the same latched as healthy
+ *     (~1230 vs ~400 kpx/s at 25.7 vs 0.8 fps); it is cost per pixel that
+ *     changed, which is also why hiding the canvases did nothing.
+ *
+ * The guard is here, in tune_to_spot(), rather than in the two edge callbacks,
+ * because the named-label tap (line ~812) reaches the same code by the same
+ * thread and would otherwise be the one left unguarded.
+ *
+ * 600 ms is the measured hold (1012 ms) rounded down, not a feel: a second
+ * jump issued before the first has been rendered cannot be acted on
+ * meaningfully anyway, and a deliberate second tap by hand is slower than this.
+ * A dropped tap says so in the log rather than failing silently. */
+#define SPOT_TUNE_MIN_GAP_MS 600
+
 static void tune_to_spot(const tap_target_t *t, const char *what)
 {
     if (!t->freq_hz) return;
+
+    static int64_t s_last_tune_us = 0;
+    int64_t now_us = esp_timer_get_time();
+    if (s_last_tune_us && (now_us - s_last_tune_us) < SPOT_TUNE_MIN_GAP_MS * 1000) {
+        ESP_LOGW(TAG, "%s ignored: %lld ms since the last one, the display is "
+                      "still catching up (min %d ms)", what,
+                 (long long)((now_us - s_last_tune_us) / 1000),
+                 SPOT_TUNE_MIN_GAP_MS);
+        return;
+    }
+    s_last_tune_us = now_us;
     /* ⛔ This call BYPASSES ui_tune_commit() - it writes cat_set_frequency_forced()
      * directly, below - and was the one gesture that still could walk the CW page
      * out of its own band segment (operator, 2026-11-09: "the spots can ALSO send
