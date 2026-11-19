@@ -205,6 +205,51 @@ uint32_t spots_version(void) { return s_version; }
 // being drawn.
 #define SPOT_STALE_S 1800
 
+// ⛔ EXCEPT RBN, which is a different kind of thing and 1800 s is wrong for it.
+//
+// The retention argument above - "absence from one response is not evidence a
+// station has gone" - was written for POTA, where an activator sits on one
+// frequency for an hour. An RBN record is a skimmer saying it heard a carrier
+// once. Our own query asks for max_age=900 with dedupe, so the server hands us
+// the COMPLETE current picture every 60 s: anything older than that window is
+// something the server itself no longer reports. The old net/rbn.c used
+// RBN_TTL_S = 600 for exactly this reason, and moving to spothole dropped it.
+//
+// ⭐ MEASURED 2026-11-19, what 1800 s cost, on 20 m at a 24 kHz window:
+//
+//     before RBN worked      lane: off L15  R17   store ~65/200
+//     after,  first poll     lane: off L72  R17   store 145/200
+//     after,  ~2 min         lane: off L109 R20   store 200/200
+//
+// The store FILLED, and spots_publish() drops silently once full - so POTA and
+// SOTA spots were being thrown away. And "< spots (109)" is not a usable
+// affordance: the operator tapped it, which walks the dial one spot per tap,
+// each jump re-framing the whole display at 921 kpx, and the panadapter
+// collapsed to 0.8 fps and stayed there. See
+// memory/project_bench1_panadapter_latches_at_08fps.md - the latch itself is
+// older than this and is NOT fixed here; what is fixed is handing it 109
+// reasons to happen.
+// ⭐ So RBN REPLACES its own set on every poll instead of merging into it.
+// A shorter stale window is NOT enough and was tried first: the measured
+// turnover is ~37 new callsigns per 60 s poll, so even a 600 s window unions
+// ten polls and still overruns the 200-entry store. Replace bounds RBN at the
+// fetch's own limit (80) by construction, on any band, at any hour.
+//
+// ⚠ The merge the rest of the store uses exists because the operator asked for
+// it (2026-08-09, "sometimes all the spots delete/shift to a new picture"). It
+// is kept for POTA, SOTA and Cluster, which is what that complaint was about.
+// It does not apply to a skimmer feed: a station absent from the server's
+// current view is one no skimmer is hearing now, which is exactly what the
+// lane should show.
+//
+// A failed fetch never reaches here (fetch_rbn_cluster returns before
+// publishing), so a dropped poll leaves the previous set on screen rather than
+// blanking the lane.
+static inline bool source_replaces(spot_source_t src)
+{
+    return src == SPOT_SRC_RBN;
+}
+
 void spots_publish(spot_source_t src, const spot_t *list, int n)
 {
     if (!s_store || !lock()) return;
@@ -228,11 +273,13 @@ void spots_publish(spot_source_t src, const spot_t *list, int n)
 
     // 1. Drop this source's genuinely stale entries (and keep every other source).
     int keep = 0;
+    bool replace = source_replaces(src);
     for (int i = 0; i < s_count; i++) {
         bool mine  = (s_store[i].source == src);
-        bool stale = mine && s_store[i].heard_unix > 0 &&
-                     (now - s_store[i].heard_unix) > SPOT_STALE_S;
-        if (!stale) s_store[keep++] = s_store[i];
+        bool drop  = mine && (replace ||
+                              (s_store[i].heard_unix > 0 &&
+                               (now - s_store[i].heard_unix) > SPOT_STALE_S));
+        if (!drop) s_store[keep++] = s_store[i];
     }
     s_count = keep;
 
