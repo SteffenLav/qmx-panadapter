@@ -1246,6 +1246,30 @@
   choose <b>E</b> (clean) at the prompt - that rewrites the partition table.
   Installing with the M5Launcher is the usual cause.
 </div>
+<!-- T207: a refused command said nothing here (Randy N4OPI, 2026-11-19, on
+     the T206 TX interlock: "No TX from foreign network. However, no message
+     explaining why").
+
+     ⛔ THE DEVICE WAS NEVER THE PROBLEM. tx_subnet_cmd_ok() answers 403
+     with a whole sentence - what was refused, which address it came from, and
+     the two ways out - plus tx_interlock:true so a page can tell it from the
+     band guard. The page threw all of it away: of 64 sendCmd() calls only 19
+     kept the reply, and tx_interlock appeared nowhere at all. That is T94 one
+     layer up - a refusal that reaches only the log is invisible to the person
+     who was refused.
+
+     Fixed in sendCmd() rather than at the call sites, because 45 of them
+     would have had to be edited and the 46th written later would be silent
+     again. position:fixed, like #no-persist-banner above, so it does not
+     depend on where the page is scrolled or which panel is open. -->
+<div id="cmd-refusal" style="display:none; position:fixed; left:0; right:0; top:0; z-index:10000;
+     background:#8a4b00; color:#fff; padding:8px 40px 8px 14px; font-size:14px; text-align:center;
+     border-bottom:1px solid #c88a30;">
+  <b id="cmd-refusal-lead">Refused</b> <span id="cmd-refusal-text"></span>
+  <button type="button" id="cmd-refusal-x" title="Dismiss"
+          style="position:absolute; right:8px; top:4px; background:none; border:0; color:#fff;
+                 font-size:20px; line-height:1; cursor:pointer;">&times;</button>
+</div>
   <!-- click-away overlay -->
   <div id="overlay"></div>
 
@@ -4367,20 +4391,69 @@ function toggleDropdown(name) {
   positionDropdown("pill-" + name, "dd-" + name);
 }
 
-async function sendCmd(payload) {
+/* Show a refusal the device sent back. T207.
+ *
+ * The device writes the whole sentence - tx_subnet.c's refusal_text() names
+ * what was refused, the address it arrived from, and the two ways out - so
+ * this renders r.error verbatim and never composes its own explanation. The
+ * one word it adds is the lead, which separates a TX interlock refusal from
+ * any other: the device flags that one with tx_interlock:true precisely so a
+ * page need not parse English to tell them apart.
+ *
+ * It sits under #no-persist-banner when that one is up, rather than over it:
+ * an installation that cannot save settings at all is the more important of
+ * the two and must not be covered by a transient message. */
+let cmdRefusalTimer = null;
+function cmdRefusalShow(j) {
+  const box = document.getElementById("cmd-refusal");
+  const txt = document.getElementById("cmd-refusal-text");
+  const lead = document.getElementById("cmd-refusal-lead");
+  if (!box || !txt || !lead) return;
+  lead.textContent = (j && j.tx_interlock) ? "Transmit refused" : "Refused";
+  txt.textContent  = (j && j.error) ? j.error : "the Tab5 declined that, without saying why.";
+  const np = document.getElementById("no-persist-banner");
+  const npUp = np && np.style.display !== "none" && np.offsetHeight > 0;
+  box.style.top = npUp ? (np.offsetHeight + "px") : "0";
+  box.style.display = "";
+  /* Long enough to read a two-line sentence, and it can be dismissed sooner.
+     Not sticky: the next refusal would otherwise land under a stale one. */
+  if (cmdRefusalTimer) clearTimeout(cmdRefusalTimer);
+  cmdRefusalTimer = setTimeout(cmdRefusalHide, 12000);
+}
+function cmdRefusalHide() {
+  const box = document.getElementById("cmd-refusal");
+  if (box) box.style.display = "none";
+  if (cmdRefusalTimer) { clearTimeout(cmdRefusalTimer); cmdRefusalTimer = null; }
+}
+(function wireCmdRefusalDismiss() {
+  const x = document.getElementById("cmd-refusal-x");
+  if (x) x.addEventListener("click", cmdRefusalHide);
+})();
+
+async function sendCmd(payload, opts) {
   // Returns the parsed reply, or null. It used to await the fetch and throw the
   // body away, which made every refusal invisible: /api/cmd answers an unknown
   // action - and a refused one - with HTTP 200 and the reason in the BODY, so a
   // caller that ignores it cannot tell "done" from "declined, because you are
   // transmitting". Existing callers ignore the return value, so this is
   // backward compatible; #218's install flow depends on it.
+  //
+  // T207: and a caller that ignores it now still SHOWS it. Reporting here is
+  // the whole point - most of the 64 call sites never looked at the reply, so
+  // fixing them one at a time would have left the next one silent again. A
+  // caller that already renders the reason in place passes { quiet: true } so
+  // the operator is not told twice; that list is short and each one is marked
+  // at the call.
   try {
     const r = await fetch("/api/cmd", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    try { return await r.json(); } catch (e) { return null; }
+    let j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    if (j && j.ok === false && !(opts && opts.quiet)) cmdRefusalShow(j);
+    return j;
   } catch(e) { return null; }
 }
 
@@ -7211,7 +7284,7 @@ function js8SubmodePopup(anchor) {
     b.addEventListener("click", async (ev) => {
       ev.stopPropagation();
       js8SubmodeClose();
-      const r = await sendCmd({ action: "js8_submode", submode: e.v });
+      const r = await sendCmd({ action: "js8_submode", submode: e.v }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
       if (r && r.ok === false) {
         alert("JS8 submode not changed: " + (r.err || "refused by the device"));
       }
@@ -8222,7 +8295,7 @@ async function rttyLogDo() {
   const body = { action: "rtty_log", call: v("rlog-call"), rst_sent: v("rlog-rs"), rst_rcvd: v("rlog-rr"),
                  stx: v("rlog-xs"), srx: v("rlog-xr") };
   if (!body.call) { rttyLogNote("Enter a callsign", "#ff9f40"); return; }
-  const r = await sendCmd(body);
+  const r = await sendCmd(body, { quiet: true }); /* T207: shows the reason in place, so no banner too */
   if (!r || !r.ok) { rttyLogNote((r && r.error) || "no answer from the Tab5 - not logged", "#ff5050"); return; }
   rttyLogClose();
   document.getElementById("rtty-log-msg").textContent = "Logged " + body.call + " - " + r.count + " in the log";
@@ -8352,7 +8425,7 @@ async function rttyPoll() {
    shows them, and an extra request per batch is load on core 1 while the
    radio keys (bench1 2026-11-15, see rtty_tx.c start_over). */
 async function rttySend(body, poll = true) {
-  const r = await sendCmd(Object.assign({ action: "rtty_send" }, body));
+  const r = await sendCmd(Object.assign({ action: "rtty_send" }, body), { quiet: true }); /* T207: shows the reason in place, so no banner too */
   const ok = !!(r && r.ok);
   if (!ok) rttyShowErr((r && r.error) || "no answer from the Tab5");
   if (poll || !ok) rttyPoll();
@@ -8443,7 +8516,7 @@ async function rttySend(body, poll = true) {
       a.textContent = "Switching...";
       /* The device refuses a sub-mode it does not implement, and says so in
          the body - show that rather than leaving the label stuck. */
-      const r = await sendCmd({ action: "set_screen", screen: want });
+      const r = await sendCmd({ action: "set_screen", screen: want }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
       a.textContent = (r && r.ok === false && r.error) ? ("Refused: " + r.error) : was;
       if (r && r.ok === false) setTimeout(() => { a.textContent = was; }, 4000);
     });
@@ -10772,7 +10845,7 @@ async function zeroBeatClick() {
   const was = ZB_GLYPH;
   val.textContent = "...";
   const seqAtPress = tuneOutSeq;
-  const r = await sendCmd({ action: "cw_tune" });
+  const r = await sendCmd({ action: "cw_tune" }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
   /* The device answers with what it DID, including which estimator ran and
      whether it is still listening - say that rather than a bare tick, because
      a tuning aid that silently does nothing reads as a dead button (the same
@@ -11096,7 +11169,7 @@ function cwLiveSend(t) {
   return cwLiveQ;
 }
 async function cwLiveSend1(t) {
-  const r = await sendCmd({ action: "cw_send", text: t });
+  const r = await sendCmd({ action: "cw_send", text: t }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
   if (r && r.ok === false) {
     const el = document.getElementById("cw-tx-sentline");
     if (el) el.textContent = "NOT SENT (" + (r.err || "refused") + "): " + t;
@@ -11221,7 +11294,7 @@ function pwrSay(msg) {
     sl._dragging = false;
     const w = (sl._levels || [])[parseInt(sl.value, 10)];
     if (w == null) return;
-    const r = await sendCmd({ action: "out_power", watts_x100: w });
+    const r = await sendCmd({ action: "out_power", watts_x100: w }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
     /* A deferred write is a success that did only half the job, and the
        device says which - pass it on rather than implying the PA moved
        while WSPR or a burst still owns it. */
@@ -12341,7 +12414,7 @@ async function otaInstall(latest) {
   if (!confirm(msg)) return;
   const url = "https://github.com/SteffenLav/qmx-panadapter/releases/download/"
             + latest + "/qmx_panadapter.bin";
-  const r = await sendCmd({ action: "ota_install", url: url });
+  const r = await sendCmd({ action: "ota_install", url: url }, { quiet: true }); /* T207: shows the reason in place, so no banner too */
   if (r && r.ok === false) alert("Cannot update right now:" + "\n" + "\n" + (r.error || "unknown reason"));
 }
 
