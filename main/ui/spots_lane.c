@@ -28,6 +28,12 @@ static const char *TAG = "spots_ui";
 #define MAX_TICKS   40
 #define MAX_LABELS  16
 
+/* How many spots the lane will DRAW in one window, newest first. See the long
+ * comment at the selection site for the measurement and for what is NOT
+ * claimed about it. MAX_LABELS above caps how many get a NAME; this caps how
+ * many exist on screen at all. */
+#define SPOTS_LANE_MAX_VISIBLE 30
+
 // Vertical layout (operator's, 2026-08-05): the block of callsigns is CENTRED on
 // the middle of the spectrum, and each line drops from its own label DOWNWARDS to
 // the frequency axis at the bottom - so the line points at the frequency it
@@ -446,7 +452,7 @@ static void repaint(void)
     }
 
     // Split into visible / off-screen-left / off-screen-right.
-    int vis_n = 0, off_l = 0, off_r = 0;
+    int vis_n = 0, off_l = 0, off_r = 0, vis_capped = 0;
     for (int i = 0; i < n; i++) {
         if (s_w->opa[i] == LV_OPA_TRANSP) continue;
         uint32_t f = s_w->buf[i].freq_hz;
@@ -471,6 +477,44 @@ static void repaint(void)
         s_w->idx[vis_n] = (uint16_t)i;
         s_w->x[vis_n]   = (int16_t)x;
         vis_n++;
+    }
+
+    /* ⛔ A CEILING ON WHAT THE LANE DRAWS, so band density stops mattering.
+     *
+     * Measured on bench1 2026-11-19. A spot tap walked the dial into the CW
+     * segment and the lane went to `81 visible` in a 24 kHz window; the
+     * panadapter ran at 3.4 fps with frames of `min 11 mean 284 max 881` - the
+     * operator's "1 sec and run .2 sec". Cutting the feed (RBN FT8 dropped,
+     * fbd9467e) took it to 19 visible and 9.4 fps.
+     *
+     * ⚠ WHAT IS NOT CLAIMED: that drawing the spots is the cost. draw ms was
+     * 79-86 at 81 visible and 76-81 at 19 - essentially UNCHANGED. The frame
+     * mean fell 284 -> 105 ms entirely in the NON-DRAW part. So this cap is
+     * known to help and the mechanism is NOT understood. Do not write one in
+     * later from memory of this comment.
+     *
+     * The cap exists because the feed cut alone leaves band density in charge:
+     * a contest weekend can put 80 CW skimmer spots in one window with no FT8
+     * involved, and we would be back. 30 is above the 19-26 seen in ordinary
+     * use and well below the 81 that broke it.
+     *
+     * Newest kept, by heard_unix. Partial selection rather than a full sort:
+     * 30 passes over at most 200, no allocation, and the x-sort below reorders
+     * whatever survives. The off-screen counters are deliberately NOT capped -
+     * they still report what is out there. */
+    if (vis_n > SPOTS_LANE_MAX_VISIBLE) {
+        for (int k = 0; k < SPOTS_LANE_MAX_VISIBLE; k++) {
+            int best = k;
+            for (int j = k + 1; j < vis_n; j++)
+                if (s_w->buf[s_w->idx[j]].heard_unix >
+                    s_w->buf[s_w->idx[best]].heard_unix) best = j;
+            if (best != k) {
+                uint16_t ti = s_w->idx[k]; s_w->idx[k] = s_w->idx[best]; s_w->idx[best] = ti;
+                int16_t  tx = s_w->x[k];   s_w->x[k]   = s_w->x[best];   s_w->x[best]   = tx;
+            }
+        }
+        vis_capped = vis_n - SPOTS_LANE_MAX_VISIBLE;
+        vis_n = SPOTS_LANE_MAX_VISIBLE;
     }
 
     // Sort visible by x (insertion sort - the feed arrives roughly
@@ -659,12 +703,21 @@ static void repaint(void)
     // how the mapping and the row packing get verified at all - and because it is
     // change-gated it stays silent while the view is still, instead of adding a
     // line a second to the diag ring.
-    static int l_vis = -1, l_named = -1, l_l = -1, l_r = -1;
-    if (vis_n != l_vis || used != l_named || off_l != l_l || off_r != l_r) {
-        l_vis = vis_n; l_named = used; l_l = off_l; l_r = off_r;
-        ESP_LOGI(TAG, "lane: %d visible, %d drawn (name+line) off L%d R%d | window %lu-%lu Hz",
-                 vis_n, used, off_l, off_r,
-                 (unsigned long)s_view_lo, (unsigned long)s_view_hi);
+    static int l_vis = -1, l_named = -1, l_l = -1, l_r = -1, l_cap = -1;
+    if (vis_n != l_vis || used != l_named || off_l != l_l || off_r != l_r ||
+        vis_capped != l_cap) {
+        l_vis = vis_n; l_named = used; l_l = off_l; l_r = off_r; l_cap = vis_capped;
+        /* capped is printed only when it bites, so its presence in a capture is
+         * itself the evidence that band density reached the ceiling. */
+        if (vis_capped)
+            ESP_LOGI(TAG, "lane: %d visible (%d CAPPED, oldest dropped), %d drawn "
+                          "(name+line) off L%d R%d | window %lu-%lu Hz",
+                     vis_n, vis_capped, used, off_l, off_r,
+                     (unsigned long)s_view_lo, (unsigned long)s_view_hi);
+        else
+            ESP_LOGI(TAG, "lane: %d visible, %d drawn (name+line) off L%d R%d | window %lu-%lu Hz",
+                     vis_n, used, off_l, off_r,
+                     (unsigned long)s_view_lo, (unsigned long)s_view_hi);
     }
 }
 
