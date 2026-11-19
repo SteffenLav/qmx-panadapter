@@ -9,8 +9,9 @@
  * DATABASE. wsprnet spots are what other people draw propagation conclusions
  * from, and an indexed spot cannot be taken back. So:
  *
- *   - it is OFF by default (settings wspr_net_en) and only the operator turns
- *     it on;
+ *   - it is ON by default since 2026-11-19 (settings wspr_net_en), because
+ *     reporting is what a WSPR receiver is for; an operator who switches it
+ *     off has that stored and a later default change cannot undo it;
  *   - a spot is published only once its callsign has been heard MORE THAN
  *     ONCE. WSPR has no CRC, so repetition is the only confirmation available
  *     that needs neither a second decoder nor the internet. A real station

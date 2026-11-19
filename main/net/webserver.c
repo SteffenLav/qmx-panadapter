@@ -47,7 +47,7 @@
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
 #include "wspr_decode.h"     // the deep-search ration (#367/#376 dev action)
-#include "net/wsprnet.h"    // spot publishing (OFF by default)
+#include "net/wsprnet.h"    // spot publishing (ON by default since 2026-11-19)
 #include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get

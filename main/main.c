@@ -839,7 +839,7 @@ void app_main(void)
      * wspr_spots_init MOVED ABOVE ui_init() - see the block there. They are
      * mutexes and buffers with no dependency on anything between here and
      * there, and the mode restore needs them before it can show a page. */
-    wsprnet_init();          /* OFF unless the operator enabled it */
+    wsprnet_init();          /* ON by default since 2026-11-19; still needs call+grid */
     ft8_qso_init();
     ft8_pileup_init();
     ft8_sim_init();

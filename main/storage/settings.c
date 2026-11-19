@@ -1240,7 +1240,21 @@ static void load_from_nvs(qmx_settings_t *out)
      * It shipped dark behind a seven-tap unlock while the bug rate had not
      * flattened; that is over. Transmitting is still opt-in (wspr_tx_en). */
     out->wspr_en       = true;
-    out->wspr_net_en   = false;       /* nothing is published unasked */
+    /* ⭐ DEFAULT ON since 2026-11-19, the operator's call: "Never seen it off
+     * like this - please make it default on". Reporting is what a WSPR
+     * receiver is FOR, and a receiver that hears and says nothing is the
+     * surprising state, not the safe one.
+     *
+     * It reaches only operators who never touched the setting. KEY_WSPR_NET
+     * is written solely when DIRTY_WSPR_NET is set - there is no write-all on
+     * first boot - so anyone who deliberately switched publishing OFF has a
+     * stored 0 that still wins on load. A default change cannot undo a
+     * decision somebody made.
+     *
+     * Two gates still stand between this and the air: nothing is sent without
+     * a callsign AND grid (status reads "no call/grid"), and no callsign is
+     * published until it has been heard more than once. See net/wsprnet.h. */
+    out->wspr_net_en   = true;
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;

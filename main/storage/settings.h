@@ -907,10 +907,15 @@ typedef struct {
      * or wspr_enabled = yes in an imported config file. */
     bool     wspr_en;
 
-    /* ⛔ PUBLISHES TO A PUBLIC DATABASE UNDER THE OPERATOR'S CALLSIGN, so it
-     * starts OFF and only the operator turns it on. wsprnet is a scientific
-     * dataset other people draw propagation conclusions from - an upload is
-     * not a private action, and it cannot be taken back once indexed. */
+    /* ⛔ PUBLISHES TO A PUBLIC DATABASE UNDER THE OPERATOR'S CALLSIGN.
+     * wsprnet is a scientific dataset other people draw propagation
+     * conclusions from - an upload is not a private action, and it cannot be
+     * taken back once indexed.
+     *
+     * ⭐ DEFAULT ON since 2026-11-19 (was off). The operator's call:
+     * reporting is what a WSPR receiver is for. A stored 0 from someone who
+     * switched it off still wins - see the note at the default in settings.c
+     * for why a default change cannot override that. */
     bool     wspr_net_en;
 
     /* WSPR PA-voltage guard (#290). WSPR keys the PA for ~110 s out of every
@@ -1547,7 +1552,7 @@ void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
-void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default OFF
+void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default ON since 2026-11-19
 void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 

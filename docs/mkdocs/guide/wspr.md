@@ -219,9 +219,11 @@ Hopping changes band **between** cycles, never during one, and the waterfall's n
 
 #### Publish spots to wsprnet
 
-Off by default. When on, the stations you hear are uploaded to **wsprnet.org**, where they join the public database. This is how WSPR is useful to anyone other than you: your receiver becomes one of the reporting stations that lets other operators see where *their* signals went.
+On by default. The stations you hear are uploaded to **wsprnet.org**, where they join the public database. This is how WSPR is useful to anyone other than you: your receiver becomes one of the reporting stations that lets other operators see where *their* signals went.
 
-It needs WiFi and your callsign and grid.
+It needs WiFi and your callsign and grid. Without them nothing is sent and the status line reads `no call/grid`. A callsign is only uploaded once it has been heard more than once, so a single stray decode is never published.
+
+Untick it if you would rather not publish. That choice is stored, and it stays off through upgrades.
 
 ---
 
