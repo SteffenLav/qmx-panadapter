@@ -5003,9 +5003,10 @@ static volatile uint32_t s_pi_partial;    /* took the band path            */
 static volatile uint32_t s_pi_no_array;   /* allocation failed             */
 static volatile uint32_t s_pi_stale;      /* previous frame not usable     */
 static volatile uint32_t s_pi_overlay;    /* signature differed            */
-static volatile uint32_t s_pi_wide;       /* band covered >= 2/3           */
+static volatile uint32_t s_pi_wide;       /* area covered >= 2/3           */
 static volatile uint64_t s_pi_band_sum;   /* band height, for the mean     */
 static volatile uint32_t s_pi_band_n;
+static volatile uint64_t s_pi_cols_sum;   /* band WIDTH, for the mean      */
 
 // "Breathing" opacity animation for edge-swipe grip handles: fades between
 // near-invisible and the normal resting opacity so the user notices the
@@ -11983,9 +11984,10 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     out->pi_overlay  = s_pi_overlay;
     out->pi_wide     = s_pi_wide;
     out->pi_band_mean_px = s_pi_band_n ? (unsigned)(s_pi_band_sum / s_pi_band_n) : 0;
+    out->pi_cols_mean_px = s_pi_band_n ? (unsigned)(s_pi_cols_sum / s_pi_band_n) : 0;
     s_pi_partial = 0; s_pi_no_array = 0; s_pi_stale = 0;
     s_pi_overlay = 0; s_pi_wide = 0;
-    s_pi_band_sum = 0; s_pi_band_n = 0;
+    s_pi_band_sum = 0; s_pi_band_n = 0; s_pi_cols_sum = 0;
 
     s_ap_n      = 0;
     s_ap_min_us = UINT32_MAX;
@@ -12564,6 +12566,21 @@ void ui_push_spectrum(const float *bins, int n_bins)
 #define SPEC_SIG(v) do { sig = (sig ^ (uint64_t)(int64_t)(v)) * 1099511628211ULL; } while (0)
     int band_lo = SPECTRUM_H;    /* empty: lo > hi */
     int band_hi = -1;
+    /* ⭐ THE HORIZONTAL EXTENT, beside the vertical one above.
+     *
+     * The band alone is full-width by construction: it is the union of every
+     * column's vertical change, so ONE signal swinging from the noise floor
+     * to the top of the panel invalidates all 1280 x 200. Measured on bench1
+     * 2026-11-19: a dead band ran at 22.8 fps with band 7 px and partial
+     * invalidation accepted on 100% of pushes; a live one ran at 10.9 fps
+     * with band 166 px and REJECTED on 94% (wide 65 vs ok 4), because the
+     * threshold is 2/3 of SPECTRUM_H. Raising that threshold buys 18% and
+     * fixes nothing - the area is wrong in x, not in y.
+     *
+     * So bound x as well. Worst case every column moved and this is the full
+     * width, i.e. exactly today's behaviour. */
+    int col_lo = DISPLAY_H_RES;  /* empty: lo > hi */
+    int col_hi = -1;
     const uint16_t fg = 0x07E0;  // green in RGB565
     const uint16_t grid_color = 0x4208;  // dim grey grid lines
 
@@ -13145,6 +13162,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
                            hi3 = (ohi > phi) ? ohi : phi; }
                     if (lo3 - 1 < band_lo) band_lo = lo3 - 1;
                     if (hi3 + 1 > band_hi) band_hi = hi3 + 1;
+                    /* x-1: this column's pixels depend on the previous
+                     * column's peak too - the joining segment. Same reason
+                     * the band carries +/-1 in y. */
+                    if (x - 1 < col_lo) col_lo = x - 1;
+                    if (x     > col_hi) col_hi = x;
                 }
                 peak_prev_moved = (pprev != py);
                 peak_prev_old   = pprev;
@@ -13164,6 +13186,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
                        hi2 = (prev > y_top) ? prev : y_top; }
                 if (lo2 - 1 < band_lo) band_lo = lo2 - 1;
                 if (hi2 + 1 > band_hi) band_hi = hi2 + 1;
+                if (x - 1 < col_lo) col_lo = x - 1;
+                if (x     > col_hi) col_hi = x;
             }
             s_frame_ytop[x] = (int16_t)y_top;
         }
@@ -13505,13 +13529,25 @@ void ui_push_spectrum(const float *bins, int n_bins)
          * Treated as a 1 px invalidate rather than special-cased out, so the
          * push still ends the same way for every caller. */
         band_lo = 0; band_hi = 0;
+        col_lo  = 0; col_hi  = 0;
     }
     if (have_band) {
         if (band_lo < 0) band_lo = 0;
         if (band_hi > SPECTRUM_H - 1) band_hi = SPECTRUM_H - 1;
-        s_pi_band_sum += (unsigned)(band_hi - band_lo + 1);
+        if (col_lo  < 0) col_lo  = 0;
+        if (col_hi  > DISPLAY_H_RES - 1) col_hi = DISPLAY_H_RES - 1;
+        if (col_hi  < col_lo) { col_lo = 0; col_hi = DISPLAY_H_RES - 1; }
+        unsigned bh = (unsigned)(band_hi - band_lo + 1);
+        unsigned bw = (unsigned)(col_hi  - col_lo  + 1);
+        s_pi_band_sum += bh;
+        s_pi_cols_sum += bw;
         s_pi_band_n++;
-        if ((band_hi - band_lo + 1) * 3 >= SPECTRUM_H * 2) {
+        /* ⛔ THE TEST IS ON AREA, NOT ON HEIGHT. It was height-only until
+         * 2026-11-19 and that made the whole optimisation collapse the moment
+         * the band had a signal in it: one tall carrier sets the height to
+         * the full panel while leaving 1200 of 1280 columns untouched. Keep
+         * both terms. */
+        if ((uint32_t)bh * bw * 3u >= (uint32_t)SPECTRUM_H * DISPLAY_H_RES * 2u) {
             have_band = false;
             s_pi_wide++;
         } else {
@@ -13519,8 +13555,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
     if (have_band) {
+        /* ⛔ SCREEN coordinates, built from the object's own coords - in x as
+         * well as y. Getting x wrong leaves a vertical stripe of the spectrum
+         * stale, the same failure the y note above warns about. */
         lv_area_t a;
         lv_obj_get_coords(s_spec_canvas, &a);
+        a.x2 = a.x1 + col_hi;
+        a.x1 = a.x1 + col_lo;
         a.y2 = a.y1 + band_hi;
         a.y1 = a.y1 + band_lo;
         lv_obj_invalidate_area(s_spec_canvas, &a);

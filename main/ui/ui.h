@@ -358,6 +358,7 @@ typedef struct {
      * band path, and how tall the band was when it was computed. */
     unsigned pi_partial, pi_no_array, pi_stale, pi_overlay, pi_wide;
     unsigned pi_band_mean_px;
+    unsigned pi_cols_mean_px;   /* mean WIDTH of the changed region */
     /* Carpet: rows written into the buffer, and how many of those actually
      * moved the view. rows/shifts should equal the shift batch. */
     unsigned wf_shifts, wf_rows_written;
