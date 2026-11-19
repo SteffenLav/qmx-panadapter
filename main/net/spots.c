@@ -131,7 +131,28 @@ static const char *TAG = "spots";
 #define RBN_CLUSTER_PERIOD_S      60
 #define RBN_CLUSTER_BACKOFF_MAX_S 900
 #define RBN_CLUSTER_MAX_AGE_S     900
-#define RBN_LIMIT                 80   // was RBN_CLUSTER_LIMIT, shared
+// ⭐ 40, and CW/RTTY ONLY. The operator, 2026-11-19, looking at the lane with
+// the RBN finally working: *"but why would we need all those spots anyways -
+// there is too many....."* He is right, and the measurement says which half to
+// cut. On one poll, 20 m and 40 m:
+//
+//     both RBN providers, limit 80    CW 13  FT4 12  FT8 55     10.8 KB
+//     RBN CW/RTTY only,   limit 40    CW 39  RTTY 1              5.4 KB
+//
+// RBN FT8 is 55-62 of every 80 and is the wrong thing on a panadapter:
+//   - FT8 lives in ONE 3 kHz slice, so the spots stack on a single frequency
+//     and say nothing about where to tune;
+//   - this firmware already DECODES FT8 and lists those stations on the FT8
+//     page, so the skimmer reports duplicate what the operator has;
+//   - they are what filled the 200-entry store, drove the lane's off-screen
+//     counter to 109, and put 87 spots behind one tap target.
+// What is left is 40 CW skimmer spots spread across the CW segment, which is
+// what the RBN was for in the first place and what a panadapter can use.
+//
+// ⚠ This does NOT fix the waterfall re-blit latch (one tap still triggers it,
+// measured). It removes most of the reasons to tap. The two are separate -
+// see memory/project_bench1_panadapter_latches_at_08fps.md.
+#define RBN_LIMIT                 40
 #define CLUSTER_LIMIT             30   // its own budget, no longer starved
 
 // ⛔ The RBN providers by their EXACT names. `source=RBN` returns [] (2 bytes,
@@ -143,8 +164,11 @@ static const char *TAG = "spots";
 // correctly refused it. Both encodings were measured to work on the server;
 // "+" is the one that is also safe here. For the same reason the "/" in
 // CW/RTTY is left raw rather than written "%2F".
-#define RBN_SOURCES    "RBN+FT8,RBN+CW/RTTY"
-#define RBN_PREFIX     "RBN"
+#define RBN_SOURCES    "RBN+CW/RTTY"
+// ⛔ NOT the bare "RBN" prefix any more. With RBN_SOURCES narrowed to
+// CW/RTTY, a prefix match would still accept an "RBN FT8" record if one ever
+// arrived in a response, quietly undoing the cut above. Matched in full.
+#define RBN_PREFIX     "RBN CW/RTTY"
 
 // ⭐ Ask for the fields we parse and nothing else. A spothole record carries 44
 // fields; collect_spothole_source() reads 7 and the self-spot parser 6.
@@ -913,7 +937,10 @@ static bool fetch_rbn_cluster(bool want_rbn, bool want_cluster)
                 ESP_LOGW(TAG, "RBN: unparseable JSON");
                 all_ok = false;
             } else {
-                nr = collect_spothole_source(root, RBN_PREFIX, true,
+                /* Exact, not prefix: RBN_PREFIX is the full provider name
+                 * now, and a prefix match would let an "RBN FT8" record back
+                 * in and silently undo the cut. */
+                nr = collect_spothole_source(root, RBN_PREFIX, false,
                                              SPOT_SRC_RBN, s_scratch, SPOTS_MAX);
                 spots_publish(SPOT_SRC_RBN, s_scratch, nr);
                 cJSON_Delete(root);
