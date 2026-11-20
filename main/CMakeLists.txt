@@ -141,6 +141,7 @@ idf_component_register(
         "net/ota_update.c"
         "qmx_term.c"
         "ft8_test.c"
+        "ft8_subtract.c"
         "js8_chat.c"
         "js8_submode.c"
         "js8_alt.c"
