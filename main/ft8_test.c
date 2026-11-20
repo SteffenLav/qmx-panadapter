@@ -3167,11 +3167,37 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
         int64_t t_sub0 = esp_timer_get_time();
         int n_removed = 0;
         const decode_result_t *src[2] = { &r_main, &r_worker };
+#ifdef FT8_SUB_DUP_AB
+        /* ⭐ THE A/B THAT SETTLES THE DUP-SUBTRACT CONFLICT IN ONE SITTING
+         * (see the NOT SETTLED note where the list is recorded). Arm A
+         * subtracts every instance, as the code does today; arm B subtracts
+         * only the FIRST instance of a payload, which is the old behaviour.
+         *
+         * Alternated in PAIRS of slots, not every slot: FT8 stations keep to
+         * an even or an odd period, so a strict alternation would give each
+         * arm one half of the band. (slot/2) % 2 gives each arm both. */
+        const bool sub_dups = (((slot_sec / 15) / 2) % 2) == 0;
+        const uint8_t *seen[2 * FT8_MAX_CANDIDATES];
+        int n_seen = 0, n_dup_kept = 0;
+#else
+        const bool sub_dups = true;
+#endif
         for (int rr = 0; rr < 2; rr++) {
             int ns = src[rr]->n_sub;
             if (ns < 0) ns = 0;
             if (ns > FT8_MAX_CANDIDATES) ns = FT8_MAX_CANDIDATES;
             for (int k = 0; k < ns; k++) {
+#ifdef FT8_SUB_DUP_AB
+                bool is_dup = false;
+                for (int j = 0; j < n_seen && !is_dup; j++)
+                    is_dup = memcmp(seen[j], src[rr]->sub[k].payload, FTX_LDPC_K_BYTES) == 0;
+                if (is_dup) {
+                    n_dup_kept++;
+                    if (!sub_dups) continue;
+                } else if (n_seen < 2 * FT8_MAX_CANDIDATES) {
+                    seen[n_seen++] = src[rr]->sub[k].payload;
+                }
+#endif
                 uint8_t tones[FT8_NN];
                 ft8_encode(src[rr]->sub[k].payload, tones);
                 ft8_subtract_signal(s_sub_audio, s_sub_audio_samples, tones,
@@ -3197,6 +3223,14 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
         ESP_LOGI(TAG, "slot %d subtract pass: removed %d, +%d decode(s), %d ms",
                  slot_idx, n_removed, r_sub.n_decoded,
                  (int)((esp_timer_get_time() - t_sub0) / 1000));
+#ifdef FT8_SUB_DUP_AB
+        /* Its own line, so the line above keeps its format for the parsers. */
+        ESP_LOGI(TAG, "slot %d subtract arm %c: %d duplicate(s) %s",
+                 slot_idx, sub_dups ? 'A' : 'B', n_dup_kept,
+                 sub_dups ? "subtracted" : "skipped");
+#else
+        (void)sub_dups;
+#endif
     }
     s_sub_audio_samples = 0;     /* consumed; never decode the same copy twice */
 #endif
