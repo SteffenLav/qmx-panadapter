@@ -91,6 +91,41 @@
  * NOT DONE: the threshold is read off 20 samples and is not calibrated. Order
  * 2 (4095 trials, ~35 expected false accepts a slot) needs a calibrated
  * threshold before it is worth building at all.
+ *
+ * ---------------------------------------------------------------------------
+ * SUBTRACTION AND OSD TOGETHER, measured 2026-11-20, same 22 WAVs / 362 truth.
+ * -DNPASS=2 turns on subtract-and-repeat; every decode feeds the next pass,
+ * OSD's own included.
+ *
+ *   variant                       uniq  hit/362  osd  in truth  osd ms/slot
+ *   plain                          264    260     -      -           -
+ *   subtract, -DSUB_SKIP_DUP       285    280     -      -           -
+ *   subtract                       289    284     -      -           -
+ *   OSD 0                          268    264     5     5/5         2.7
+ *   subtract + OSD 0               293    288     5     5/5         6.5
+ *   subtract + OSD 1               315    290    32    12/32       16.4
+ *
+ * [*] THE TWO LEVERS ARE ADDITIVE. Subtraction alone is +24 ground-truth
+ * hits, OSD 0 alone is +4, and together they are +28 - exactly the sum, no
+ * overlap. They fix different failures: subtraction removes a strong signal
+ * that was masking a weak one, OSD re-solves a candidate whose soft bits were
+ * nearly right. 288 of 362 is 79.6 % against the baseline's 71.8 %.
+ *
+ * [*] -DSUB_SKIP_DUP REPRODUCES ft8_subtract_bench.c EXACTLY, 285 uniq / 280
+ * hit. That is this harness validated against a known-good number, and it
+ * explains the difference: that bench `continue`s on a duplicate text before
+ * collecting it for subtraction, so it never subtracts a signal decoded twice
+ * from two candidate positions.
+ *
+ * [*] SUBTRACTING DUPLICATES IS WORTH +4 GROUND-TRUTH HITS, FREE (280 -> 284).
+ * ft8_subtract_bench leaves that on the table. A duplicate text means the same
+ * signal was found at two candidate positions; removing both instances fits
+ * the residual better than removing one.
+ *
+ * ⛔ ORDER 1 IS STILL NOT WORTH IT. +2 hits over OSD 0 (288 -> 290) for 32 OSD
+ * decodes of which only 12 are in the truth. 492016 trials predict 30.0 CRC
+ * false accepts and ~20 were observed. The arithmetic holds across both
+ * measurements; it needs the calibrated distance threshold first.
  * ===========================================================================
  */
 #include <stdio.h>
@@ -101,9 +136,11 @@
 #include <time.h>
 #include <ft8/decode.h>
 #include <ft8/message.h>
+#include <ft8/encode.h>
 #include <ft8/constants.h>
 #include <ft8/crc.h>
 #include <common/monitor.h>
+#include "ft8_subtract.h"
 
 #define SR       12000
 #define TIME_OSR 2
@@ -116,6 +153,12 @@
 
 #ifndef OSD_ORDER
 #define OSD_ORDER 1
+#endif
+
+/* Subtract-and-repeat passes. 1 = no subtraction, which is how the first
+ * measurement in the header was taken. */
+#ifndef NPASS
+#define NPASS 1
 #endif
 
 #define N FTX_LDPC_N   /* 174 */
@@ -290,56 +333,106 @@ int main(int argc,char** argv)
     load_expected(argv[2]);
     build_generator();
 
-    monitor_t mon; monitor_config_t cfg={200,3000,sr,TIME_OSR,FREQ_OSR,FTX_PROTOCOL_FT8};
-    monitor_init(&mon,&cfg);
-    for(int p=0;p+mon.block_size<=n;p+=mon.block_size) monitor_process(&mon,sig+p);
-
-    ftx_candidate_t cands[MAXC];
-    int nc=ftx_find_candidates(&mon.wf,MAXC,cands,MINSCORE);
-
     char texts[MAXMSG][64]; int ntext=0;
     char osd_only[MAXMSG][64]; double osd_metric[MAXMSG]; int n_osd_only=0;
-    int n_ldpc=0, n_osd=0, trials_total=0;
+    int n_ldpc=0, n_osd=0, trials_total=0, n_removed=0;
+    int per_pass[8]; memset(per_pass,0,sizeof per_pass);
     double t_osd=0;
 
-    for(int i=0;i<nc;i++){
-        ftx_message_t m; ftx_decode_status_t st;
-        memset(&st,0,sizeof st);
-        if(ftx_decode_candidate(&mon.wf,&cands[i],ITERS,&m,&st)){
-            n_ldpc++;
-            char t[64]; ftx_message_offsets_t off;
-            if(ftx_message_decode(&m,NULL,t,&off)==FTX_MESSAGE_RC_OK && ntext<MAXMSG){
-                int dup=0; for(int j=0;j<ntext;j++) if(match(texts[j],t)) dup=1;
-                if(!dup) snprintf(texts[ntext++],64,"%s",t);
+    float *scratch = malloc(sizeof(float)*(size_t)ft8_subtract_scratch_floats(FT8_NN));
+    if(!scratch){ fprintf(stderr,"scratch alloc failed\n"); return 1; }
+
+    for(int pass=0; pass<NPASS; pass++){
+        monitor_t mon; monitor_config_t cfg={200,3000,sr,TIME_OSR,FREQ_OSR,FTX_PROTOCOL_FT8};
+        monitor_init(&mon,&cfg);
+        for(int p=0;p+mon.block_size<=n;p+=mon.block_size) monitor_process(&mon,sig+p);
+
+        ftx_candidate_t cands[MAXC];
+        int nc=ftx_find_candidates(&mon.wf,MAXC,cands,MINSCORE);
+
+        /* Collected during the pass, subtracted after it. Subtracting while
+         * still walking the candidate list would change the waterfall under
+         * the list - ft8_subtract_bench.c records the same rule. */
+        struct { uint8_t tones[FT8_NN]; float f0; int start; } todo[MAXC];
+        int n_todo=0;
+
+        for(int i=0;i<nc;i++){
+            uint8_t payload[10];
+            int from_osd=0;
+            double metric=0;
+
+            ftx_message_t m; ftx_decode_status_t st;
+            memset(&st,0,sizeof st);
+            if(ftx_decode_candidate(&mon.wf,&cands[i],ITERS,&m,&st)){
+                n_ldpc++;
+                memcpy(payload,m.payload,10);
+            } else {
+#ifdef OSD_OFF
+                continue;
+#else
+                /* LDPC failed: this is the candidate OSD exists for */
+                float llr[N];
+                ftx_extract_likelihood_probe(&mon.wf,&cands[i],llr);
+                int trials=0;
+                double a=now_ms();
+                int got=osd(llr,OSD_ORDER,payload,&metric,&trials);
+                t_osd+=now_ms()-a; trials_total+=trials;
+                if(!got) continue;
+                from_osd=1;
+#endif
             }
-            continue;
-        }
-#ifndef OSD_OFF
-        /* LDPC failed: this is the candidate OSD exists for */
-        float llr[N];
-        ftx_extract_likelihood_probe(&mon.wf,&cands[i],llr);
-        uint8_t payload[10]; double metric; int trials=0;
-        double a=now_ms();
-        int got=osd(llr,OSD_ORDER,payload,&metric,&trials);
-        t_osd+=now_ms()-a; trials_total+=trials;
-        if(got){
+
             ftx_message_t om; memset(&om,0,sizeof om);
             memcpy(om.payload,payload,10);
             char t[64]; ftx_message_offsets_t off;
-            if(ftx_message_decode(&om,NULL,t,&off)==FTX_MESSAGE_RC_OK){
-                int dup=0; for(int j=0;j<ntext;j++) if(match(texts[j],t)) dup=1;
-                if(!dup && ntext<MAXMSG){
-                    snprintf(texts[ntext++],64,"%s",t);
+            if(ftx_message_decode(&om,NULL,t,&off)!=FTX_MESSAGE_RC_OK) continue;
+
+            int dup=0; for(int j=0;j<ntext;j++) if(match(texts[j],t)) dup=1;
+            if(!dup && ntext<MAXMSG){
+                snprintf(texts[ntext++],64,"%s",t);
+                per_pass[pass<8?pass:7]++;
+                if(from_osd){
+                    n_osd++;
                     if(n_osd_only<MAXMSG){
                         osd_metric[n_osd_only]=metric;
                         snprintf(osd_only[n_osd_only++],64,"%s",t);
                     }
-                    n_osd++;
                 }
             }
-        }
+
+            /* Every decode feeds the next pass, OSD's included - that is the
+             * whole question this harness exists to answer.
+             *
+             * NOTE a duplicate text still gets subtracted here, which is what
+             * makes this harness's subtract-only row differ from
+             * ft8_subtract_bench.c's: that one `continue`s on a duplicate
+             * before collecting it. -DSUB_SKIP_DUP reproduces its behaviour
+             * and is the check that the difference is this and not a defect. */
+#ifdef SUB_SKIP_DUP
+            if(dup) continue;
 #endif
+            if(pass+1<NPASS && n_todo<MAXC){
+                ft8_encode(payload,todo[n_todo].tones);
+                todo[n_todo].f0 = (mon.min_bin + cands[i].freq_offset
+                                   + (float)cands[i].freq_sub / mon.wf.freq_osr)
+                                  / mon.symbol_period;
+                float t_sec = (cands[i].time_offset
+                               + (float)cands[i].time_sub / mon.wf.time_osr)
+                              * mon.symbol_period;
+                todo[n_todo].start = ft8_subtract_start_sample(t_sec, SR);
+                n_todo++;
+            }
+        }
+        monitor_free(&mon);
+
+        for(int i=0;i<n_todo;i++){
+            ft8_subtract_signal(sig,n,todo[i].tones,FT8_NN,
+                                todo[i].f0,todo[i].start,SR,scratch);
+            n_removed++;
+        }
+        if(n_todo==0 && pass>0) break;      /* nothing new: stop early */
     }
+    free(scratch);
 
     int hit=0; for(int i=0;i<n_exp;i++) for(int j=0;j<ntext;j++)
         if(match(exp_txt[i],texts[j])){ hit++; break; }
@@ -357,9 +450,9 @@ int main(int argc,char** argv)
     }
 
     printf("%-28s truth=%2d uniq=%2d hit=%2d | ldpc=%2d osd=%2d (truth %d/%d)"
-           " | trials=%d osd_ms=%.1f\n",
+           " | removed=%d p1=%d p2=%d | trials=%d osd_ms=%.1f\n",
            argv[1], n_exp, ntext, hit, n_ldpc, n_osd,
-           osd_in_truth, n_osd, trials_total, t_osd);
-    monitor_free(&mon);
+           osd_in_truth, n_osd, n_removed, per_pass[0], per_pass[1],
+           trials_total, t_osd);
     return 0;
 }
