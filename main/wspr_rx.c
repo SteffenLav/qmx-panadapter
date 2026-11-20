@@ -110,7 +110,9 @@ static const char *TAG = "wspr_rx";
  * never reached, and pass 2 is what subtracts a decoded station to uncover
  * its neighbours. The host said 2.1x; the device measured about 4.5x.
  * Over-running the budget costs more than the extra candidates buy. */
+#ifndef WSPR_MAX_CANDS     /* an off-device build may raise it - with WSPR_MARKS_MAX */
 #define WSPR_MAX_CANDS    20
+#endif
 /* How far above the cycle's MEDIAN candidate score an undecoded candidate has
  * to sit before it earns a '?' on the waterfall (#360). See the long note where
  * it is applied - the finder pads its list out of the noise, so without this

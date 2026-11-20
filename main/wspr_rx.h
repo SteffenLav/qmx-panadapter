@@ -201,7 +201,9 @@ uint32_t wspr_rx_waterfall_seq(void);
  * that is all the carpet can show. */
 /* Must equal WSPR_MAX_CANDS, which is private to wspr_rx.c - a _Static_assert
  * there ties the two together, so a change to one fails the build. */
+#ifndef WSPR_MARKS_MAX
 #define WSPR_MARKS_MAX 20
+#endif
 
 typedef struct {
     float freq_hz;   /* audio tone, same scale as a spot's freq */
