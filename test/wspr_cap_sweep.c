@@ -8,6 +8,22 @@
  *       components/ft8_lib/fft/kiss_fftr.c -lm
  *   ./wspr_cap_sweep test/wav_reference/wspr/260824_1906.wav [max_cands] [deep]
  *
+ * MEASURED 2026-11-20, the three 260824 reference windows, 20 candidates,
+ * deep OFF against deep=14 (gcc -O2, x86-64):
+ *
+ *     1906    8 -> 10 decodes
+ *     1910    6 ->  8
+ *     1914    5 ->  6
+ *     total  19 -> 24   = +5, +26 %
+ *
+ * That is what WSPR_DEEP_MAX_PER_CYCLE = 0 currently costs the device, and
+ * it is NOT an argument for turning it on there: wspr_decode.c records why
+ * it is off, and the reason is the capture it starves, not its own cost.
+ *
+ * Against ground truth on 1906 at deep=14: 8 distinct callsigns, all 8 in
+ * the .txt, ZERO false positives (two stations decode on two candidates
+ * each - this sweep runs the raw decoder with the near-guard off).
+ *
  * WHY THIS EXISTS
  *   The device ran with WSPR_MAX_CANDS = 8 and every one of its first 127
  *   cycles reported exactly 8 - the cap was saturated 100 % of the time, so
