@@ -74,6 +74,26 @@
  * expected number of random passes across 252 decodes is 252/16384 = 0.015.
  * The ground truth is WSJT-X's own output and is simply not exhaustive.
  *
+ * [*] WHY freq_osr 4 IS WORSE, AND WHY 2 IS THE OPTIMUM - explained, not
+ * just observed. The decoder reads ONE sub-bin per tone: get_cand_mag()
+ * (decode.c:182) selects a single (time_sub, freq_sub) plane and every
+ * magnitude after that is read inside it. The STFT bin is 6.25/freq_osr Hz
+ * wide against FT8's 6.25 Hz tone spacing, so:
+ *
+ *     freq_osr 1   6.25 Hz   one bin per tone, but NO sub-bin correction -
+ *                            a tone sitting between bins is scalloped away
+ *     freq_osr 2   3.125 Hz  half-bin correction available, bin still wide
+ *                            enough to hold most of one tone   <-- optimum
+ *     freq_osr 4   1.5625 Hz bin NARROWER than the tone, so the one bin the
+ *                            decoder reads holds a fraction of its energy
+ *
+ * The measurements follow that exactly: 175, 235, 167. Raising the candidate
+ * cap recovers only 6 of the 68 lost at freq_osr 4 (173 at cand 280, and no
+ * further at 560), so candidate dilution is a small second-order effect and
+ * the lost energy is the cause. This is a property of the decoder's design,
+ * not a bug with a cheap fix - reading all freq_osr sub-bins per tone would
+ * be the fix, and that is a change to ft8_lib's core.
+ *
  * [!] time_osr 8 and 4x4 CRASH partway through the corpus (the run stops at
  * truth 139 and 121 of 345) while a single file at 4x4 completes. Unexplained,
  * and it is a harness limit, not a decoder result - do not quote those two
