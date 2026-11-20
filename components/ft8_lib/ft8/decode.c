@@ -738,6 +738,8 @@ static bool js8_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_
 
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
+    /* Before the JS8 branch: every return path must leave it defined. */
+    status->osd = false;
     if (ftx_protocol_is_js8(wf->protocol))
     {
         return js8_decode_candidate(wf, cand, max_iterations, message, status);
@@ -844,6 +846,7 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             return false;
         }
         status->ldpc_errors = 0;     /* an OSD codeword satisfies every check */
+        status->osd = true;          /* the CRC below may still reject it */
 #else
         // Log the failure
         diag_log_candidate(cand->score, 0.0f, cand->freq_offset,

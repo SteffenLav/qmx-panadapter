@@ -1784,6 +1784,7 @@ static bool slot_dedup_seen(slot_dedup_t *d, const uint8_t *payload)
 
 typedef struct {
     int   n_decoded;
+    int   n_osd;       // of n_decoded, how many order-0 OSD produced (0 when it is off)
     int   n_attempted;
     int   n_dup;                       // identical payloads suppressed (see slot_dedup_t)
     float timing[FT8_MAX_CANDIDATES];  // one sample per decoded candidate
@@ -2367,6 +2368,7 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
      * array. Anything added to that struct is added here in the same edit. */
     out->early_advanced = false;
     out->n_decoded   = 0;
+    out->n_osd       = 0;
     out->n_attempted = 0;
     out->n_dup       = 0;
     out->n_timing    = 0;
@@ -2632,6 +2634,7 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
         }
         if (rendered) {
             out->n_decoded++;
+            if (st.osd) out->n_osd++;
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
             // FT8 constants for FT4 candidates silently produced a ~3.3x-too-large
@@ -3155,7 +3158,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
      * that number goes negative - see the comment on n_skipped. */
     int n_cand_sub = 0;
     decode_result_t r_sub;
-    r_sub.n_decoded = r_sub.n_attempted = r_sub.n_dup = 0;
+    r_sub.n_decoded = r_sub.n_osd = r_sub.n_attempted = r_sub.n_dup = 0;
     r_sub.n_timing = r_sub.n_js8ev = r_sub.js8ev_dropped = 0;
     r_sub.n_sub = 0;
     r_sub.early_advanced = false;
@@ -3200,8 +3203,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
 
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
     int n_attempted = r_main.n_attempted + r_worker.n_attempted;
+    int n_osd       = r_main.n_osd       + r_worker.n_osd;
 #if FT8_SUBTRACT_PASSES > 1
     n_decoded   += r_sub.n_decoded;
+    n_osd       += r_sub.n_osd;
     n_attempted += r_sub.n_attempted;
 #endif
     /* Reported in the slot line: without it the fix is invisible, and a
@@ -3654,6 +3659,14 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
         s_last_timing_valid ? s_last_timing_stations : 0,
         s_last_timing_valid ? s_last_applied_ms : 0,
         (unsigned)heap_i, (unsigned)heap_i_min, (unsigned)heap_i_lblk, (unsigned)heap_p);
+#if FT8_OSD_ORDER0
+    /* Its own line, EVERY slot, zero included: the slot line's format has
+     * parsers, and a line that only appears on a hit cannot tell "OSD found
+     * nothing" from "OSD is not running". */
+    ESP_LOGI(TAG, "slot %d OSD: %d of %d decode(s)", slot_idx, n_osd, n_decoded);
+#else
+    (void)n_osd;
+#endif
 
     // When internal DRAM gets dangerously low, dump the full internal-heap
     // breakdown so we can see the consumer/fragmentation picture right before

@@ -70,6 +70,7 @@ typedef struct
     uint16_t crc_calculated; ///< CRC value calculated over the payload
     // int unpack_status;       ///< Return value of the unpack routine
     uint8_t symbols[FT8_NN]; ///< Decoded FT8 symbols (0-7) for Stage 2 reconstruction; populated on successful decode
+    bool osd;                ///< true when order-0 OSD, not belief propagation, produced the codeword
 } ftx_decode_status_t;
 
 /// Localize top N candidates in frequency and time according to their sync strength (looking at Costas symbols)
