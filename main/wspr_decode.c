@@ -1502,6 +1502,11 @@ void wspr_decode_set_deep_max(int n)
 }
 
 int wspr_decode_get_deep_max(void) { return s_deep_max; }
+int wspr_decode_get_deep_used(void)
+{
+    int used = s_deep_max - s_deep_left;
+    return used < 0 ? 0 : used;
+}
 
 static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                              wspr_decode_result_t *result)

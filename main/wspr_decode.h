@@ -278,6 +278,10 @@ void wspr_decode_begin_cycle(void);
  * made on one band in one hour without a reflash. */
 void wspr_decode_set_deep_max(int n);
 int  wspr_decode_get_deep_max(void);
+/* Deep searches spent since the last wspr_decode_begin_cycle(). The only
+ * direct evidence that the pass ran: before this it had to be read off the
+ * bimodal per-candidate curve times. */
+int  wspr_decode_get_deep_used(void);
 
 void wspr_guards_defaults(wspr_guards_t *g);
 

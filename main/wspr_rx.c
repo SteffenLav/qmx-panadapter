@@ -1851,6 +1851,12 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                   "%d skipped (budget, pass %d), %d pass(es), %d subtracted, %lld ms",
              (long long)cycle_utc, ncand, decoded, guarded, skipped,
              pass, pass, subtracted, (long long)dec_ms);
+    /* Every cycle, 0 of 0 included: the shipping ration is 0, and a line
+     * that appeared only when the pass ran could not tell "off" from "ran,
+     * spent nothing". */
+    ESP_LOGI(TAG, "cycle %lld: deep searches %d of %d",
+             (long long)cycle_utc, wspr_decode_get_deep_used(),
+             wspr_decode_get_deep_max());
     /* ⚠ WHICH PASS was cut is the whole meaning of this warning. A cut in pass
      * 1 means part of the band was never looked at; a cut in a later pass just
      * means the cheap second look ran out of time, which costs at most a
