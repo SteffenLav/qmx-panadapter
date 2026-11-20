@@ -3044,6 +3044,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
      * may_early_advance is FALSE. A reply decoded only on the second pass is
      * later than the QSO logic's own timing assumptions, and advancing on it
      * would fire our TX off evidence the first pass did not have. */
+    /* The second pass runs find_candidates over the residual, so it has a
+     * candidate list of its own. It MUST reach the skip arithmetic below or
+     * that number goes negative - see the comment on n_skipped. */
+    int n_cand_sub = 0;
     decode_result_t r_sub;
     r_sub.n_decoded = r_sub.n_attempted = r_sub.n_dup = 0;
     r_sub.n_timing = r_sub.n_js8ev = r_sub.js8ev_dropped = 0;
@@ -3076,6 +3080,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
             ftx_candidate_t cands2[FT8_MAX_CANDIDATES];
             int n_cand2 = ftx_find_candidates(&s_sub_mon->wf, FT8_MAX_CANDIDATES,
                                               cands2, FT8_FIND_MIN_SCORE);
+            n_cand_sub = n_cand2;
             decode_candidate_range(s_sub_mon, dc, cands2, n_cand2, 0, 1,
                                    noise_db, slot_sec, t_start, start_off_ms,
                                    false, NULL, NULL, &dedup, &r_sub);
@@ -3114,7 +3119,23 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
 #if FT8_SUBTRACT_PASSES > 1
     n_js8ev += r_sub.n_js8ev;
 #endif
-    int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
+    /* Candidates left undecoded because the budget ran out.
+     *
+     * ⛔ BOTH PASSES' CANDIDATE LISTS MUST BE IN THIS SUM. n_attempted above
+     * already carries r_sub.n_attempted, so comparing it against the FIRST
+     * pass's n_cand alone made skip go negative by exactly the second pass's
+     * attempts - measured on air 2026-11-20, four consecutive slots printed
+     * `cand=140 skip=-140` with the pass on. The decode was correct; only
+     * this number was wrong, and it is one the operator reads every slot.
+     *
+     * cand= in the slot line deliberately stays the FIRST pass's count: the
+     * stuck-RX heuristic below (`n_cand > 20 && n_decoded == 0`) and slotdiag
+     * are both calibrated on it, and the second pass's own line already
+     * reports what it did. */
+    int n_skipped   = n_cand - n_attempted;
+#if FT8_SUBTRACT_PASSES > 1
+    n_skipped += n_cand_sub;
+#endif
 
     /* ---- JS8 free-text reassembly (J7) ---------------------------------
      *
