@@ -44,6 +44,40 @@
  *   stft 141.3 + find 52.5 + dec 199.3 = 393.1 ms for all 22 slots
  * The 110 missed ground-truth messages are the size of the prize, and what
  * subtract-and-repeat and OSD would be for; neither exists in ft8_lib.
+ *
+ * SWEEP 2026-11-20, same 22 WAVs, one binary per setting (-D overrides):
+ *
+ *   setting        hit/345  uniq   stft ms   dec ms
+ *   2x2 baseline      235    236     142      200
+ *   cand 300          235    236     146      487
+ *   cand 600          235    236     143     1031
+ *   minscore 2        235    236     144      200
+ *   iters 60          235    236     147      202
+ *   time_osr 4        241    252     298      176    <-- the only winner
+ *   freq_osr 4        167    163     305      207
+ *   freq_osr 1        175    173      72      228
+ *
+ * [*] CANDIDATES, MIN SCORE AND LDPC ITERATIONS ARE NOT BINDING, and this is
+ * an INDEPENDENT replication of what the device measured: ft8_test.c records
+ * 140 -> 300 as a clean negative on 20 m. Here 140 -> 600 moves nothing at
+ * all while decode cost goes up 5x. Stop proposing these three.
+ *
+ * [*] time_osr 2 -> 4 IS A REAL GAIN: +16 unique decodes (+6.8 %), and decode
+ * gets CHEAPER (176 vs 200 ms) because better time resolution means fewer
+ * candidates burn the full LDPC iteration count before failing. STFT doubles,
+ * 142 -> 298 ms, which on the device is PSRAM and core-1 time it does not
+ * have, and on a host is nothing.
+ *
+ * [!] THE EXTRA DECODES ARE GENUINE, NOT FALSE POSITIVES. uniq rises 236 ->
+ * 252 while hit rises 235 -> 241, so 11 decodes are not in the .txt. Every
+ * decode ft8_lib returns has passed a 14-bit CRC (decode.c:815), so the
+ * expected number of random passes across 252 decodes is 252/16384 = 0.015.
+ * The ground truth is WSJT-X's own output and is simply not exhaustive.
+ *
+ * [!] time_osr 8 and 4x4 CRASH partway through the corpus (the run stops at
+ * truth 139 and 121 of 345) while a single file at 4x4 completes. Unexplained,
+ * and it is a harness limit, not a decoder result - do not quote those two
+ * rows as measurements.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,9 +90,25 @@
 #include <common/monitor.h>
 
 #define SR 12000
-#define MAXC 140
-#define MINSCORE 5
-#define ITERS 30
+/* Overridable with -D so one binary per setting can be swept against the same
+ * corpus. The DEFAULTS must stay equal to the device's own constants in
+ * main/ft8_test.c, or the number this prints stops meaning anything - that is
+ * what the file header promises and it is the whole point of the harness. */
+#ifndef MAXC
+#define MAXC 140          /* FT8_MAX_CANDIDATES */
+#endif
+#ifndef MINSCORE
+#define MINSCORE 5        /* FT8_FIND_MIN_SCORE */
+#endif
+#ifndef ITERS
+#define ITERS 30          /* FT8_LDPC_MAX_ITERS */
+#endif
+#ifndef TIME_OSR
+#define TIME_OSR 2
+#endif
+#ifndef FREQ_OSR
+#define FREQ_OSR 2
+#endif
 
 static double now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
     return ts.tv_sec*1000.0 + ts.tv_nsec/1e6; }
@@ -107,7 +157,7 @@ int main(int argc,char** argv){
     if(load_wav(sig,&n,&sr,argv[1])<0){ fprintf(stderr,"bad wav %s\n",argv[1]); return 1; }
     if(argc>2) load_expected(argv[2]);
 
-    monitor_t mon; monitor_config_t cfg={200,3000,sr,2,2,FTX_PROTOCOL_FT8};
+    monitor_t mon; monitor_config_t cfg={200,3000,sr,TIME_OSR,FREQ_OSR,FTX_PROTOCOL_FT8};
     monitor_init(&mon,&cfg);
     double t0=now_ms();
     for(int p=0;p+mon.block_size<=n;p+=mon.block_size) monitor_process(&mon,sig+p);
