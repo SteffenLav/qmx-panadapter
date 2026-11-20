@@ -42,6 +42,9 @@
  *       -Icomponents/ft8_lib -Icomponents/ft8_lib/ft8 \
  *       -Icomponents/ft8_lib/common -Icomponents/ft8_lib/fft -lm
  *
+ * Not a pass/fail harness: it measures, and needs a WAV and its truth file.
+ * tools/run_harnesses.py skips it for that reason.
+ *
  * Run over the 22 WAVs that have a .txt ground truth:
  *   for w in test/wav_reference/*.txt; do ./ft8_osd_proto ${w%.txt}.wav $w; done
  *

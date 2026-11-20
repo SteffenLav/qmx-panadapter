@@ -31,72 +31,14 @@ GCCDIR = Path(os.environ["LOCALAPPDATA"]) / (
     "BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin"
 ) if os.name == "nt" else None
 
-LEADER = re.compile(r"^\s*(\*|//|/\*)\s?")
+# Reading and running a header's build line lives in tools/harness_lines.py,
+# shared with check_harness_buildlines.py. This file had its own copy that
+# read only 40 lines and ran through cmd.exe - see that module for what it
+# cost (2026-11-21).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness_lines as HL  # noqa: E402
 
-
-def find_sh():
-    """Absolute path to a POSIX sh, or None.
-
-    ⛔ Run from PowerShell there is no `sh` on PATH, and three script
-    harnesses then reported RUN FAIL with "'sh' is not recognized". Measured
-    2026-10-21: all three PASS when handed a real sh - the suite was reporting
-    its own environment as three broken tests, which is worse than reporting
-    nothing, because a green suite minus three looks like a regression to chase.
-    Git for Windows ships one; so does an MSYS2/WinLibs install.
-    """
-    found = shutil.which("sh")
-    if found:
-        return found
-    for cand in (
-        r"C:\Program Files\Git\bin\sh.exe",
-        r"C:\Program Files\Git\usr\bin\sh.exe",
-        r"C:\Program Files (x86)\Git\bin\sh.exe",
-    ):
-        if Path(cand).exists():
-            return cand
-    return None
-
-
-SH = find_sh()
-
-
-def script_command(src: Path):
-    """A `sh test/build_*.sh` line from the header, if the harness has one.
-
-    A few harnesses cannot be a single gcc line. adif_worked_cache_harness
-    force-includes a path-redirect header into the firmware source ONLY, so
-    its shim must be compiled in a separate step; it also runs the binary more
-    than once, because one of its cases needs a virgin process. Such a harness
-    owns a build script, and this runner hands it the whole job: build AND run,
-    no -o rewrite and no second run here.
-    """
-    for raw in src.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
-        line = LEADER.sub("", raw).strip()
-        if line.startswith("sh ") and ".sh" in line:
-            return line
-    return None
-
-
-def build_command(src: Path):
-    """The gcc line from the header, following backslash continuations."""
-    parts, collecting = [], False
-    for raw in src.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
-        # The leader strip leaves the header's own indentation ("*   gcc ..."),
-        # so lstrip before matching or nothing is ever found.
-        line = LEADER.sub("", raw).strip()
-        if not collecting and line.startswith("gcc "):
-            collecting = True
-        if collecting:
-            cont = line.endswith("\\")
-            parts.append(line[:-1].rstrip() if cont else line)
-            if not cont:
-                break
-    if not parts:
-        return None
-    cmd = " ".join(parts)
-    for cut in ("&&", ";"):                    # drop the "&& ./harness" tail
-        cmd = cmd.split(cut)[0]
-    return " ".join(cmd.split())
+SH = HL.BASH
 
 
 def main():
@@ -113,7 +55,11 @@ def main():
         name = src.stem
         if only and only not in name:
             continue
-        script = script_command(src)
+        if HL.is_measurement(src):
+            print(f"  {name:<26} SKIP  (measurement tool, not pass/fail)")
+            nskip += 1
+            continue
+        script = HL.script_line(src)
         if script:
             if not SH:
                 print(f"  {name:<26} SKIP  (no POSIX sh on this machine)")
@@ -124,10 +70,8 @@ def main():
             # contains spaces and script.split()[1] would print a fragment of
             # "Program Files" as the script name.
             label = script.split()[1]
-            script = f'"{SH}" ' + script[len("sh "):]
-            r = subprocess.run(script, shell=True, cwd=ROOT, env=env,
-                               stdin=subprocess.DEVNULL, capture_output=True,
-                               text=True, timeout=600)
+            r = HL.run(script, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                       timeout=600)
             if r.returncode == 0:
                 print(f"  {name:<26} pass  (via {label})")
                 npass += 1
@@ -137,7 +81,7 @@ def main():
                 nfail += 1
             continue
 
-        cmd = build_command(src)
+        cmd = HL.gcc_line(src)
         if not cmd:
             print(f"  {name:<26} SKIP  (no build line in its header)")
             nskip += 1
@@ -148,17 +92,15 @@ def main():
         exe = out / (name + ".exe")
         # A Windows path in the REPLACEMENT is not a template - "C:\Users" would
         # be read as an escape. Pass a function so it is taken literally.
-        cmd = re.sub(r"-o\s+\S+", lambda _m: f'-o "{exe}"', cmd, count=1)
+        cmd = re.sub(r"-o\s+\S+", lambda _m: f'-o "{exe.as_posix()}"', cmd, count=1)
 
         # Some headers document their command as run FROM test/ (relative paths
         # like "psk_harness.c" or "../main/adif/lotw_tq8.c"), others from the
         # repo root. Try the root, then test/ - which of the two an author was
         # standing in is not worth encoding in 27 places.
-        r = subprocess.run(cmd, shell=True, cwd=ROOT, env=env,
-                           capture_output=True, text=True)
+        r = HL.run(cmd, cwd=ROOT, env=env)
         if (r.returncode != 0 or not exe.exists()):
-            r2 = subprocess.run(cmd, shell=True, cwd=ROOT / "test", env=env,
-                                capture_output=True, text=True)
+            r2 = HL.run(cmd, cwd=ROOT / "test", env=env)
             if r2.returncode == 0 and exe.exists():
                 r = r2
         if r.returncode != 0 or not exe.exists():
