@@ -86,6 +86,7 @@
 #include <ft8/message.h>
 #include <ft8/constants.h>
 #include <common/monitor.h>
+#include "ft8_subtract.h"
 
 #define SR        12000
 #define MAXC      140
@@ -185,91 +186,16 @@ static int match(const char *a, const char *b)
     return !*a && !*b;
 }
 
-/* ------------------------------------------------------------ the subtract
- *
- * Builds the GFSK phase for `tones` at f0 starting at sample `start`, then
- * removes it from sig[] by a per-symbol-block least-squares fit in
- * quadrature. Returns the fraction of the fitted energy actually removed,
- * which is the instrument: a fit that removes almost nothing means the
- * frequency or time estimate was wrong, and reporting a clean subtraction
- * that did not happen is the failure this whole harness exists to avoid.
- */
+/* [!] THE ALGORITHM IS NOT HERE ANY MORE. It lives in main/ft8_subtract.c
+ * and this harness LINKS THE REAL FUNCTION, like every other harness in this
+ * directory - a copy here would drift from the firmware's and the number this
+ * prints would stop meaning anything. */
 static double subtract_signal(float *sig, int n_sig, const uint8_t *tones,
                               int n_sym, float f0, int start)
 {
-    const int n_spsym = (int)(0.5f + SR * FT8_SYMBOL_PERIOD);
-    const int n_wave  = n_sym * n_spsym;
-    const float dphi_peak = 2.0f * (float)M_PI / n_spsym;   /* hmod = 1.0 */
-
-    float *dphi  = calloc((size_t)(n_wave + 2 * n_spsym), sizeof(float));
-    float *pulse = calloc((size_t)(3 * n_spsym), sizeof(float));
-    if (!dphi || !pulse) { free(dphi); free(pulse); return 0.0; }
-
-    for (int i = 0; i < n_wave + 2 * n_spsym; i++)
-        dphi[i] = 2.0f * (float)M_PI * f0 / SR;
-
-    for (int i = 0; i < 3 * n_spsym; i++) {
-        float t = i / (float)n_spsym - 1.5f;
-        float a1 = GFSK_K * GFSK_BT * (t + 0.5f);
-        float a2 = GFSK_K * GFSK_BT * (t - 0.5f);
-        pulse[i] = (erff(a1) - erff(a2)) / 2.0f;
-    }
-    for (int i = 0; i < n_sym; i++) {
-        int ib = i * n_spsym;
-        for (int j = 0; j < 3 * n_spsym; j++)
-            dphi[j + ib] += dphi_peak * tones[i] * pulse[j];
-    }
-
-    /* Integrate to phase, skipping the one-symbol run-in the pulse adds. */
-    double removed = 0.0, fitted = 0.0;
-    float phi = 0.0f;
-    float *ph = malloc((size_t)n_wave * sizeof(float));
-    if (!ph) { free(dphi); free(pulse); return 0.0; }
-    for (int k = 0; k < n_spsym; k++) phi += dphi[k];          /* run-in */
-    for (int k = 0; k < n_wave; k++) {
-        ph[k] = phi;
-        phi += dphi[k + n_spsym];
-        if (phi > (float)M_PI) phi -= 2.0f * (float)M_PI;
-    }
-
-    /* Per-symbol-block least squares against sin/cos of that phase. */
-    for (int b = 0; b < n_sym; b++) {
-        int off = b * n_spsym;
-        double sii = 0, sqq = 0, siq = 0, ri = 0, rq = 0;
-        for (int k = 0; k < n_spsym; k++) {
-            int idx = start + off + k;
-            if (idx < 0 || idx >= n_sig) continue;
-            double si = sin(ph[off + k]), sq = cos(ph[off + k]);
-            double r  = sig[idx];
-            sii += si * si; sqq += sq * sq; siq += si * sq;
-            ri  += r * si;  rq  += r * sq;
-        }
-        double det = sii * sqq - siq * siq;
-        if (fabs(det) < 1e-12) continue;
-        double a = (ri * sqq - rq * siq) / det;
-        double bb = (rq * sii - ri * siq) / det;
-        for (int k = 0; k < n_spsym; k++) {
-            int idx = start + off + k;
-            if (idx < 0 || idx >= n_sig) continue;
-            double m = a * sin(ph[off + k]) + bb * cos(ph[off + k]);
-            double before = sig[idx];
-            sig[idx] = (float)(before - m);
-            fitted  += m * m;
-            removed += before * before;
-        }
-    }
-    free(ph); free(dphi); free(pulse);
-    /* [!] THE FIRST VERSION OF THIS RETURN WAS TAUTOLOGICAL. It divided the
-     * energy actually removed by the energy of the fitted model - and for a
-     * least-squares fit those are equal by construction, so it printed 1.00
-     * for every signal whether the alignment was right or hopelessly wrong.
-     * An instrument that cannot fail tells you nothing.
-     *
-     * What is returned now is the fraction of the energy IN THE BURST WINDOW
-     * that the fitted model accounts for. A strong decode should take a large
-     * share; a few per cent means the frequency or start time is wrong and
-     * the subtraction is doing nothing. */
-    return removed > 0 ? fitted / removed : 0.0;
+    static float scratch[(79 * FT8_SUB_SPSYM) + (2 * FT8_SUB_SPSYM)
+                         + (3 * FT8_SUB_SPSYM) + (79 * FT8_SUB_SPSYM)];
+    return ft8_subtract_signal(sig, n_sig, tones, n_sym, f0, start, SR, scratch);
 }
 
 /* Alignment probe: which start offset maximises the energy the fit takes?
@@ -349,16 +275,7 @@ int main(int argc, char **argv)
                 float t_sec = (cands[i].time_offset
                                + (float)cands[i].time_sub / mon.wf.time_osr)
                               * mon.symbol_period;
-                /* [*] MINUS ONE SYMBOL, AND IT WAS MEASURED, NOT REASONED.
-                 * ft8_lib's own monitor_resynth() hints at it ("Starting
-                 * offset is 3 subblocks due to analysis buffer loading"), but
-                 * the number came from the -DPROBE_ALIGN sweep: on the first
-                 * decode of 191111_110615 the fit takes 0.695 of the burst
-                 * energy at -1 symbol against 0.066 at +0, a factor of ten.
-                 * Before this line the subtraction removed about 6 % of the
-                 * signal and pass 2 found nothing - which read exactly like
-                 * "subtract-and-repeat is not worth it". */
-                todo[n_todo].start = (int)lrintf(t_sec * SR) - (int)(0.5f + SR * FT8_SYMBOL_PERIOD);
+                todo[n_todo].start = ft8_subtract_start_sample(t_sec, SR);
                 n_todo++;
             }
         }
