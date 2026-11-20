@@ -41,6 +41,18 @@
  * Baseline over test/wav_reference (the 22 WAVs that have a .txt ground
  * truth), measured 2026-11-20 on the Ryzen box, gcc -O2:
  *   236 unique decodes, 235 of 345 ground-truth messages (68.1 %)
+ *
+ * ⛔ DO NOT COMPARE THAT ROW WITH A PER-FILE SUM OF THIS BENCH'S OWN OUTPUT.
+ * Summing the printed uniq/truth/hit columns across the 22 files, same binary,
+ * same settings, gives 264 uniq and 260 of 362 - not 236 and 235 of 345. The
+ * truth count differs too, so this is an AGGREGATION difference and not a
+ * decoder change: a per-file sum counts a message appearing in two files
+ * twice, and how the 236/345 row above was totalled is not recorded.
+ * UNEXPLAINED and left that way, because only whoever produced that row can
+ * say. 362/260 is the figure ft8_subtract_bench.c, ft8_osd_reach_harness.c
+ * and ft8_osd_proto_harness.c all agree on, and those three are mutually
+ * validated; quote one of them, or re-derive this row's method before
+ * quoting it.
  *   stft 141.3 + find 52.5 + dec 199.3 = 393.1 ms for all 22 slots
  * The 110 missed ground-truth messages are the size of the prize, and what
  * subtract-and-repeat and OSD would be for; neither exists in ft8_lib.
