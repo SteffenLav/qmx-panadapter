@@ -1,4 +1,5 @@
 #include "decode.h"
+#include "osd.h"
 #include "constants.h"
 #include "js8.h"
 #include "js8_message.h"
@@ -56,6 +57,27 @@
  * is written at its call site in ftx_decode_candidate(). */
 #ifndef FT8_MULTI_SYMBOL_FALLBACK
 #define FT8_MULTI_SYMBOL_FALLBACK 0
+#endif
+
+/* Order-0 OSD on a candidate belief propagation could not decode. OFF, and
+ * the measurement that says it is worth switching on is in osd.h: +4 of 362
+ * ground-truth messages for 2.82 ms a slot on a host, additive with
+ * subtract-and-repeat. It is off because the P4 cost is an ESTIMATE (~136 ms
+ * a slot, probably optimistic) and because it wants ~3.4 KB of stack in
+ * whichever task decodes. Both need measuring on a Tab5 before this flips.
+ *
+ * ⛔ UNLIKE the subtract pass this needs NO PSRAM and no second monitor, which
+ * is the whole reason it is the better candidate for the device. */
+#ifndef FT8_OSD_ORDER0
+#define FT8_OSD_ORDER0 0
+#endif
+
+/* Reject an OSD codeword disagreeing with the hard decision in more than this
+ * many of the 174 bits. 34 is calibrated - see osd.h for the four statistics
+ * that were compared and why this one won. ⚠ FITTED on 32 samples from the
+ * same 22 files, not confirmed on held-out data. */
+#ifndef FT8_OSD_MAX_NDIS
+#define FT8_OSD_MAX_NDIS 34
 #endif
 
 /* Abandon an FT8 candidate after this many belief-propagation iterations with
@@ -795,10 +817,44 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
     if (status->ldpc_errors > 0)
     {
+#if FT8_OSD_ORDER0
+        /* ⭐ BP FAILED - TRY ORDER-0 OSD BEFORE GIVING UP. Measured +4 of 362
+         * ground-truth messages on the reference corpus for 2.82 ms a slot on
+         * a host, and ADDITIVE with subtract-and-repeat. See osd.h for the
+         * numbers, the P4 cost estimate and the ~3.4 KB of stack it wants.
+         *
+         * HERE, and not in a wrapper around ftx_decode_candidate(), for two
+         * reasons: log174 already exists at this point, so OSD costs no second
+         * likelihood extraction; and everything below - pack_bits, the CRC,
+         * the FT4 XOR, the unpack, the symbol extraction - then applies to an
+         * OSD codeword unchanged.
+         *
+         * ⛔ A CODEWORD IS NOT A MESSAGE. ft8_osd_order0() returns a valid
+         * codeword; the 14-bit CRC below is the only thing that makes it a
+         * message, and one trial false-accepts with probability 2^-14. Falling
+         * through to that check is deliberate - do not add an early accept.
+         *
+         * FT8 only: FT4's parity matrix differs and no corpus has been
+         * measured for it, the same caution bp_decode()'s stall_limit carries
+         * above. */
+        bool osd_ok = false;
+        if (wf->protocol == FTX_PROTOCOL_FT8)
+        {
+            osd_ok = ft8_osd_order0(log174, FT8_OSD_MAX_NDIS, plain174);
+        }
+        if (!osd_ok)
+        {
+            diag_log_candidate(cand->score, 0.0f, cand->freq_offset,
+                              single_symbol_errors, fallback_triggered, multi_symbol_errors, 0, "FAIL");
+            return false;
+        }
+        status->ldpc_errors = 0;     /* an OSD codeword satisfies every check */
+#else
         // Log the failure
         diag_log_candidate(cand->score, 0.0f, cand->freq_offset,
                           single_symbol_errors, fallback_triggered, multi_symbol_errors, 0, "FAIL");
         return false;
+#endif
     }
 
     // Extract payload + CRC (first FTX_LDPC_K bits) packed into a byte array

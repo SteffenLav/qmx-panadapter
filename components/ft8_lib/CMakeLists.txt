@@ -18,6 +18,7 @@ idf_component_register(
         "ft8/js8_text.c"
         "ft8/ldpc.c"
         "ft8/message.c"
+        "ft8/osd.c"
         "ft8/text.c"
         "fft/kiss_fft.c"
         "fft/kiss_fftr.c"

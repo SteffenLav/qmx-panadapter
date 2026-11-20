@@ -40,6 +40,7 @@
 #include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "ft8_slot_gate.h"
 #include "ft8_subtract.h"
+#include "ft8/osd.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -4008,6 +4009,18 @@ static void ft8_task(void *arg)
     // Kept (idempotent) so the flag is still correct if this task is ever
     // started by some other route.
     s_ft8_task_alive = true;
+
+#if FT8_OSD_ORDER0
+    /* ⛔ WITHOUT THIS THE FLAG IS A SILENT NO-OP. ft8_osd_order0() returns
+     * false until the generator table is built, so every candidate would
+     * simply fail as before and the build would look like OSD bought nothing.
+     *
+     * HERE and not lazily inside the decoder: the table is shared mutable
+     * state and both FT8 decode halves run concurrently on two cores. This
+     * runs once, on this task, before any decode is queued. Idempotent. */
+    ft8_osd_init();
+    ESP_LOGI(TAG, "OSD order 0 enabled (max ndis %d)", FT8_OSD_MAX_NDIS);
+#endif
 
     ft8_status_set("Waiting for QMX...");
     ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");

@@ -108,6 +108,9 @@
 #include <ft8/decode.h>
 #include <ft8/message.h>
 #include <common/monitor.h>
+#if FT8_OSD_ORDER0
+#include <ft8/osd.h>
+#endif
 
 #define SR 12000
 /* Overridable with -D so one binary per setting can be swept against the same
@@ -177,6 +180,9 @@ int main(int argc,char** argv){
     if(load_wav(sig,&n,&sr,argv[1])<0){ fprintf(stderr,"bad wav %s\n",argv[1]); return 1; }
     if(argc>2) load_expected(argv[2]);
 
+#if FT8_OSD_ORDER0
+    ft8_osd_init();
+#endif
     monitor_t mon; monitor_config_t cfg={200,3000,sr,TIME_OSR,FREQ_OSR,FTX_PROTOCOL_FT8};
     monitor_init(&mon,&cfg);
     double t0=now_ms();
