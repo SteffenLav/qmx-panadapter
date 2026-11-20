@@ -39,7 +39,13 @@ nobody can trust is how a broken test survives a release. So a line that looks
 like a failure is FLAGGED, and everything else is printed for a human to read.
 Absence of a flag is not proof of passing.
 """
-import os, re, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
+
+# Git's bash, not whatever "bash" is first on PATH: on Windows that can be
+# WSL's, which sees a different filesystem and a different gcc.
+BASH = next((b for b in (r"C:\Program Files\Git\bin\bash.exe",
+                         r"C:\Program Files\Git\usr\bin\bash.exe")
+             if os.path.exists(b)), None) or shutil.which("bash") or "bash"
 
 ROOT = os.path.dirname(os.path.abspath(__file__)) + "/.."
 os.chdir(ROOT)
@@ -67,12 +73,31 @@ for name in sorted(os.listdir("test")):
     if not name.endswith(".c"):
         continue
     p = os.path.join("test", name)
+    # A harness that owns a build script says so with an `sh ....sh` line, and
+    # tools/run_harnesses.py already prefers it. This checker did not, so it
+    # built js8_submode_table_harness.c from a gcc line the header itself says
+    # is NOT the way to build it - a false failure, 2026-11-21. The script
+    # builds AND runs, so it is run whole.
+    sh_line = next((re.sub(r"^\s*(?:\*|//)?\s*", "", ln).strip()
+                    for ln in open(p, encoding="utf-8", errors="replace").read().split("\n")[:40]
+                    if re.match(r"^\s*(?:\*|//)?\s*sh \S+\.sh\b", ln)), None)
+    if sh_line:
+        r = subprocess.run([BASH, "-c", sh_line], capture_output=True, text=True, cwd=ROOT)
+        rows.append((name, "builds (script)" if r.returncode == 0 else "SCRIPT FAILS",
+                     "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[-120:]))
+        continue
     cmd = build_line(p)
     # Some headers say "from test/", others "from the repo root". Running the
     # line from the wrong place is not a rotted build line, it is this script
     # being careless - and would report a false failure.
     head = open(p, encoding="utf-8", errors="replace").read()[:2000]
-    cwd = os.path.join(ROOT, "test") if re.search(r"from test/", head) else ROOT
+    # ⛔ "from test/" ALONE MATCHED "Run over the whole corpus from
+    # test/wav_reference" (ft8_decode_bench.c) and built it in the wrong place
+    # - a false failure, 2026-11-21. Now: a "Build (from test/)" header, or a
+    # build line that itself reaches up with ../ - either one means test/.
+    from_test = (re.search(r"Build\s*\(from test/\)", head)
+                 or (cmd and re.search(r"(^|\s)(-I)?\.\./", cmd)))
+    cwd = os.path.join(ROOT, "test") if from_test else ROOT
     if not cmd:
         rows.append((name, "NO BUILD LINE", ""))
         continue
@@ -87,7 +112,11 @@ for name in sorted(os.listdir("test")):
                           lambda m: "-o " + tmp.replace("\\", "/") + "/h.exe",
                           compile_only)
     binpath = tmp.replace("\\", "/") + "/h.exe"
-    r = subprocess.run(compile_only, shell=True, capture_output=True, text=True, cwd=cwd)
+    # ⛔ THROUGH BASH, NOT cmd.exe. The lines are written for a POSIX shell
+    # and several use brace lists ({decode,encode,...}.c), which cmd.exe
+    # passes through literally - so they "failed" here while working for
+    # anyone who copied them into Git Bash. A false failure, 2026-11-21.
+    r = subprocess.run([BASH, "-c", compile_only], capture_output=True, text=True, cwd=cwd)
     if r.returncode == 0:
         note = ""
         if RUN:

@@ -135,17 +135,74 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len)
     return NULL;            /* no SD on the host */
 }
 
+bool sd_archive_save_flash_diag(void) { return false; }
+/* diag_log.c is the whole logging subsystem; the rotation path only asks it
+ * to drop its persisted copy to make room. Nothing persisted on the host. */
+bool diag_log_persist_drop(void) { return false; }
+
+/* Link-level breadcrumbs. adif_log.c sees test/shim/panic_hook.h (inline, no
+ * symbol), but main/util/spiffs_guard.c finds the REAL main/util/panic_hook.h
+ * first - a quoted #include searches the including file's own directory
+ * before any -I - and that one declares them extern. */
+void panic_hook_crumb_enter(const char *site) { (void)site; }
+void panic_hook_crumb_exit(void) { }
+
+/* No LoTW certificate on the host, so the LoTW cursor never limits the
+ * rotation's upload floor here - the same as a station without LoTW set up. */
+bool lotw_cert_present(void) { return false; }
+bool sd_archive_archive_info(long *bytes, uint32_t *records)
+{
+    if (bytes)   *bytes   = 0;
+    if (records) *records = 0;
+    return false;
+}
+bool sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes)
+{
+    (void)previous; (void)arc_bytes;
+    return false;
+}
+char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len)
+{
+    (void)previous; (void)offset;
+    if (out_len) *out_len = 0;
+    return NULL;
+}
+
 void ui_toast(const char *msg) { printf("[toast] %s\n", msg ? msg : ""); }
 
 static qmx_settings_t s_set;
 
 void settings_load_all(qmx_settings_t *out) { if (out) *out = s_set; }
-void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw)
+void settings_get_upload_cursors(uint32_t *qrz, uint32_t *eqsl, uint32_t *lotw,
+                                 uint32_t *cloudlog)
 {
-    if (qrz)  *qrz  = s_set.qrz_uploaded_n;
-    if (eqsl) *eqsl = s_set.eqsl_uploaded_n;
-    if (lotw) *lotw = s_set.lotw_uploaded_n;
+    if (qrz)      *qrz      = s_set.qrz_uploaded_n;
+    if (eqsl)     *eqsl     = s_set.eqsl_uploaded_n;
+    if (lotw)     *lotw     = s_set.lotw_uploaded_n;
+    if (cloudlog) *cloudlog = s_set.cloudlog_uploaded_n;
 }
+void settings_set_cloudlog_uploaded_n(uint32_t n) { s_set.cloudlog_uploaded_n = n; }
+
+/* Same arithmetic as settings_shift_upload_cursors() in settings.c: a rotation
+ * that drops d records moves every cursor back by d, floored at 0. */
+static uint32_t s_rot_base;
+uint32_t settings_get_rot_base(void) { return s_rot_base; }
+void settings_set_rot_base(uint32_t base) { s_rot_base = base; }
+void settings_shift_upload_cursors(uint32_t to_base)
+{
+    if (to_base == s_rot_base) return;
+    if (to_base > s_rot_base) {
+        uint32_t d = to_base - s_rot_base;
+        uint32_t *c[4] = { &s_set.qrz_uploaded_n, &s_set.eqsl_uploaded_n,
+                           &s_set.lotw_uploaded_n, &s_set.cloudlog_uploaded_n };
+        for (int i = 0; i < 4; i++) *c[i] = (*c[i] > d) ? *c[i] - d : 0;
+    }
+    s_rot_base = to_base;   /* either way the base follows, as in settings.c */
+}
+void settings_flush(void) { }
+static bool s_log_seen;
+bool settings_qso_log_seen(void) { return s_log_seen; }
+void settings_mark_qso_log_seen(void) { s_log_seen = true; }
 void settings_set_qrz_uploaded_n(uint32_t n)  { s_set.qrz_uploaded_n  = n; }
 void settings_set_eqsl_uploaded_n(uint32_t n) { s_set.eqsl_uploaded_n = n; }
 void settings_set_lotw_uploaded_n(uint32_t n) { s_set.lotw_uploaded_n = n; }
@@ -175,5 +232,21 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t h)
 {
     (void)h;
     shim_lock_depth--;
+    return pdTRUE;
+}
+
+static int s_rmutex_token;
+int shim_rlock_depth;
+SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return &s_rmutex_token; }
+BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t h, TickType_t t)
+{
+    (void)h; (void)t;
+    shim_rlock_depth++;
+    return pdTRUE;
+}
+BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t h)
+{
+    (void)h;
+    shim_rlock_depth--;
     return pdTRUE;
 }

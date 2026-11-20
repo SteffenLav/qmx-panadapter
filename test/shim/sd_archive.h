@@ -11,6 +11,12 @@ char *sd_archive_read_adif_file(bool previous, size_t *out_len);
  * rewrite - a missing declaration here broke the harness build, not the
  * firmware, which sees the real main/storage/sd_archive.h. */
 bool sd_archive_lock(uint32_t timeout_ms);
+/* Added 2026-11-21 with the rotation/restore work in adif_log.c (2111d3ce and
+ * after). No card on the host: every one answers "nothing there". */
+bool  sd_archive_save_flash_diag(void);
+bool  sd_archive_archive_info(long *bytes, uint32_t *records);
+bool  sd_archive_adif_has_archive_prefix(bool previous, long arc_bytes);
+char *sd_archive_read_adif_file_at(bool previous, size_t offset, size_t *out_len);
 bool sd_archive_is_mounted(void);
 void sd_archive_unlock(void);
 #endif

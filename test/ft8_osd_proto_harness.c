@@ -38,6 +38,7 @@
  *       components/ft8_lib/ft8/{js8_codec,js8_tables}.c \
  *       components/ft8_lib/common/monitor.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \
+ *       main/ft8_subtract.c -Imain \
  *       -Icomponents/ft8_lib -Icomponents/ft8_lib/ft8 \
  *       -Icomponents/ft8_lib/common -Icomponents/ft8_lib/fft -lm
  *
@@ -591,5 +592,11 @@ int main(int argc,char** argv)
            argv[1], n_exp, ntext, hit, n_ldpc, n_osd,
            osd_in_truth, n_osd, n_removed, per_pass[0], per_pass[1],
            trials_total, t_osd);
+#ifdef PRINT_MSGS
+    /* One line per unique message, for pairing two builds on the SAME audio
+     * (tools/ft8_pair_ab.py). Recorded on-air slots have no truth file, so
+     * what decodes in one build and not the other is the whole comparison. */
+    for (int j = 0; j < ntext; j++) printf("MSG\t%d\t%s\n", text_pass[j], texts[j]);
+#endif
     return 0;
 }

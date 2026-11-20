@@ -15,7 +15,11 @@
  *
  *   mkdir -p build/hosttest && cp -r test/stub/. build/hosttest/
  *   cp main/js8_submode.c main/js8_submode.h build/hosttest/
- *   gcc -O2 -Wall -Wextra -I build/hosttest  *       -o build/hosttest/js8_submode_table_harness  *       test/js8_submode_table_harness.c build/hosttest/js8_submode.c
+ *   gcc -O2 -Wall -Wextra -I build/hosttest
+ *       -o build/hosttest/js8_submode_table_harness
+ *       test/js8_submode_table_harness.c build/hosttest/js8_submode.c
+ *   (one command; the continuation backslashes were lost here once and the
+ *   line ran together - tools/run_js8_submode_table.sh is the copy that runs)
  *   ./build/hosttest/js8_submode_table_harness
  *
  * ⚠ THE COPY IS NOT COSMETIC. For a quoted #include, GCC searches the

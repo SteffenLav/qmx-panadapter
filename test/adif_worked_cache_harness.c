@@ -258,16 +258,21 @@ static void test_growth_failure_is_loud(void)
  * near 8192 pairs. A silent ceiling is the SAME defect as the silent 1024
  * that started all this, so it has to be exercised, not reasoned about.
  *
- * 10000 QSOs is past ADIF_WORKED_MAX and past anything the 1 MB `storage`
+ * WORKED_CEILING_QSOS must stay past ADIF_WORKED_MAX in adif_log.c. It was
+ * 10000 against a ceiling of 8192; 588d380e raised the ceiling to 65536 and
+ * this test then never reached it - both checks below FAILED, unnoticed,
+ * because the harness had stopped building at all. Found 2026-11-21.
+ * The count is past ADIF_WORKED_MAX and past anything the 1 MB `storage`
  * partition can actually hold (~5800 records) - which is the point: the
  * ceiling must never be reachable from a legal file, AND must say so if it
  * ever is. Runs in its own process: it leaves the static capacity at the
  * ceiling, which would mask growth in any test after it. */
+#define WORKED_CEILING_QSOS 70000   /* > ADIF_WORKED_MAX (65536); calls stay unique */
 static void test_ceiling_is_loud(void)
 {
-    printf("the ADIF_WORKED_MAX ceiling says so (10000 QSOs)\n");
+    printf("the ADIF_WORKED_MAX ceiling says so (%d QSOs)\n", WORKED_CEILING_QSOS);
     remove(s_log);
-    write_log(10000);
+    write_log(WORKED_CEILING_QSOS);
     shim_set_spiffs_dir(s_dir);
 
     shim_log_errors = 0;
@@ -277,7 +282,7 @@ static void test_ceiling_is_loud(void)
 
     expect("logged an error", shim_log_errors > 0, 1);
     expect("said it once, not once per QSO past it", shim_log_errors, 1);
-    expect("count still right", adif_log_count(), 10000);
+    expect("count still right", adif_log_count(), WORKED_CEILING_QSOS);
     /* What fitted is still correct - a full cache must not corrupt the part
        it does hold. */
     expect("an early station is still found", worked_i(7), 1);

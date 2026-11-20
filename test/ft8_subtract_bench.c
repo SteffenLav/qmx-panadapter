@@ -17,6 +17,7 @@
  *       components/ft8_lib/ft8/{js8_codec,js8_tables}.c \
  *       components/ft8_lib/common/monitor.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \
+ *       main/ft8_subtract.c -Imain \
  *       -Icomponents/ft8_lib -Icomponents/ft8_lib/ft8 \
  *       -Icomponents/ft8_lib/common -Icomponents/ft8_lib/fft -lm
  *
