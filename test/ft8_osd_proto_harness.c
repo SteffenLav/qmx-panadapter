@@ -183,6 +183,29 @@
  * from codewords with ndis > 34, the regime this calibration calls false. Do
  * not count them.
  *
+ * ---------------------------------------------------------------------------
+ * WHY ORDER 0 MIGHT FIT ON THE TAB5 WHERE THE SUBTRACT PASS DOES NOT.
+ * Measured here, order 0, no subtraction, 22 slots:
+ *
+ *   104.8 trials a slot (one per failing candidate), 2.82 ms a slot,
+ *   0.0269 ms a trial.
+ *
+ * The cost PROFILE is the opposite of subtraction's. Order 0 needs no second
+ * STFT, no second monitor, and no private copy of the slot audio - the three
+ * things that make the subtract pass cost ~720 KB of PSRAM and a whole second
+ * monitor_process() sweep. It needs the 91x174 bit generator (2184 B), a
+ * reduced copy of it, and the 174 floats of LLR already computed inside
+ * ftx_decode_candidate(). Call it 6 KB and no new buffers.
+ *
+ * ⚠ ESTIMATE, NOT A MEASUREMENT: scaling 2.82 ms by the measured host-to-Tab5
+ * decode ratio (1800 / 37.3 = 48.3x) gives ~136 ms a slot against the 11 s
+ * budget. Two reasons that number could be well out, both of which argue it
+ * is optimistic: the 48.3x came from an FFT-and-LDPC workload and this one is
+ * GF(2) row reduction, and the reduction is written on uint64 words, which a
+ * 32-bit RISC-V splits into two operations with no SIMD to recover it. Even
+ * at four times the estimate it fits, which is the point - but nobody has run
+ * it on a P4.
+ *
  * ⛔ The threshold is fit on 32 samples from the same 22 files it is tested
  * on. There is no held-out FT8 corpus in this tree - wav_reference_full is
  * empty and the extra 13 WAVs in wav_reference are attenuated copies of the
