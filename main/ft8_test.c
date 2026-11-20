@@ -2494,7 +2494,29 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
          * cross-pass case does exist, gating it changes `removed` 837 -> 809
          * and the ground-truth hits NOT AT ALL, 284 either way. So the whole
          * +4 is the within-pass case. If a third pass is ever added, restore a
-         * cross-pass guard here - not a blanket dedup. */
+         * cross-pass guard here - not a blanket dedup.
+         *
+         * ⛔⛔ THE ON-AIR SERIES DISAGREES WITH THE HOST CORPUS AND THIS IS
+         * NOT SETTLED. 2026-11-20, 40 m, one receiver, two boots compared within
+         * MATCHED activity bins (extra decodes / main decodes):
+         *
+         *   main dec/slot   before this change   with it
+         *   5-8             6.5 % (37 slots)     4.1 % (122 slots)
+         *   9-12            7.7 % (49 slots)     6.6 % (25 slots)
+         *
+         * Lower in both bins that have data, while the host corpus says +4
+         * ground-truth messages. Do not quote the +4 as settled and do not
+         * quote the on-air drop as a regression either.
+         *
+         * What is NOT equal between the two: the host metric counts
+         * GROUND-TRUTH hits, the on-air one counts "+N decodes" with nothing
+         * to validate them against, so the host figure is the stronger of the
+         * two. And a bin matches on decode COUNT, not on band character -
+         * QSB and time of evening still differ inside a bin.
+         *
+         * To settle it: alternate the two binaries on one band in one
+         * sitting, or score the on-air decodes against a second receiver.
+         * Nobody has. */
         if (out->n_sub < FT8_MAX_CANDIDATES) {
             int k = out->n_sub++;
             memcpy(out->sub[k].payload, msg.payload, FTX_LDPC_K_BYTES);
