@@ -71,7 +71,12 @@
  * :40 can never be decoded this way, so Fast coverage is 4 of 6 per minute
  * whatever this number is. js8_alt_select_harness.c asserts exactly that, so
  * nobody re-derives it from intuition. */
+/* An #ifndef so an off-device build with cores to spare can set it to 1 (every
+ * slot) with a -D, leaving this default - and the Tab5 - unchanged. 1 is
+ * coprime with everything, so the phase argument above holds for it too. */
+#ifndef JS8_ALT_DUTY_EVERY
 #define JS8_ALT_DUTY_EVERY   5
+#endif
 
 /* Most complete alternate windows one primary slot can hold. Turbo (6 s) in a
  * Slow (30 s) primary is 5; Turbo in Normal is 2; Fast in Normal is 1. */

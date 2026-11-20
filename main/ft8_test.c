@@ -367,7 +367,13 @@ int ft8_op_mode_slot_ms(void)
 #define FT8_NUM_BUFFERS       2
 /* T132's alternate sub-mode pool - ONE monitor, and the reasoning for that is
  * at s_alt_pool. Up here only because DECODE_QUEUE_DEPTH below needs it. */
+/* An #ifndef for the same reason as JS8_ALT_DUTY_EVERY: a build with RAM to
+ * spare sets it to 3 and gets one monitor per OTHER sub-mode, so every JS8
+ * speed that fits the primary slot is decoded (see alt_wanted()). At 1 the
+ * single monitor follows the operator's choice, exactly as before. */
+#ifndef FT8_NUM_ALT_BUFFERS
 #define FT8_NUM_ALT_BUFFERS   1
+#endif
 /* ⛔ THE PRIMARY POOL PLUS THE ALTERNATE ONE. It was FT8_NUM_BUFFERS, with
  * the comment at the full-queue branch saying "shouldn't happen (queue depth
  * == pool size)" - which stopped being true when T132 added a second pool
@@ -611,7 +617,7 @@ static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
  * touches none of it. */
 static monitor_t    *s_alt_pool[FT8_NUM_ALT_BUFFERS];
 static volatile bool s_alt_busy[FT8_NUM_ALT_BUFFERS];
-static int           s_alt_proto = -1;   // ftx_protocol_t, or -1
+static int           s_alt_proto[FT8_NUM_ALT_BUFFERS];   // ftx_protocol_t, or -1
 /* The primary slot's audio, copied for the alternate decode.
  *
  * ⛔ A COPY, AND THE STFT RUNS ON THE DECODE TASK. The obvious shape is to
@@ -630,8 +636,11 @@ static int           s_alt_proto = -1;   // ftx_protocol_t, or -1
  * window: the offsets js8_alt_slots_in_primary() returns are then usable
  * unchanged, which removes a class of off-by-one that produces silence rather
  * than an error. */
-static float        *s_alt_audio = NULL;
-static int           s_alt_audio_samples = 0;   /* capacity, in samples */
+/* ONE COPY PER MONITOR. With more than one alternate, a shared copy would be
+ * overwritten by the next slot while a slower monitor still reads it; each
+ * busy flag guards exactly its own copy. */
+static float        *s_alt_audio[FT8_NUM_ALT_BUFFERS];
+static int           s_alt_audio_samples[FT8_NUM_ALT_BUFFERS];   /* capacity */
 
 #if FT8_SUBTRACT_PASSES > 1
 /* ---- the subtract pass's own three buffers -----------------------------
@@ -919,12 +928,12 @@ static void forget_capture_pool(void)
      * did not exit within the bounded wait, so it may still be reading the
      * alternate waterfall. A leak in PSRAM beats a use-after-free. */
     for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) {
-        s_alt_pool[i] = NULL;
-        s_alt_busy[i] = false;
+        s_alt_pool[i]          = NULL;
+        s_alt_busy[i]          = false;
+        s_alt_audio[i]         = NULL;
+        s_alt_audio_samples[i] = 0;
+        s_alt_proto[i]         = -1;
     }
-    s_alt_audio         = NULL;
-    s_alt_audio_samples = 0;
-    s_alt_proto         = -1;
 }
 
 // Free the monitor pool + capture scratch (idempotent; safe on partial alloc).
@@ -1319,10 +1328,10 @@ static void free_alt_monitor(void)
             s_alt_pool[i] = NULL;
         }
         s_alt_busy[i] = false;
+        if (s_alt_audio[i]) { heap_caps_free(s_alt_audio[i]); s_alt_audio[i] = NULL; }
+        s_alt_audio_samples[i] = 0;
+        s_alt_proto[i] = -1;
     }
-    if (s_alt_audio) { heap_caps_free(s_alt_audio); s_alt_audio = NULL; }
-    s_alt_audio_samples = 0;
-    s_alt_proto = -1;
 }
 
 /* Build the alternate monitor for `proto`, plus the audio copy buffer sized
@@ -1388,27 +1397,27 @@ fail:
 }
 #endif
 
-static bool build_alt_monitor(ftx_protocol_t proto, int primary_samples)
+static bool build_alt_monitor(int ai, ftx_protocol_t proto, int primary_samples)
 {
     const monitor_config_t cfg = {
         .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
         .time_osr = 2, .freq_osr = 2, .protocol = proto,
     };
 
-    s_alt_pool[0] = heap_caps_malloc(sizeof(monitor_t),
+    s_alt_pool[ai] = heap_caps_malloc(sizeof(monitor_t),
                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_alt_pool[0]) {
+    if (!s_alt_pool[ai]) {
         ESP_LOGW(TAG, "alt monitor: alloc failed - alternate decode off this session");
         return false;
     }
-    s_alt_busy[0] = false;
-    monitor_init(s_alt_pool[0], &cfg);
+    s_alt_busy[ai] = false;
+    monitor_init(s_alt_pool[ai], &cfg);
     /* ⛔ monitor_init() DOES NOT CHECK ITS OWN ALLOCATIONS, and a NULL
      * waterfall is only found by the first capture writing through it - the
      * Store access fault at MTVAL 0 the primary builder's comment records.
      * The alternate is optional, so a failure here is a warning and a quiet
      * stand-down, not a refusal to run JS8. */
-    if (!monitor_alloc_ok(s_alt_pool[0])) {
+    if (!monitor_alloc_ok(s_alt_pool[ai])) {
         ESP_LOGW(TAG, "alt monitor for %s: buffers not allocated (%u KB PSRAM free)"
                       " - alternate decode off",
                  ftx_protocol_label(proto),
@@ -1428,7 +1437,7 @@ static bool build_alt_monitor(ftx_protocol_t proto, int primary_samples)
      * cfg inside the buffer it is given, and a memcpy of that buffer to a new
      * address is not something kiss_fft promises to survive. */
     {
-        monitor_t *m = s_alt_pool[0];
+        monitor_t *m = s_alt_pool[ai];
         struct { void **p; size_t sz; } mv[] = {
             { (void **)&m->window,    (size_t)m->nfft * sizeof(float) },
             { (void **)&m->last_frame,(size_t)m->nfft * sizeof(float) },
@@ -1458,23 +1467,23 @@ static bool build_alt_monitor(ftx_protocol_t proto, int primary_samples)
         }
     }
 
-    s_alt_audio = heap_caps_malloc((size_t)primary_samples * sizeof(float),
+    s_alt_audio[ai] = heap_caps_malloc((size_t)primary_samples * sizeof(float),
                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_alt_audio) {
+    if (!s_alt_audio[ai]) {
         ESP_LOGW(TAG, "alt audio buffer (%u KB) failed - alternate decode off",
                  (unsigned)((size_t)primary_samples * sizeof(float) / 1024));
         free_alt_monitor();
         return false;
     }
-    s_alt_audio_samples = primary_samples;
-    s_alt_proto = (int)proto;
+    s_alt_audio_samples[ai] = primary_samples;
+    s_alt_proto[ai] = (int)proto;
     ESP_LOGI(TAG, "alt monitor built for %s: block=%d samples, %d blocks/slot, "
                   "%u KB waterfall + %u KB audio copy (1 window in %d primary slots)",
-             ftx_protocol_label(proto), s_alt_pool[0]->block_size,
-             s_alt_pool[0]->wf.max_blocks,
-             (unsigned)((size_t)s_alt_pool[0]->wf.max_blocks *
-                        s_alt_pool[0]->wf.block_stride *
-                        sizeof(s_alt_pool[0]->wf.mag[0]) / 1024),
+             ftx_protocol_label(proto), s_alt_pool[ai]->block_size,
+             s_alt_pool[ai]->wf.max_blocks,
+             (unsigned)((size_t)s_alt_pool[ai]->wf.max_blocks *
+                        s_alt_pool[ai]->wf.block_stride *
+                        sizeof(s_alt_pool[ai]->wf.mag[0]) / 1024),
              (unsigned)((size_t)primary_samples * sizeof(float) / 1024),
              JS8_ALT_DUTY_EVERY);
     return true;
@@ -1488,34 +1497,80 @@ static bool alt_pool_idle(void)
     return true;
 }
 
-/* Top-of-slot: bring the alternate monitor in line with the setting and with
+/* The alternate sub-modes wanted for this primary, in pool order. With one
+ * monitor it is the operator's choice; with more, it is every OTHER JS8 speed
+ * that fits the primary slot, and the setting is only the on/off switch. */
+static int alt_wanted(ftx_protocol_t primary, ftx_protocol_t *want)
+{
+    uint8_t want_sub = settings_get_js8_alt_submode();
+    if (want_sub == JS8_ALT_OFF) return 0;
+#if FT8_NUM_ALT_BUFFERS == 1
+    ftx_protocol_t w = js8_alt_proto_for_submode(want_sub);
+    if (!js8_alt_fits(primary, w)) return 0;
+    want[0] = w;
+    return 1;
+#else
+    static const uint8_t subs[] = { 0, 1, 2, 4 };   /* NSUBMODE, not dense */
+    int n = 0;
+    for (size_t k = 0; k < sizeof(subs) && n < FT8_NUM_ALT_BUFFERS; k++) {
+        ftx_protocol_t w = js8_alt_proto_for_submode(subs[k]);
+        if (js8_alt_fits(primary, w)) want[n++] = w;
+    }
+    return n;
+#endif
+}
+
+/* The NSUBMODE value js8_alt_select() takes for a protocol - the inverse of
+ * js8_alt_proto_for_submode(). */
+static uint8_t alt_submode_for_proto(ftx_protocol_t p)
+{
+    switch (p) {
+    case FTX_PROTOCOL_JS8_FAST:  return 1;
+    case FTX_PROTOCOL_JS8_TURBO: return 2;
+    case FTX_PROTOCOL_JS8_SLOW:  return 4;
+    default:                     return 0;
+    }
+}
+
+/* Top-of-slot: bring the alternate monitors in line with the setting and with
  * the primary protocol. Called once per slot, so a change costs at most one
  * slot; a rebuild that cannot run because a decode is in flight is simply
  * retried next slot, the same policy reinit_pool_if_mode_changed() settled on
  * after the FT8->FT4 crash.
  *
- * `primary_samples` is this protocol's slot length - the audio copy is sized
- * from it, so a primary sub-mode change rebuilds the buffer too. */
+ * `primary_samples` is this protocol's slot length - the audio copies are
+ * sized from it, so a primary sub-mode change rebuilds them too. All monitors
+ * are rebuilt together: a change is rare, and a partial rebuild is not worth
+ * the bookkeeping. */
 static void reinit_alt_if_changed(ftx_protocol_t primary, int primary_samples)
 {
-    uint8_t want_sub = settings_get_js8_alt_submode();
-    ftx_protocol_t want = js8_alt_proto_for_submode(want_sub);
-    bool want_any = (want_sub != JS8_ALT_OFF) && js8_alt_fits(primary, want);
+    ftx_protocol_t want[FT8_NUM_ALT_BUFFERS];
+    int n = alt_wanted(primary, want);
 
-    if (!want_any) {
-        if (s_alt_proto >= 0 && alt_pool_idle()) {
-            ESP_LOGI(TAG, "alt monitor torn down (%s)",
-                     want_sub == JS8_ALT_OFF ? "turned off"
-                                             : "does not fit the primary slot");
-            free_alt_monitor();
-        }
+    bool same = true;
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) {
+        int w = i < n ? (int)want[i] : -1;
+        if (s_alt_proto[i] != w ||
+            (w >= 0 && s_alt_audio_samples[i] != primary_samples)) same = false;
+    }
+    if (same) return;
+    if (!alt_pool_idle()) return;      /* a decode is reading one - try next slot */
+
+    bool had_any = false;
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) if (s_alt_proto[i] >= 0) had_any = true;
+    free_alt_monitor();
+    if (n == 0) {
+        if (had_any) ESP_LOGI(TAG, "alt monitor torn down (off, or none fits the primary slot)");
         return;
     }
-    if ((int)want == s_alt_proto && s_alt_audio_samples == primary_samples) return;
-    if (!alt_pool_idle()) return;      /* a decode is reading it - try next slot */
-
-    free_alt_monitor();
-    if (!build_alt_monitor(want, primary_samples)) free_alt_monitor();
+    for (int i = 0; i < n; i++) {
+        /* build_alt_monitor() frees EVERY monitor on its own failure paths,
+         * so one failure stands the whole feature down - never half a pool. */
+        if (!build_alt_monitor(i, want[i], primary_samples)) {
+            free_alt_monitor();
+            return;
+        }
+    }
 }
 
 /* How long the slot task will wait for an in-flight decode before giving up on
@@ -3821,7 +3876,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
 static void decode_alt_job(worker_ctx_t *wctx, const decode_job_t *job)
 {
     monitor_t *mon = s_alt_pool[job->mon_idx];
-    if (!mon || !s_alt_audio) return;
+    const float *audio = s_alt_audio[job->mon_idx];
+    const int audio_samples = s_alt_audio_samples[job->mon_idx];
+    if (!mon || !audio) return;
 
     const ftx_protocol_t alt = (ftx_protocol_t)job->expect_mon;
     const decode_ctx_t dc = {
@@ -3850,10 +3907,10 @@ static void decode_alt_job(worker_ctx_t *wctx, const decode_job_t *job)
          * the same shape as the SLOT_SAMPLES_MAX refusal in the slot loop.
          * The mutation test in js8_alt_window_harness.c segfaulted exactly
          * here, on the first run, for exactly this reason. */
-        if (off < 0 || off + alt_samples > s_alt_audio_samples) {
+        if (off < 0 || off + alt_samples > audio_samples) {
             ESP_LOGE(TAG, "alt %s window %d at +%d runs past the %d-sample copy"
                           " - REFUSING", ftx_protocol_label(alt), w, off,
-                     s_alt_audio_samples);
+                     audio_samples);
             continue;
         }
 
@@ -3861,7 +3918,7 @@ static void decode_alt_job(worker_ctx_t *wctx, const decode_job_t *job)
         int64_t t_stft = esp_timer_get_time();
         for (int pos = 0; pos + mon->block_size <= alt_samples;
              pos += mon->block_size) {
-            monitor_process(mon, &s_alt_audio[off + pos]);
+            monitor_process(mon, &audio[off + pos]);
         }
         int stft_ms = (int)((esp_timer_get_time() - t_stft) / 1000);
 
@@ -4717,16 +4774,18 @@ static void ft8_task(void *arg)
                  * the decode both run on the decode task (see s_alt_audio),
                  * so this adds nothing to the capture task's path to the next
                  * UTC boundary. */
-                if (s_alt_pool[0] && s_alt_audio) {
+                for (int ai = 0; ai < FT8_NUM_ALT_BUFFERS; ai++) {
+                    if (!s_alt_pool[ai] || !s_alt_audio[ai] || s_alt_proto[ai] < 0)
+                        continue;
                     ftx_protocol_t alt = FTX_PROTOCOL_FT8;
                     int alt_offs[JS8_ALT_MAX_WINDOWS];
                     int alt_n = 0;
-                    if (js8_alt_select(sproto, settings_get_js8_alt_submode(),
+                    if (js8_alt_select(sproto, alt_submode_for_proto((ftx_protocol_t)s_alt_proto[ai]),
                                        slot_sec, &alt, alt_offs,
                                        JS8_ALT_MAX_WINDOWS, &alt_n) &&
-                        (int)alt == s_alt_proto &&
-                        slot_samples <= s_alt_audio_samples) {
-                        if (s_alt_busy[0]) {
+                        (int)alt == s_alt_proto[ai] &&
+                        slot_samples <= s_alt_audio_samples[ai]) {
+                        if (s_alt_busy[ai]) {
                             /* The last alternate decode has not finished. It
                              * is optional work, so skip this visit rather
                              * than wait or allocate a second waterfall - but
@@ -4737,11 +4796,11 @@ static void ft8_task(void *arg)
                                           "- skipping this alternate window",
                                      slot_idx, ftx_protocol_label(alt));
                         } else {
-                            memcpy(s_alt_audio, s_cap_scratch,
+                            memcpy(s_alt_audio[ai], s_cap_scratch,
                                    (size_t)slot_samples * sizeof(float));
-                            s_alt_busy[0] = true;
+                            s_alt_busy[ai] = true;
                             decode_job_t ajob = {
-                                .mon_idx     = 0,
+                                .mon_idx     = ai,
                                 .pool        = 1,
                                 .expect_mon  = (uint8_t)alt,
                                 .expect_mode = (uint8_t)proto_for_mode(),
@@ -4752,7 +4811,7 @@ static void ft8_task(void *arg)
                             for (int w = 0; w < alt_n && w < JS8_ALT_MAX_WINDOWS; w++)
                                 ajob.alt_offs[w] = alt_offs[w];
                             if (xQueueSend(s_decode_queue, &ajob, 0) != pdTRUE) {
-                                s_alt_busy[0] = false;
+                                s_alt_busy[ai] = false;
                                 ESP_LOGW(TAG, "slot %d: decode queue full - "
                                               "alternate window dropped", slot_idx);
                             }
