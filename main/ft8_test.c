@@ -617,7 +617,10 @@ static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
  * touches none of it. */
 static monitor_t    *s_alt_pool[FT8_NUM_ALT_BUFFERS];
 static volatile bool s_alt_busy[FT8_NUM_ALT_BUFFERS];
-static int           s_alt_proto[FT8_NUM_ALT_BUFFERS];   // ftx_protocol_t, or -1
+/* ⛔ -1 EXPLICITLY. A static array is zero-filled and 0 is a real protocol,
+ * so without this the first reinit saw "a monitor for protocol 0" that never
+ * existed and logged a teardown at boot. */
+static int           s_alt_proto[FT8_NUM_ALT_BUFFERS] = { [0 ... FT8_NUM_ALT_BUFFERS - 1] = -1 };
 /* The primary slot's audio, copied for the alternate decode.
  *
  * ⛔ A COPY, AND THE STFT RUNS ON THE DECODE TASK. The obvious shape is to
@@ -1557,7 +1560,7 @@ static void reinit_alt_if_changed(ftx_protocol_t primary, int primary_samples)
     if (!alt_pool_idle()) return;      /* a decode is reading one - try next slot */
 
     bool had_any = false;
-    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) if (s_alt_proto[i] >= 0) had_any = true;
+    for (int i = 0; i < FT8_NUM_ALT_BUFFERS; i++) if (s_alt_pool[i]) had_any = true;
     free_alt_monitor();
     if (n == 0) {
         if (had_any) ESP_LOGI(TAG, "alt monitor torn down (off, or none fits the primary slot)");
