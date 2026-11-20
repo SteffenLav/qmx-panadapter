@@ -39,6 +39,7 @@
 #include "ft8_test.h"
 #include "esp_attr.h"   // EXT_RAM_BSS_ATTR
 #include "ft8_slot_gate.h"
+#include "ft8_subtract.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -435,6 +436,27 @@ static char s_stuck_note[256];   /* same text as the stuck toast - widened with 
 #define FT8_LDPC_MAX_ITERS    30
 #define FT4_LDPC_MAX_ITERS    30
 
+/* Subtract-and-repeat: total decode passes over one slot. 1 = off, and OFF IS
+ * THE DEVICE DEFAULT - everything below compiles out at 1, so the Tab5 binary
+ * is unchanged until somebody measures the cost on a P4.
+ *
+ * Worth, measured on the 22 ground-truth reference WAVs
+ * (test/ft8_subtract_bench.c, 2026-11-20):
+ *     1 pass   264 unique, 260 of 362 truth,  404 ms
+ *     2 passes 285 unique, 280 of 362      , 1994 ms   = +21, +8.0 %
+ *     3 passes 285 unique, 280 of 362      , 2413 ms   (nothing more)
+ * About 90 ms a slot on a PC against FT8_DECODE_BUDGET_MS of 11000. The P4's
+ * own decode is ~50x slower than that host, so the second pass there would be
+ * seconds, not milliseconds - which is why this is not simply turned on.
+ *
+ * The sweep that led here also closed three doors: FT8_MAX_CANDIDATES,
+ * FT8_FIND_MIN_SCORE and FT8_LDPC_MAX_ITERS are all NON-binding (140 -> 600
+ * candidates moves the count not at all), so what we miss is underneath
+ * stronger signals, not past a threshold. */
+#ifndef FT8_SUBTRACT_PASSES
+#define FT8_SUBTRACT_PASSES 1
+#endif
+
 #define EPOCH_SANE_MIN        1700000000  // 2023-11-14 - SNTP not synced if below this
 
 // ---------------------------------------------------------------------------
@@ -609,6 +631,28 @@ static int           s_alt_proto = -1;   // ftx_protocol_t, or -1
  * than an error. */
 static float        *s_alt_audio = NULL;
 static int           s_alt_audio_samples = 0;   /* capacity, in samples */
+
+#if FT8_SUBTRACT_PASSES > 1
+/* ---- the subtract pass's own three buffers -----------------------------
+ *
+ * ⛔ A PRIVATE MONITOR, BUILT LIKE THE ALTERNATE AND FOR THE SAME REASON.
+ * monitor_process() on a POOL monitor is capture-task-only and strictly
+ * sequential, because every one of them borrows s_shared_fft_work and the
+ * s_shared_stft_* pair (see the note at those). The second pass re-runs the
+ * STFT on the DECODE task, so it must touch none of them - which is exactly
+ * what build_alt_monitor() already arranges for the alternate sub-mode, and
+ * why its comment says a decode-task monitor_process() is safe.
+ *
+ * ⛔ AND A PRIVATE COPY OF THE AUDIO. s_cap_scratch belongs to the capture
+ * task and is already being filled with the NEXT slot by the time decode
+ * runs; the alternate path copies for the same reason. */
+static monitor_t    *s_sub_mon = NULL;
+static float        *s_sub_audio = NULL;        /* the slot, copied at capture */
+static int           s_sub_audio_samples = 0;   /* valid samples in it */
+static int           s_sub_audio_cap = 0;       /* its capacity */
+static float        *s_sub_scratch = NULL;      /* ft8_subtract_signal's */
+static int           s_sub_proto = -1;
+#endif
 
 /* Wall-clock cap for ONE alternate window's candidate loop. Shorter than the
  * primary's 11 s on purpose: an alternate decode is optional and must never be
@@ -1283,6 +1327,66 @@ static void free_alt_monitor(void)
 /* Build the alternate monitor for `proto`, plus the audio copy buffer sized
  * for `primary_samples`. Returns false on any failure, having freed whatever
  * it got - the caller then simply runs without an alternate. */
+#if FT8_SUBTRACT_PASSES > 1
+/* Lazily build the subtract pass's monitor and buffers. Returns false and
+ * says why if anything is missing - the second pass is optional by
+ * construction, exactly like the alternate sub-mode, so a shortage stands it
+ * down for the session instead of refusing to decode.
+ *
+ * ⛔ monitor_init() DOES NOT CHECK ITS OWN ALLOCATIONS (see the alternate's
+ * note): a NULL waterfall is only found by the first STFT writing through it.
+ * monitor_alloc_ok() is not optional here. */
+static bool ensure_sub_pass(ftx_protocol_t proto, int samples)
+{
+    if (s_sub_mon && s_sub_proto == (int)proto && s_sub_audio_cap >= samples
+        && s_sub_scratch)
+        return true;
+
+    if (s_sub_mon) { monitor_free(s_sub_mon); heap_caps_free(s_sub_mon); s_sub_mon = NULL; }
+    if (s_sub_audio) { heap_caps_free(s_sub_audio); s_sub_audio = NULL; s_sub_audio_cap = 0; }
+    if (s_sub_scratch) { heap_caps_free(s_sub_scratch); s_sub_scratch = NULL; }
+    s_sub_proto = -1;
+
+    const monitor_config_t cfg = {
+        .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
+        .time_osr = 2, .freq_osr = 2, .protocol = proto,
+    };
+    s_sub_mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_sub_audio = heap_caps_malloc((size_t)samples * sizeof(float),
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_sub_scratch = heap_caps_malloc((size_t)ft8_subtract_scratch_floats(FT8_NN)
+                                     * sizeof(float),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_sub_mon || !s_sub_audio || !s_sub_scratch) {
+        ESP_LOGW(TAG, "subtract pass: alloc failed (%u KB PSRAM free)"
+                      " - second decode pass off this session",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        goto fail;
+    }
+    s_sub_audio_cap = samples;
+    monitor_init(s_sub_mon, &cfg);
+    if (!monitor_alloc_ok(s_sub_mon)) {
+        ESP_LOGW(TAG, "subtract pass: monitor buffers not allocated"
+                      " - second decode pass off this session");
+        goto fail;
+    }
+    /* ⛔ KEEPS monitor_init()'s OWN fft_work and STFT buffers, and that is the
+     * whole point: this monitor's STFT runs on the DECODE task, so it must not
+     * borrow s_shared_fft_work or the s_shared_stft_* pair the pool monitors
+     * share. Do not "optimise" it to share them. */
+    s_sub_proto = (int)proto;
+    ESP_LOGI(TAG, "subtract pass ready (%d passes, %d samples, nfft %d)",
+             FT8_SUBTRACT_PASSES, samples, s_sub_mon->nfft);
+    return true;
+fail:
+    if (s_sub_mon) { heap_caps_free(s_sub_mon); s_sub_mon = NULL; }
+    if (s_sub_audio) { heap_caps_free(s_sub_audio); s_sub_audio = NULL; }
+    if (s_sub_scratch) { heap_caps_free(s_sub_scratch); s_sub_scratch = NULL; }
+    s_sub_audio_cap = 0;
+    return false;
+}
+#endif
+
 static bool build_alt_monitor(ftx_protocol_t proto, int primary_samples)
 {
     const monitor_config_t cfg = {
@@ -1660,6 +1764,22 @@ typedef struct {
     } js8ev[FT8_JS8_MAX_EVENTS];
     int   n_js8ev;
     int   js8ev_dropped;
+
+#if FT8_SUBTRACT_PASSES > 1
+    /* Signals to remove before the next pass.
+     *
+     * ⛔ COLLECTED HERE AND USED AT THE MERGE, for the same reason js8ev[]
+     * above is: the candidate loop runs on TWO threads with one
+     * decode_result_t each, and the subtraction rewrites the slot audio.
+     * Doing it inside the loop would have two threads writing one buffer
+     * while a third reads it. The merge is single-threaded. */
+    struct {
+        uint8_t payload[FTX_LDPC_K_BYTES];
+        float   f0_hz;
+        int     start;          /* sample index, already lead-corrected */
+    } sub[FT8_MAX_CANDIDATES];
+    int   n_sub;
+#endif
 } decode_result_t;
 
 /* ⛔⛔ WHAT A DECODE IS ALLOWED TO TOUCH, and it is a PARAMETER rather than
@@ -2193,6 +2313,9 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
     out->n_timing    = 0;
     out->n_js8ev     = 0;
     out->js8ev_dropped = 0;
+#if FT8_SUBTRACT_PASSES > 1
+    out->n_sub       = 0;      /* see the ⛔ above: every counter, every time */
+#endif
     (void)start_off_ms;   // no longer added to the timing (backfill anchors the
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
@@ -2355,6 +2478,23 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
             out->n_dup++;
             continue;
         }
+#if FT8_SUBTRACT_PASSES > 1
+        /* Record what to remove before the next pass. AFTER the dedup, so a
+         * signal already subtracted in an earlier pass is not subtracted
+         * twice - taking out energy that is no longer there digs a hole the
+         * next pass reads as noise. */
+        if (out->n_sub < FT8_MAX_CANDIDATES) {
+            int k = out->n_sub++;
+            memcpy(out->sub[k].payload, msg.payload, FTX_LDPC_K_BYTES);
+            out->sub[k].f0_hz = (mon->min_bin + cands[i].freq_offset
+                                 + (float)cands[i].freq_sub / mon->wf.freq_osr)
+                                / mon->symbol_period;
+            float t_sec = (cands[i].time_offset
+                           + (float)cands[i].time_sub / mon->wf.time_osr)
+                          * mon->symbol_period;
+            out->sub[k].start = ft8_subtract_start_sample(t_sec, SR_HZ);
+        }
+#endif
         /* ⛔ FT8_TEXT_MAX_LEN (40), NOT FTX_MAX_MESSAGE_LENGTH (35).
          * 35 is FT8's own ceiling and it SILENTLY DROPPED long JS8 lines:
          * decode_msg_to_text() refuses rather than truncate (truncating puts a
@@ -2890,12 +3030,76 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
                                &dedup, &r_worker);
     }
 
+#if FT8_SUBTRACT_PASSES > 1
+    /* ---- subtract-and-repeat --------------------------------------------
+     *
+     * HERE, after the join and before the counters are summed: the two
+     * candidate ranges have finished, so the subtraction has the slot audio
+     * to itself, and the extra decodes still reach the slot line.
+     *
+     * The same `dedup` is passed through, so a second-pass candidate that
+     * lands on a message pass 1 already read is counted as a duplicate and
+     * never reaches the screen twice.
+     *
+     * may_early_advance is FALSE. A reply decoded only on the second pass is
+     * later than the QSO logic's own timing assumptions, and advancing on it
+     * would fire our TX off evidence the first pass did not have. */
+    decode_result_t r_sub;
+    r_sub.n_decoded = r_sub.n_attempted = r_sub.n_dup = 0;
+    r_sub.n_timing = r_sub.n_js8ev = r_sub.js8ev_dropped = 0;
+    r_sub.n_sub = 0;
+    r_sub.early_advanced = false;
+    if (!rx_only && s_sub_mon && s_sub_audio_samples > 0
+        && s_sub_proto == (int)proto_for_mode()) {
+        int64_t t_sub0 = esp_timer_get_time();
+        int n_removed = 0;
+        const decode_result_t *src[2] = { &r_main, &r_worker };
+        for (int rr = 0; rr < 2; rr++) {
+            int ns = src[rr]->n_sub;
+            if (ns < 0) ns = 0;
+            if (ns > FT8_MAX_CANDIDATES) ns = FT8_MAX_CANDIDATES;
+            for (int k = 0; k < ns; k++) {
+                uint8_t tones[FT8_NN];
+                ft8_encode(src[rr]->sub[k].payload, tones);
+                ft8_subtract_signal(s_sub_audio, s_sub_audio_samples, tones,
+                                    FT8_NN, src[rr]->sub[k].f0_hz,
+                                    src[rr]->sub[k].start, SR_HZ, s_sub_scratch);
+                n_removed++;
+            }
+        }
+        if (n_removed > 0) {
+            monitor_reset(s_sub_mon);
+            for (int pos = 0; pos + s_sub_mon->block_size <= s_sub_audio_samples;
+                 pos += s_sub_mon->block_size)
+                monitor_process(s_sub_mon, &s_sub_audio[pos]);
+
+            ftx_candidate_t cands2[FT8_MAX_CANDIDATES];
+            int n_cand2 = ftx_find_candidates(&s_sub_mon->wf, FT8_MAX_CANDIDATES,
+                                              cands2, FT8_FIND_MIN_SCORE);
+            decode_candidate_range(s_sub_mon, dc, cands2, n_cand2, 0, 1,
+                                   noise_db, slot_sec, t_start, start_off_ms,
+                                   false, NULL, NULL, &dedup, &r_sub);
+        }
+        ESP_LOGI(TAG, "slot %d subtract pass: removed %d, +%d decode(s), %d ms",
+                 slot_idx, n_removed, r_sub.n_decoded,
+                 (int)((esp_timer_get_time() - t_sub0) / 1000));
+    }
+    s_sub_audio_samples = 0;     /* consumed; never decode the same copy twice */
+#endif
+
     int n_decoded   = r_main.n_decoded   + r_worker.n_decoded;
     int n_attempted = r_main.n_attempted + r_worker.n_attempted;
+#if FT8_SUBTRACT_PASSES > 1
+    n_decoded   += r_sub.n_decoded;
+    n_attempted += r_sub.n_attempted;
+#endif
     /* Reported in the slot line: without it the fix is invisible, and a
      * decoder that suddenly publishes one row instead of twenty-three looks
      * exactly like a decoder that stopped working. */
     int n_dup       = r_main.n_dup       + r_worker.n_dup;
+#if FT8_SUBTRACT_PASSES > 1
+    n_dup += r_sub.n_dup;
+#endif
     /* JS8 frames recorded for the reassembler. A free-text DATA frame never
      * renders, so it does NOT reach n_decoded (see the js8_frame_is_data
      * branch in decode_range). Two consumers need to know it arrived:
@@ -2907,6 +3111,9 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
      *     text scores zero in every slot and had its receiver reset under it.
      * Zero in FT8/FT4, so neither consumer needs a protocol guard. */
     int n_js8ev     = r_main.n_js8ev     + r_worker.n_js8ev;
+#if FT8_SUBTRACT_PASSES > 1
+    n_js8ev += r_sub.n_js8ev;
+#endif
     int n_skipped   = n_cand - n_attempted;  // candidates left undecoded if the budget ran out
 
     /* ---- JS8 free-text reassembly (J7) ---------------------------------
@@ -2933,9 +3140,15 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
          * The STRUCTURED traffic below is different: each frame is complete in
          * itself, so it reaches the conversation pane marked with the sub-mode
          * that heard it, and that is the whole point of T132. */
+#if FT8_SUBTRACT_PASSES > 1
+        const decode_result_t *ranges[3] = { &r_main, &r_worker, &r_sub };
+        const int n_ranges = 3;
+#else
         const decode_result_t *ranges[2] = { &r_main, &r_worker };
+        const int n_ranges = 2;
+#endif
         for (int pass = 0; rx_only ? false : pass < 2; pass++) {
-            for (int rr = 0; rr < 2; rr++) {
+            for (int rr = 0; rr < n_ranges; rr++) {
                 /* Clamped, as well as initialised at the source. The reset
                  * above is the fix; this is so the same slip can never again
                  * turn into a crash on the decode task overnight - it would
@@ -2981,8 +3194,14 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
             const uint32_t js8_dial_hz = cat_get_frequency();
             const char *js8_band = js8_dial_hz ? adif_log_band_for_freq(js8_dial_hz) : "";
 
+#if FT8_SUBTRACT_PASSES > 1
+            const decode_result_t *src[3] = { &r_main, &r_worker, &r_sub };
+            const int n_src = 3;
+#else
             const decode_result_t *src[2] = { &r_main, &r_worker };
-            for (int rr = 0; rr < 2; rr++) {
+            const int n_src = 2;
+#endif
+            for (int rr = 0; rr < n_src; rr++) {
                 int nev = src[rr]->n_js8ev;
                 if (nev > FT8_JS8_MAX_EVENTS) nev = FT8_JS8_MAX_EVENTS;
                 for (int k = 0; k < nev; k++) {
@@ -4361,6 +4580,21 @@ static void ft8_task(void *arg)
                  * now exactly the 15 s the decoder will work on. */
                 slotcap_take(s_cap_scratch, (uint32_t)slot_samples, slot_sec,
                              ft8_op_mode_name());
+#if FT8_SUBTRACT_PASSES > 1
+                /* The decode task cannot read s_cap_scratch - by the time it
+                 * runs, THIS task is filling it with the next slot. Copy it,
+                 * exactly as the alternate sub-mode path does, and for the
+                 * same reason. A memcpy of ~720 KB is a few ms and the STFT
+                 * and the subtraction both happen on the decode task, so
+                 * nothing is added to the path to the next UTC boundary. */
+                if (ensure_sub_pass(sproto, slot_samples)) {
+                    memcpy(s_sub_audio, s_cap_scratch,
+                           (size_t)slot_samples * sizeof(float));
+                    s_sub_audio_samples = slot_samples;
+                } else {
+                    s_sub_audio_samples = 0;
+                }
+#endif
                 int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
                 int stft_ms = (int)(stft_us / 1000);
                 int drop_delta = (int)(audio_get_dropped_total() - drop_before);
