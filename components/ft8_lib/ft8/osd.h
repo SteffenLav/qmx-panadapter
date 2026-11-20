@@ -46,6 +46,15 @@ extern "C"
  * ft8_osd_order0() below, which is the one real cost to watch.
  */
 
+/* Reject an OSD codeword disagreeing with the hard decision in more than this
+ * many of the 174 bits. 34 is calibrated - this file records the four statistics
+ * that were compared and why this one won. ⚠ FITTED on 32 samples from the
+ * same 22 files, not confirmed on held-out data.
+ * Moved here from decode.c so the decoder and the init log share ONE copy. */
+#ifndef FT8_OSD_MAX_NDIS
+#define FT8_OSD_MAX_NDIS 34
+#endif
+
 /// Build the systematic generator table. Idempotent, and NOT thread-safe:
 /// call it once before any decode task starts, not lazily from the decoders.
 /// Both FT8 decode halves run concurrently on two cores.

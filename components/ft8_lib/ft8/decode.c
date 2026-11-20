@@ -72,13 +72,8 @@
 #define FT8_OSD_ORDER0 0
 #endif
 
-/* Reject an OSD codeword disagreeing with the hard decision in more than this
- * many of the 174 bits. 34 is calibrated - see osd.h for the four statistics
- * that were compared and why this one won. ⚠ FITTED on 32 samples from the
- * same 22 files, not confirmed on held-out data. */
-#ifndef FT8_OSD_MAX_NDIS
-#define FT8_OSD_MAX_NDIS 34
-#endif
+/* FT8_OSD_MAX_NDIS lives in osd.h: ft8_test.c logs it at init, and a second
+ * copy here would be free to drift from the one it prints. */
 
 /* Abandon an FT8 candidate after this many belief-propagation iterations with
  * no improvement. The table of what each value costs in DECODES is at the
