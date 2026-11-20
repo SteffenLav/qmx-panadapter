@@ -2469,20 +2469,31 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
         ftx_message_t msg;
         ftx_decode_status_t st;
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
-        /* ⭐ ONE TRANSMISSION, ONE DECODE - see slot_dedup_t for the
-         * measurement. Checked HERE, before decode_msg_to_text(), so a
-         * duplicate costs nothing beyond the LDPC that already ran, and so
-         * BOTH branches below are covered: the rendered one and the JS8
-         * data-frame one that feeds the reassembler. */
-        if (dedup && slot_dedup_seen(dedup, msg.payload)) {
-            out->n_dup++;
-            continue;
-        }
 #if FT8_SUBTRACT_PASSES > 1
-        /* Record what to remove before the next pass. AFTER the dedup, so a
-         * signal already subtracted in an earlier pass is not subtracted
-         * twice - taking out energy that is no longer there digs a hole the
-         * next pass reads as noise. */
+        /* Record what to remove before the next pass.
+         *
+         * ⭐ BEFORE THE DEDUP, DELIBERATELY, AND WORTH +4 GROUND-TRUTH
+         * DECODES. A duplicate payload here means ONE transmission was found
+         * at TWO candidate positions, each with its own (f0, start). The
+         * signal is still fully present in the audio, and removing both
+         * instances fits the residual better than removing one: measured
+         * 2026-11-20 on the 22 reference WAVs, 280 -> 284 of 362, for nothing.
+         * test/ft8_osd_proto_harness.c, -DSUB_SKIP_DUP is the old behaviour.
+         *
+         * ⛔ THIS IS NOT THE CASE THE OLD COMMENT HERE WARNED ABOUT. It read
+         * "AFTER the dedup, so a signal already subtracted in an earlier pass
+         * is not subtracted twice - taking out energy that is no longer there
+         * digs a hole the next pass reads as noise." That hazard is real but
+         * it is the CROSS-PASS duplicate, and it cannot arise at this site:
+         * sub[] is collected from r_main/r_worker only, which is pass 1, and
+         * only pass 1's decodes are ever subtracted (r_sub.n_sub is zeroed and
+         * never read). There is no earlier pass to have removed anything.
+         *
+         * Measured separately rather than argued: at three passes, where the
+         * cross-pass case does exist, gating it changes `removed` 837 -> 809
+         * and the ground-truth hits NOT AT ALL, 284 either way. So the whole
+         * +4 is the within-pass case. If a third pass is ever added, restore a
+         * cross-pass guard here - not a blanket dedup. */
         if (out->n_sub < FT8_MAX_CANDIDATES) {
             int k = out->n_sub++;
             memcpy(out->sub[k].payload, msg.payload, FTX_LDPC_K_BYTES);
@@ -2495,6 +2506,20 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
             out->sub[k].start = ft8_subtract_start_sample(t_sec, SR_HZ);
         }
 #endif
+        /* ⭐ ONE TRANSMISSION, ONE DECODE - see slot_dedup_t for the
+         * measurement. Checked HERE, before decode_msg_to_text(), so a
+         * duplicate costs nothing beyond the LDPC that already ran, and so
+         * BOTH branches below are covered: the rendered one and the JS8
+         * data-frame one that feeds the reassembler.
+         *
+         * ⛔ The subtract collection above runs BEFORE this on purpose and
+         * must stay there - see its own comment. Everything from here down is
+         * about what reaches the SCREEN, where one transmission is still one
+         * row. */
+        if (dedup && slot_dedup_seen(dedup, msg.payload)) {
+            out->n_dup++;
+            continue;
+        }
         /* ⛔ FT8_TEXT_MAX_LEN (40), NOT FTX_MAX_MESSAGE_LENGTH (35).
          * 35 is FT8's own ceiling and it SILENTLY DROPPED long JS8 lines:
          * decode_msg_to_text() refuses rather than truncate (truncating puts a

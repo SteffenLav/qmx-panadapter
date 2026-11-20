@@ -122,6 +122,23 @@
  * signal was found at two candidate positions; removing both instances fits
  * the residual better than removing one.
  *
+ * [*] AND IT IS THE WITHIN-PASS CASE THAT PAYS, WHICH IS THE SAFE ONE.
+ * -DSUB_SKIP_CROSS_PASS subtracts a duplicate found a second time inside one
+ * pass but not one already removed in an earlier pass. ⛔ At NPASS=2 that gate
+ * CANNOT FIRE - only pass 0 collects, so every duplicate is within-pass by
+ * construction, and the variant printed numbers identical to ungated. It took
+ * NPASS=3 to make the case exist at all:
+ *
+ *   NPASS=3, dup subtraction   uniq  hit/362  removed
+ *   all                         289    284      837
+ *   within-pass only            289    284      809
+ *   none (-DSUB_SKIP_DUP)       285    280      285
+ *
+ * So gating the cross-pass case drops 28 subtractions and changes the
+ * ground-truth hits NOT AT ALL. The whole +4 is within-pass. That is what
+ * licensed moving the collection above the dedup in main/ft8_test.c, where
+ * only pass 1 collects and the cross-pass case cannot arise.
+ *
  * ⛔ ORDER 1 IS STILL NOT WORTH IT. +2 hits over OSD 0 (288 -> 290) for 32 OSD
  * decodes of which only 12 are in the truth. 492016 trials predict 30.0 CRC
  * false accepts and ~20 were observed. The arithmetic holds across both
@@ -333,7 +350,7 @@ int main(int argc,char** argv)
     load_expected(argv[2]);
     build_generator();
 
-    char texts[MAXMSG][64]; int ntext=0;
+    char texts[MAXMSG][64]; int text_pass[MAXMSG]; int ntext=0;
     char osd_only[MAXMSG][64]; double osd_metric[MAXMSG]; int n_osd_only=0;
     int n_ldpc=0, n_osd=0, trials_total=0, n_removed=0;
     int per_pass[8]; memset(per_pass,0,sizeof per_pass);
@@ -387,8 +404,12 @@ int main(int argc,char** argv)
             char t[64]; ftx_message_offsets_t off;
             if(ftx_message_decode(&om,NULL,t,&off)!=FTX_MESSAGE_RC_OK) continue;
 
-            int dup=0; for(int j=0;j<ntext;j++) if(match(texts[j],t)) dup=1;
+            int dup=0, dup_earlier_pass=0;
+            for(int j=0;j<ntext;j++) if(match(texts[j],t)){
+                dup=1; if(text_pass[j]<pass) dup_earlier_pass=1;
+            }
             if(!dup && ntext<MAXMSG){
+                text_pass[ntext]=pass;
                 snprintf(texts[ntext++],64,"%s",t);
                 per_pass[pass<8?pass:7]++;
                 if(from_osd){
@@ -411,6 +432,17 @@ int main(int argc,char** argv)
 #ifdef SUB_SKIP_DUP
             if(dup) continue;
 #endif
+            /* -DSUB_SKIP_CROSS_PASS subtracts a duplicate found a SECOND time
+             * within the same pass - two candidate positions on one still-
+             * present signal - but not one already removed in an earlier
+             * pass. That is the case main/ft8_test.c's comment is about:
+             * taking out energy that is no longer there digs a hole the next
+             * pass reads as noise. Separating the two says whether the free
+             * +4 is the safe case or the one that comment warns against. */
+#ifdef SUB_SKIP_CROSS_PASS
+            if(dup_earlier_pass) continue;
+#endif
+            (void)dup_earlier_pass;
             if(pass+1<NPASS && n_todo<MAXC){
                 ft8_encode(payload,todo[n_todo].tones);
                 todo[n_todo].f0 = (mon.min_bin + cands[i].freq_offset
