@@ -143,6 +143,53 @@
  * decodes of which only 12 are in the truth. 492016 trials predict 30.0 CRC
  * false accepts and ~20 were observed. The arithmetic holds across both
  * measurements; it needs the calibrated distance threshold first.
+ *
+ * ---------------------------------------------------------------------------
+ * THE THRESHOLD, CALIBRATED 2026-11-20. Four candidate statistics over the 32
+ * order-1 decodes (12 in truth, 20 not). For each, the tightest threshold that
+ * keeps EVERY real decode, and how many false ones it still admits:
+ *
+ *   statistic                     real range        keep-all thr   false kept
+ *   d     (soft distance)       23.53 .. 55.59          55.59        6 of 20
+ *   d_rel (d / sum|llr|)        0.0332 .. 0.0740        0.0740       5 of 20
+ *   d_per (d / ndis)            0.871 .. 1.985          1.985       16 of 20
+ *   ndis  (bits disagreeing)       22 .. 34               34         3 of 20
+ *
+ * [*] ndis WINS, AND IT IS THE SIMPLEST. -DOSD_MAX_NDIS=34 rejects a codeword
+ * that disagrees with the hard decision in more than 34 of the 174 bits. No
+ * floating-point threshold to scale, no dependence on signal strength.
+ * -DOSD_NDIS_POST screens the selected codeword instead of filtering inside
+ * the search; measured identical, so the placement does not matter here.
+ *
+ * [*] VALIDATED WITH SUBTRACTION OFF, where nothing else can recover a
+ * message:
+ *
+ *   NPASS=1            hit/362   osd decodes   in truth
+ *   order 0              264          5          5
+ *   order 1              269         20         11
+ *   order 1, ndis<=34    269         12         11
+ *
+ * The filter removes 8 of the 9 false decodes and costs NOTHING: 269 hits and
+ * 11 real either way.
+ *
+ * ⛔⛔ BUT ORDER 1 AND SUBTRACTION RECOVER THE SAME MESSAGES. With NPASS=2,
+ * order 0 gives 288 hits and order 1 with the filter gives 288 as well - the
+ * +5 that order 1 is worth on its own vanishes. Order 0 is ADDITIVE with
+ * subtraction (+24 and +4 -> +28, measured above); order 1 OVERLAPS it
+ * completely. So once subtract-and-repeat is on, order 1 buys nothing and
+ * order 0 is the whole OSD win.
+ *
+ * ⚠ That also retires the "+2 over order 0" above: those 2 hits come entirely
+ * from codewords with ndis > 34, the regime this calibration calls false. Do
+ * not count them.
+ *
+ * ⛔ The threshold is fit on 32 samples from the same 22 files it is tested
+ * on. There is no held-out FT8 corpus in this tree - wav_reference_full is
+ * empty and the extra 13 WAVs in wav_reference are attenuated copies of the
+ * same 22 signals. A half-and-half split (odd/even files) gave 134 and 154
+ * hits for both order 0 and filtered order 1 at NPASS=2, consistent with the
+ * overlap above but too small to validate 34 as a number. Treat 34 as fitted,
+ * not confirmed.
  * ===========================================================================
  */
 #include <stdio.h>
@@ -176,6 +223,13 @@
  * measurement in the header was taken. */
 #ifndef NPASS
 #define NPASS 1
+#endif
+
+/* Reject an OSD codeword that disagrees with the hard decision in more than
+ * this many of the 174 bits. ndis separated real from false better than the
+ * soft distance did - see the calibration block in the header. 0 = no limit. */
+#ifndef OSD_MAX_NDIS
+#define OSD_MAX_NDIS 0
 #endif
 
 #define N FTX_LDPC_N   /* 174 */
@@ -268,7 +322,8 @@ static int crc_ok(const uint8_t cw[N], uint8_t payload[10])
  * trials_out counts CRC checks, which is what the false-accept arithmetic in
  * the header is about. */
 static int osd(const float llr[N], int order, uint8_t payload[10],
-               double* metric_out, int* trials_out)
+               double* metric_out, int* trials_out,
+               int* ndis_out, double* llrsum_out)
 {
     int idx[N];
     for (int i = 0; i < N; i++) idx[i] = i;
@@ -308,8 +363,16 @@ static int osd(const float llr[N], int order, uint8_t payload[10],
 
     int    best = 0;
     double best_metric = 0;
+    int    best_ndis = 0;
     uint8_t best_payload[10];
     int trials = 0;
+
+    /* Total soft weight of the candidate, the natural scale for the distance:
+     * sum |llr| over all 174 bits. A distance of 40 means something different
+     * on a strong signal than on a weak one, which is why an absolute
+     * threshold read off 20 samples was never going to hold. */
+    double llr_total = 0;
+    for (int i = 0; i < N; i++) llr_total += fabs((double)llr[i]);
 
     for (int flip = -1; flip < (order >= 1 ? K : 0); flip++) {
         uint8_t info[K];
@@ -327,18 +390,31 @@ static int osd(const float llr[N], int order, uint8_t payload[10],
         trials++;
         if (!crc_ok(cw, pl)) continue;
 
-        double d = 0;
-        for (int i = 0; i < N; i++) if (cw[i] != hard[i]) d += fabs((double)llr[i]);
+        double d = 0; int ndis = 0;
+        for (int i = 0; i < N; i++) if (cw[i] != hard[i]) { d += fabs((double)llr[i]); ndis++; }
+
+#ifndef OSD_NDIS_POST
+        /* Inside the search: a rejected codeword lets a WORSE one be selected.
+         * -DOSD_NDIS_POST screens the selected codeword instead, which is what
+         * the calibration measured. The two are not the same test. */
+        if (OSD_MAX_NDIS > 0 && ndis > OSD_MAX_NDIS) continue;
+#endif
 
         if (!best || d < best_metric) {
-            best = 1; best_metric = d; memcpy(best_payload, pl, 10);
+            best = 1; best_metric = d; best_ndis = ndis;
+            memcpy(best_payload, pl, 10);
         }
     }
 
     *trials_out = trials;
+    *llrsum_out = llr_total;
+#ifdef OSD_NDIS_POST
+    if (best && OSD_MAX_NDIS > 0 && best_ndis > OSD_MAX_NDIS) best = 0;
+#endif
     if (!best) return 0;
     memcpy(payload, best_payload, 10);
     *metric_out = best_metric;
+    *ndis_out = best_ndis;
     return 1;
 }
 
@@ -351,7 +427,8 @@ int main(int argc,char** argv)
     build_generator();
 
     char texts[MAXMSG][64]; int text_pass[MAXMSG]; int ntext=0;
-    char osd_only[MAXMSG][64]; double osd_metric[MAXMSG]; int n_osd_only=0;
+    char osd_only[MAXMSG][64]; double osd_metric[MAXMSG];
+    double osd_llrsum[MAXMSG]; int osd_ndis[MAXMSG]; int n_osd_only=0;
     int n_ldpc=0, n_osd=0, trials_total=0, n_removed=0;
     int per_pass[8]; memset(per_pass,0,sizeof per_pass);
     double t_osd=0;
@@ -376,7 +453,8 @@ int main(int argc,char** argv)
         for(int i=0;i<nc;i++){
             uint8_t payload[10];
             int from_osd=0;
-            double metric=0;
+            double metric=0, llrsum=0;
+            int ndis=0;
 
             ftx_message_t m; ftx_decode_status_t st;
             memset(&st,0,sizeof st);
@@ -392,7 +470,7 @@ int main(int argc,char** argv)
                 ftx_extract_likelihood_probe(&mon.wf,&cands[i],llr);
                 int trials=0;
                 double a=now_ms();
-                int got=osd(llr,OSD_ORDER,payload,&metric,&trials);
+                int got=osd(llr,OSD_ORDER,payload,&metric,&trials,&ndis,&llrsum);
                 t_osd+=now_ms()-a; trials_total+=trials;
                 if(!got) continue;
                 from_osd=1;
@@ -416,6 +494,8 @@ int main(int argc,char** argv)
                     n_osd++;
                     if(n_osd_only<MAXMSG){
                         osd_metric[n_osd_only]=metric;
+                        osd_llrsum[n_osd_only]=llrsum;
+                        osd_ndis[n_osd_only]=ndis;
                         snprintf(osd_only[n_osd_only++],64,"%s",t);
                     }
                 }
@@ -477,8 +557,10 @@ int main(int argc,char** argv)
 
     for(int i=0;i<n_osd_only;i++){
         int in=0; for(int e=0;e<n_exp;e++) if(match(exp_txt[e],osd_only[i])) in=1;
-        printf("  OSD %-9s metric=%8.2f  %s\n", in?"IN-TRUTH":"NOT-TRUTH",
-               osd_metric[i], osd_only[i]);
+        printf("  OSD %-9s d=%8.2f ndis=%3d llrsum=%9.2f d_rel=%7.4f d_per=%7.3f  %s\n",
+               in?"IN-TRUTH":"NOT-TRUTH", osd_metric[i], osd_ndis[i],
+               osd_llrsum[i], osd_llrsum[i]>0? osd_metric[i]/osd_llrsum[i] : 0.0,
+               osd_ndis[i]? osd_metric[i]/osd_ndis[i] : 0.0, osd_only[i]);
     }
 
     printf("%-28s truth=%2d uniq=%2d hit=%2d | ldpc=%2d osd=%2d (truth %d/%d)"
