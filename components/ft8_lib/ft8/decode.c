@@ -851,6 +851,34 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     return true;
 }
 
+#ifdef FTX_EXPOSE_LIKELIHOOD
+/* The 174 soft bits a candidate produces, with no LDPC decode.
+ *
+ * ⛔ COMPILED OUT UNLESS -DFTX_EXPOSE_LIKELIHOOD. The device build must stay
+ * byte-identical, so this exists only for host harnesses that need the LLRs
+ * themselves - OSD reprocessing is the reason it was added
+ * (test/ft8_osd_proto_harness.c). It duplicates the first four lines of
+ * ftx_decode_candidate() and nothing else; if that extraction order ever
+ * changes, change it here in the same commit or the harness silently measures
+ * a different decoder.
+ *
+ * SIGN: positive means a ONE bit. See the note at the top of ldpc.c - the
+ * upstream comment claiming the opposite was wrong. */
+void ftx_extract_likelihood_probe(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                  float log174_out[FTX_LDPC_N])
+{
+    if (wf->protocol == FTX_PROTOCOL_FT4)
+    {
+        ft4_extract_likelihood(wf, cand, log174_out);
+    }
+    else
+    {
+        ft8_extract_likelihood(wf, cand, log174_out);
+    }
+    ftx_normalize_logl(log174_out);
+}
+#endif
+
 static float max2(float a, float b)
 {
     return (a >= b) ? a : b;

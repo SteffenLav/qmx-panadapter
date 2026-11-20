@@ -91,6 +91,13 @@ int ftx_find_candidates(const ftx_waterfall_t* power, int num_candidates, ftx_ca
 /// @return True if the decoding was successful, false otherwise (check status for details)
 bool ftx_decode_candidate(const ftx_waterfall_t* power, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status);
 
+#ifdef FTX_EXPOSE_LIKELIHOOD
+/// Host-harness only: the 174 soft bits for a candidate, normalized, no LDPC
+/// decode. Positive means a ONE bit. Compiled out of the device build.
+void ftx_extract_likelihood_probe(const ftx_waterfall_t* wf, const ftx_candidate_t* cand,
+                                  float log174_out[FTX_LDPC_N]);
+#endif
+
 /// Set the current filename for diagnostic logging
 void diag_set_filename(const char* filename);
 
