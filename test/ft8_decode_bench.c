@@ -21,6 +21,7 @@
  * Build (host, not the device):
  *   gcc -O2 -o ft8_decode_bench test/ft8_decode_bench.c \
  *       components/ft8_lib/ft8/{decode,encode,ldpc,text,message,crc,constants}.c \
+ *       components/ft8_lib/ft8/{js8_codec,js8_tables}.c \
  *       components/ft8_lib/common/monitor.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \
  *       -Icomponents/ft8_lib -Icomponents/ft8_lib/ft8 \
@@ -31,6 +32,18 @@
  *
  * Not a pass/fail harness, so run_harnesses.py does not run it - it has no
  * correct answer, only a number you compare between two builds.
+ *
+ * ⛔ THE TWO JS8 FILES ARE NOT OPTIONAL. decode.c grew a JS8 branch after
+ * this build line was written, and without them the link fails on
+ * js8_check_payload_crc, kJS8_LDPC_colorder, kJS8_Costas_original and three
+ * more. A stale build line in a comment reads as a broken harness.
+ *
+ * Baseline over test/wav_reference (the 22 WAVs that have a .txt ground
+ * truth), measured 2026-11-20 on the Ryzen box, gcc -O2:
+ *   236 unique decodes, 235 of 345 ground-truth messages (68.1 %)
+ *   stft 141.3 + find 52.5 + dec 199.3 = 393.1 ms for all 22 slots
+ * The 110 missed ground-truth messages are the size of the prize, and what
+ * subtract-and-repeat and OSD would be for; neither exists in ft8_lib.
  */
 #include <stdio.h>
 #include <stdlib.h>
