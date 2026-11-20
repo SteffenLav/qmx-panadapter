@@ -245,7 +245,9 @@ static const char *TAG = "settings";
 #define DEF_WF_BLEND      (100)
 #define DEF_WF_WINDOW     (0)
 #define DEF_CW_ROWS       (4)    /* four since 2026-10-15 (Sam W7STF); Bryan N0LUF may pick 2 */
+#ifndef DEF_WF_ROWS   /* #ifndef: an off-device build with frames to spare sets 20 */
 #define DEF_WF_ROWS       (10)   /* rows/s - the rate the waterfall has always run at */
+#endif
 #define DEF_SPEC_PEAK     (0)    /* peak hold OFF until asked for - it costs 25 KB of PSRAM */
 #define DEF_CW_PEAK       (0)    /* CW peak filter OFF - it changes how the radio SOUNDS */
 #define DEF_CHARGE_LIM_EN  (false)

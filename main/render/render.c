@@ -290,8 +290,14 @@ static void synth_fill(float *dst)
  *
  * A/B: {"action":"framesync","on":false} restores the 100 ms timer. */
 #define RENDER_FALLBACK_MS    100   /* no frames coming - keep the loop alive */
+#ifndef RENDER_MIN_PERIOD_MS
 #define RENDER_MIN_PERIOD_MS   45   /* ~22 Hz ceiling, so a 2 ms frame burst
                                        cannot run the push at frame rate      */
+#endif
+/* ⚠ This floor also caps how many FRESH waterfall rows there can be: with
+ * 33 ms frames it lets a push through every second frame, ~15/s, so a rows/s
+ * setting above that repeats rows rather than adding time resolution. A build
+ * that wants 20 real rows/s must lower it below the frame interval. */
 static volatile bool s_frame_sync = true;
 
 void render_set_frame_sync(bool on)
