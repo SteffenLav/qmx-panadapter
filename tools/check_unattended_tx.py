@@ -55,7 +55,9 @@ def _c_sources():
     for root, dirs, files in os.walk(os.path.join(REPO, "main")):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         for fn in files:
-            if fn.endswith(".c"):
+            # ⛔ .inc too - see the same note in check_tx_guard.py. A file
+            # #included by a .c can arm a transmitter and was not walked.
+            if fn.endswith((".c", ".inc")):
                 yield os.path.join(root, fn)
 
 

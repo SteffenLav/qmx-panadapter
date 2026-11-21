@@ -217,7 +217,14 @@ EXEMPT = {
 def c_sources():
     for dirpath, _dirs, files in os.walk(MAIN):
         for f in files:
-            if f.endswith(".c"):
+            # ⛔ .inc TOO. A keying site in a file #included by a .c is still a
+            # keying site, and walking only .c made it INVISIBLE here - the
+            # checker then reported a smaller count and passed, which is the
+            # one failure mode this script exists to prevent. Found by Mark
+            # N8MH on his QDX port, where cat.c #includes cat_qdx.inc and 11
+            # keying sites silently became 10 on the move. main/ has no .inc
+            # today, so this changes no count now - it closes the hole first.
+            if f.endswith((".c", ".inc")):
                 yield os.path.join(dirpath, f)
 
 
