@@ -2991,8 +2991,15 @@ static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
         out->timing[out->n_timing++] = dt_ms;
     }
     int freq_hz = (int)lroundf(freq);
-    ESP_LOGI(TAG, "decoded: '%s' (wsjtx sync=%.1f freq=%dHz snr=%d dt=%d%s)",
-             text, sync, freq_hz, snr, (int)lroundf(dt_ms), nap ? " AP" : "");
+    /* at= ms into the 15 s period on the wall clock: 13000 is 2 s BEFORE
+     * the boundary, 16000 is 1 s after it (period + into next). It is what
+     * decides whether a reply can still go out in the next slot. */
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    int at_ms = (int)(now_ms - k->slot_sec * 1000);
+    ESP_LOGI(TAG, "decoded: '%s' (wsjtx sync=%.1f freq=%dHz snr=%d dt=%d at=%d%s)",
+             text, sync, freq_hz, snr, (int)lroundf(dt_ms), at_ms, nap ? " AP" : "");
     if (!k->sim_suppresses_real && !k->rx_only) {
         ft8_screen_record_decode(text, (int)lroundf(sync), snr, freq_hz, k->slot_sec,
                                  (int)lroundf(dt_ms));
