@@ -863,6 +863,11 @@ bool dsp_avg_ready(float *dst)
 
 static volatile uint32_t s_zoom_frames;   /* zoom spectra produced, ever */
 uint32_t dsp_zoom_frames(void) { return s_zoom_frames; }
+/* zoom_process() entries. 0 in a window means the zoom path did not run at
+ * all (FT8 and the other full-screen modes keep the zoom setting but never
+ * feed it), which cpu_stats must not report as a stalled zoom FFT. */
+static volatile uint32_t s_zoom_calls;
+uint32_t dsp_zoom_calls(void) { return s_zoom_calls; }
 
 static void zoom_run_fft(int k)
 {
@@ -908,6 +913,7 @@ static void zoom_run_fft(int k)
 // (already DC-blocked) buffer compute_and_publish_spectrum just used.
 static void zoom_process(const int16_t *samples)
 {
+    s_zoom_calls++;
     int D;
     int gen;
     float fshift;

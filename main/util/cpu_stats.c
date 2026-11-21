@@ -126,15 +126,22 @@ static void cpu_stats_task(void *arg)
                  * not the base rate the line above counts. Printed only
                  * while zoomed, so the unzoomed log is unchanged. */
                 {
-                    static uint32_t zf_last;
+                    /* ⚠ Gated on the zoom path having RUN, not on the zoom
+                     * setting: FT8 and the other full-screen pages keep D=2
+                     * but never feed the zoom FFT, and the first version
+                     * printed "D=2 0.0 spectra/s" every 10 s there - which
+                     * reads as a stall. A real stall (fed, no output) still
+                     * prints 0. */
+                    static uint32_t zf_last, zc_last;
                     static int64_t  zf_t;
-                    uint32_t zf = dsp_zoom_frames();
+                    uint32_t zf = dsp_zoom_frames(), zc = dsp_zoom_calls();
                     int64_t  now = esp_timer_get_time();
                     int zd = dsp_get_zoom_decim();
-                    if (zd > 1 && zf_t && now > zf_t)
+                    if (zd > 1 && zc != zc_last && zf_t && now > zf_t)
                         ESP_LOGI(TAG, "zoom: D=%d %.1f spectra/s", zd,
                                  (double)(zf - zf_last) * 1e6 / (double)(now - zf_t));
                     zf_last = zf;
+                    zc_last = zc;
                     zf_t    = now;
                 }
 
