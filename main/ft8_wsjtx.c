@@ -1352,8 +1352,18 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
                 for (int i = 0; i < 29; i++) { apmask[i] = 1; llrz[i] = apmag * ap->apsym[i]; }
                 apmask[74] = apmask[75] = apmask[76] = 1;
                 llrz[74] = llrz[75] = -apmag; llrz[76] = apmag;
-            } else {
-                continue;   /* types 3..6 need nQSOProgress > 0; jt9 runs with 0 */
+            } else if (*iaptype == 3) {                   /* MyCall DxCall ??? */
+                for (int i = 0; i < 58; i++) { apmask[i] = 1; llrz[i] = apmag * ap->apsym[i]; }
+                apmask[74] = apmask[75] = apmask[76] = 1;
+                llrz[74] = llrz[75] = -apmag; llrz[76] = apmag;
+            } else {                                      /* 4/5/6: ... RRR / 73 / RR73 */
+                static const int mrrr[19]  = {0,1,1,1,1,1,1,0,1,0,0,1,0,0,1,0,0,0,1};
+                static const int m73[19]   = {0,1,1,1,1,1,1,0,1,0,0,1,0,1,0,0,0,0,1};
+                static const int mrr73[19] = {0,1,1,1,1,1,1,0,0,1,1,1,0,1,0,1,0,0,1};
+                const int* m = *iaptype == 4 ? mrrr : *iaptype == 5 ? m73 : mrr73;
+                for (int i = 0; i < 77; i++) apmask[i] = 1;
+                for (int i = 0; i < 58; i++) llrz[i] = apmag * ap->apsym[i];
+                for (int i = 0; i < 19; i++) llrz[58 + i] = apmag * (2 * m[i] - 1);
             }
         }
         int8_t message91[91], cw[174];

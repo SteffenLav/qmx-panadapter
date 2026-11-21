@@ -3056,6 +3056,22 @@ static void wsx_params_now(wsx_params_t *p, bool *sim_mode, int64_t slot_sec)
     if (!ft8_qso_get_priority_freq(&rx_hz) || rx_hz <= 0) rx_hz = tx_hz > 0 ? tx_hz : 1500;
     p->nfqso = rx_hz;
     p->nftx = tx_hz;
+    /* WSJT-X's nQSOProgress is the message we last sent: it picks the AP
+     * types ft8b tries (naptypes). 0 CQ/idle, 1 grid (Tx1), 2 report (Tx2),
+     * 3 R+report (Tx3), 4 RRR/RR73 (Tx4), 5 73 (Tx5). */
+    {
+        char ex[16] = {0};
+        ft8_qso_get_cur_extra(ex, sizeof ex);
+        int q = 0;
+        if (p->hiscall[0] && ex[0]) {
+            if (!strcmp(ex, "RRR") || !strcmp(ex, "RR73")) q = 4;
+            else if (!strcmp(ex, "73")) q = 5;
+            else if (ex[0] == 'R' && (ex[1] == '+' || ex[1] == '-')) q = 3;
+            else if (ex[0] == '+' || ex[0] == '-') q = 2;
+            else if (strlen(ex) >= 4) q = 1;                /* a grid */
+        }
+        p->nqso_progress = q;
+    }
     p->hash_if = ft8_hash_if();
     /* a7 keeps one table per even/odd sequence, picked by (nutc/5)%2. jt9
      * takes nutc from the WAV name, which for the slot corpus is the UTC

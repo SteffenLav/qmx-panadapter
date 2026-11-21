@@ -109,6 +109,7 @@ int main(int argc, char** argv)
         if (getenv("WSX_HISCALL")) snprintf(p.hiscall, sizeof p.hiscall, "%s", getenv("WSX_HISCALL"));
         if (getenv("WSX_HISGRID")) snprintf(p.hisgrid, sizeof p.hisgrid, "%s", getenv("WSX_HISGRID"));
         if (getenv("WSX_NFQSO")) p.nfqso = atoi(getenv("WSX_NFQSO"));
+        if (getenv("WSX_NQSO")) p.nqso_progress = atoi(getenv("WSX_NQSO"));   /* jt9 -Q */
         if (argc > 2) printf("FILE\t%s\n", argv[f]);
         wsx_decode_slot(iwave, &p, on_decode, NULL);
         fflush(stdout);
