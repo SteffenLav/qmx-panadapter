@@ -2584,5 +2584,14 @@ int wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, 
 
 void wsx_piece_end(void) { g_piece_npasses = 0; g_piece_maxosd = 2; g_piece_ndeep = 2; }
 void wsx_piece_set_ndeep(int ndeep) { g_piece_ndeep = ndeep; }
+/* AP type 1 only ("CQ ??? ???", ft8b passes 6-7): the MyCall/DxCall types
+ * are disabled (apsym[0] = 99, exactly ft8b's "mycall unusable" mark). */
+void wsx_piece_set_ap_cq(int on)
+{
+    g_piece_p.lapon = on ? 1 : 0;
+    g_piece_p.nqso_progress = 0;
+    g_piece_ap.apsym[0] = 99;
+    g_piece_npasses = on ? 0 : 5;
+}
 
 #endif /* FT8_DECODER_WSJTX */

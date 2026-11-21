@@ -74,3 +74,5 @@ void   wsx_piece_release(void);
 /* OSD depth (decode174_91 norder) for the piece path; ft8b uses 2. Reset by
  * wsx_piece_end(). */
 void   wsx_piece_set_ndeep(int ndeep);
+/* AP type 1 (CQ) in the piece path; off by default. Call after begin. */
+void   wsx_piece_set_ap_cq(int on);

@@ -140,6 +140,9 @@ int main(int argc, char** argv)
 #ifdef NDEEP
         wsx_piece_set_ndeep(NDEEP);
 #endif
+#ifdef APCQ
+        wsx_piece_set_ap_cq(1);
+#endif
         int tried = 0;
         for (int i = 0; i < nc; i++) {
             /* PIECE_K set: only candidates ft8_lib FAILED, strongest first
