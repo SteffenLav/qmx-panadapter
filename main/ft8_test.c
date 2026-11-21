@@ -3330,8 +3330,19 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     /* Slot peak -> int16 full scale, in place: exactly how slotcap_take()
      * writes the corpus, the input on which the port was proved identical to
      * jt9 and the pieces were scored (ft8b's false-decode screen is
-     * level-sensitive). 5 metric passes, BP only: variant B. */
-    if (!wsx_piece_begin_audio(s_pc_samples, 5, -1)) {
+     * level-sensitive). 5 metric passes, BP + OSD order 0.
+     *
+     * OSD order 0, measured 2026-11-22 on 457 of bench1's own 40 m slots
+     * against jt9 (tools/wsjtx_port/gap_analysis.py, score_pieces.py):
+     *   K40 BP only      +597 confirmed,  4 unconfirmed, 33 ms/slot host
+     *   K20 OSD-0        +734            12              45
+     *   K40 OSD-0        +898            17              71  (~8.6 s on the P4)
+     * OSD orders 1 and 2 add only +37/+61 more. The gap analysis said why:
+     * of the jt9 decodes we tried and failed, 760 of 1299 decode with OSD at
+     * jt9's own f/DT. K40 OSD-0 does not fit the 6 s budget; the budget
+     * stops the pass, strongest candidates first, so a slot gets what fits -
+     * the same CPU ceiling the K40 BP pass already ran under on air. */
+    if (!wsx_piece_begin_audio(s_pc_samples, 5, 0)) {
         pl->ready = false;
         s_pc_full = false;
         return;
