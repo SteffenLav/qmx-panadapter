@@ -273,7 +273,15 @@ int ft8_op_mode_slot_ms(void)
 // already live in the strongest ~140. So 140 is NOT clipping real signals and
 // raising it only burns core-1 CPU that then competes with the next slot's
 // capture STFT. Yield here is band-limited, not candidate-limited. Kept at 140.
+//
+// RE-MEASURED 2026-11-21 on the host corpus (22 WAVs, 362 truth messages,
+// ft8_osd_proto_harness -DMAXC) WITH the subtract pass and OSD order 0 on:
+// 140 -> 285 hits, 200 -> 287, 300 -> 287 plus one decode not in the truth.
+// +2 at 200, no false decode, ~14 ms a slot on a host. Still not worth P4
+// time; an off-device build with the cycles may set 200 with a -D.
+#ifndef FT8_MAX_CANDIDATES
 #define FT8_MAX_CANDIDATES    140
+#endif
 
 // Minimum Costas sync score for a candidate to be attempted. ft8_lib's demo
 // uses 10; we lower it to 5 to attempt weaker candidates, spending the per-slot

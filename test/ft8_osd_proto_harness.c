@@ -237,8 +237,12 @@
 #define TIME_OSR 2
 #define FREQ_OSR 2
 #define ITERS    30
+#ifndef MAXC              /* -DMAXC=300: the candidate-cap sweep, 2026-11-21 */
 #define MAXC     140
+#endif
+#ifndef MINSCORE
 #define MINSCORE 5
+#endif
 #define MAXE     200
 #define MAXMSG   400
 
