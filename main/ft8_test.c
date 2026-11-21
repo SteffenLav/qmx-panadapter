@@ -3027,7 +3027,7 @@ static void wsx_result_reset(decode_result_t *out)
     out->n_sub = 0;
 }
 
-static void wsx_params_now(wsx_params_t *p, bool *sim_mode)
+static void wsx_params_now(wsx_params_t *p, bool *sim_mode, int64_t slot_sec)
 {
     qmx_settings_t qs;
     settings_load_all(&qs);
@@ -3040,6 +3040,10 @@ static void wsx_params_now(wsx_params_t *p, bool *sim_mode)
     snprintf(p->mycall, sizeof p->mycall, "%s", me);
     p->hiscall[0] = 0;
     p->hash_if = ft8_hash_if();
+    /* a7 keeps one table per even/odd sequence, picked by (nutc/5)%2. jt9
+     * takes nutc from the WAV name, which for the slot corpus is the UTC
+     * second's last 6 digits - so the same here, and the two agree. */
+    p->nutc = (int)(slot_sec % 1000000);
 }
 
 /* ---- the early call (41), run from the CAPTURE loop ----------------------
@@ -3093,7 +3097,7 @@ static void wsx_early_call(const float *cap, int64_t slot_sec)
     for (int i = WSX_EARLY_SAMPLES; i < WSX_NMAX; i++) s_wsx_pcm[i] = 0;
     wsx_params_t p;
     bool sim_mode;
-    wsx_params_now(&p, &sim_mode);
+    wsx_params_now(&p, &sim_mode, slot_sec);
     wsx_result_reset(&s_wsx_early);
     wsx_sink_t k = { .out = &s_wsx_early, .rx_only = false, .slot_sec = slot_sec,
                      .may_early_advance = true, .sim_suppresses_real = sim_mode };
@@ -3124,7 +3128,7 @@ static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result
 
     wsx_params_t p;
     bool sim_mode;
-    wsx_params_now(&p, &sim_mode);
+    wsx_params_now(&p, &sim_mode, slot_sec);
     wsx_sink_t k = { .out = out, .rx_only = dc->rx_only, .slot_sec = slot_sec,
                      .may_early_advance = !dc->rx_only, .sim_suppresses_real = sim_mode };
     if (have_early) {

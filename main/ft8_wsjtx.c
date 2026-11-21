@@ -1677,16 +1677,77 @@ static int a7_pack(const char* msg, int8_t* cw, int* itone, char* msgsent)
         b[q++] = 0; b[q++] = 0; b[q++] = 1;                    /* i3 = 1 */
         bits_to_payload(b, payload);
         snprintf(msgsent, 38, "%s", msg);
-    } else {
+        /* ⛔ genft8 UNPACKS what it packed and, if unpack77 fails, sends the
+         * ALL-ZERO codeword as "*** bad message ***". Every "QU1RK ..."
+         * candidate fails (callok: no call starts with Q), as does CQ with
+         * R or a report. In jt9 those are all one zero codeword; packed as
+         * real messages here they set a lower dmin2 and rejected true a7
+         * decodes on the 1.3 ratio (CQ CT7AXN IM59, 2026-11-21). */
+        if (!std_ok_like_jt9(b, msg)) {
+            memset(cw, 0, 174);
+            for (int i = 0; i < NN; i++) itone[i] = 0;
+            snprintf(msgsent, 38, "*** bad message ***");
+            return 1;
+        }
+    } else if (nwords == 2 || nwords == 3) {
+        /* pack77_4 (i3=4: h12 c58 iflip nrpt icq). ft8_lib's encoder was
+         * used here first and did not give jt9's codeword for "CQ <nonstd>":
+         * 3 a7 CQ decodes of 995 missed, 2026-11-21. */
+        char c1[14], c2[14];
+        snprintf(c1, sizeof c1, "%s", w[0][0] == '<' ? w[0] + 1 : w[0]);
+        snprintf(c2, sizeof c2, "%s", w[1][0] == '<' ? w[1] + 1 : w[1]);
+        char* gt;
+        if (w[0][0] == '<' && (gt = strchr(c1, '>'))) *gt = 0;
+        if (w[1][0] == '<' && (gt = strchr(c2, '>'))) *gt = 0;
+        int ok1 = chkcall(c1), ok2 = chkcall(c2);
+        if (ok1 && ok2 && strlen(c1) <= 6 && strlen(c2) <= 6 && !strchr(c1, '/') && !strchr(c2, '/'))
+            return 0;                                          /* call == bcall: not type 4 */
+        int i3 = -1, icq = 0, iflip = 0, nrpt = 0;
+        uint32_t n12 = 0;
+        const char* c11src = NULL;
+        if (strcmp(w[0], "CQ") == 0 || (ok1 && ok2)) {
+            if (strcmp(w[0], "CQ") == 0 && strlen(w[1]) <= 4) return 0;
+            i3 = 4;
+            if (strcmp(w[0], "CQ") == 0) icq = 1;
+        }
+        /* ⛔ icq: pack77_4 sets n12=0 and then calls save_hash_call(w(2),
+         * n10,n12,n22), which RETURNS the call's 12-bit hash in n12. So the
+         * h12 field carries hash12(call_2), not 0. */
+        if (icq) { c11src = c2; n12 = ihashcall22(c2) >> 10; save_hash_call(w[1]); }
+        else if (w[0][0] == '<') { i3 = 4; n12 = ihashcall22(c1) >> 10; save_hash_call(w[0]); c11src = c2; }
+        else if (w[1][0] == '<') { i3 = 4; iflip = 1; n12 = ihashcall22(c2) >> 10; save_hash_call(w[1]); c11src = c1; }
+        if (i3 != 4 || !c11src) return 0;
+        static const char cset[] = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/";
+        char c11[12];
+        snprintf(c11, sizeof c11, "%11.11s", c11src);              /* adjustr */
+        uint64_t n58 = 0;
+        for (int i = 0; i < 11; i++) {
+            const char* q2 = strchr(cset, c11[i]);
+            n58 = n58 * 38 + (uint64_t)((q2 && c11[i]) ? (q2 - cset) : 0);
+        }
+        if (nwords == 3) {
+            if (strcmp(w[2], "RRR") == 0) nrpt = 1;
+            if (strcmp(w[2], "RR73") == 0) nrpt = 2;
+            if (strcmp(w[2], "73") == 0) nrpt = 3;
+        }
+        if (icq) { iflip = 0; nrpt = 0; }
+        int q = 0;
+        for (int i = 11; i >= 0; i--) b[q++] = (n12 >> i) & 1;
+        for (int i = 57; i >= 0; i--) b[q++] = (n58 >> i) & 1;
+        b[q++] = (int8_t)iflip;
+        b[q++] = (nrpt >> 1) & 1; b[q++] = nrpt & 1;
+        b[q++] = (int8_t)icq;
+        b[q++] = 1; b[q++] = 0; b[q++] = 0;                    /* i3 = 4 */
+        bits_to_payload(b, payload);
         ftx_message_t m;
-        if (ftx_message_encode(&m, &lk_if, msg) != FTX_MESSAGE_RC_OK) return 0;
-        if (ftx_message_get_i3(&m) != 4) return 0;
-        memcpy(payload, m.payload, 10);
-        for (int i = 0; i < 77; i++) b[i] = (payload[i / 8] >> (7 - i % 8)) & 1;
+        memset(&m, 0, sizeof m);
+        memcpy(m.payload, payload, 10);
         ftx_message_offsets_t off;
         char t[64];
         if (ftx_message_decode(&m, &lk_if, t, &off) != FTX_MESSAGE_RC_OK) return 0;
         snprintf(msgsent, 38, "%s", t);
+    } else {
+        return 0;
     }
     /* encode174_91: 77 bits + CRC14 (computed over 77 bits and 5 zeros) */
     int8_t m91[91], m96[96] = {0};
@@ -1847,6 +1908,7 @@ static int ft8_a7d(float* dd0, int* newdat, const char* call_1, const char* call
         dmm[imsg - 1] = dm;
 #ifdef A7_DEBUG
         if (imsg <= 6) dm1[imsg - 1] = dm;
+        if (getenv("A7_ALL") && strstr(call_2, getenv("A7_ALL"))) fprintf(stderr, "    %3d %7.1f %s\n", imsg, dm, msg);
 #endif
         if (dm < dmin) {
             dmin = dm;

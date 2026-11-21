@@ -35,20 +35,30 @@ static int load_wav(int16_t* out, int nmax, const char* path)
 /* Callsign hash table: the firmware's main/ft8_hash.c without the RTOS
  * parts - linear scan, 12/10-bit hashes are the top bits of n22. jt9 starts
  * each process (one WAV) with an empty table, so does this. */
-static struct { char call[12]; uint32_t n22; } htab[256];
-static int hnext;
+/* Newest wins, as in packjt77: calls10/calls12 are indexed by the hash
+ * (the last save overwrites) and calls22 puts each save at the top. So a
+ * save of a call already present moves it to the newest slot, and lookup
+ * scans newest first. First-match resolved 3 colliding 12-bit hashes to
+ * the older call (<DD1OO> where jt9 had <DG3NCZ>), 2026-11-21. */
+static struct { char call[12]; uint32_t n22; } htab[1000];
+static int hn;
 static void hash_save(const char* c, uint32_t n22)
 {
     if (!c || !c[0]) return;
-    for (int i = 0; i < 256; i++) if (htab[i].call[0] && strncmp(htab[i].call, c, 11) == 0) return;
-    strncpy(htab[hnext].call, c, 11); htab[hnext].call[11] = 0; htab[hnext].n22 = n22;
-    hnext = (hnext + 1) % 256;
+    for (int i = 0; i < hn; i++)
+        if (strncmp(htab[i].call, c, 11) == 0) {
+            memmove(&htab[i], &htab[i + 1], (size_t)(hn - 1 - i) * sizeof htab[0]);
+            hn--;
+            break;
+        }
+    if (hn == 1000) { memmove(&htab[0], &htab[1], 999 * sizeof htab[0]); hn--; }
+    strncpy(htab[hn].call, c, 11); htab[hn].call[11] = 0; htab[hn].n22 = n22;
+    hn++;
 }
 static bool hash_lookup(ftx_callsign_hash_type_t t, uint32_t h, char* c)
 {
     c[0] = 0;
-    for (int i = 0; i < 256; i++) {
-        if (!htab[i].call[0]) continue;
+    for (int i = hn - 1; i >= 0; i--) {
         uint32_t v = htab[i].n22;
         if (t == FTX_CALLSIGN_HASH_12_BITS) v >>= 10;
         else if (t == FTX_CALLSIGN_HASH_10_BITS) v >>= 12;
