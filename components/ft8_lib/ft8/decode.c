@@ -837,7 +837,8 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
         bool osd_ok = false;
         if (wf->protocol == FTX_PROTOCOL_FT8)
         {
-            osd_ok = ft8_osd_order0(log174, FT8_OSD_MAX_NDIS, plain174);
+            osd_ok = ft8_osd_decode(log174, FT8_OSD_ORDER1 ? 1 : 0, FT8_OSD_MAX_NDIS,
+                                    FT8_OSD_MAX_NDIS1, plain174);
         }
         if (!osd_ok)
         {

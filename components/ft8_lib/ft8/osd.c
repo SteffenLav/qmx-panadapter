@@ -2,6 +2,7 @@
  * See osd.h for what it is worth, what it costs, and where 34 comes from. */
 
 #include "osd.h"
+#include "crc.h"
 
 #include <math.h>
 #include <string.h>
@@ -47,7 +48,23 @@ void ft8_osd_init(void)
     s_ready = true;
 }
 
-bool ft8_osd_order0(const float log174[N], int max_ndis, uint8_t plain174[N])
+/* The 91 information bits of a codeword, packed as ftx_extract_crc() wants
+ * them, and the CRC check decode.c applies after BP. Same arithmetic as there:
+ * the CRC is over the 77-bit message zero-extended to 82 bits. */
+static bool cw_crc_ok(const uint8_t cw[N])
+{
+    uint8_t a91[FTX_LDPC_K_BYTES];
+    memset(a91, 0, sizeof a91);
+    for (int i = 0; i < K; i++)
+        if (cw[i]) a91[i / 8] |= (uint8_t)(0x80u >> (i % 8));
+    uint16_t extracted = ftx_extract_crc(a91);
+    a91[9] &= 0xF8;
+    a91[10] &= 0x00;
+    return extracted == ftx_compute_crc(a91, 96 - 14);
+}
+
+bool ft8_osd_decode(const float log174[N], int order, int max_ndis, int max_ndis1,
+                    uint8_t plain174[N])
 {
     if (!s_ready) return false;      /* ft8_osd_init() was never called */
 
@@ -93,8 +110,8 @@ bool ft8_osd_order0(const float log174[N], int max_ndis, uint8_t plain174[N])
      * table would show up here rather than as a wrong decode. */
     if (nb < K) return false;
 
-    /* Re-encode: the codeword is the sum of the reduced rows whose basis bit
-     * is set. Column basis[k] is 1 only in row k after the reduction, so the
+    /* Order 0: the codeword is the sum of the reduced rows whose basis bit is
+     * set. Column basis[k] is 1 only in row k after the reduction, so the
      * result agrees with the hard decision on every basis position. */
     row_t acc; acc.w[0] = acc.w[1] = acc.w[2] = 0;
     for (int k = 0; k < K; k++)
@@ -102,13 +119,62 @@ bool ft8_osd_order0(const float log174[N], int max_ndis, uint8_t plain174[N])
         if (hard[basis[k]]) rxor(&acc, &M[k]);
     }
 
-    int ndis = 0;
-    for (int i = 0; i < N; i++)
+    if (order <= 0)
     {
-        plain174[i] = (uint8_t)rget(&acc, i);
-        if (plain174[i] != hard[i]) ndis++;
+        /* Unchanged from the order-0-only version: no CRC here, decode.c
+         * checks it on the returned codeword. */
+        int ndis = 0;
+        for (int i = 0; i < N; i++)
+        {
+            plain174[i] = (uint8_t)rget(&acc, i);
+            if (plain174[i] != hard[i]) ndis++;
+        }
+        return !(max_ndis > 0 && ndis > max_ndis);
     }
 
-    if (max_ndis > 0 && ndis > max_ndis) return false;
+    /* ⭐ ORDER 1: the order-0 codeword and the 91 codewords that differ from
+     * it in one basis bit - flipping basis bit k is one XOR with row k. Each
+     * must pass the CRC; among those that do, the smallest soft distance
+     * (sum |llr| over the bits that disagree with the hard decision) wins.
+     *
+     * ⛔ 92 CRC trials a candidate is where false accepts come from (2^-14
+     * each), so the FLIPPED codewords get their own screen, max_ndis1. It is
+     * not applied to the order-0 codeword: a shared screen cost true order-0
+     * decodes as it tightened. Measured 2026-11-21 on 307 recorded 40 m slots
+     * against WSJT-X's jt9 as referee (tools/ft8_pair_ab.py --jt9 3), order 1
+     * against order 0, test/ft8_osd_proto_harness.c -DOSD_MAX_NDIS1:
+     *   flips <= 26   +105 / -5 real    +1 not in jt9
+     *   flips <= 30   +137 / -8 real    +3 not in jt9     <- chosen
+     *   flips <= 34   +145 / -9 real   +17 not in jt9
+     *   no screen     +154 / -11 real  +299 not in jt9 (about 1 a slot)
+     *
+     * ⚠ STACK: M[] (91 x 24 B) plus these locals is ~3.7 KB, as order 0. */
+    bool found = false;
+    float best_d = 0.0f;
+    row_t best = acc;
+    uint8_t cw[N];
+    for (int flip = -1; flip < K; flip++)
+    {
+        row_t t = acc;
+        if (flip >= 0) rxor(&t, &M[flip]);
+        for (int i = 0; i < N; i++) cw[i] = (uint8_t)rget(&t, i);
+        if (!cw_crc_ok(cw)) continue;
+
+        float d = 0.0f; int ndis = 0;
+        for (int i = 0; i < N; i++)
+        {
+            if (cw[i] != hard[i]) { d += fabsf(log174[i]); ndis++; }
+        }
+        if (max_ndis > 0 && ndis > max_ndis) continue;
+        if (flip >= 0 && max_ndis1 > 0 && ndis > max_ndis1) continue;
+        if (!found || d < best_d) { found = true; best_d = d; best = t; }
+    }
+    if (!found) return false;
+    for (int i = 0; i < N; i++) plain174[i] = (uint8_t)rget(&best, i);
     return true;
+}
+
+bool ft8_osd_order0(const float log174[N], int max_ndis, uint8_t plain174[N])
+{
+    return ft8_osd_decode(log174, 0, max_ndis, 0, plain174);
 }

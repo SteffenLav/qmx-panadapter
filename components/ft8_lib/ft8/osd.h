@@ -98,6 +98,26 @@ void ft8_osd_init(void);
 bool ft8_osd_order0(const float log174[FTX_LDPC_N], int max_ndis,
                     uint8_t plain174[FTX_LDPC_N]);
 
+/* Order 1 on top of order 0. OFF by default and off on the device: ~92 CRC
+ * trials a failed candidate. An off-device build turns it on with a -D. */
+#ifndef FT8_OSD_ORDER1
+#define FT8_OSD_ORDER1 0
+#endif
+/* Screen for the ORDER-1 (flipped) codewords only. 30 is measured against
+ * WSJT-X on real air - the table is at ft8_osd_decode() in osd.c. */
+#ifndef FT8_OSD_MAX_NDIS1
+#define FT8_OSD_MAX_NDIS1 30
+#endif
+
+/// OSD of order 0 or 1. order 0: exactly ft8_osd_order0() - one codeword,
+/// no CRC here, the caller checks it. order 1: the order-0 codeword and its
+/// 91 single-flip neighbours, each CRC-checked INSIDE; the passing one with
+/// the smallest soft distance is returned, so a true return is already a
+/// CRC-valid codeword. max_ndis screens every candidate codeword, max_ndis1
+/// only the flipped ones; 0 = no screen. Same ~3.7 KB of stack.
+bool ft8_osd_decode(const float log174[FTX_LDPC_N], int order, int max_ndis,
+                    int max_ndis1, uint8_t plain174[FTX_LDPC_N]);
+
 #ifdef __cplusplus
 }
 #endif

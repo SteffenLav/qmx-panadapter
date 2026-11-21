@@ -259,6 +259,9 @@
 /* Reject an OSD codeword that disagrees with the hard decision in more than
  * this many of the 174 bits. ndis separated real from false better than the
  * soft distance did - see the calibration block in the header. 0 = no limit. */
+#ifndef OSD_MAX_NDIS1     /* screen for order-1 codewords only; 0 = none */
+#define OSD_MAX_NDIS1 0
+#endif
 #ifndef OSD_MAX_NDIS
 #define OSD_MAX_NDIS 0
 #endif
@@ -430,6 +433,11 @@ static int osd(const float llr[N], int order, uint8_t payload[10],
          * the calibration measured. The two are not the same test. */
         if (OSD_MAX_NDIS > 0 && ndis > OSD_MAX_NDIS) continue;
 #endif
+        /* A screen for ORDER-1 codewords only (flip >= 0). One shared screen
+         * cost order-0 decodes as it tightened - measured 2026-11-21 against
+         * jt9: ndis<=26 lost 30 real order-0 decodes. Order 0 is one trial
+         * and needs none; the ~92 order-1 trials are where false accepts are. */
+        if (flip >= 0 && OSD_MAX_NDIS1 > 0 && ndis > OSD_MAX_NDIS1) continue;
 
         if (!best || d < best_metric) {
             best = 1; best_metric = d; best_ndis = ndis;
