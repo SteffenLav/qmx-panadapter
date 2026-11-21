@@ -9,12 +9,13 @@ per-slot message sets: what A decodes that B does not, and the reverse.
 Builds test/ft8_osd_proto_harness.c twice with -DPRINT_MSGS:
   A = BASE flags            (dup instances subtracted - the decoder today)
   B = BASE + -DSUB_SKIP_DUP (first instance only - the old behaviour)
-BASE matches the off-device build: 2 passes, OSD order 0, ndis <= 34.
+BASE matches the off-device build: 2 passes, OSD order 0, no ndis screen.
 
 Instrument checks, run every time before any A/B figure:
   1. A against A must differ on NOTHING (determinism) - it stops if it does.
   2. On test/wav_reference (truth files present) it PRINTS A's and B's
-     ground-truth hits. Measured 2026-11-21 with BASE: A 285, B 282. A run
+     ground-truth hits. Measured 2026-11-21 with BASE (no ndis screen), dup
+     arms: A 288, B 282 (285 / 282 with the old ndis<=34 screen). A run
      that prints anything else has a different decoder from that one.
 
 A message "also decoded in another slot" is a plausibility mark only. In
@@ -22,7 +23,12 @@ test/wav_reference the _weak files are the SAME audio at a lower level, so
 there a repeat proves less than it does across consecutive live slots.
 
 Usage:
-  python tools/ft8_pair_ab.py <dir of .wav> [more dirs]
+  python tools/ft8_pair_ab.py <dir of .wav> [more dirs]          (dup arms)
+  python tools/ft8_pair_ab.py DIR --a= --b=-DOSD_OFF              (OSD on/off)
+  python tools/ft8_pair_ab.py DIR --a=-DMAXC=200 --b=-DMAXC=140
+(write --a=FLAGS with "=": a value starting with "-" is otherwise read as an option)
+--a/--b are extra gcc flags per arm; --maxc sets the cap for an arm that does
+not set -DMAXC itself (default 140, the device's).
 """
 import collections, glob, os, re, subprocess, sys, tempfile
 
@@ -35,7 +41,7 @@ SRCS = ["test/ft8_osd_proto_harness.c"] + [
     "main/ft8_subtract.c"]
 INC = ["-Imain", f"-I{F}", f"-I{F}/ft8", f"-I{F}/common", f"-I{F}/fft"]
 BASE = ["-O2", "-DFTX_EXPOSE_LIKELIHOOD", "-DPRINT_MSGS",
-        "-DNPASS=2", "-DOSD_ORDER=0", "-DOSD_MAX_NDIS=34"]
+        "-DNPASS=2", "-DOSD_ORDER=0", "-DOSD_MAX_NDIS=0"]   # = osd.h since 2026-11-21
 
 
 def build(tmp, tag, extra):
@@ -68,12 +74,23 @@ def pair(exe_a, exe_b, wavs):
 
 
 def main():
-    dirs = sys.argv[1:]
-    if not dirs:
-        print(__doc__); return 2
+    import argparse
+    ap = argparse.ArgumentParser(description="Pair two FT8 decoder builds on the same WAVs.")
+    ap.add_argument("dirs", nargs="+", help="directories of .wav slots")
+    ap.add_argument("--a", default="", help="extra gcc flags for arm A (default: none)")
+    ap.add_argument("--b", default="-DSUB_SKIP_DUP", help="extra gcc flags for arm B")
+    ap.add_argument("--maxc", type=int, default=140,
+                    help="candidate cap for BOTH arms unless an arm sets -DMAXC itself")
+    args = ap.parse_args()
+    dirs = args.dirs
+    fa, fb = args.a.split(), args.b.split()
+    for f in (fa, fb):
+        if not any(x.startswith("-DMAXC=") for x in f):
+            f.append(f"-DMAXC={args.maxc}")
+    print(f"A: {' '.join(fa)}\nB: {' '.join(fb)}")
     with tempfile.TemporaryDirectory() as tmp:
-        exe_a = build(tmp, "A", [])
-        exe_b = build(tmp, "B", ["-DSUB_SKIP_DUP"])
+        exe_a = build(tmp, "A", fa)
+        exe_b = build(tmp, "B", fb)
 
         ref = sorted(glob.glob(os.path.join(ROOT, "test/wav_reference/*.wav")))
         ref = [w for w in ref if os.path.exists(w[:-4] + ".txt")]

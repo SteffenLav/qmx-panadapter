@@ -50,9 +50,20 @@ extern "C"
  * many of the 174 bits. 34 is calibrated - this file records the four statistics
  * that were compared and why this one won. ⚠ FITTED on 32 samples from the
  * same 22 files, not confirmed on held-out data.
- * Moved here from decode.c so the decoder and the init log share ONE copy. */
+ * Moved here from decode.c so the decoder and the init log share ONE copy.
+ *
+ * ⛔ NOW 0 = NO SCREEN, 2026-11-21. The 34 was fitted where the false accepts
+ * are - ORDER 1, ~92 trials a candidate. The decoder runs ORDER 0, one trial,
+ * and there the screen only cost true decodes (tools/ft8_pair_ab.py, the same
+ * audio both ways, subtract pass on):
+ *   reference corpus, 22 WAVs   no screen 288, ndis<=34 285 of 362 truth
+ *   live 40 m, 33 slots         +3 decodes, 0 lost: SP6CVB PD2NIK RR73,
+ *                               KC9BK F1PSX JN08, K4DKW G6PWS IO91 (repeats)
+ * - prefixes match their grids, which a 14-bit CRC false accept would not
+ * arrange. The expected false-accept rate of one extra trial is ~0.01 a slot;
+ * re-check it on a longer recording before this ships anywhere. */
 #ifndef FT8_OSD_MAX_NDIS
-#define FT8_OSD_MAX_NDIS 34
+#define FT8_OSD_MAX_NDIS 0
 #endif
 
 /// Build the systematic generator table. Idempotent, and NOT thread-safe:
