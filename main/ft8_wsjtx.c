@@ -1110,7 +1110,7 @@ static int unpack_i3_5(const int8_t* b, char* msg)
     int j5 = n / 24, j6 = n - j5 * 24;
     if (j1 > 17 || j2 > 17 || j3 > 9 || j4 > 9 || j5 > 23 || j6 > 23) return 0;
     char cexch[8];
-    snprintf(cexch, sizeof cexch, "%2u%04u", 52 + irpt, iserial);
+    snprintf(cexch, sizeof cexch, "%2u%04u", (unsigned)(52 + irpt), (unsigned)iserial);   /* uint32_t is long on RISC-V */
     snprintf(msg, 64, "%s %s %s%s %c%c%c%c%c%c", c1, c2, ir ? "R " : "", cexch,
             'A' + j1, 'A' + j2, '0' + j3, '0' + j4, 'A' + j5, 'A' + j6);
     return 1;
@@ -1147,7 +1147,10 @@ static int unpack_dxped(const int8_t* b, char* msg)
     if (n28a <= 2 || n28b <= 2) return 0;
     if (!unpack28_via_std(n28a, c1) || !unpack28_via_std(n28b, c2)) return 0;
     if (lk_lookup(FTX_CALLSIGN_HASH_10_BITS, n10, t)) snprintf(c3, sizeof c3, "<%s>", t);
-    snprintf(msg, 64, "%s RR73; %s %s %c%02d", c1, c2, c3, irpt >= 0 ? '+' : '-', abs(irpt));
+    /* The return value is checked: -Wformat-truncation=1 then trusts the
+     * caller, and a message that does not fit is not a message. */
+    int w = snprintf(msg, 64, "%s RR73; %s %s %c%02d", c1, c2, c3, irpt >= 0 ? '+' : '-', abs(irpt));
+    if (w < 0 || w >= 64) return 0;
     return 1;
 }
 
@@ -1417,7 +1420,7 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         if (!ok || strstr(text, "/R") || strncmp(text, "TU; ", 4) == 0)
             if (i3 >= 1 && i3 <= 3) continue;
         if (!ok) continue;
-        snprintf(msg37, 38, "%s", text);
+        if (snprintf(msg37, 38, "%s", text) >= 38) continue;   /* longer than jt9's msg37 */
         uint8_t tones[NN];
         ft8_encode(m.payload, tones);
         for (int i = 0; i < NN; i++) itone[i] = tones[i];
