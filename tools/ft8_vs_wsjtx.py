@@ -22,6 +22,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ft8_pair_ab as P  # noqa: E402  (shares the harness build)
 
 
+# The referee. Since 2026-11-21 it is WS 3.2.1 (WSJT-X Improved, renamed), the
+# version the decoder port follows; the old WSJT-X Improved 3.0.0 251101 jt9 is
+# --jt9 C:/WSJT/wsjtx/bin/jt9.exe --ref-tag jt9. Each referee caches under its
+# own tag, so the two can never be mixed up in a cache file.
+REF_EXE = os.path.join(ROOT, "scratchpad", "ws-3.2.1-win", "bin_x", "bin", "jt9.exe")
+REF_TAG = "ws321"
+
+
 def norm(t):
     return " ".join(t.upper().split())
 
@@ -33,11 +41,12 @@ def ours(exe, wav):
     return {norm(l.split("\t", 2)[2]) for l in out.splitlines() if l.startswith("MSG\t")}, dt
 
 
-def jt9(path, wav, depth, wd):
+def jt9(path, wav, depth, wd, tag=None):
     """jt9's decodes of one slot. Its raw output is CACHED beside the WAV
-    (<wav>.jt9d<depth>.txt), so a slot costs its ~3 s once and later runs -
+    (<wav>.<tag>d<depth>.txt), so a slot costs its ~3 s once and later runs -
     and ft8_pair_ab.py --jt9 - can use jt9 as the reference for free."""
-    cache = f"{wav}.jt9d{depth}.txt"
+    tag = tag or REF_TAG
+    cache = f"{wav}.{tag}d{depth}.txt"
     t0 = time.perf_counter()
     if os.path.exists(cache):
         out = open(cache, encoding="utf-8").read()
@@ -61,7 +70,8 @@ def jt9(path, wav, depth, wd):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
-    ap.add_argument("--jt9", default=r"C:\WSJT\wsjtx\bin\jt9.exe")
+    ap.add_argument("--jt9", default=REF_EXE)
+    ap.add_argument("--ref-tag", default=REF_TAG, help="cache tag of this referee")
     ap.add_argument("--depth", type=int, default=3)
     ap.add_argument("--flags", default="-DMAXC=200",
                     help="extra gcc flags for our decoder (use --flags=...)")
@@ -79,7 +89,7 @@ def main():
         ex_o, ex_j = [], []
         for w in wavs:
             o, to = ours(exe, w)
-            j, japs, tj = jt9(a.jt9, w, a.depth, wd)
+            j, japs, tj = jt9(a.jt9, w, a.depth, wd, a.ref_tag)
             t_o += to; t_j += tj
             n_o += len(o); n_j += len(j); n_ap += len(japs - o)
             both += len(o & j)

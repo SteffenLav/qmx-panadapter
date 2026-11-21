@@ -83,7 +83,8 @@ def main():
                     help="candidate cap for BOTH arms unless an arm sets -DMAXC itself")
     ap.add_argument("--jt9", type=int, default=0,
                     help="score each arm's extra messages against jt9 at this depth (1-3)")
-    ap.add_argument("--jt9-exe", default=r"C:\WSJT\wsjtx\bin\jt9.exe")
+    ap.add_argument("--jt9-exe", default=None, help="default: ft8_vs_wsjtx.REF_EXE")
+    ap.add_argument("--ref-tag", default=None, help="default: ft8_vs_wsjtx.REF_TAG")
     args = ap.parse_args()
     dirs = args.dirs
     fa, fb = args.a.split(), args.b.split()
@@ -121,7 +122,7 @@ def main():
             import ft8_vs_wsjtx as V
             wd = os.path.join(tmp, "jt9"); os.makedirs(wd, exist_ok=True)
             for w in wavs:
-                plain, apd, _ = V.jt9(args.jt9_exe, os.path.abspath(w), args.jt9, wd)
+                plain, apd, _ = V.jt9(args.jt9_exe or V.REF_EXE, os.path.abspath(w), args.jt9, wd, args.ref_tag)
                 ref_sets[os.path.basename(w)] = plain | apd
         for tag, lst in (("A only", oa), ("B only", ob)):
             rep = sum(1 for _, t in lst if seen[t] > 1)

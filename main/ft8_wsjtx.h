@@ -1,0 +1,40 @@
+/* ft8_wsjtx - WS 3.2.1's FT8 decoder (lib/ft8_decode.f90 and lib/ft8/),
+ * ported to C routine by routine. Algorithms and constants are the Fortran's;
+ * each function names the routine it ports. GPL-3, (c) K1JT, K9AN, G4WJS,
+ * DG2YCB et al.; port 2026-11-21.
+ *
+ * Input is one 15 s slot at 12000 S/s as int16, exactly what jt9 reads from a
+ * WAV: the absolute level matters, because ft8b's false-decode screen compares
+ * a signal power against the spectrum baseline in absolute units.
+ */
+#pragma once
+#include <stdint.h>
+#include "ft8/message.h"
+
+#define WSX_NMAX (15 * 12000)
+
+typedef struct {
+    int nfa, nfb;        /* search band, Hz (jt9: 200, 4000) */
+    int nfqso, nftx;     /* rx / tx audio frequency (jt9: 1500, 1500) */
+    int ndepth;          /* 1..3 (jt9 -d) */
+    int lapon;           /* AP decoding on (jt9: on) */
+    int napwid;          /* AP width, Hz (jt9: 75) */
+    int nqso_progress;   /* 0..5 (jt9: 0) */
+    char mycall[13];     /* jt9 default K1ABC */
+    char hiscall[13];    /* jt9 default W9XYZ */
+    /* Callsign hash table for unpack (jt9: packjt77's, filled by every
+     * decode in the process). NULL prints every hashed call as <...>. */
+    ftx_callsign_hash_interface_t* hash_if;
+} wsx_params_t;
+
+/* One decode. nap = 0 for a plain decode, 1..6 for an a priori one (jt9
+ * prints these with a trailing "aN"). */
+typedef void (*wsx_callback_t)(void* ctx, float sync, int snr, float dt, float freq,
+                               const char* msg, int nap, float qual);
+
+void wsx_default_params(wsx_params_t* p);
+
+/* jt9's disk-mode sequence for one slot: decode at nzhsym 41 and 47 on the
+ * truncated slot, then at 50 on the whole of it (jt9.f90, mode 8). */
+void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p,
+                     wsx_callback_t cb, void* ctx);
