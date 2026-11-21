@@ -125,7 +125,18 @@ int main(int argc, char** argv)
         t_base += now_ms() - a;
 
         a = now_ms();
+#ifdef BEGIN_AUDIO
+        /* The Tab5's path: raw floats at an arbitrary level into the port's
+         * own buffer, normalised in place. Must decode exactly as the int16
+         * path above does. */
+        {
+            float* dd = wsx_piece_audio();
+            for (int i = 0; i < WSX_NMAX; i++) dd[i] = sig[i] * 0.013f;
+            wsx_piece_begin_audio(WSX_NMAX, NPASSES, MAXOSD);
+        }
+#else
         wsx_piece_begin(iwave, NPASSES, MAXOSD);
+#endif
         int tried = 0;
         for (int i = 0; i < nc; i++) {
             /* PIECE_K set: only candidates ft8_lib FAILED, strongest first
@@ -169,6 +180,9 @@ int main(int argc, char** argv)
             printf("PIECE\t%s\n", t);
         }
         wsx_piece_end();
+#ifdef RELEASE_EACH
+        wsx_piece_release();   /* FT8 stop/start: realloc must change nothing */
+#endif
         t_piece += now_ms() - a;
         fflush(stdout);
     }

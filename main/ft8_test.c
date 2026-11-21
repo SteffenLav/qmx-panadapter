@@ -3226,8 +3226,16 @@ static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result
  *   3. wsx_piece_pass()        decode task, after s_decode_jobs_done++.
  *
  * s_pc_full hands the audio from the capture task to the decode task: the
- * capture task writes only while it is false, the decode task clears it once
- * the audio is converted. A slot whose copy was refused gets no pass. */
+ * capture task writes only while it is false, the decode task clears it when
+ * the pass is OVER - the copy goes straight into the port's own buffer
+ * (wsx_piece_audio), which the pass reads until its last candidate. A slot
+ * whose copy was refused gets no pass. On FT8 stop the buffer and the FFT
+ * plans are released (wsx_piece_release) with s_pc_full left true, so no
+ * late capture can write into freed memory; FT8 start clears it.
+ *
+ * PSRAM, measured on the map: 2.5 MB of statics went (dd1, the downsample
+ * copy, two audio copies of ours); what is left is ~1.5 MB of heap buffers
+ * plus the FFT plans, all handed back outside FT8. */
 typedef struct {
     bool    ready;
     int64_t slot_sec;
@@ -3240,8 +3248,6 @@ typedef struct {
 } wsx_piece_plan_t;
 
 static EXT_RAM_BSS_ATTR wsx_piece_plan_t s_pc_plan;
-static float            *s_pc_audio;          /* PSRAM, WSX_NMAX floats */
-static int16_t          *s_pc_pcm;            /* PSRAM, WSX_NMAX int16  */
 static int               s_pc_samples;
 static volatile int64_t  s_pc_slot_sec = -1;
 static volatile bool     s_pc_full;
@@ -3249,12 +3255,10 @@ static volatile bool     s_pc_full;
 static void wsx_piece_take_audio(const float *x, int n, ftx_protocol_t proto, int64_t slot_sec)
 {
     if (proto != FTX_PROTOCOL_FT8 || s_pc_full || n <= 0) return;
-    if (!s_pc_audio) {
-        s_pc_audio = heap_caps_malloc(WSX_NMAX * sizeof(float), MALLOC_CAP_SPIRAM);
-        if (!s_pc_audio) return;
-    }
+    float *dst = wsx_piece_audio();      /* >16 KB: PSRAM by itself */
+    if (!dst) return;
     if (n > WSX_NMAX) n = WSX_NMAX;
-    memcpy(s_pc_audio, x, (size_t)n * sizeof(float));
+    memcpy(dst, x, (size_t)n * sizeof(float));
     s_pc_samples  = n;
     s_pc_slot_sec = slot_sec;
     __sync_synchronize();
@@ -3311,20 +3315,7 @@ static void wsx_piece_pass(int64_t job_slot_sec)
         return;
     }
     int64_t t0 = esp_timer_get_time();
-    if (!s_pc_pcm) s_pc_pcm = heap_caps_malloc(WSX_NMAX * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     static EXT_RAM_BSS_ATTR uint8_t seen[FT8_MAX_CANDIDATES + FT8_WSX_PIECE_K][FT8_NN];
-    if (!s_pc_pcm) { pl->ready = false; s_pc_full = false; return; }
-
-    /* Slot peak -> int16 full scale: exactly how slotcap_take() writes the
-     * corpus, the input on which the port was proved identical to jt9 and
-     * the pieces were scored (ft8b's false-decode screen is level-sensitive). */
-    const int n = s_pc_samples;
-    float fpeak = 0.0f;
-    for (int i = 0; i < n; i++) { float a = fabsf(s_pc_audio[i]); if (a > fpeak) fpeak = a; }
-    const float g = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
-    for (int i = 0; i < n; i++) s_pc_pcm[i] = (int16_t)lroundf(s_pc_audio[i] * g);
-    for (int i = n; i < WSX_NMAX; i++) s_pc_pcm[i] = 0;
-    s_pc_full = false;                 /* the audio is converted: release the copy */
 
     int n_seen = 0;
     for (int k = 0; k < pl->n_base; k++) ft8_encode(pl->base[k], seen[n_seen++]);
@@ -3333,7 +3324,15 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     settings_load_all(&qs);
     const bool sim_mode = qs.sim_mode_en;
 
-    wsx_piece_begin(s_pc_pcm, 5, -1);  /* 5 metric passes, BP only: variant B */
+    /* Slot peak -> int16 full scale, in place: exactly how slotcap_take()
+     * writes the corpus, the input on which the port was proved identical to
+     * jt9 and the pieces were scored (ft8b's false-decode screen is
+     * level-sensitive). 5 metric passes, BP only: variant B. */
+    if (!wsx_piece_begin_audio(s_pc_samples, 5, -1)) {
+        pl->ready = false;
+        s_pc_full = false;
+        return;
+    }
     int64_t t_setup = esp_timer_get_time();
     int tried = 0, n_new = 0, n_dup = 0;
     const char *stop = "done";
@@ -3379,6 +3378,7 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     }
     wsx_piece_end();
     pl->ready = false;
+    s_pc_full = false;                 /* the buffer is free for the next slot */
     if (n_new > 0) ft8_screen_view_request_refresh();
     /* One line per slot, zero included: the instrument for the on-air yield. */
     ESP_LOGI(TAG, "slot %d wsjtx pieces: tried %d of %d, +%d new, %d dup, %d ms "
@@ -4616,6 +4616,13 @@ static void ft8_decode_task(void *arg)
         wctx = NULL;
     }
 
+#if FT8_WSX_PIECES
+    /* Hand the piece pass's PSRAM back to the other modes. s_pc_full stays
+     * true so nothing can copy into the freed buffer; ft8_task clears it. */
+    s_pc_full = true;
+    s_pc_plan.ready = false;
+    wsx_piece_release();
+#endif
     ESP_LOGI(TAG, "decode task exiting");
     s_decode_task_alive = false;
     if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
@@ -4798,6 +4805,9 @@ static void ft8_task(void *arg)
     // a previous instance may have torn down mid-flight).
     s_decode_jobs_queued = 0;
     s_decode_jobs_done   = 0;
+#if FT8_WSX_PIECES
+    s_pc_full = false;      /* left true by the last decode task's release */
+#endif
 
     int slot_idx = 0;
     struct timeval tv_init;

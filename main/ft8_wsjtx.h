@@ -63,3 +63,11 @@ int  wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, fl
 int  wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out,
                       float* snr_out, int* itone_out /* [79] */);
 void wsx_piece_end(void);
+/* Fill-in-place variant, for a caller that already holds the slot as floats:
+ * write up to WSX_NMAX samples into wsx_piece_audio() (NULL = no memory),
+ * then wsx_piece_begin_audio(n, ...) normalises them exactly as the corpus is
+ * (peak -> int16 full scale). wsx_piece_release() frees every buffer and FFT
+ * plan; the next wsx_piece_audio() allocates them again. */
+float* wsx_piece_audio(void);
+int    wsx_piece_begin_audio(int n, int npasses, int maxosd);
+void   wsx_piece_release(void);

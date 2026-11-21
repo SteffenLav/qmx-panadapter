@@ -787,6 +787,15 @@ static void sync8(const float* dd, int* nfa, int* nfb, float syncmin, int nfqso,
 /* ---------------------------------------------------------- ft8_downsample */
 #define NFFTD 192000
 #define NFFT2 3200
+#ifdef WSX_PIECE_ONLY
+/* The piece path's two big buffers live on the HEAP, not in .bss, so
+ * wsx_piece_release() can hand them back when FT8 stops (the Tab5 needs that
+ * PSRAM in its other modes). g_pdd is the slot audio, NFFTD long with a zero
+ * tail, so ft8_downsample's FFT reads it directly - jt9's own x(1:NMAX)=dd,
+ * x(NMAX+1:)=0 copy is that same array, and it saved 750 KB. */
+static float* g_pdd;     /* NFFTD floats */
+static cf*    g_pcx;     /* NFFTD/2+1    */
+#endif
 static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1);
 static void ft8_downsample(const float* dd, int* newdat, float f0, cf* c1)
 {
@@ -796,8 +805,13 @@ static void ft8_downsample(const float* dd, int* newdat, float f0, cf* c1)
 }
 static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1)
 {
+#ifdef WSX_PIECE_ONLY
+    cf* const cx = g_pcx;            /* dd is g_pdd: NFFTD long, zero tail */
+    static WSX_BSS cf tmp[NFFT2];
+#else
     static WSX_BSS float x[NFFTD];
     static WSX_BSS cf cx[NFFTD / 2 + 1], tmp[NFFT2];
+#endif
     static float taper[101];
     static int first = 1;
     if (first) {
@@ -806,9 +820,13 @@ static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1)
         first = 0;
     }
     if (*newdat) {
+#ifdef WSX_PIECE_ONLY
+        r2c(dd, cx, NFFTD);
+#else
         memcpy(x, dd, sizeof(float) * NMAX);
         memset(x + NMAX, 0, sizeof(float) * (NFFTD - NMAX));
         r2c(x, cx, NFFTD);
+#endif
         *newdat = 0;
     }
     const float df = 12000.0f / NFFTD, baud = 12000.0f / NSPS;
@@ -1454,7 +1472,9 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
 /* ---------------------------------------------------- ft8_decode (driver) */
 
 static WSX_BSS struct {
-    float dd[NMAX], dd1[NMAX];
+#ifndef WSX_PIECE_ONLY
+    float dd[NMAX], dd1[NMAX];   /* the piece path uses g_pdd instead */
+#endif
     int ndec_early;
     int itone_save[MAX_EARLY][NN];
     float f1_save[MAX_EARLY], xdt_save[MAX_EARLY];
@@ -2457,17 +2477,71 @@ static apctx_t g_piece_ap;
 static wsx_params_t g_piece_p;
 static int g_piece_newdat;
 
-void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd)
+#ifdef WSX_PIECE_ONLY
+#define PDD g_pdd
+#define PDD_LEN NFFTD
+#else
+#define PDD st.dd
+#define PDD_LEN NMAX
+#endif
+
+float* wsx_piece_audio(void)
+{
+#ifdef WSX_PIECE_ONLY
+    if (!g_pdd) g_pdd = malloc(sizeof(float) * NFFTD);
+    if (!g_pcx) g_pcx = malloc(sizeof(cf) * (NFFTD / 2 + 1));
+    if (!g_pdd || !g_pcx) { wsx_piece_release(); return NULL; }
+#endif
+    return PDD;
+}
+
+static void piece_setup(int npasses, int maxosd)
 {
     wsx_default_params(&g_piece_p);
     g_piece_p.lapon = 0;
     g_piece_ap.p = &g_piece_p;
     g_piece_npasses = npasses;
     g_piece_maxosd = maxosd;
-    for (int i = 0; i < NMAX; i++) st.dd[i] = (float)iwave[i];
     int ifa = g_piece_p.nfa, ifb = g_piece_p.nfb;
-    get_spectrum_baseline(st.dd, &ifa, &ifb, st.sbase);
+    get_spectrum_baseline(PDD, &ifa, &ifb, st.sbase);
     g_piece_newdat = 1;
+}
+
+void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd)
+{
+    float* dd = wsx_piece_audio();
+    if (!dd) return;
+    for (int i = 0; i < NMAX; i++) dd[i] = (float)iwave[i];
+    for (int i = NMAX; i < PDD_LEN; i++) dd[i] = 0.0f;
+    piece_setup(npasses, maxosd);
+}
+
+int wsx_piece_begin_audio(int n, int npasses, int maxosd)
+{
+    float* dd = wsx_piece_audio();
+    if (!dd) return 0;
+    if (n > NMAX) n = NMAX;
+    /* Slot peak -> int16 full scale, then back to float: bit for bit what
+     * the corpus WAVs (and so the parity proof) hold. */
+    float fpeak = 0.0f;
+    for (int i = 0; i < n; i++) { float a = fabsf(dd[i]); if (a > fpeak) fpeak = a; }
+    const float g = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
+    for (int i = 0; i < n; i++) dd[i] = (float)(int16_t)lroundf(dd[i] * g);
+    for (int i = n; i < PDD_LEN; i++) dd[i] = 0.0f;
+    piece_setup(npasses, maxosd);
+    return 1;
+}
+
+void wsx_piece_release(void)
+{
+#ifdef WSX_PIECE_ONLY
+    free(g_pdd); g_pdd = NULL;
+    free(g_pcx); g_pcx = NULL;
+#endif
+    for (int i = 0; i < (int)(sizeof plans / sizeof plans[0]); i++) {
+        free(plans[i].cfg);              /* kiss_*_alloc(..., NULL, NULL) is one malloc */
+        plans[i].cfg = NULL;
+    }
 }
 
 int wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out)
@@ -2489,7 +2563,10 @@ int wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, 
     int iaptype = 0, nh, itone[NN];
     float dmin = 0, xsnr = 0;
     char m37[38] = {0};
-    int bad = ft8b(st.dd, &g_piece_newdat, &g_piece_ap, 50, 0, imetric, &iaptype, &f1, &xdt, xbase,
+#ifdef WSX_PIECE_ONLY
+    if (!g_pdd || !g_pcx) return 0;
+#endif
+    int bad = ft8b(PDD, &g_piece_newdat, &g_piece_ap, 50, 0, imetric, &iaptype, &f1, &xdt, xbase,
                    &nh, &dmin, m37, &xsnr, itone);
     if (bad) return 0;
     snprintf(msg, 38, "%s", m37);
