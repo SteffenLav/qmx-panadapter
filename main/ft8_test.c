@@ -3314,6 +3314,9 @@ static void wsx_piece_pass(int64_t job_slot_sec)
         s_pc_full = false;
         return;
     }
+    /* FT8 is being torn down: the ~0.5 s setup would only delay the release
+     * that the next mode waits for (seen on bench1: WSPR entry, 487 ms). */
+    if (!s_ft8_running) { pl->ready = false; s_pc_full = false; return; }
     int64_t t0 = esp_timer_get_time();
     static EXT_RAM_BSS_ATTR uint8_t seen[FT8_MAX_CANDIDATES + FT8_WSX_PIECE_K][FT8_NN];
 
