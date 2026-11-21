@@ -90,6 +90,9 @@
 #include "ft8_hash.h"
 #include "time_sync.h"
 #include "ft8_status.h"
+#ifdef FT8_DECODER_WSJTX
+#include "ft8_wsjtx.h"
+#endif
 #include "ui/ui.h"
 /* adif_log_band_for_freq() - the ONE band table, so the JS8 chat store files
  * a conversation under the same band string the log and the spot map use. */
@@ -2939,6 +2942,113 @@ static void ft8_decode_worker_task(void *arg)
     task_park_and_reap();
 }
 
+#ifdef FT8_DECODER_WSJTX
+#if FT8_SUBTRACT_PASSES < 2
+#error "FT8_DECODER_WSJTX runs where the subtract pass runs: it needs FT8_SUBTRACT_PASSES >= 2"
+#endif
+/* ---- WS 3.2.1's decoder (main/ft8_wsjtx.c) in place of ft8_lib ---------
+ *
+ * The port decodes the slot AUDIO, not the streamed waterfall, so it runs
+ * where the subtract pass runs: after the join, single-threaded, on
+ * s_sub_audio. ft8_lib's candidate list is emptied for such a slot, so the
+ * two decoders never both publish.
+ *
+ * Every decode takes the same road as one from decode_candidate_range():
+ * the screen row, the DT sample, the early QSO advance and the PSK Reporter
+ * spot - each under the same guards (sim mode, rx_only).
+ *
+ * The audio goes in normalised exactly as slotcap_take() writes the corpus
+ * (slot peak -> int16 full scale). That is the input on which the port was
+ * proved identical to jt9 (tools/wsjtx_port/compare.py), and ft8b's
+ * false-decode screen depends on the absolute level. */
+typedef struct {
+    decode_result_t       *out;
+    const decode_ctx_t    *dc;
+    int64_t                slot_sec;
+    bool                   may_early_advance;
+    bool                   sim_suppresses_real;
+} wsx_sink_t;
+
+static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
+                          const char *msg, int nap, float qual)
+{
+    (void)qual;
+    wsx_sink_t *k = (wsx_sink_t *)vctx;
+    decode_result_t *out = k->out;
+    char text[FT8_TEXT_MAX_LEN];
+    snprintf(text, sizeof text, "%s", msg);
+    out->n_decoded++;
+    out->n_attempted++;
+    /* jt9's DT is relative to the nominal 0.5 s start, the same quantity the
+     * ft8_lib path feeds the auto-sync (it averages ~0 on a synced band). */
+    float dt_ms = dt * 1000.0f;
+    if (out->n_timing < FT8_MAX_CANDIDATES) {
+        char tcall[FT8_CALL_MAX_LEN];
+        uint32_t h = 2166136261u;
+        if (ft8_screen_extract_call(text, tcall, sizeof(tcall)))
+            for (const char *c = tcall; *c; c++) { h ^= (uint32_t)(unsigned char)*c; h *= 16777619u; }
+        out->tcall[out->n_timing]  = h;
+        out->timing[out->n_timing++] = dt_ms;
+    }
+    int freq_hz = (int)lroundf(freq);
+    ESP_LOGI(TAG, "decoded: '%s' (wsjtx sync=%.1f freq=%dHz snr=%d dt=%d%s)",
+             text, sync, freq_hz, snr, (int)lroundf(dt_ms), nap ? " AP" : "");
+    if (!k->sim_suppresses_real && !k->dc->rx_only) {
+        ft8_screen_record_decode(text, (int)lroundf(sync), snr, freq_hz, k->slot_sec,
+                                 (int)lroundf(dt_ms));
+        if (k->may_early_advance && !out->early_advanced && ft8_qso_msg_is_for_us(text)) {
+            out->early_advanced = true;
+            ESP_LOGI(TAG, "early advance: '%s' is for us - advancing now", text);
+            ft8_qso_advance(k->slot_sec);
+        }
+    }
+    if (!k->dc->rx_only) {
+        char sp_call[16], sp_grid[8];
+        if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
+            ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
+            pskreporter_spot(sp_call, sp_grid, cat_get_frequency() + (uint32_t)freq_hz, snr,
+                             ftx_protocol_name((ftx_protocol_t)s_pool_proto), k->slot_sec);
+        }
+    }
+}
+
+static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result_t *out)
+{
+    static int16_t *pcm = NULL;            /* PSRAM, 360 KB, kept */
+    out->early_advanced = false;
+    out->n_decoded = out->n_osd = out->n_attempted = out->n_dup = 0;
+    out->n_timing = out->n_js8ev = out->js8ev_dropped = 0;
+    out->n_sub = 0;
+    if (!pcm) pcm = heap_caps_malloc(WSX_NMAX * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!pcm) { ESP_LOGE(TAG, "wsjtx: no PSRAM for the slot copy"); return; }
+    int n = s_sub_audio_samples < WSX_NMAX ? s_sub_audio_samples : WSX_NMAX;
+    float fpeak = 0.0f;
+    for (int i = 0; i < n; i++) { float a = fabsf(s_sub_audio[i]); if (a > fpeak) fpeak = a; }
+    float gain = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;     /* = slotcap_take() */
+    for (int i = 0; i < n; i++) {
+        float x = s_sub_audio[i] * gain;
+        int32_t v = (int32_t)(x < 0.0f ? x - 0.5f : x + 0.5f);
+        pcm[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    }
+    for (int i = n; i < WSX_NMAX; i++) pcm[i] = 0;
+
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    wsx_params_t p;
+    wsx_default_params(&p);
+    /* WSJT-X's AP passes use the operator's own call; no call = no MyCall AP,
+     * exactly as ft8apset does with a blank mycall. */
+    char me[16] = {0};
+    settings_get_my_callsign(me, sizeof(me));
+    snprintf(p.mycall, sizeof p.mycall, "%s", me);
+    p.hiscall[0] = 0;
+    p.hash_if = ft8_hash_if();
+    wsx_sink_t k = { .out = out, .dc = dc, .slot_sec = slot_sec,
+                     .may_early_advance = !dc->rx_only, .sim_suppresses_real = qs.sim_mode_en };
+    wsx_decode_slot(pcm, &p, wsx_on_decode, &k);
+}
+#endif
+
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
 // capture). Candidate search, then dual-core LDPC fan-out, merge, record,
 // advance the QSO state machine.
@@ -2958,6 +3068,15 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     // LDPC attempts are affordable and net a few more real weak-signal decodes;
     // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
     int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
+#ifdef FT8_DECODER_WSJTX
+    /* The port decodes this slot (see wsx_run_slot) - ft8_lib must not also
+     * publish it. Only the primary FT8 sub-mode: FT4, JS8 and the rx_only
+     * alternates stay on ft8_lib. */
+    const bool use_wsx = !rx_only && proto_for_mode() == FTX_PROTOCOL_FT8 &&
+                         s_sub_mon && s_sub_audio_samples > 0 &&
+                         s_sub_proto == (int)FTX_PROTOCOL_FT8;
+    if (use_wsx) n_cand = 0;
+#endif
 
     // "Let the others wait": if we're mid-exchange (pounce OR CQ-run - the
     // CQ-run exclusion was removed 2026-10-04, see ft8_qso_get_priority_freq),
@@ -3166,6 +3285,14 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     r_sub.n_timing = r_sub.n_js8ev = r_sub.js8ev_dropped = 0;
     r_sub.n_sub = 0;
     r_sub.early_advanced = false;
+#ifdef FT8_DECODER_WSJTX
+    if (use_wsx) {
+        int64_t t_w0 = esp_timer_get_time();
+        wsx_run_slot(dc, slot_sec, &r_sub);
+        ESP_LOGI(TAG, "slot %d wsjtx decoder: %d decode(s), %d ms", slot_idx,
+                 r_sub.n_decoded, (int)((esp_timer_get_time() - t_w0) / 1000));
+    } else
+#endif
     if (!rx_only && s_sub_mon && s_sub_audio_samples > 0
         && s_sub_proto == (int)proto_for_mode()) {
         int64_t t_sub0 = esp_timer_get_time();
@@ -3556,6 +3683,16 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
         tcall_arr[n_timing]      = r_worker.tcall[i];
         timing_ms_arr[n_timing++] = r_worker.timing[i];
     }
+#ifdef FT8_DECODER_WSJTX
+    /* A wsjtx slot has ALL its decodes in r_sub (ft8_lib's two halves had no
+     * candidates), so without this the auto-sync would get no samples. The
+     * ft8_lib subtract pass never fills r_sub.timing, so this adds nothing
+     * on a slot the port did not decode. */
+    for (int i = 0; i < r_sub.n_timing && n_timing < FT8_MAX_CANDIDATES; i++) {
+        tcall_arr[n_timing]      = r_sub.tcall[i];
+        timing_ms_arr[n_timing++] = r_sub.timing[i];
+    }
+#endif
     /* Distinct senders among the samples. Counted BEFORE robust_mean_timing_ms,
      * which sorts timing_ms_arr in place and would break the pairing. O(n^2) on
      * at most 140 entries, once per slot - not worth a set. */
@@ -3882,7 +4019,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
        advanced), so this test is belt-and-braces rather than the only guard -
        which it has to be, now that the core-0 worker can early-advance too and
        these two flags are set from two different tasks. */
-    if (!r_main.early_advanced && !r_worker.early_advanced) {
+#ifdef FT8_DECODER_WSJTX
+    const bool sub_early = r_sub.early_advanced;   /* the port may early-advance */
+#else
+    const bool sub_early = false;
+#endif
+    if (!r_main.early_advanced && !r_worker.early_advanced && !sub_early) {
         ft8_qso_advance(slot_sec);
     } else {
         /* An early advance ran, so the state machine has already had its one

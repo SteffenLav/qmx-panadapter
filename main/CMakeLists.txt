@@ -142,6 +142,7 @@ idf_component_register(
         "qmx_term.c"
         "ft8_test.c"
         "ft8_subtract.c"
+        "ft8_wsjtx.c"
         "js8_chat.c"
         "js8_submode.c"
         "js8_alt.c"

@@ -22,7 +22,7 @@ INC = ["-Imain", f"-I{F}", f"-I{F}/ft8", f"-I{F}/fft", f"-I{F}/common"]
 
 
 def build(exe, flags):
-    subprocess.run(["gcc", "-O2", *flags, "-o", exe, *SRCS, *INC, "-lm"], cwd=ROOT, check=True)
+    subprocess.run(["gcc", "-O2", "-DFT8_DECODER_WSJTX", *flags, "-o", exe, *SRCS, *INC, "-lm"], cwd=ROOT, check=True)
 
 
 def run(exe, wav):

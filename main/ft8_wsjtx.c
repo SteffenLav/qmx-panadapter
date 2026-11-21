@@ -17,6 +17,12 @@
  * a file), contest modes other than ncontest=0, and OSD's npre2 branch (only
  * reached at norder>=3; ft8b always uses norder=2).
  */
+/* ⛔ COMPILED ONLY WITH -DFT8_DECODER_WSJTX. Its static buffers are ~9 MB
+ * (the 180000-point subtraction and the 192000-point downsample FFTs, the
+ * 372x1920 symbol spectra), which no Tab5 .bss can hold. The host tools
+ * define it; the Tab5 firmware build compiles this file to nothing. */
+#ifdef FT8_DECODER_WSJTX
+
 #include "ft8_wsjtx.h"
 #include "ft8_wsjtx_tables.h"
 
@@ -26,8 +32,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "kiss_fft.h"
-#include "kiss_fftr.h"
+#include "fft/kiss_fft.h"
+#include "fft/kiss_fftr.h"
 #include "ft8/encode.h"
 #include "ft8/message.h"
 
@@ -1549,3 +1555,5 @@ void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t
         decode_call(id2a, nearly[c], p, cb, ctx);
     }
 }
+
+#endif /* FT8_DECODER_WSJTX */
