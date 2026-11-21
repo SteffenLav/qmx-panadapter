@@ -137,6 +137,9 @@ int main(int argc, char** argv)
 #else
         wsx_piece_begin(iwave, NPASSES, MAXOSD);
 #endif
+#ifdef NDEEP
+        wsx_piece_set_ndeep(NDEEP);
+#endif
         int tried = 0;
         for (int i = 0; i < nc; i++) {
             /* PIECE_K set: only candidates ft8_lib FAILED, strongest first
@@ -190,6 +193,9 @@ int main(int argc, char** argv)
         t_piece += now_ms() - a;
         fflush(stdout);
     }
+#ifdef WSX_PROF
+    { extern void wsx_prof_print(void); wsx_prof_print(); }
+#endif
     fprintf(stderr, "candidates %ld; base %.1f ms; piece %.1f ms (incl. per-slot setup)\n",
             n_cand_total, t_base, t_piece);
     return 0;

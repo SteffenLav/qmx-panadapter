@@ -71,3 +71,6 @@ void wsx_piece_end(void);
 float* wsx_piece_audio(void);
 int    wsx_piece_begin_audio(int n, int npasses, int maxosd);
 void   wsx_piece_release(void);
+/* OSD depth (decode174_91 norder) for the piece path; ft8b uses 2. Reset by
+ * wsx_piece_end(). */
+void   wsx_piece_set_ndeep(int ndeep);

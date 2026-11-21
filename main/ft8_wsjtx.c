@@ -75,11 +75,11 @@ static const int graymap[8] = {0, 1, 3, 2, 5, 6, 4, 7};
 #include <stdio.h>
 #include <time.h>
 static double prof_t[8]; static long prof_n[8];
-static const char* prof_name[8] = {"sync8", "downsample", "ft8b-other", "bp", "osd", "subtract", "", ""};
+static const char* prof_name[8] = {"sync8", "downsample", "ft8b-other", "bp", "osd", "subtract", "piece-try", "piece-setup"};
 static double prof_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
 #define PROF_BEGIN(k) double _pt##k = prof_now()
 #define PROF_END(k) do { prof_t[k] += prof_now() - _pt##k; prof_n[k]++; } while (0)
-void wsx_prof_print(void) { for (int i = 0; i < 6; i++) fprintf(stderr, "  %-11s %7.0f ms  %ld calls\n", prof_name[i], 1e3 * prof_t[i], prof_n[i]); }
+void wsx_prof_print(void) { for (int i = 0; i < 8; i++) fprintf(stderr, "  %-11s %7.0f ms  %ld calls\n", prof_name[i], 1e3 * prof_t[i], prof_n[i]); }
 #else
 #define PROF_BEGIN(k)
 #define PROF_END(k)
@@ -1247,6 +1247,7 @@ static void normalizebmet(float* bmet, int n)
 
 /* Returns nbadcrc. f1 and xdt are refined in place, as in Fortran. */
 /* Knobs for the piece API below; the defaults are ft8b's own behaviour. */
+static int g_piece_ndeep = 2;       /* decode174_91 norder; ft8b passes 2 */
 static int g_piece_npasses = 0;     /* 0 = ft8b's npasses; else at most this many */
 static int g_piece_maxosd  = 2;     /* decode174_91's maxosd: -1 BP only, 2 = ft8b */
 
@@ -1413,7 +1414,7 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         int ntype;
         *dmin = 0;
         PROF_BEGIN(3);
-        decode174_91(llrz, g_piece_maxosd, 2, apmask, message91, cw, &ntype, nharderrors, dmin);
+        decode174_91(llrz, g_piece_maxosd, g_piece_ndeep, apmask, message91, cw, &ntype, nharderrors, dmin);
         PROF_END(3);
         if (*nharderrors < 0 || *nharderrors > 36) continue;
         int nz = 0;
@@ -2497,6 +2498,7 @@ float* wsx_piece_audio(void)
 
 static void piece_setup(int npasses, int maxosd)
 {
+    PROF_BEGIN(7);
     wsx_default_params(&g_piece_p);
     g_piece_p.lapon = 0;
     g_piece_ap.p = &g_piece_p;
@@ -2505,6 +2507,7 @@ static void piece_setup(int npasses, int maxosd)
     int ifa = g_piece_p.nfa, ifb = g_piece_p.nfb;
     get_spectrum_baseline(PDD, &ifa, &ifb, st.sbase);
     g_piece_newdat = 1;
+    PROF_END(7);
 }
 
 void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd)
@@ -2566,8 +2569,10 @@ int wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, 
 #ifdef WSX_PIECE_ONLY
     if (!g_pdd || !g_pcx) return 0;
 #endif
+    PROF_BEGIN(6);
     int bad = ft8b(PDD, &g_piece_newdat, &g_piece_ap, 50, 0, imetric, &iaptype, &f1, &xdt, xbase,
                    &nh, &dmin, m37, &xsnr, itone);
+    PROF_END(6);
     if (bad) return 0;
     snprintf(msg, 38, "%s", m37);
     if (f_out) *f_out = f1;
@@ -2577,6 +2582,7 @@ int wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, 
     return 1;
 }
 
-void wsx_piece_end(void) { g_piece_npasses = 0; g_piece_maxosd = 2; }
+void wsx_piece_end(void) { g_piece_npasses = 0; g_piece_maxosd = 2; g_piece_ndeep = 2; }
+void wsx_piece_set_ndeep(int ndeep) { g_piece_ndeep = ndeep; }
 
 #endif /* FT8_DECODER_WSJTX */

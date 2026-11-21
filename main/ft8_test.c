@@ -3347,6 +3347,13 @@ static void wsx_piece_pass(int64_t job_slot_sec)
         s_pc_full = false;
         return;
     }
+    /* OSD depth 1, not ft8b's 2. Under the 6 s budget (host -DBUDGET_MS=50,
+     * K40, 2026-11-22, jt9 referee) depth 1 beats depth 2 on both band states:
+     *   457 quiet slots  depth 2 +775 / 14 unconfirmed   depth 1 +833 / 9
+     *   130 busy slots   depth 2 +202 / 3                depth 1 +236 / 2
+     * It is cheaper per candidate, so more candidates fit the budget, and it
+     * accepts fewer false decodes. wsx_piece_end() puts it back to 2. */
+    wsx_piece_set_ndeep(1);
     int64_t t_setup = esp_timer_get_time();
     int tried = 0, n_new = 0, n_dup = 0;
     const char *stop = "done";
