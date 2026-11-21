@@ -1558,7 +1558,10 @@ static uint8_t alt_submode_for_proto(ftx_protocol_t p)
  * the bookkeeping. */
 static void reinit_alt_if_changed(ftx_protocol_t primary, int primary_samples)
 {
-    ftx_protocol_t want[FT8_NUM_ALT_BUFFERS];
+    /* Zeroed although only want[0..n) is ever read: GCC 14 cannot see that
+     * through alt_wanted() and -Werror=maybe-uninitialized stops the Tab5
+     * build (found by the first IDF build of this code, 2026-11-21). */
+    ftx_protocol_t want[FT8_NUM_ALT_BUFFERS] = {0};
     int n = alt_wanted(primary, want);
 
     bool same = true;
