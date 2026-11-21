@@ -16739,6 +16739,96 @@ void ui_toast_ms(const char *msg, uint32_t ms)
     display_unlock();
 }
 
+/* ⭐ AN ALERT TOAST: a toast that must not be missed, and that a tap closes.
+ *
+ * The plain toast is white text on 80 % black with a 1 px grey border. Over
+ * the white text of the FT8 decode list it is close to unreadable - the
+ * operator, 2026-11-21, on the "TX INHIBITED" notice: "I can barely see it
+ * with the white text behind it". So: fully opaque dark background and a
+ * thick red frame.
+ *
+ * Any press anywhere closes it. That is a listener on the INPUT DEVICES, not
+ * a full-screen scrim: any_modal_open() counts full-screen children of the
+ * layers as modals, and a scrim would make this read as one and hold back
+ * the QMX-wait prompt. The press is NOT consumed - it reaches whatever is
+ * under the finger as well, exactly as it would with no alert showing.
+ *
+ * Not reentrant with itself in any interesting way: one alert object,
+ * re-texted and re-timed by the next call. Call from any task: it takes the
+ * display lock like ui_toast_ms(). */
+static lv_obj_t   *s_alert       = NULL;
+static lv_timer_t *s_alert_timer = NULL;
+static lv_indev_t *s_alert_hooked[8];
+static int         s_alert_n_hooked;
+
+static void alert_hide(void)
+{
+    if (s_alert) lv_obj_add_flag(s_alert, LV_OBJ_FLAG_HIDDEN);
+    if (s_alert_timer) {
+        lv_timer_delete(s_alert_timer);
+        s_alert_timer = NULL;
+    }
+}
+
+static void alert_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_alert_timer = NULL;          /* one-shot: LVGL deletes it after this */
+    if (s_alert) lv_obj_add_flag(s_alert, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void alert_press_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_alert && !lv_obj_has_flag(s_alert, LV_OBJ_FLAG_HIDDEN)) alert_hide();
+}
+
+/* Hook every input device that exists now (touch, and in some builds a
+ * mouse); a device added later is hooked by the next alert. */
+static void alert_hook_indevs(void)
+{
+    for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
+        bool have = false;
+        for (int i = 0; i < s_alert_n_hooked; i++) if (s_alert_hooked[i] == in) have = true;
+        if (have || s_alert_n_hooked >= (int)(sizeof s_alert_hooked / sizeof s_alert_hooked[0])) continue;
+        lv_indev_add_event_cb(in, alert_press_cb, LV_EVENT_PRESSED, NULL);
+        s_alert_hooked[s_alert_n_hooked++] = in;
+    }
+}
+
+void ui_toast_alert_ms(const char *msg, uint32_t ms)
+{
+    if (!display_lock(100)) return;
+    alert_hook_indevs();
+    if (!s_alert) {
+        s_alert = lv_label_create(lv_layer_top());
+        lv_obj_set_style_bg_color(s_alert, lv_color_hex(0x101014), 0);
+        lv_obj_set_style_bg_opa(s_alert, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(s_alert, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_alert, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_pad_all(s_alert, 22, 0);
+        lv_obj_set_style_radius(s_alert, 10, 0);
+        lv_obj_set_style_border_width(s_alert, 6, 0);
+        lv_obj_set_style_border_color(s_alert, lv_color_hex(0xE0302A), 0);
+        lv_obj_remove_flag(s_alert, LV_OBJ_FLAG_CLICKABLE);   /* the indev hook closes it */
+        lv_obj_set_width(s_alert, LV_PCT(70));                /* wraps: see ui_toast_ms */
+        lv_label_set_long_mode(s_alert, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(s_alert, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    lv_label_set_text(s_alert, msg);
+    lv_obj_align(s_alert, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_move_foreground(s_alert);
+    lv_obj_remove_flag(s_alert, LV_OBJ_FLAG_HIDDEN);
+    if (s_alert_timer) {
+        lv_timer_set_period(s_alert_timer, ms);
+        lv_timer_reset(s_alert_timer);
+    } else {
+        s_alert_timer = lv_timer_create(alert_timer_cb, ms, NULL);
+        lv_timer_set_repeat_count(s_alert_timer, 1);
+    }
+    display_unlock();
+}
+
 /* ⭐ A NOTICE THE OPERATOR HAS TO DISMISS, NOT A TOAST THAT TIMES OUT.
  *
  * A toast is right for "that worked". It is wrong for anything the operator

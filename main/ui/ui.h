@@ -89,6 +89,9 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 void ui_toast(const char *msg);
 /* Same toast, with a readable dwell for anything the operator must act on. */
 void ui_toast_ms(const char *msg, uint32_t ms);
+/* The same, for what must not be missed: opaque, red-framed, closed by any
+ * press anywhere (the press still reaches what is under it). Any task. */
+void ui_toast_alert_ms(const char *msg, uint32_t ms);
 
 /* A notice the operator must dismiss with OK. Use this - not a toast - for
  * anything they have to ACT on: a toast leaves on its own whether or not it
