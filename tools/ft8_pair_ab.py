@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--b", default="-DSUB_SKIP_DUP", help="extra gcc flags for arm B")
     ap.add_argument("--maxc", type=int, default=140,
                     help="candidate cap for BOTH arms unless an arm sets -DMAXC itself")
+    ap.add_argument("--jt9", type=int, default=0,
+                    help="score each arm's extra messages against jt9 at this depth (1-3)")
+    ap.add_argument("--jt9-exe", default=r"C:\WSJT\wsjtx\bin\jt9.exe")
     args = ap.parse_args()
     dirs = args.dirs
     fa, fb = args.a.split(), args.b.split()
@@ -110,11 +113,28 @@ def main():
         seen = collections.Counter()
         for w in wavs:
             seen.update(run(exe_a, w)[0] | run(exe_b, w)[0])
+        # --jt9 D: WSJT-X's jt9 at depth D as the referee. A message jt9 also
+        # decodes from the same slot is real; this replaces "repeats" as the
+        # judge wherever it is available. Cached per slot by ft8_vs_wsjtx.
+        ref_sets = {}
+        if args.jt9:
+            import ft8_vs_wsjtx as V
+            wd = os.path.join(tmp, "jt9"); os.makedirs(wd, exist_ok=True)
+            for w in wavs:
+                plain, apd, _ = V.jt9(args.jt9_exe, os.path.abspath(w), args.jt9, wd)
+                ref_sets[os.path.basename(w)] = plain | apd
         for tag, lst in (("A only", oa), ("B only", ob)):
             rep = sum(1 for _, t in lst if seen[t] > 1)
-            print(f"  {tag}: {len(lst)}, of which also decoded in another slot: {rep}")
+            line = f"  {tag}: {len(lst)}, of which also decoded in another slot: {rep}"
+            if ref_sets:
+                inj = sum(1 for f, t in lst if " ".join(t.upper().split()) in ref_sets.get(f, ()))
+                line += f", confirmed by jt9 -d {args.jt9}: {inj}"
+            print(line)
             for f, t in lst[:40]:
-                print(f"    {f:24} {t}{'   (repeats)' if seen[t] > 1 else ''}")
+                mark = ""
+                if ref_sets:
+                    mark = "   (jt9)" if " ".join(t.upper().split()) in ref_sets.get(f, ()) else "   (NOT in jt9)"
+                print(f"    {f:24} {t}{'   (repeats)' if seen[t] > 1 else ''}{mark}")
     return 0
 
 

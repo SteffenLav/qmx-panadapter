@@ -34,9 +34,18 @@ def ours(exe, wav):
 
 
 def jt9(path, wav, depth, wd):
+    """jt9's decodes of one slot. Its raw output is CACHED beside the WAV
+    (<wav>.jt9d<depth>.txt), so a slot costs its ~3 s once and later runs -
+    and ft8_pair_ab.py --jt9 - can use jt9 as the reference for free."""
+    cache = f"{wav}.jt9d{depth}.txt"
     t0 = time.perf_counter()
-    out = subprocess.run([path, "-8", "-d", str(depth), wav], cwd=wd,
-                         capture_output=True, text=True).stdout
+    if os.path.exists(cache):
+        out = open(cache, encoding="utf-8").read()
+    else:
+        out = subprocess.run([path, "-8", "-d", str(depth), wav], cwd=wd,
+                             capture_output=True, text=True).stdout
+        if "<DecodeFinished>" in out:          # only a complete run is cached
+            open(cache, "w", encoding="utf-8").write(out)
     dt = time.perf_counter() - t0
     plain, ap = set(), set()
     for l in out.splitlines():
