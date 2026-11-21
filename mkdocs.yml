@@ -29,6 +29,7 @@ nav:
     - Spot Map: guide/spot-map.md
     - Web UI: guide/web-ui.md
     - Web DSP: guide/web-dsp.md
+    - Remote Access: guide/remote-access.md
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
     - CW: guide/cw.md
