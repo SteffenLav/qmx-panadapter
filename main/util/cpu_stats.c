@@ -121,6 +121,23 @@ static void cpu_stats_task(void *arg)
                          (unsigned)pubfail, (unsigned)getfail,
                          sfs.age_mean_us / 1000, sfs.age_max_us / 1000);
 
+                /* Zoomed, the waterfall draws the ZOOM FFT, whose rate is
+                 * 46.9/D per second (times ZOOM_OVERLAP_MAX, capped at D) -
+                 * not the base rate the line above counts. Printed only
+                 * while zoomed, so the unzoomed log is unchanged. */
+                {
+                    static uint32_t zf_last;
+                    static int64_t  zf_t;
+                    uint32_t zf = dsp_zoom_frames();
+                    int64_t  now = esp_timer_get_time();
+                    int zd = dsp_get_zoom_decim();
+                    if (zd > 1 && zf_t && now > zf_t)
+                        ESP_LOGI(TAG, "zoom: D=%d %.1f spectra/s", zd,
+                                 (double)(zf - zf_last) * 1e6 / (double)(now - zf_t));
+                    zf_last = zf;
+                    zf_t    = now;
+                }
+
                 /* ⭐ THE ONE LINE THAT DESCRIBES THE MOTION. Every other
                  * counter here measures a stage; this measures the result -
                  * how long each picture stood still before the next replaced

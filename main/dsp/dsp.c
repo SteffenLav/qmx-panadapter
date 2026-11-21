@@ -850,8 +850,23 @@ bool dsp_avg_ready(float *dst)
     return true;
 }
 
-static void zoom_run_fft(void)
+/* Zoom-FFT overlap. 1 = none: a new zoomed spectrum every DSP_FFT_SIZE
+ * decimated samples, i.e. 46.9/D per second - at D=16 one every 341 ms, so a
+ * waterfall running faster than that repeats rows. K > 1 hops DSP_FFT_SIZE/K
+ * instead, capped at K = D (beyond that the zoom FFT would outrun the base
+ * one). Each spectrum still covers the full DSP_FFT_SIZE window, so the
+ * resolution is unchanged; only the rate rises, at K FFTs per window.
+ * The Tab5 keeps 1 - an off-device build with cycles to spare sets it. */
+#ifndef ZOOM_OVERLAP_MAX
+#define ZOOM_OVERLAP_MAX 1
+#endif
+
+static volatile uint32_t s_zoom_frames;   /* zoom spectra produced, ever */
+uint32_t dsp_zoom_frames(void) { return s_zoom_frames; }
+
+static void zoom_run_fft(int k)
 {
+    s_zoom_frames++;
     for (int i = 0; i < DSP_FFT_SIZE; i++) {
         float w = s_window[i];
         s_zoom_workbuf[2*i]     = s_zoom_acc[2*i]     * w;
@@ -871,7 +886,11 @@ static void zoom_run_fft(void)
     // frame-to-frame jumps at high decimation (slower cadence). Too low an
     // alpha smears/blurs the waterfall (signals visibly trail/fade), so
     // keep this fairly high - it's a touch-up, not the main smoothing.
-    const float alpha = 0.6f;
+    /* 0.6 per frame at no overlap. With K frames in the same time the EMA
+     * must be (1 - 0.4^(1/K)) to keep the same time constant in SECONDS -
+     * otherwise more frames would mean less smoothing, and the waterfall
+     * would look noisier for a change that only meant to make it fresher. */
+    const float alpha = (k <= 1) ? 0.6f : 1.0f - powf(0.4f, 1.0f / (float)k);
     const float floor_mag2 = 1e-12f;
     for (int i = 0; i < DSP_FFT_SIZE; i++) {
         float re = s_zoom_workbuf[2*i];
@@ -984,8 +1003,21 @@ static void zoom_process(const int16_t *samples)
             s_zoom_acc_idx++;
         }
         if (s_zoom_acc_idx >= DSP_FFT_SIZE) {
-            zoom_run_fft();
+            const int k = (ZOOM_OVERLAP_MAX < D) ? ZOOM_OVERLAP_MAX : D;
+            zoom_run_fft(k);
+#if ZOOM_OVERLAP_MAX > 1
+            /* Keep the newest DSP_FFT_SIZE - hop samples as the start of the
+             * next window. zoom_run_fft() windows into s_zoom_workbuf, so
+             * s_zoom_acc itself is still the raw samples here. */
+            const int hop  = DSP_FFT_SIZE / k;
+            const int keep = DSP_FFT_SIZE - hop;
+            if (keep > 0)
+                memmove(s_zoom_acc, s_zoom_acc + 2 * hop,
+                        (size_t)keep * 2 * sizeof(s_zoom_acc[0]));
+            s_zoom_acc_idx = keep;
+#else
             s_zoom_acc_idx = 0;
+#endif
         }
     }
 }

@@ -196,6 +196,8 @@ void dsp_set_zoom(float zoom_factor, int pan_offset_bins, int if_bin_shift);
 // D == 1 means zoom-FFT is inactive; the display should use the normal
 // dsp_get_spectrum() output with the existing zoom/pan math.
 int dsp_get_zoom_decim(void);
+// Zoom spectra produced since boot - cpu_stats turns it into a rate.
+uint32_t dsp_zoom_frames(void);
 
 // Residual zoom to apply on top of the zoom-FFT spectrum (zoom_factor / D).
 float dsp_get_zoom_residual(void);
