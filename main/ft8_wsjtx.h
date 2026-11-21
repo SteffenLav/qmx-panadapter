@@ -54,3 +54,10 @@ void wsx_decode_late(const int16_t* iwave, const wsx_params_t* p,
 
 /* -DWSX_PROF builds only: per-stage times to stderr. */
 void wsx_prof_print(void);
+
+/* Single pieces, for measurement on another decoder's candidates (see the
+ * pieces section in ft8_wsjtx.c). xdt is WSJT-X's DT (signal start - 0.5 s);
+ * npasses limits ft8b's metric passes (1..5, 0 = all), maxosd -1 = BP only. */
+void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd);
+int  wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out);
+void wsx_piece_end(void);

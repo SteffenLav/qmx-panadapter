@@ -1208,6 +1208,10 @@ static void normalizebmet(float* bmet, int n)
 }
 
 /* Returns nbadcrc. f1 and xdt are refined in place, as in Fortran. */
+/* Knobs for the piece API below; the defaults are ft8b's own behaviour. */
+static int g_piece_npasses = 0;     /* 0 = ft8b's npasses; else at most this many */
+static int g_piece_maxosd  = 2;     /* decode174_91's maxosd: -1 BP only, 2 = ft8b */
+
 static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsubtract,
                 int imetric, int* iaptype, float* f1, float* xdt, float xbase,
                 int* nharderrors, float* dmin, char* msg37, float* xsnr_out, int* itone)
@@ -1325,6 +1329,7 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
     int npasses = p->lapon ? 5 + 2 * nappasses[p->nqso_progress] : 5;
     if (nzhsym < 50) npasses = 5;
 
+    if (g_piece_npasses > 0 && npasses > g_piece_npasses) npasses = g_piece_npasses;
     for (int ipass = 1; ipass <= npasses; ipass++) {
         int8_t apmask[174];
         const float* src = llra;
@@ -1370,7 +1375,7 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         int ntype;
         *dmin = 0;
         PROF_BEGIN(3);
-        decode174_91(llrz, 2, 2, apmask, message91, cw, &ntype, nharderrors, dmin);
+        decode174_91(llrz, g_piece_maxosd, 2, apmask, message91, cw, &ntype, nharderrors, dmin);
         PROF_END(3);
         if (*nharderrors < 0 || *nharderrors > 36) continue;
         int nz = 0;
@@ -2412,5 +2417,47 @@ void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t
     wsx_decode_early(iwave, p, cb, ctx);
     wsx_decode_late(iwave, p, cb, ctx);
 }
+
+/* ---------------------------------------------------------------- pieces
+ * For measuring single WSJT-X pieces on ANOTHER decoder's candidates: load a
+ * slot once (dd, the 192000-point downsample FFT, the spectrum baseline), then
+ * run ft8b's demodulator on one candidate at a time. No subtraction, no AP,
+ * no early passes - just the per-candidate front end and decoder. */
+static apctx_t g_piece_ap;
+static wsx_params_t g_piece_p;
+static int g_piece_newdat;
+
+void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd)
+{
+    wsx_default_params(&g_piece_p);
+    g_piece_p.lapon = 0;
+    g_piece_ap.p = &g_piece_p;
+    g_piece_npasses = npasses;
+    g_piece_maxosd = maxosd;
+    for (int i = 0; i < NMAX; i++) st.dd[i] = (float)iwave[i];
+    int ifa = g_piece_p.nfa, ifb = g_piece_p.nfb;
+    get_spectrum_baseline(st.dd, &ifa, &ifb, st.sbase);
+    g_piece_newdat = 1;
+}
+
+int wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out)
+{
+    int si = nint(f1 / 3.125f);
+    if (si < 1) si = 1;
+    if (si > NH1) si = NH1;
+    float xbase = powf(10.0f, 0.1f * (st.sbase[si] - 40.0f));
+    int iaptype = 0, nh, itone[NN];
+    float dmin = 0, xsnr = 0;
+    char m37[38] = {0};
+    int bad = ft8b(st.dd, &g_piece_newdat, &g_piece_ap, 50, 0, imetric, &iaptype, &f1, &xdt, xbase,
+                   &nh, &dmin, m37, &xsnr, itone);
+    if (bad) return 0;
+    snprintf(msg, 38, "%s", m37);
+    if (f_out) *f_out = f1;
+    if (dt_out) *dt_out = xdt - 0.5f;
+    return 1;
+}
+
+void wsx_piece_end(void) { g_piece_npasses = 0; g_piece_maxosd = 2; }
 
 #endif /* FT8_DECODER_WSJTX */
