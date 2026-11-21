@@ -51,6 +51,7 @@ def main():
     os.makedirs(wd, exist_ok=True)
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         res = list(ex.map(lambda w: run(exe, w), wavs))
+    ap_o = ap_j = ap_both = 0
     n_o = n_j = both = 0
     t = 0.0
     same = 0
@@ -58,6 +59,7 @@ def main():
     for wav, plain, ap, dt in res:
         jp, jap, _ = V.jt9(V.REF_EXE, wav, 3, wd)
         t += dt
+        ap_o += len(ap); ap_j += len(jap); ap_both += len(ap & jap)
         n_o += len(plain); n_j += len(jp); both += len(plain & jp)
         if plain == jp:
             same += 1
@@ -68,6 +70,7 @@ def main():
         print("INSTRUMENT FAIL: nothing decoded"); return 1
     print(f"{n} slots: port {n_o} ({n_o/n:.2f}/slot)  jt9 {n_j} ({n_j/n:.2f}/slot)  both {both}")
     print(f"  identical slots {same}/{n}; port-only {n_o-both}, jt9-only {n_j-both}")
+    print(f"  AP decodes: port {ap_o}, jt9 {ap_j}, both {ap_both}")
     print(f"  port {1000*t/n:.0f} ms/slot (wall, {args.jobs} in parallel)")
     for f, oo, jj in diffs[:args.show]:
         print(f"  {f}: +{oo} -{jj}")

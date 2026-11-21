@@ -78,6 +78,7 @@ int main(int argc, char** argv)
     p.hash_if = &hif;
     clock_t t0 = clock();
     wsx_decode_slot(iwave, &p, on_decode, NULL);
+    wsx_prof_print();
     fprintf(stderr, "decodes=%d ap=%d ms=%.0f\n", ndec, nap, 1000.0 * (clock() - t0) / CLOCKS_PER_SEC);
     return 0;
 }

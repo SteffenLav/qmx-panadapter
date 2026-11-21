@@ -21,6 +21,7 @@
 #include "ft8_wsjtx_tables.h"
 
 #include <complex.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,22 @@ typedef float complex cf;
 
 static const int icos7[7] = {3, 1, 4, 0, 6, 5, 2};
 static const int graymap[8] = {0, 1, 3, 2, 5, 6, 4, 7};
+
+/* -DWSX_PROF: time per stage, printed by wsx_prof_print(). Host only. */
+#ifdef WSX_PROF
+#include <stdio.h>
+#include <time.h>
+static double prof_t[8]; static long prof_n[8];
+static const char* prof_name[8] = {"sync8", "downsample", "ft8b-other", "bp", "osd", "subtract", "", ""};
+static double prof_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + ts.tv_nsec * 1e-9; }
+#define PROF_BEGIN(k) double _pt##k = prof_now()
+#define PROF_END(k) do { prof_t[k] += prof_now() - _pt##k; prof_n[k]++; } while (0)
+void wsx_prof_print(void) { for (int i = 0; i < 6; i++) fprintf(stderr, "  %-11s %7.0f ms  %ld calls\n", prof_name[i], 1e3 * prof_t[i], prof_n[i]); }
+#else
+#define PROF_BEGIN(k)
+#define PROF_END(k)
+void wsx_prof_print(void) {}
+#endif
 
 static int nint(float x) { return (int)lroundf(x); }
 
@@ -504,7 +521,9 @@ static void decode174_91(const float* llr, int maxosd, int norder, const int8_t*
     for (int i = 0; i < nosd; i++) {
         int nh;
         float dminosd;
+        PROF_BEGIN(4);
         osd174_91(zsave[i], KK, apmask, norder, message91, cw, &nh, &dminosd);
+        PROF_END(4);
         if (nh > 0) {
             float d = 0;
             for (int q = 0; q < N; q++) d += ((llr[q] >= 0) ^ cw[q]) * fabsf(llr[q]);
@@ -748,7 +767,14 @@ static void sync8(const float* dd, int* nfa, int* nfb, float syncmin, int nfqso,
 /* ---------------------------------------------------------- ft8_downsample */
 #define NFFTD 192000
 #define NFFT2 3200
+static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1);
 static void ft8_downsample(const float* dd, int* newdat, float f0, cf* c1)
+{
+    PROF_BEGIN(1);
+    ft8_downsample_(dd, newdat, f0, c1);
+    PROF_END(1);
+}
+static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1)
 {
     static float x[NFFTD];
     static cf cx[NFFTD / 2 + 1], tmp[NFFT2];
@@ -913,7 +939,14 @@ static float sqf(float* dd0, float f0, float dt, int idt, int ldt)
     return sqq;
 }
 
+static void subtractft8_(float* dd0, const int* itone, float f0, float dt, int lrefinedt);
 static void subtractft8(float* dd0, const int* itone, float f0, float dt, int lrefinedt)
+{
+    PROF_BEGIN(5);
+    subtractft8_(dd0, itone, f0, dt, lrefinedt);
+    PROF_END(5);
+}
+static void subtractft8_(float* dd0, const int* itone, float f0, float dt, int lrefinedt)
 {
     static int first = 1;
     if (first) {
@@ -1051,6 +1084,104 @@ static int unpack_i3_5(const int8_t* b, char* msg)
     snprintf(cexch, sizeof cexch, "%2u%04u", 52 + irpt, iserial);
     sprintf(msg, "%s %s %s%s %c%c%c%c%c%c", c1, c2, ir ? "R " : "", cexch,
             'A' + j1, 'A' + j2, '0' + j3, '0' + j4, 'A' + j5, 'A' + j6);
+    return 1;
+}
+
+/* unpack77, i3=0 n3=1 (DXpedition: c28 c28 h10 r5). ft8_lib has no
+ * unpacker for it. unpack28 is borrowed from ft8_lib by wrapping each c28 in
+ * an i3=1 payload (ip=0, grid AA00) and reading call_to back. */
+static int unpack28_via_std(uint32_t n28, char* out)
+{
+    ftx_message_t m;
+    memset(&m, 0, sizeof m);
+    int8_t b[77] = {0};
+    for (int i = 0; i < 28; i++) b[i] = (n28 >> (27 - i)) & 1;      /* n29a = n28<<1 */
+    /* n29b = 0 (DE), ir 0, igrid4 0 = AA00, i3 = 1 */
+    b[76] = 1;
+    bits_to_payload(b, m.payload);
+    char to[32], de[32], ex[32];
+    ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+    if (ftx_message_decode_std(&m, &lk_if, to, de, ex, ft) != FTX_MESSAGE_RC_OK) return 0;
+    strcpy(out, to);
+    return 1;
+}
+static int unpack_dxped(const int8_t* b, char* msg)
+{
+    uint32_t n28a = 0, n28b = 0, n10 = 0, n5 = 0;
+    int q = 0;
+    for (int i = 0; i < 28; i++) n28a = n28a << 1 | (uint32_t)b[q++];
+    for (int i = 0; i < 28; i++) n28b = n28b << 1 | (uint32_t)b[q++];
+    for (int i = 0; i < 10; i++) n10 = n10 << 1 | (uint32_t)b[q++];
+    for (int i = 0; i < 5; i++) n5 = n5 << 1 | (uint32_t)b[q++];
+    int irpt = 2 * (int)n5 - 30;
+    char c1[32], c2[32], c3[16] = "<...>", t[14];
+    if (n28a <= 2 || n28b <= 2) return 0;
+    if (!unpack28_via_std(n28a, c1) || !unpack28_via_std(n28b, c2)) return 0;
+    if (lk_lookup(FTX_CALLSIGN_HASH_10_BITS, n10, t)) snprintf(c3, sizeof c3, "<%s>", t);
+    sprintf(msg, "%s RR73; %s %s %c%02d", c1, c2, c3, irpt >= 0 ? '+' : '-', abs(irpt));
+    return 1;
+}
+
+/* packjt77's callok(): 3+ chars, not Q..., call area digit at 2 or 3, a
+ * letter in the prefix, an all-letter suffix (sfx is CHARACTER*3). */
+static int callok(const char* w)
+{
+    int n = (int)strlen(w);
+    while (n > 0 && w[n - 1] == ' ') n--;
+    if (n < 3 || w[0] == 'Q') return 0;
+    int i0;
+    for (i0 = n; i0 >= 1; i0--) if (w[i0 - 1] >= '0' && w[i0 - 1] <= '9') break;
+    if (i0 != 2 && i0 != 3) return 0;
+    int nlp = 0;
+    for (int i = 0; i < i0 - 1; i++) nlp += isalpha((unsigned char)w[i]) != 0;
+    if (nlp == 0) return 0;
+    char sfx[4] = {0};
+    strncpy(sfx, w + i0, 3);
+    int ns = (int)strlen(sfx);
+    while (ns > 0 && sfx[ns - 1] == ' ') ns--;
+    for (int i = 0; i < ns; i++) if (!isalpha((unsigned char)sfx[i])) return 0;
+    return 1;
+}
+/* unpack28's success flag for a standard call (n28 >= NTOKENS + MAX22);
+ * tokens and hashes always succeed. */
+static int unpack28_ok(uint32_t n28)
+{
+    static const char c1[] = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", c2[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                      c3[] = "0123456789", c4[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const uint32_t NTOKENS = 2063592, MAX22 = 4194304;
+    if (n28 < NTOKENS) return 1;
+    n28 -= NTOKENS;
+    if (n28 < MAX22) return 1;
+    uint32_t n = n28 - MAX22;
+    uint32_t i1 = n / (36 * 10 * 27 * 27 * 27); n -= 36 * 10 * 27 * 27 * 27 * i1;
+    uint32_t i2 = n / (10 * 27 * 27 * 27); n -= 10 * 27 * 27 * 27 * i2;
+    uint32_t i3 = n / (27 * 27 * 27); n -= 27 * 27 * 27 * i3;
+    uint32_t i4 = n / (27 * 27); n -= 27 * 27 * i4;
+    uint32_t i5 = n / 27, i6 = n - 27 * i5;
+    if (i1 > 36 || i2 > 35 || i3 > 9 || i4 > 26 || i5 > 26 || i6 > 26) return 0;
+    char c13[8] = {c1[i1], c2[i2], c3[i3], c4[i4], c4[i5], c4[i6], 0};
+    const char* w = c13;
+    while (*w == ' ') w++;                                   /* adjustl */
+    char t[8];
+    strcpy(t, w);
+    int L = (int)strlen(t);
+    while (L > 0 && t[L - 1] == ' ') t[--L] = 0;            /* trim */
+    if (!callok(t)) return 0;
+    for (int i = 0; i < L; i++) if (t[i] == ' ') return 0;  /* label 900 */
+    return 1;
+}
+/* unpack77's i3=1/2 failure rules that ft8_lib's unpacker does not apply */
+static int std_ok_like_jt9(const int8_t* b, const char* text)
+{
+    uint32_t n28a = 0, n28b = 0, igrid4 = 0;
+    for (int i = 0; i < 28; i++) n28a = n28a << 1 | (uint32_t)b[i];
+    for (int i = 29; i < 57; i++) n28b = n28b << 1 | (uint32_t)b[i];
+    int ir = b[58];
+    for (int i = 59; i < 74; i++) igrid4 = igrid4 << 1 | (uint32_t)b[i];
+    if (!unpack28_ok(n28a) || !unpack28_ok(n28b)) return 0;
+    int cq = strncmp(text, "CQ ", 3) == 0;
+    if (igrid4 <= 32400) { if (cq && ir == 1) return 0; }
+    else if (cq && (int)igrid4 - 32400 >= 2) return 0;
     return 1;
 }
 
@@ -1216,7 +1347,9 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         int8_t message91[91], cw[174];
         int ntype;
         *dmin = 0;
+        PROF_BEGIN(3);
         decode174_91(llrz, 2, 2, apmask, message91, cw, &ntype, nharderrors, dmin);
+        PROF_END(3);
         if (*nharderrors < 0 || *nharderrors > 36) continue;
         int nz = 0;
         for (int i = 0; i < 174; i++) nz += cw[i] == 0;
@@ -1231,8 +1364,10 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         ftx_message_offsets_t off;
         char text[64];
         g_hash = p->hash_if;
-        int ok = (i3 == 5) ? unpack_i3_5(message91, text)
-                           : ftx_message_decode(&m, &lk_if, text, &off) == FTX_MESSAGE_RC_OK;
+        int ok = (i3 == 5)              ? unpack_i3_5(message91, text)
+               : (i3 == 0 && n3 == 1)   ? unpack_dxped(message91, text)
+               : ftx_message_decode(&m, &lk_if, text, &off) == FTX_MESSAGE_RC_OK;
+        if (ok && (i3 == 1 || i3 == 2) && !std_ok_like_jt9(message91, text)) ok = 0;
         if (ok && strncmp(text, "CQ <", 4) == 0) ok = 0;           /* unpack77's last rule */
         unpack77_save(&m, message91, i3);
         if (!ok || strstr(text, "/R") || strncmp(text, "TU; ", 4) == 0)
@@ -1348,7 +1483,9 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
         int imetric = ipass == 1 ? 1 : 2;
         if (ipass == 3 && st.ndecodes == 0) continue;
         int ncand;
+        PROF_BEGIN(0);
         sync8(st.dd, &ifa, &ifb, syncmin, p->nfqso, MAXCAND, st.candidate, &ncand, st.sbase);
+        PROF_END(0);
         for (int icand = 0; icand < ncand; icand++) {
             float sync = st.candidate[icand][2];
             float f1 = st.candidate[icand][0];

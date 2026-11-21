@@ -38,3 +38,6 @@ void wsx_default_params(wsx_params_t* p);
  * truncated slot, then at 50 on the whole of it (jt9.f90, mode 8). */
 void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p,
                      wsx_callback_t cb, void* ctx);
+
+/* -DWSX_PROF builds only: per-stage times to stderr. */
+void wsx_prof_print(void);

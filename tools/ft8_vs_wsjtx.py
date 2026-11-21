@@ -62,7 +62,9 @@ def jt9(path, wav, depth, wd, tag=None):
         if not m:
             continue
         txt = m[1]
-        a = re.search(r"\s+a\d\s*$", txt)
+        # AP lines end "aN", and jt9 puts "?" before it when qual < 0.17
+        # (decoder.f90). Left in, the "?" made 58 matching AP lines differ.
+        a = re.search(r"(\s+\?)?\s+a\d\s*$", txt)
         (ap if a else plain).add(norm(txt[:a.start()] if a else txt))
     return plain, ap, dt
 
