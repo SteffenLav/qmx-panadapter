@@ -391,7 +391,7 @@ int ft8_op_mode_slot_ms(void)
 #define FT8_WSX_PIECES 0
 #endif
 #endif
-#define FT8_WSX_PIECE_K          40     /* ft8_lib failures tried, strongest first; K20 -> K40 on 456 on-air slots: +491 -> +597 jt9-confirmed (+17.2 -> +20.9 %), ~+1 s of core 1 */
+#define FT8_WSX_PIECE_K          60     /* ft8_lib failures tried, strongest first. K20 -> K40 (BP): +491 -> +597 jt9-confirmed on 456 on-air slots. With OSD-0 depth 1 and the packed OSD, under the 6 s budget: K40 +848, K60 +919, K80 +922 (budget-bound). */
 #define FT8_WSX_PIECE_BUDGET_MS  6000   /* wall-clock cap for one slot's pass */
 #define FT8_WSX_PIECE_DT_SHIFT   0.57f  /* ft8_lib time - this = WSJT-X DT (measured) */
 
