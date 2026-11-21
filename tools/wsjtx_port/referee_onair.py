@@ -26,6 +26,10 @@ import ft8_vs_wsjtx as V  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def hfold(t):
+    return re.sub(r"<[^>]*>", "<H>", t)
+
+
 def parse(capture, boot):
     slots = {}
     base, piece = [], []
@@ -51,10 +55,16 @@ def parse(capture, boot):
                 base = []; piece = []
                 continue
             m = re.search(r"\bslot (\d+) wsjtx pieces: tried (\d+) of (\d+), \+(\d+) new", l)
-            if m and int(m[1]) in slots:
-                slots[int(m[1])]["piece"] = piece
-                slots[int(m[1])]["pline"] = True
-                piece = []
+            if m:
+                if int(m[1]) in slots:
+                    slots[int(m[1])]["piece"] = piece
+                    slots[int(m[1])]["pline"] = True
+                # ⛔ A pieces line ENDS its slot even when that slot's own
+                # "slot N UTC" line was lost from the serial capture (it
+                # happens: slot 378, 19:06:30 on 2026-11-21). Without this
+                # the lost slot's decodes were added to the NEXT slot and
+                # read as 20 "unconfirmed" base decodes.
+                base, piece = [], []
     return [s for s in slots.values() if s.get("pline")]
 
 
@@ -73,9 +83,12 @@ def main():
             tot["no_wav"] += 1
             continue
         jp, jap, _ = V.jt9(V.REF_EXE, os.path.abspath(wav), 3, "scratchpad/jt9wd")
-        ref = jp | jap
-        b = {V.norm(t) for t in s["base"]}
-        p = {V.norm(t) for t in s["piece"]} - b
+        # A hashed call renders as "<...>" or "<CALL>" depending on what each
+        # decoder's hash table had heard - a text difference, not a different
+        # message. Compared with every <...> token folded to one mark.
+        ref = {hfold(t) for t in jp | jap}
+        b = {hfold(V.norm(t)) for t in s["base"]}
+        p = {hfold(V.norm(t)) for t in s["piece"]} - b
         tot["slots"] += 1
         tot["jt9"] += len(jp)
         tot["base"] += len(b); tot["base_ok"] += len(b & ref)
