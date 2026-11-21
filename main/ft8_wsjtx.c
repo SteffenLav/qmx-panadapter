@@ -39,6 +39,17 @@
 
 typedef float complex cf;
 
+/* Every sizeable static goes to PSRAM on the Tab5 (internal RAM has no room:
+ * see the internal RAM audit); host builds ignore the attribute.
+ * Allocations over CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (16 KB) - the kiss
+ * FFT plans - land in PSRAM by themselves. */
+#if defined(ESP_PLATFORM)
+#include "esp_attr.h"
+#define WSX_BSS EXT_RAM_BSS_ATTR
+#else
+#define WSX_BSS
+#endif
+
 /* ft8_params.f90 */
 #define KK 91
 #define ND 58
@@ -258,7 +269,7 @@ static int crc_bad(const int8_t* cw91)  /* decode174_91's m96 check */
 
 /* ------------------------------------------------- LDPC (174,91) encoder
  * encode174_91_nocrc.f90: generator rows from the hex table. */
-static int8_t gen_par[83][91];   /* gen(i,icol), 0-based */
+static WSX_BSS int8_t gen_par[83][91];   /* gen(i,icol), 0-based */
 static void gen_init(void)
 {
     static int done;
@@ -288,7 +299,7 @@ static void encode174_91_nocrc(const int8_t* message, int8_t* codeword)
 
 /* -------------------------------------------------------------- osd174_91 */
 #define N 174
-static int8_t osd_gen[KK][N];
+static WSX_BSS int8_t osd_gen[KK][N];
 static void osd_gen_init(void)
 {
     static int done;
@@ -326,7 +337,7 @@ static void nextpat91(int8_t* mi, int k, int iorder, int* iflag)
         if (mi[i] == 1) { *iflag = i; break; }
 }
 
-static int8_t genmrb[KK + 1][N + 1];    /* 1-based, (row i, column) */
+static WSX_BSS int8_t genmrb[KK + 1][N + 1];    /* 1-based, (row i, column) */
 
 /* mrbencode91.f90: codeword[1..N] = XOR of genmrb rows where me[i]=1 */
 static void mrbencode91(const int8_t* me, int8_t* codeword, int k)
@@ -462,7 +473,7 @@ static void osd174_91(const float* llr, int k, const int8_t* apmask, int ndeep,
 static void decode174_91(const float* llr, int maxosd, int norder, const int8_t* apmask,
                          int8_t* message91, int8_t* cw, int* ntype, int* nharderror, float* dmin)
 {
-    static float tov[N][3], toc[M][7], tanhtoc[M][7], zsave[3][N];
+    static WSX_BSS float tov[N][3], toc[M][7], tanhtoc[M][7], zsave[3][N];
     float zn[N], zsum[N];
     int nosd = 0;
     const int maxiterations = 30;
@@ -549,7 +560,7 @@ static void decode174_91(const float* llr, int maxosd, int norder, const int8_t*
 /* baseline.f90: s[1..NH1] (destroyed: converted to dB), sbase[1..NH1] */
 static void baseline(float* s, int nfa, int nfb, float* sbase)
 {
-    static double x[1001], y[1001];
+    static WSX_BSS double x[1001], y[1001];
     const int nseg = 10, npct = 10;
     double df = 12000.0 / 3840.0, a[5];
     int ia = (int)lround(nfa / df); if (ia < 1) ia = 1;
@@ -580,8 +591,8 @@ static void baseline(float* s, int nfa, int nfb, float* sbase)
 static void get_spectrum_baseline(const float* dd, int* nfa, int* nfb, float* sbase)
 {
     enum { NST = NFFT1 / 2, NF = 93 };
-    static float window[NFFT1], x[NFFT1], savg[NH1 + 1], savsm[NH1 + 1];
-    static cf cx[NH1 + 1];
+    static WSX_BSS float window[NFFT1], x[NFFT1], savg[NH1 + 1], savsm[NH1 + 1];
+    static WSX_BSS cf cx[NH1 + 1];
     static int first = 1;
     if (first) {
         first = 0;
@@ -633,6 +644,7 @@ static void get_spectrum_baseline(const float* dd, int* nfa, int* nfb, float* sb
     baseline(savg, *nfa, *nfb, sbase);
 }
 
+#ifndef WSX_PIECE_ONLY   /* not on the piece path - see wsx_piece_begin */
 /* ------------------------------------------------------------------ sync8 */
 #define JZ 62
 #define MAXPRECAND 1000
@@ -770,6 +782,8 @@ static void sync8(const float* dd, int* nfa, int* nfb, float syncmin, int nfqso,
     *ncand = k - 1;
 }
 
+#endif /* !WSX_PIECE_ONLY */
+
 /* ---------------------------------------------------------- ft8_downsample */
 #define NFFTD 192000
 #define NFFT2 3200
@@ -782,8 +796,8 @@ static void ft8_downsample(const float* dd, int* newdat, float f0, cf* c1)
 }
 static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1)
 {
-    static float x[NFFTD];
-    static cf cx[NFFTD / 2 + 1], tmp[NFFT2];
+    static WSX_BSS float x[NFFTD];
+    static WSX_BSS cf cx[NFFTD / 2 + 1], tmp[NFFT2];
     static float taper[101];
     static int first = 1;
     if (first) {
@@ -819,7 +833,7 @@ static void ft8_downsample_(const float* dd, int* newdat, float f0, cf* c1)
 /* ------------------------------------------------------------------ sync8d */
 static float sync8d(const cf* cd0, int i0, const cf* ctwk, int itwk)
 {
-    static cf csync[7][32];
+    static WSX_BSS cf csync[7][32];
     static int first = 1;
     if (first) {
         const float twopi = 8.0f * atanf(1.0f);
@@ -848,6 +862,7 @@ static float sync8d(const cf* cd0, int i0, const cf* ctwk, int itwk)
     return sync;
 }
 
+#ifndef WSX_PIECE_ONLY   /* not on the piece path - see wsx_piece_begin */
 /* ------------------------------------------------------------ gen_ft8wave */
 static float gfsk_pulse(float b, float t)
 {
@@ -1001,6 +1016,8 @@ static void subtractft8_(float* dd0, const int* itone, float f0, float dt, int l
     memcpy(dd0, sub_dd, sizeof sub_dd);
 }
 
+#endif /* !WSX_PIECE_ONLY */
+
 /* ----------------------------------------------------------------- ft8b */
 
 typedef struct {
@@ -1094,7 +1111,7 @@ static int unpack_i3_5(const int8_t* b, char* msg)
     if (j1 > 17 || j2 > 17 || j3 > 9 || j4 > 9 || j5 > 23 || j6 > 23) return 0;
     char cexch[8];
     snprintf(cexch, sizeof cexch, "%2u%04u", 52 + irpt, iserial);
-    sprintf(msg, "%s %s %s%s %c%c%c%c%c%c", c1, c2, ir ? "R " : "", cexch,
+    snprintf(msg, 64, "%s %s %s%s %c%c%c%c%c%c", c1, c2, ir ? "R " : "", cexch,
             'A' + j1, 'A' + j2, '0' + j3, '0' + j4, 'A' + j5, 'A' + j6);
     return 1;
 }
@@ -1130,7 +1147,7 @@ static int unpack_dxped(const int8_t* b, char* msg)
     if (n28a <= 2 || n28b <= 2) return 0;
     if (!unpack28_via_std(n28a, c1) || !unpack28_via_std(n28b, c2)) return 0;
     if (lk_lookup(FTX_CALLSIGN_HASH_10_BITS, n10, t)) snprintf(c3, sizeof c3, "<%s>", t);
-    sprintf(msg, "%s RR73; %s %s %c%02d", c1, c2, c3, irpt >= 0 ? '+' : '-', abs(irpt));
+    snprintf(msg, 64, "%s RR73; %s %s %c%02d", c1, c2, c3, irpt >= 0 ? '+' : '-', abs(irpt));
     return 1;
 }
 
@@ -1220,8 +1237,8 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
     static const int nappasses[6] = {2, 2, 2, 4, 4, 3};
     static const int naptypes[6][4] = {{1,2,0,0},{2,3,0,0},{2,3,0,0},{3,4,5,6},{3,4,5,6},{3,1,2,0}};
     const wsx_params_t* p = ap->p;
-    static cf cd0[NFFT2], ctwk[32], csymb[32], cs[NN + 1][8];
-    static float s8[NN + 1][8];
+    static WSX_BSS cf cd0[NFFT2], ctwk[32], csymb[32], cs[NN + 1][8];
+    static WSX_BSS float s8[NN + 1][8];
     float bmeta[174], bmetb[174], bmetc[174], bmetd[174], bmete[174];
     float llra[174], llrb[174], llrc[174], llrd[174], llre[174], llrz[174];
     float s2[512];
@@ -1404,7 +1421,11 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
         uint8_t tones[NN];
         ft8_encode(m.payload, tones);
         for (int i = 0; i < NN; i++) itone[i] = tones[i];
+#ifndef WSX_PIECE_ONLY
         if (lsubtract) subtractft8(dd0, itone, *f1, *xdt, 0);
+#else
+        (void)lsubtract;
+#endif
         float xsig = 0, xnoi = 0;
         for (int i = 1; i <= NN; i++) {
             xsig += s8[i][itone[i - 1]] * s8[i][itone[i - 1]];
@@ -1429,7 +1450,7 @@ static int ft8b(float* dd0, int* newdat, const apctx_t* ap, int nzhsym, int lsub
 
 /* ---------------------------------------------------- ft8_decode (driver) */
 
-static struct {
+static WSX_BSS struct {
     float dd[NMAX], dd1[NMAX];
     int ndec_early;
     int itone_save[MAX_EARLY][NN];
@@ -1441,6 +1462,7 @@ static struct {
     float candidate[MAXCAND][3];
 } st;
 
+#ifndef WSX_PIECE_ONLY   /* not on the piece path - see wsx_piece_begin */
 /* ================================================================== ft8_a7
  * lib/ft8/ft8_a7.f90: "a7" decodes. Every decode is remembered per even/odd
  * sequence; at nzhsym 50 each message heard in the SAME sequence one cycle
@@ -2364,6 +2386,8 @@ l800:
     }
 }
 
+#endif /* !WSX_PIECE_ONLY */
+
 void wsx_default_params(wsx_params_t* p)
 {
     memset(p, 0, sizeof *p);
@@ -2379,6 +2403,7 @@ void wsx_default_params(wsx_params_t* p)
     snprintf(p->hisgrid, sizeof p->hisgrid, "EN37");
 }
 
+#ifndef WSX_PIECE_ONLY   /* not on the piece path - see wsx_piece_begin */
 /* One jt9 call: id2a = iwave(1:nzhsym*3456), zero after - jt9.f90's id2a. */
 static void run_call(const int16_t* iwave, int nzhsym, const wsx_params_t* p,
                      wsx_callback_t cb, void* ctx)
@@ -2417,6 +2442,8 @@ void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t
     wsx_decode_early(iwave, p, cb, ctx);
     wsx_decode_late(iwave, p, cb, ctx);
 }
+
+#endif /* !WSX_PIECE_ONLY */
 
 /* ---------------------------------------------------------------- pieces
  * For measuring single WSJT-X pieces on ANOTHER decoder's candidates: load a
