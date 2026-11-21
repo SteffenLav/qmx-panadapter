@@ -1281,7 +1281,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                                band_err, sizeof band_err);
     if (!band_ok) {
         ESP_LOGE(TAG, "TX aborted before key-up: %s", band_err);
-        ui_toast_ms(band_err, 15000);
+        ui_toast_alert_ms(band_err, 15000);
         ft8_status_set("%s", band_err);
     } else if (strcmp(mode, "DiGi") != 0) {
         ESP_LOGW(TAG, "TX aborted before key-up: mode drifted to '%s' (need DiGi)", mode);

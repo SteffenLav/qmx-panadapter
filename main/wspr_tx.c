@@ -449,7 +449,7 @@ static void run_burst(const wspr_tx_request_t *req)
          * toast closed. A refusal the operator can ACT on has to reach them.
          * 12 s: long enough to catch across the room, short enough not to sit
          * over the waterfall. */
-        ui_toast_ms("WSPR did not transmit: this band is not calibrated. "
+        ui_toast_alert_ms("WSPR did not transmit: this band is not calibrated. "
                     "Run Calibrate Power on it.", 12000);
         s_state = WSPR_TX_IDLE;
         return;
@@ -462,7 +462,7 @@ static void run_burst(const wspr_tx_request_t *req)
                       "Set Declared power to match, or recalibrate this band.",
                  wbuf[0] ? wbuf + 3 : "?", pa_dbm, req->power_dbm);
         /* Same reasoning as the calibration refusal above. */
-        ui_toast_ms("WSPR did not transmit: the radio's power does not match "
+        ui_toast_alert_ms("WSPR did not transmit: the radio's power does not match "
                     "the declared power. Fix Declared power or recalibrate.", 12000);
         /* run_burst() returns void and owns the state machine, so the refusal
          * looks exactly like a burst that ended: back to IDLE, nothing keyed,
@@ -492,7 +492,7 @@ static void run_burst(const wspr_tx_request_t *req)
         if (ft8_tx_swr_tripped(&trip)) {
             ESP_LOGE(TAG, "WSPR TX REFUSED: SWR protection latched at %.1f:1 - "
                           "check the antenna, then clear it", (double)trip);
-            ui_toast_ms("WSPR not transmitted: SWR protection is latched. "
+            ui_toast_alert_ms("WSPR not transmitted: SWR protection is latched. "
                         "Check the antenna and clear it to transmit again.", 12000);
             /* ⚠ NO cat_poll_release() HERE. This now runs BEFORE
              * cat_poll_hold() below, so there is no hold to give back - and

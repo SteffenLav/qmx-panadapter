@@ -738,7 +738,7 @@ static bool web_tune_start(httpd_req_t *req, char *tune_err, size_t tune_err_len
         char gerr[160];
         uint32_t d = cat_get_frequency();
         if (!tx_band_guard_allows(d, d, "Antenna Tune", gerr, sizeof gerr)) {
-            ui_toast_ms(gerr, 15000);
+            ui_toast_alert_ms(gerr, 15000);
             ESP_LOGE(TAG, "web tune REFUSED: %s", gerr);
             return false;
         }

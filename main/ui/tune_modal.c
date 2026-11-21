@@ -115,7 +115,7 @@ static void action_btn_cb(lv_event_t *e)
         char gerr[160];
         uint32_t d = cat_get_frequency();
         if (!tx_band_guard_allows(d, d, "Antenna Tune", gerr, sizeof gerr)) {
-            ui_toast_ms(gerr, 15000);
+            ui_toast_alert_ms(gerr, 15000);
             return;
         }
     }

@@ -646,7 +646,7 @@ static void timer_cb(lv_timer_t *t)
                 uint32_t rf = cat_get_frequency() + (uint32_t)PWRCAL_TONE_HZ;
                 if (!tx_band_guard_allows(rf, rf, "Power calibration",
                                           gerr, sizeof gerr)) {
-                    ui_toast_ms(gerr, 15000);
+                    ui_toast_alert_ms(gerr, 15000);
                     enter_state(PC_IDLE);
                     return;
                 }
