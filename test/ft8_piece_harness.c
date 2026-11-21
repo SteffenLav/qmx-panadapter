@@ -145,6 +145,10 @@ int main(int argc, char** argv)
                 if (base_ok[i]) continue;
                 if (tried++ >= PIECE_K) break;
             }
+#ifdef BUDGET_MS
+            /* The device's wall-clock budget, scaled to the host (P4 ~120x). */
+            if (now_ms() - a >= BUDGET_MS) break;
+#endif
             float f = (mon.min_bin + cands[i].freq_offset + (float)cands[i].freq_sub / mon.wf.freq_osr)
                       / mon.symbol_period;
             float tsec = (cands[i].time_offset + (float)cands[i].time_sub / mon.wf.time_osr)
