@@ -856,29 +856,35 @@ static float gfsk_pulse(float b, float t)
     return 0.5f * (erff(c * b * (t + 0.5f)) - erff(c * b * (t - 0.5f)));
 }
 /* icmplx=1, nsym=79, nsps=1920, bt=2, fsample=12000, nwave=NZ */
-static void gen_ft8wave_c(const int* itone, float f0, cf* cwave)
+/* gen_ft8wave.f90, icmplx=1, nsym=79, bt=2.0: any nsps and fsample. Used at
+ * nsps 1920 / 12000 S/s by subtractft8 and at nsps 32 / 200 S/s by ft8_a8d.
+ * The pulse is recomputed when nsps changes, as the Fortran's fchk test
+ * does (it keys on nsym+nsps+bt+fsample). */
+static void gen_ft8wave(const int* itone, int nsps, float fsample, float f0, cf* cwave, int nwave)
 {
-    enum { NTAB = 65536, nsym = NN, nsps = NSPS };
+    enum { NTAB = 65536, nsym = NN };
     static float pulse[3 * NSPS];
     static cf ctab[NTAB];
     static float dphi[(NN + 2) * NSPS];
-    static int first = 1;
-    static float twopi, dt;
-    if (first) {
-        twopi = 8.0f * atanf(1.0f);
-        dt = 1.0f / 12000.0f;
-        for (int i = 1; i <= 3 * nsps; i++) {
-            float tt = (i - 1.5f * nsps) / (float)nsps;
-            pulse[i - 1] = gfsk_pulse(2.0f, tt);
-        }
+    static int pulse_nsps = 0, tab_done = 0;
+    const float twopi = 8.0f * atanf(1.0f);
+    const float dt = 1.0f / fsample;
+    if (!tab_done) {
         for (int i = 0; i < NTAB; i++) {
             float phi = i * twopi / NTAB;
             ctab[i] = cosf(phi) + I * sinf(phi);
         }
-        first = 0;
+        tab_done = 1;
+    }
+    if (pulse_nsps != nsps) {
+        for (int i = 1; i <= 3 * nsps; i++) {
+            float tt = (i - 1.5f * nsps) / (float)nsps;
+            pulse[i - 1] = gfsk_pulse(2.0f, tt);
+        }
+        pulse_nsps = nsps;
     }
     const float dphi_peak = twopi * 1.0f / (float)nsps;
-    memset(dphi, 0, sizeof dphi);
+    memset(dphi, 0, sizeof(float) * (nsym + 2) * nsps);
     for (int j = 1; j <= nsym; j++) {
         int ib = (j - 1) * nsps;
         for (int q = 0; q < 3 * nsps; q++) dphi[ib + q] += dphi_peak * pulse[q] * itone[j - 1];
@@ -888,7 +894,7 @@ static void gen_ft8wave_c(const int* itone, float f0, cf* cwave)
     float phi = 0;
     for (int q = 0; q < (nsym + 2) * nsps; q++) dphi[q] += twopi * f0 * dt;
     int k = 0;
-    for (int j = nsps; j <= nsps + NZ - 1; j++) {
+    for (int j = nsps; j <= nsps + nwave - 1; j++) {
         int i = (int)(phi * (float)NTAB / twopi);
         if (i >= NTAB) i = NTAB - 1;
         cwave[k++] = ctab[i];
@@ -979,7 +985,7 @@ static void subtractft8_(float* dd0, const int* itone, float f0, float dt, int l
         }
         first = 0;
     }
-    gen_ft8wave_c(itone, f0, sub_cref);
+    gen_ft8wave(itone, NSPS, 12000.0f, f0, sub_cref, NZ);
     if (lrefinedt) {
         float sqa = sqf(dd0, f0, dt, -90, 1);
         float sqb = sqf(dd0, f0, dt, +90, 1);
@@ -1941,14 +1947,25 @@ static int ft8_a7d(float* dd0, int* newdat, const char* call_1, const char* call
     return nharderrors;
 }
 
+/* Every decode is reported through here: decoder.f90's ft8_decoded callback
+ * clears ltry_a8 for a decode within 3 Hz of the RX frequency. */
+static int a8_ltry;
+static void emit(wsx_callback_t cb, void* ctx, const wsx_params_t* p, float sync, int snr, float dt,
+                 float freq, const char* msg, int nap, float qual)
+{
+    if (fabsf(freq - (float)p->nfqso) < 3.0f) a8_ltry = 0;
+    if (cb) cb(ctx, sync, snr, dt, freq, msg, nap, qual);
+}
+
 /* The a7 block at the end of ft8_decode's decode(), nzhsym 50 only. */
 #ifdef A7_DEBUG
 static float a7_raw[NMAX];
 #endif
-static void a7_run(const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+static int a7_run(const wsx_params_t* p, wsx_callback_t cb, void* ctx)
 {
+    int la8 = 1;
     int j = a7_jseq;
-    if (!p->lapon || a7_ndec[j][0] < 1) return;
+    if (!p->lapon || a7_ndec[j][0] < 1) return la8;
     int newdat = 1;
     int n = a7_ndec[j][0] < MAXDEC ? a7_ndec[j][0] : MAXDEC;
     for (int i = 0; i < n; i++) {
@@ -1992,11 +2009,223 @@ static void a7_run(const wsx_params_t* p, wsx_callback_t cb, void* ctx)
                          &dmin, msg37, &xsnr);
         if (nh >= 0) {
             int nsnr = (int)xsnr;                  /* nsnr=xsnr: truncation */
-            if (cb) cb(ctx, 10.0f, nsnr, xdt, f1, msg37, 7, 1.0f);
+            if (p->hiscall[0] && strstr(msg37, p->hiscall)) la8 = 0;
+            emit(cb, ctx, p, 10.0f, nsnr, xdt, f1, msg37, 7, 1.0f);
             ft8_a7_save(j, xdt, f1, msg37);
         }
     }
+    return la8;
 }
+
+/* ================================================================== ft8_a8
+ * lib/ft8/ft8_a8d.f90: "a8" list decoding at the RX frequency, only when a
+ * DX call and grid are set (mid-QSO). Each of getmsg's 206 messages from the
+ * DX station to us is turned into a waveform and correlated against the
+ * downsampled audio over +-1 s of lag; the best fit is accepted on a symbol
+ * probability test. */
+
+/* getmsg (ft8_a7.f90) */
+static void getmsg(int i, const char* mycall, const char* hiscall, const char* hisgrid, char* msg)
+{
+    int my_std = stdcall(mycall), his_std = stdcall(hiscall);
+    int isnr = 0;
+    char base[40];
+    snprintf(msg, 38, "%s %s", mycall, hiscall);
+    if (!my_std) {
+        if (i == 1 || i >= 6) snprintf(msg, 38, "<%s> %s", mycall, hiscall);
+        if (i >= 2 && i <= 4) snprintf(msg, 38, "%s <%s>", mycall, hiscall);
+    } else if (!his_std) {
+        if (i <= 4 || i == 6) snprintf(msg, 38, "<%s> %s", mycall, hiscall);
+        if (i >= 7) snprintf(msg, 38, "%s <%s>", mycall, hiscall);
+    }
+    snprintf(base, sizeof base, "%s", msg);
+    if (i == 2) snprintf(msg, 38, "%s RRR", base);
+    if (i == 3) snprintf(msg, 38, "%s RR73", base);
+    if (i == 4) snprintf(msg, 38, "%s 73", base);
+    if (i == 5) {
+        if (his_std) snprintf(msg, 38, "CQ %s %.4s", hiscall, hisgrid);
+        else snprintf(msg, 38, "CQ %s", hiscall);
+    }
+    if (i == 6 && his_std) snprintf(msg, 38, "%s %.4s", base, hisgrid);
+    if (i >= 7 && i <= 206) {
+        isnr = -50 + (i - 7) / 2;
+        if (i & 1) snprintf(msg, 38, "%s %c%02d", base, isnr < 0 ? '-' : '+', abs(isnr));
+        else snprintf(msg, 38, "%s R%c%02d", base, isnr < 0 ? '-' : '+', abs(isnr));
+    }
+    rtrim(msg);
+    if (abs(isnr) > 30) msg[0] = 0;
+}
+
+/* genft8's itone for an a8 message. A blank message is what pack77 makes
+ * telemetry of: split77 finds no words, the "3z6" read of a blank field
+ * gives three zeros, so i3=0 n3=5 with 71 zero bits. */
+static int a8_tones(const char* msg, int* itone)
+{
+    if (!msg[0]) {
+        int8_t b[77] = {0};
+        b[71] = 1; b[72] = 0; b[73] = 1;                       /* n3 = 5, i3 = 0 */
+        uint8_t payload[10], tones[NN];
+        bits_to_payload(b, payload);
+        ft8_encode(payload, tones);
+        for (int i = 0; i < NN; i++) itone[i] = tones[i];
+        return 1;
+    }
+    int8_t cw[174];
+    char sent[38];
+    return a7_pack(msg, cw, itone, sent);
+}
+
+/* twkfreq1.f90 */
+static void twkfreq1(cf* ca, int npts, float fsample, const float* a, cf* cb)
+{
+    const float twopi = 6.283185307f;
+    cf w = 1.0f, wstep;
+    float x0 = 0.5f * (npts + 1), s = 2.0f / npts;
+    for (int i = 1; i <= npts; i++) {
+        float x = s * (i - x0);
+        float p2 = 1.5f * x * x - 0.5f;
+        float p3 = 2.5f * (x * x * x) - 1.5f * x;
+        float p4 = 4.375f * (x * x * x * x) - 3.75f * (x * x) + 0.375f;
+        float dphi = (a[0] + x * a[1] + p2 * a[2] + p3 * a[3] + p4 * a[4]) * (twopi / fsample);
+        wstep = cosf(dphi) + I * sinf(dphi);
+        w = w * wstep;
+        cb[i - 1] = w * ca[i - 1];
+    }
+}
+
+static void smo121(float* x, int nz)
+{
+    float x0 = x[0];
+    for (int i = 1; i < nz - 1; i++) {
+        float x1 = x[i];
+        x[i] = 0.5f * x[i] + 0.25f * (x0 + x[i + 1]);
+        x0 = x1;
+    }
+}
+
+/* ft8_a8d. msgbest[0] == 0 means no decode. */
+static void ft8_a8d(float* dd, const char* mycall, const char* dxcall, const char* dxgrid, float f1a,
+                    float* xdt, float* fbest_out, float* xsnr, float* plog_out, char* msgbest)
+{
+    enum { NWAVE = NN * NSPS / NDOWN, NZZ = 3200, NFFTA = NZZ, NHA = NFFTA / 2, NMSGS = 206 };
+    static cf cwave[NZZ], cd[NZZ], cd0[NZZ], csymb[32];
+    static float s[NFFTA + 1], s0[NFFTA + 1], s1[NFFTA + 1];     /* index j + NHA */
+    int itone[NN], itone_best[NN];
+    float f1 = f1a;
+    int newdat = 1;
+    ft8_downsample(dd, &newdat, f1, cd);
+    const float fac = 1.e-6f, fsd = 200.0f, dt = 1.0f / fsd, df = 200.0f / NFFTA;
+    memset(s, 0, sizeof s);
+    float sbest = 0, tbest = 0, fbest = 0;
+    msgbest[0] = 0;
+    memset(itone_best, 0, sizeof itone_best);
+    for (int imsg = 1; imsg <= NMSGS; imsg++) {
+        char msg[40];
+        getmsg(imsg, mycall, dxcall, dxgrid, msg);
+        if (!a8_tones(msg, itone)) continue;      /* a form this port does not pack */
+        gen_ft8wave(itone, 32, fsd, 0.0f, cwave, NWAVE);
+        for (int i = NWAVE; i < NZZ; i++) cwave[i] = 0;
+        float spk = 0, fpk = 0, tpk = 0;
+        int lagpk = 0, lag1 = -200, lag2 = 200, lagstep = 4;
+        for (int iter = 1; iter <= 2; iter++) {
+            if (iter == 2) { lag1 = lagpk - 8; lag2 = lagpk + 8; lagstep = 1; }
+            for (int lag = lag1; lag <= lag2; lag += lagstep) {
+                for (int i = 0; i < NWAVE; i++) {
+                    int j = i + lag + 100;
+                    cd0[i] = (j >= 0 && j <= NWAVE - 1) ? cd[j] * conjf(cwave[i]) : 0;
+                }
+                for (int i = NWAVE; i < NZZ; i++) cd0[i] = 0;
+                c2c(cd0, NFFTA, -1);
+                for (int i = 0; i < NFFTA; i++) {
+                    int j = (i > NHA) ? i - NFFTA : i;
+                    s[j + NHA] = fac * (crealf(cd0[i]) * crealf(cd0[i]) + cimagf(cd0[i]) * cimagf(cd0[i]));
+                }
+                smo121(s, NFFTA + 1);
+                for (int j = -NHA; j <= NHA; j++)
+                    if (s[j + NHA] > spk) {
+                        spk = s[j + NHA];
+                        fpk = j * df + f1;
+                        lagpk = lag;
+                        tpk = lag * dt;
+                        memcpy(s0, s, sizeof s);
+                    }
+            }
+        }
+        if (spk > sbest) {
+            sbest = spk; fbest = fpk; tbest = tpk;
+            snprintf(msgbest, 38, "%s", msg);
+            memcpy(itone_best, itone, sizeof itone);
+            memcpy(s1, s0, sizeof s0);
+        }
+    }
+    float a[5] = {0};
+    a[0] = f1 - fbest;
+    *fbest_out = fbest;
+    if (fabsf(a[0]) > 5.0f) { msgbest[0] = 0; return; }
+    twkfreq1(cd, NZZ, 200.0f, a, cd);
+    *xdt = tbest;
+    float ave = 0;
+    for (int i = -200; i <= -100; i++) ave += s1[i + NHA];
+    for (int i = 100; i <= 200; i++) ave += s1[i + NHA];
+    ave /= 202.0f;
+    for (int i = 0; i <= NFFTA; i++) s1[i] = s1[i] / ave - 1.0f;
+    float s1pk = -INFINITY;
+    for (int i = -32; i <= 32; i++) if (s1[i + NHA] > s1pk) s1pk = s1[i + NHA];
+    float sig = 0;
+    int nsig = 0;
+    for (int i = -32; i <= 32; i++) {
+        if (s1[i + NHA] < 0.5f * s1pk) continue;
+        sig += s1[i + NHA];
+        nsig++;
+    }
+    sig /= nsig;
+    *xsnr = 10.0f * log10f(sig) - 35.0f;
+    if (*xsnr < -30) *xsnr = -30;
+    if (msgbest[0]) {
+        float plog = 0, sum_sync = 0, sum_sig = 0, sum_big = 0, s8[8];
+        int nhard = 0, nsum = 0;
+        for (int k = 1; k <= NN; k++) {
+            int i0 = 32 * (k - 1) + nint((tbest + 0.5f) / 0.005f);
+            for (int i = 0; i < 32; i++) csymb[i] = (i0 + i >= 0 && i0 + i <= NZZ - 1) ? cd[i0 + i] : 0;
+            c2c(csymb, 32, -1);
+            float s8sum = 0;
+            for (int i = 0; i < 8; i++) {
+                s8[i] = crealf(csymb[i]) * crealf(csymb[i]) + cimagf(csymb[i]) * cimagf(csymb[i]);
+                s8sum += s8[i];
+            }
+            if (s8sum > 0.0f) {
+                float p = s8[itone_best[k - 1]] / s8sum;
+                plog += logf(p);
+                nsum++;
+            }
+            int ipk = 0;
+            for (int i = 1; i < 8; i++) if (s8[i] > s8[ipk]) ipk = i;
+            if (ipk != itone_best[k - 1]) nhard++;
+            if (k <= 7 || (k >= 37 && k <= 43) || k >= 73) sum_sync += s8[itone_best[k - 1]];
+            else sum_sig += s8[itone_best[k - 1]];
+            sum_big += s8[ipk];
+        }
+        if (nsum < NN) plog += (NN - nsum) * logf(0.125f);
+        float sigobig = (sum_sync + sum_sig) / sum_big;
+        *plog_out = plog;
+        if (nhard > 54 || plog < -159.0f || sigobig < 0.71f) msgbest[0] = 0;
+    }
+}
+
+/* The a8 block at the end of ft8_decode's decode(), after a7. */
+static void a8_run(const wsx_params_t* p, int la8, wsx_callback_t cb, void* ctx)
+{
+    if (!p->lapon || !la8 || strlen(p->hiscall) < 3 || strlen(p->hisgrid) < 4 || !a8_ltry) return;
+    float f1 = (float)p->nfqso, xdt = 0, fbest = 0, xsnr = 0, plog = 0;
+    char msg37[38];
+    ft8_a8d(st.dd, p->mycall, p->hiscall, p->hisgrid, f1, &xdt, &fbest, &xsnr, &plog, msg37);
+    if (msg37[0]) {
+        float qual = plog < -147.0f ? 0.16f : 1.0f;
+        if (cb) cb(ctx, 10.0f, nint(xsnr), xdt, fbest, msg37, 8, qual);
+        ft8_a7_save(a7_jseq, xdt, f1, msg37);          /* f1 = nfqso, as the Fortran */
+    }
+}
+
 
 static void ft8apset(const wsx_params_t* p, int* apsym)
 {
@@ -2023,6 +2252,7 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
     ap.p = p;
     g_hash = p->hash_if;
     a7_new_call(p->nutc, nzhsym);
+    if (nzhsym == 41) a8_ltry = 1;                 /* decoder.f90: "FT8 defaults at start to enable a8" */
 #ifdef A7_DEBUG
     if (nzhsym == 50) memcpy(a7_raw, iwave, sizeof a7_raw);
 #endif
@@ -2104,7 +2334,7 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
                     st.xdt_save[d] = xdt + 0.5f;
                     memcpy(st.itone_save[d], itone, sizeof itone);
                     float qual = 1.0f - (nharderrors + dmin) / 60.0f;
-                    if (cb) cb(ctx, sync, nsnr, xdt, f1, msg37, iaptype, qual);
+                    emit(cb, ctx, p, sync, nsnr, xdt, f1, msg37, iaptype, qual);
                     ft8_a7_save(a7_jseq, xdt, f1, msg37);
                 }
             }
@@ -2113,7 +2343,10 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
 l800:
     st.ndec_early = 0;
     if (nzhsym < 50) st.ndec_early = st.ndecodes;
-    if (nzhsym == 50) a7_run(p, cb, ctx);          /* label 900 */
+    if (nzhsym == 50) {                             /* label 900 */
+        int la8 = a7_run(p, cb, ctx);
+        a8_run(p, la8, cb, ctx);
+    }
 }
 
 void wsx_default_params(wsx_params_t* p)
@@ -2128,6 +2361,7 @@ void wsx_default_params(wsx_params_t* p)
     p->nqso_progress = 0;
     snprintf(p->mycall, sizeof p->mycall, "K1ABC");
     snprintf(p->hiscall, sizeof p->hiscall, "W9XYZ");
+    snprintf(p->hisgrid, sizeof p->hisgrid, "EN37");
 }
 
 /* One jt9 call: id2a = iwave(1:nzhsym*3456), zero after - jt9.f90's id2a. */

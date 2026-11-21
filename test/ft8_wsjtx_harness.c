@@ -104,6 +104,11 @@ int main(int argc, char** argv)
         wsx_default_params(&p);
         p.hash_if = &hif;
         p.nutc = nutc_from_name(argv[f]);
+        /* jt9's -c / -x / -g / -f, for an a8 referee run */
+        if (getenv("WSX_MYCALL")) snprintf(p.mycall, sizeof p.mycall, "%s", getenv("WSX_MYCALL"));
+        if (getenv("WSX_HISCALL")) snprintf(p.hiscall, sizeof p.hiscall, "%s", getenv("WSX_HISCALL"));
+        if (getenv("WSX_HISGRID")) snprintf(p.hisgrid, sizeof p.hisgrid, "%s", getenv("WSX_HISGRID"));
+        if (getenv("WSX_NFQSO")) p.nfqso = atoi(getenv("WSX_NFQSO"));
         if (argc > 2) printf("FILE\t%s\n", argv[f]);
         wsx_decode_slot(iwave, &p, on_decode, NULL);
         fflush(stdout);

@@ -45,7 +45,7 @@ def main():
     a.add_argument("--show", type=int, default=20)
     args = a.parse_args()
     wavs = sorted(os.path.abspath(w) for w in glob.glob(os.path.join(args.dir, "*.wav")))
-    exe = os.path.join(ROOT, "scratchpad", "wsx_cmp.exe")
+    exe = os.path.join(ROOT, "scratchpad", "wsx_cmp_single.exe")  # not wsx_cmp.exe: a multi-file run may be using that one
     build(exe, args.flags.split())
     wd = os.path.join(ROOT, "scratchpad", "jt9wd")
     os.makedirs(wd, exist_ok=True)

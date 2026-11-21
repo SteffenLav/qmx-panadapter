@@ -3038,7 +3038,24 @@ static void wsx_params_now(wsx_params_t *p, bool *sim_mode, int64_t slot_sec)
     char me[16] = {0};
     settings_get_my_callsign(me, sizeof(me));
     snprintf(p->mycall, sizeof p->mycall, "%s", me);
+    /* WSJT-X's DX Call / DX Grid / Rx Freq, from the QSO state. a8 (list
+     * decoding of the partner's next message at the RX frequency) runs only
+     * with a DX call AND a 4-char grid, as in WSJT-X; idle, both are empty.
+     * Rx Freq: the partner's tone when the exchange knows it, else our own
+     * TX tone, else 1500 (jt9's default). nftx = our TX tone. */
     p->hiscall[0] = 0;
+    p->hisgrid[0] = 0;
+    char partner[16] = {0};
+    if (ft8_qso_is_busy(partner, sizeof partner) && partner[0]) {
+        snprintf(p->hiscall, sizeof p->hiscall, "%s", partner);
+        ft8_call_t c;
+        if (ft8_screen_find_call(partner, &c) && strlen(c.last_grid) >= 4)
+            snprintf(p->hisgrid, sizeof p->hisgrid, "%.4s", c.last_grid);
+    }
+    int rx_hz = 0, tx_hz = ft8_qso_get_tx_tone_hz();
+    if (!ft8_qso_get_priority_freq(&rx_hz) || rx_hz <= 0) rx_hz = tx_hz > 0 ? tx_hz : 1500;
+    p->nfqso = rx_hz;
+    p->nftx = tx_hz;
     p->hash_if = ft8_hash_if();
     /* a7 keeps one table per even/odd sequence, picked by (nutc/5)%2. jt9
      * takes nutc from the WAV name, which for the slot corpus is the UTC

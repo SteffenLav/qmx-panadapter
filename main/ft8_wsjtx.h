@@ -24,13 +24,14 @@ typedef struct {
                           * table. jt9: the last 6 digits of the WAV name. */
     char mycall[13];     /* jt9 default K1ABC */
     char hiscall[13];    /* jt9 default W9XYZ */
+    char hisgrid[7];     /* jt9 default EN37; a8 needs >= 4 chars */
     /* Callsign hash table for unpack (jt9: packjt77's, filled by every
      * decode in the process). NULL prints every hashed call as <...>. */
     ftx_callsign_hash_interface_t* hash_if;
 } wsx_params_t;
 
 /* One decode. nap = 0 for a plain decode, 1..6 for an a priori one, 7 for
- * an a7 (previous-cycle) one (jt9 prints these with a trailing "aN"). */
+ * an a7 (previous-cycle) one, 8 for an a8 (list decode at the RX frequency) (jt9 prints these with a trailing "aN"). */
 typedef void (*wsx_callback_t)(void* ctx, float sync, int snr, float dt, float freq,
                                const char* msg, int nap, float qual);
 
