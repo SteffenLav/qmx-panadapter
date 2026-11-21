@@ -569,13 +569,21 @@ static float estimate_snr_db(const ftx_waterfall_t* wf, const ftx_candidate_t* c
 {
     const WF_ELEM_T* mag = get_cand_mag(wf, cand);
     const int num_bins = 8;  // FSK tones per symbol
+    /* ⛔ time_offset can be NEGATIVE (a signal that started before the
+     * waterfall), and then `mag` points BEFORE the buffer. Both loops here
+     * bounded only the end, so the first -time_offset rows were read out of
+     * bounds - a segfault on the host (ft8_piece_harness, 2026-11-21), on the
+     * Tab5 a read of whatever PSRAM lies below the waterfall, on such
+     * candidates since 47dc8653 (2026-07-07). Every other user of
+     * get_cand_mag() in this file checks block < 0; this one did not. */
+    const int sym0 = cand->time_offset < 0 ? -cand->time_offset : 0;
 
     // Collect signal power from the candidate's FSK tones (first 10 symbols)
     float signal_sum = 0.0f;
     int signal_count = 0;
 
     // Sample signal from the 8 FSK tone bins across multiple symbols
-    for (int sym = 0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
+    for (int sym = sym0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
         const WF_ELEM_T* block = mag + sym * wf->block_stride;
         for (int bin = 0; bin < num_bins; ++bin) {
             float magnitude_db = WF_ELEM_MAG(block[bin]);
@@ -596,10 +604,11 @@ static float estimate_snr_db(const ftx_waterfall_t* wf, const ftx_candidate_t* c
 
     // Sample between the FSK tones (bins 4-7 in a typical 8-bin FSK window)
     // These are unlikely to contain strong signal
-    for (int sym = 0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
+    for (int sym = sym0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
         const WF_ELEM_T* block = mag + sym * wf->block_stride;
         // Sample the "gaps" between expected FSK tones
-        for (int bin = 50; bin < wf->num_bins && bin < 150; bin += 3) {
+        /* The bound is the ROW: freq_offset + bin past num_bins read the next row. */
+        for (int bin = 50; cand->freq_offset + bin < wf->num_bins && bin < 150; bin += 3) {
             float magnitude_db = WF_ELEM_MAG(block[bin]);
             float magnitude_linear = powf(10.0f, magnitude_db / 10.0f);
             noise_sum += magnitude_linear;
