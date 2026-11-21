@@ -337,7 +337,9 @@ static void nextpat91(int8_t* mi, int k, int iorder, int* iflag)
         if (mi[i] == 1) { *iflag = i; break; }
 }
 
+#ifdef OSD_INT8
 static WSX_BSS int8_t genmrb[KK + 1][N + 1];    /* 1-based, (row i, column) */
+#define GMRB(r, c) genmrb[r][c]
 
 /* mrbencode91.f90: codeword[1..N] = XOR of genmrb rows where me[i]=1 */
 static void mrbencode91(const int8_t* me, int8_t* codeword, int k)
@@ -347,6 +349,28 @@ static void mrbencode91(const int8_t* me, int8_t* codeword, int k)
         if (me[i] == 1)
             for (int c = 1; c <= N; c++) codeword[c] ^= genmrb[i][c];
 }
+#else
+/* ⭐ The same matrix, one BIT per element: row r is 174 bits in three words,
+ * column c (1-based) is bit c-1. It is GF(2) arithmetic either way, so every
+ * XOR, swap and test gives the identical result - on 64 elements at once.
+ * Measured 2026-11-22: OSD was half the cost of a piece-pass candidate on
+ * the host (the int8 Gaussian elimination and the 91 re-encodings), and the
+ * piece pass is time-bound on the P4. The int8 original stays behind
+ * -DOSD_INT8 for the byte-identical A/B (test/ft8_piece_harness.c). */
+static WSX_BSS uint64_t gpk[KK + 1][3];
+#define GMRB(r, c) ((int8_t)((gpk[r][((c) - 1) >> 6] >> (((c) - 1) & 63)) & 1u))
+
+static void mrbencode91(const int8_t* me, int8_t* codeword, int k)
+{
+    uint64_t w0 = 0, w1 = 0, w2 = 0;
+    for (int i = 1; i <= k; i++)
+        if (me[i] == 1) { w0 ^= gpk[i][0]; w1 ^= gpk[i][1]; w2 ^= gpk[i][2]; }
+    codeword[0] = 0;
+    for (int c = 1; c <= 64; c++)  codeword[c] = (int8_t)((w0 >> (c - 1)) & 1u);
+    for (int c = 65; c <= 128; c++) codeword[c] = (int8_t)((w1 >> (c - 65)) & 1u);
+    for (int c = 129; c <= N; c++)  codeword[c] = (int8_t)((w2 >> (c - 129)) & 1u);
+}
+#endif
 
 /* osd174_91.f90, ndeep <= 2. llr, apmask, cw 0-based in and out. */
 static void osd174_91(const float* llr, int k, const int8_t* apmask, int ndeep,
@@ -365,6 +389,7 @@ static void osd174_91(const float* llr, int k, const int8_t* apmask, int ndeep,
         absrx0[i] = fabsf(rx[i]);
     }
     indexx(absrx0, N, indx);
+#ifdef OSD_INT8
     for (int i = 1; i <= N; i++) {
         int c = indx[N + 1 - i];
         for (int r = 1; r <= k; r++) genmrb[r][i] = osd_gen[r - 1][c - 1];
@@ -386,6 +411,36 @@ static void osd174_91(const float* llr, int k, const int8_t* apmask, int ndeep,
             }
         }
     }
+#else
+    memset(gpk, 0, sizeof gpk);
+    for (int i = 1; i <= N; i++) {
+        int c = indx[N + 1 - i];
+        const uint64_t bit = 1ull << ((i - 1) & 63);
+        const int w = (i - 1) >> 6;
+        for (int r = 1; r <= k; r++) if (osd_gen[r - 1][c - 1]) gpk[r][w] |= bit;
+        indices[i] = c;
+    }
+    for (int id = 1; id <= k; id++) {
+        for (int icol = id; icol <= k + 20; icol++) {
+            if (GMRB(id, icol) == 1) {
+                if (icol != id) {
+                    /* swap columns id and icol in every row */
+                    const int wa = (id - 1) >> 6, wb = (icol - 1) >> 6;
+                    const int sa = (id - 1) & 63, sb = (icol - 1) & 63;
+                    for (int r = 1; r <= k; r++) {
+                        uint64_t a = (gpk[r][wa] >> sa) & 1u, b = (gpk[r][wb] >> sb) & 1u;
+                        if (a != b) { gpk[r][wa] ^= 1ull << sa; gpk[r][wb] ^= 1ull << sb; }
+                    }
+                    int itmp = indices[id]; indices[id] = indices[icol]; indices[icol] = itmp;
+                }
+                const uint64_t p0 = gpk[id][0], p1 = gpk[id][1], p2 = gpk[id][2];
+                for (int ii = 1; ii <= k; ii++)
+                    if (ii != id && GMRB(ii, id) == 1) { gpk[ii][0] ^= p0; gpk[ii][1] ^= p1; gpk[ii][2] ^= p2; }
+                break;
+            }
+        }
+    }
+#endif
     /* hdec=hdec(indices) etc. */
     {
         int8_t h2[N + 1], a2[N + 1];
@@ -434,7 +489,7 @@ static void osd174_91(const float* llr, int k, const int8_t* apmask, int ndeep,
                         d1 = 0.f;
                         for (int i = 1; i <= k; i++) d1 += (me[i] ^ hdec[i]) * absrx[i];
                     } else {
-                        for (int i = k + 1; i <= N; i++) e2[i] = e2sub[i] ^ genmrb[n1][i];
+                        for (int i = k + 1; i <= N; i++) e2[i] = e2sub[i] ^ GMRB(n1, i);
                         nd1kpt = 2;
                         for (int i = k + 1; i <= k + nt; i++) nd1kpt += e2[i];
                     }
