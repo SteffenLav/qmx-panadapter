@@ -2575,6 +2575,8 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
          *   B  first instance only     248   89 / 1401  6.4 %
          *
          * B - A = +0.49 points, permutation p = 0.62: NO difference on air.
+         * The same run left going all night, 2157 slots: A 7.2 %, B 6.7 %,
+         * B - A = -0.52 points, p = 0.23 - the sign flipped, still noise.
          * The two-boot bins were band variance. The host corpus, which scores
          * against GROUND TRUTH, decides: A 285, B 282 of 362 with OSD-0 on
          * (tools/ft8_pair_ab.py). The -DFT8_SUB_DUP_AB switch below stays for
