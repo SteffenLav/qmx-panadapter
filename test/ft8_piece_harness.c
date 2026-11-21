@@ -21,6 +21,7 @@
  *   -Icomponents/ft8_lib/ft8 -Icomponents/ft8_lib/common -Icomponents/ft8_lib/fft -lm
  */
 #include <stdio.h>
+#include "ft8/encode.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -94,6 +95,13 @@ int main(int argc, char** argv)
 
         char seen_b[MAXC][40], seen_p[MAXC][40];
         int nb = 0, np = 0;
+#ifdef TONE_CHECK
+        /* The device dedups a piece decode against the base decodes by
+         * comparing 79 tones: ft8_encode(base payload) vs ft8b's itone.
+         * This checks that rule against text equality on real slots. */
+        static uint8_t base_tones[MAXC][79];
+        int n_bt = 0;
+#endif
         static unsigned char base_ok[MAXC];
         memset(base_ok, 0, sizeof base_ok);
         double a = now_ms();
@@ -105,6 +113,9 @@ int main(int argc, char** argv)
             ftx_message_offsets_t off;
             if (ftx_message_decode(&m, NULL, t, &off) != FTX_MESSAGE_RC_OK) continue;
             base_ok[i] = 1;
+#ifdef TONE_CHECK
+            if (n_bt < MAXC) ft8_encode(m.payload, base_tones[n_bt++]);
+#endif
             int dup = 0;
             for (int j = 0; j < nb; j++) if (!strcmp(seen_b[j], t)) dup = 1;
             if (dup) continue;
@@ -131,7 +142,23 @@ int main(int argc, char** argv)
             /* ft8_lib's time is the Costas start from the WAV start; WSJT-X's
              * DT is that minus the nominal 0.5 s. */
             float fo, dto;
+#ifdef TONE_CHECK
+            int itone[79];
+            float snr;
+            if (!wsx_piece_try_ex(f, tsec - DT_SHIFT, 1, t, &fo, &dto, &snr, itone)) continue;
+            {
+                int tdup = 0, xdup = 0;
+                for (int k = 0; k < n_bt && !tdup; k++) {
+                    int j = 0;
+                    while (j < 79 && base_tones[k][j] == (uint8_t)itone[j]) j++;
+                    tdup = (j == 79);
+                }
+                for (int j = 0; j < nb; j++) if (!strcmp(seen_b[j], t)) xdup = 1;
+                printf("TCHK\t%d\t%d\t%s\n", tdup, xdup, t);
+            }
+#else
             if (!wsx_piece_try(f, tsec - DT_SHIFT, 1, t, &fo, &dto)) continue;
+#endif
 #ifdef DT_DEBUG
             fprintf(stderr, "DTDBG %.3f %.2f\n", dto - (tsec - DT_SHIFT), fo - f);
 #endif

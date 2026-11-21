@@ -90,9 +90,7 @@
 #include "ft8_hash.h"
 #include "time_sync.h"
 #include "ft8_status.h"
-#ifdef FT8_DECODER_WSJTX
-#include "ft8_wsjtx.h"
-#endif
+#include "ft8_wsjtx.h"   /* declarations only; see FT8_WSX_PIECES */
 #include "ui/ui.h"
 /* adif_log_band_for_freq() - the ONE band table, so the JS8 chat store files
  * a conversation under the same band string the log and the spot map use. */
@@ -366,6 +364,36 @@ int ft8_op_mode_slot_ms(void)
  * late the other station is - so it does not scale with the slot. 560 ms in
  * both. */
 #define FT8_RX_LATENCY_GUARD_MS 560
+
+/* ---- WSJT-X piece pass (Tab5) --------------------------------------------
+ *
+ * After the base (ft8_lib) decode has been handed to the QSO logic AND the
+ * hold-for-decode gate has opened, run WS 3.2.1's per-candidate demodulator
+ * (ft8b: 5 metric passes, BP) on the strongest candidates ft8_lib FAILED.
+ *
+ * Measured 2026-11-21 (memory project_wsjtx_port_tab5_budget):
+ *   host, 307 real slots, jt9 as referee: K20 = +10.4 % unique decodes.
+ *   bench1 P4, core 1 otherwise idle: setup 470 ms + K20 ~2.1 s = ~2.6 s.
+ *   base decode ends p50 -75 ms vs the boundary, so a piece decode lands
+ *   ~+2.5 s - past the 1960 ms hold deadline in 99.9 % of slots. The operator
+ *   accepted that (2026-11-21): piece decodes are SHOWN and SPOTTED late and
+ *   answered a cycle later; they never advance the QSO and never arm TX.
+ *
+ * ⛔ It must run AFTER s_decode_jobs_done++ - inside decode_slot it would
+ * hold every reply for the 2.6 s the pass costs.
+ *
+ * Off in a host build that runs the full port instead
+ * (FT8_DECODER_WSJTX). */
+#ifndef FT8_WSX_PIECES
+#if defined(ESP_PLATFORM) && !defined(FT8_DECODER_WSJTX)
+#define FT8_WSX_PIECES 1
+#else
+#define FT8_WSX_PIECES 0
+#endif
+#endif
+#define FT8_WSX_PIECE_K          20     /* ft8_lib failures tried, strongest first */
+#define FT8_WSX_PIECE_BUDGET_MS  6000   /* wall-clock cap for one slot's pass */
+#define FT8_WSX_PIECE_DT_SHIFT   0.57f  /* ft8_lib time - this = WSJT-X DT (measured) */
 
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
@@ -1901,6 +1929,7 @@ typedef struct {
     portMUX_TYPE            cand_lock;
     /* Shared duplicate table - both halves check it before publishing. */
     slot_dedup_t           *dedup;
+    uint8_t                *cand_ok;      /* per-candidate "decoded", or NULL */
     int                     start_off_ms;
     int                     start;        // first candidate index
     int                     step;         // index stride (2 for the dual-core split)
@@ -2371,6 +2400,7 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
                                    bool may_early_advance,
                                    volatile int *cursor, portMUX_TYPE *cursor_lock,
                                    slot_dedup_t *dedup,
+                                   uint8_t *cand_ok,
                                    decode_result_t *out)
 {
     /* ⛔ EVERY COUNTER IN decode_result_t IS RESET HERE, and the list is not
@@ -2544,6 +2574,9 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
         ftx_message_t msg;
         ftx_decode_status_t st;
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
+        /* Decoded (a duplicate included): the WSJT-X piece pass skips it.
+         * Each index is pulled by exactly one half, so no lock. */
+        if (cand_ok) cand_ok[i] = 1;
 #if FT8_SUBTRACT_PASSES > 1
         /* Record what to remove before the next pass.
          *
@@ -2931,7 +2964,7 @@ static void ft8_decode_worker_task(void *arg)
                                job->noise_db, job->slot_sec, job->t_start_us,
                                job->start_off_ms, true,
                                &job->next_cand, &job->cand_lock,
-                               job->dedup, job->result);
+                               job->dedup, job->cand_ok, job->result);
         xSemaphoreGive(ctx->done);
     }
     /* MEASURE IT, so the 65536 above stops being a judgement call. This task
@@ -3182,6 +3215,180 @@ static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
 // capture). Candidate search, then dual-core LDPC fan-out, merge, record,
 // advance the QSO state machine.
+#if FT8_WSX_PIECES
+/* ---- WSJT-X piece pass: see FT8_WSX_PIECES for what and why ------------
+ *
+ * Three steps on three sites, so the pass never sits on the reply path:
+ *   1. wsx_piece_take_audio()  capture task, at the decode-job queue point:
+ *      copies the slot audio (the same buffer slotcap_take() writes).
+ *   2. wsx_piece_plan()        decode_slot(), after the join: records the
+ *      strongest K candidates ft8_lib failed, and the slot's base payloads.
+ *   3. wsx_piece_pass()        decode task, after s_decode_jobs_done++.
+ *
+ * s_pc_full hands the audio from the capture task to the decode task: the
+ * capture task writes only while it is false, the decode task clears it once
+ * the audio is converted. A slot whose copy was refused gets no pass. */
+typedef struct {
+    bool    ready;
+    int64_t slot_sec;
+    int     slot_idx;
+    int     n;
+    float   f_hz[FT8_WSX_PIECE_K];
+    float   t_sec[FT8_WSX_PIECE_K];
+    int     n_base;
+    uint8_t base[FT8_MAX_CANDIDATES][FTX_PAYLOAD_LENGTH_BYTES];
+} wsx_piece_plan_t;
+
+static EXT_RAM_BSS_ATTR wsx_piece_plan_t s_pc_plan;
+static float            *s_pc_audio;          /* PSRAM, WSX_NMAX floats */
+static int16_t          *s_pc_pcm;            /* PSRAM, WSX_NMAX int16  */
+static int               s_pc_samples;
+static volatile int64_t  s_pc_slot_sec = -1;
+static volatile bool     s_pc_full;
+
+static void wsx_piece_take_audio(const float *x, int n, ftx_protocol_t proto, int64_t slot_sec)
+{
+    if (proto != FTX_PROTOCOL_FT8 || s_pc_full || n <= 0) return;
+    if (!s_pc_audio) {
+        s_pc_audio = heap_caps_malloc(WSX_NMAX * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (!s_pc_audio) return;
+    }
+    if (n > WSX_NMAX) n = WSX_NMAX;
+    memcpy(s_pc_audio, x, (size_t)n * sizeof(float));
+    s_pc_samples  = n;
+    s_pc_slot_sec = slot_sec;
+    __sync_synchronize();
+    s_pc_full = true;
+}
+
+static void wsx_piece_plan(const monitor_t *mon, const decode_ctx_t *dc,
+                           const ftx_candidate_t *cands, int n_cand,
+                           const uint8_t *cand_ok, const slot_dedup_t *dedup,
+                           int64_t slot_sec, int slot_idx)
+{
+    s_pc_plan.ready = false;
+    if (dc->rx_only || mon->wf.protocol != FTX_PROTOCOL_FT8) return;
+    if (!s_pc_full || s_pc_slot_sec != slot_sec) return;
+    int n = 0;
+    for (int i = 0; i < n_cand && n < FT8_WSX_PIECE_K; i++) {
+        if (cand_ok[i]) continue;
+        s_pc_plan.f_hz[n] = (mon->min_bin + cands[i].freq_offset
+                             + (float)cands[i].freq_sub / mon->wf.freq_osr) / mon->symbol_period;
+        s_pc_plan.t_sec[n] = (cands[i].time_offset
+                              + (float)cands[i].time_sub / mon->wf.time_osr) * mon->symbol_period;
+        n++;
+    }
+    int nb = dedup->n;
+    if (nb > FT8_MAX_CANDIDATES) nb = FT8_MAX_CANDIDATES;
+    memcpy(s_pc_plan.base, dedup->payload, (size_t)nb * FTX_PAYLOAD_LENGTH_BYTES);
+    s_pc_plan.n_base   = nb;
+    s_pc_plan.n        = n;
+    s_pc_plan.slot_sec = slot_sec;
+    s_pc_plan.slot_idx = slot_idx;
+    s_pc_plan.ready    = (n > 0);
+}
+
+/* Same message as one already on this slot's list? Compared on the 79
+ * channel tones, which both decoders produce exactly - no text, no hash. */
+static bool wsx_piece_is_dup(const int *itone, uint8_t (*seen)[FT8_NN], int n_seen)
+{
+    for (int k = 0; k < n_seen; k++) {
+        int j = 0;
+        while (j < FT8_NN && seen[k][j] == (uint8_t)itone[j]) j++;
+        if (j == FT8_NN) return true;
+    }
+    return false;
+}
+
+static void wsx_piece_pass(int64_t job_slot_sec)
+{
+    if (!s_pc_full) return;
+    if (s_pc_slot_sec > job_slot_sec) return;      /* a newer slot's copy: keep it */
+    wsx_piece_plan_t *pl = &s_pc_plan;
+    if (!pl->ready || pl->slot_sec != s_pc_slot_sec || proto_for_mode() != FTX_PROTOCOL_FT8) {
+        pl->ready = false;
+        s_pc_full = false;
+        return;
+    }
+    int64_t t0 = esp_timer_get_time();
+    if (!s_pc_pcm) s_pc_pcm = heap_caps_malloc(WSX_NMAX * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    static EXT_RAM_BSS_ATTR uint8_t seen[FT8_MAX_CANDIDATES + FT8_WSX_PIECE_K][FT8_NN];
+    if (!s_pc_pcm) { pl->ready = false; s_pc_full = false; return; }
+
+    /* Slot peak -> int16 full scale: exactly how slotcap_take() writes the
+     * corpus, the input on which the port was proved identical to jt9 and
+     * the pieces were scored (ft8b's false-decode screen is level-sensitive). */
+    const int n = s_pc_samples;
+    float fpeak = 0.0f;
+    for (int i = 0; i < n; i++) { float a = fabsf(s_pc_audio[i]); if (a > fpeak) fpeak = a; }
+    const float g = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
+    for (int i = 0; i < n; i++) s_pc_pcm[i] = (int16_t)lroundf(s_pc_audio[i] * g);
+    for (int i = n; i < WSX_NMAX; i++) s_pc_pcm[i] = 0;
+    s_pc_full = false;                 /* the audio is converted: release the copy */
+
+    int n_seen = 0;
+    for (int k = 0; k < pl->n_base; k++) ft8_encode(pl->base[k], seen[n_seen++]);
+
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    const bool sim_mode = qs.sim_mode_en;
+
+    wsx_piece_begin(s_pc_pcm, 5, -1);  /* 5 metric passes, BP only: variant B */
+    int64_t t_setup = esp_timer_get_time();
+    int tried = 0, n_new = 0, n_dup = 0;
+    const char *stop = "done";
+    for (int k = 0; k < pl->n; k++) {
+        if (!s_ft8_running) { stop = "ft8 stopped"; break; }
+        if (proto_for_mode() != FTX_PROTOCOL_FT8) { stop = "mode changed"; break; }
+        if ((int)((esp_timer_get_time() - t0) / 1000) >= FT8_WSX_PIECE_BUDGET_MS) { stop = "budget"; break; }
+        /* The next slot's decode outranks this one's weak tail. */
+        if (s_decode_queue && uxQueueMessagesWaiting(s_decode_queue) > 0) { stop = "next slot queued"; break; }
+        tried++;
+        char text[40];
+        float fo = 0, dto = 0, snr = 0;
+        int itone[FT8_NN];
+        if (!wsx_piece_try_ex(pl->f_hz[k], pl->t_sec[k] - FT8_WSX_PIECE_DT_SHIFT, 1,
+                              text, &fo, &dto, &snr, itone))
+            continue;
+        if (wsx_piece_is_dup(itone, seen, n_seen)) { n_dup++; continue; }
+        if (n_seen < FT8_MAX_CANDIDATES + FT8_WSX_PIECE_K) {
+            for (int j = 0; j < FT8_NN; j++) seen[n_seen][j] = (uint8_t)itone[j];
+            n_seen++;
+        }
+        n_new++;
+        const int freq_hz = (int)lroundf(fo);
+        const int snr_db  = (int)lroundf(snr);
+        const int dt_ms   = (int)lroundf(dto * 1000.0f);
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        const int at_ms = (int)((int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000 - pl->slot_sec * 1000);
+        ESP_LOGI(TAG, "decoded: '%s' (wsjtx piece freq=%dHz snr=%d dt=%d at=%d)",
+                 text, freq_hz, snr_db, dt_ms, at_ms);
+        /* Shown and spotted only. It never advances the QSO or arms TX: it
+         * lands ~2.5 s after the boundary, past the hold deadline, and the
+         * slot's one advance has already run on the base decodes. */
+        if (!sim_mode) {
+            ft8_screen_record_decode(text, 0, snr_db, freq_hz, pl->slot_sec, dt_ms);
+            char sp_call[16], sp_grid[8];
+            if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
+                ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
+                pskreporter_spot(sp_call, sp_grid, cat_get_frequency() + (uint32_t)freq_hz,
+                                 snr_db, ftx_protocol_name(FTX_PROTOCOL_FT8), pl->slot_sec);
+            }
+        }
+    }
+    wsx_piece_end();
+    pl->ready = false;
+    if (n_new > 0) ft8_screen_view_request_refresh();
+    /* One line per slot, zero included: the instrument for the on-air yield. */
+    ESP_LOGI(TAG, "slot %d wsjtx pieces: tried %d of %d, +%d new, %d dup, %d ms "
+                  "(setup %d ms), %s",
+             pl->slot_idx, tried, pl->n, n_new, n_dup,
+             (int)((esp_timer_get_time() - t0) / 1000),
+             (int)((t_setup - t0) / 1000), stop);
+}
+#endif /* FT8_WSX_PIECES */
+
 static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
                         const decode_ctx_t *dc, int64_t slot_sec,
                         int slot_idx, int mon_idx, int cap_ms, int stft_ms,
@@ -3198,6 +3405,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     // LDPC attempts are affordable and net a few more real weak-signal decodes;
     // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
     int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
+    uint8_t cand_ok[FT8_MAX_CANDIDATES];
+    memset(cand_ok, 0, sizeof cand_ok);
 #ifdef FT8_DECODER_WSJTX
     /* The port decodes this slot (see wsx_run_slot) - ft8_lib must not also
      * publish it. Only the primary FT8 sub-mode: FT4, JS8 and the rx_only
@@ -3315,7 +3524,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
         .start = 1, .step = 2, .result = &r_worker,
         /* Both halves walk this one cursor - see decode_candidate_range(). */
         .next_cand = 0, .cand_lock = portMUX_INITIALIZER_UNLOCKED,
-        .dedup = &dedup,
+        .dedup = &dedup, .cand_ok = cand_ok,
     };
     /* ⭐⭐ DO NOT HAND WORK TO A CORE THAT CANNOT DO IT.
      *
@@ -3376,7 +3585,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     decode_candidate_range(mon, dc, cands, n_cand, 0, 2, noise_db, slot_sec,
                            t_start, start_off_ms, true,
                            dispatched ? &job.next_cand : NULL,
-                           dispatched ? &job.cand_lock : NULL, &dedup, &r_main);
+                           dispatched ? &job.cand_lock : NULL, &dedup, cand_ok, &r_main);
     int64_t t_main_done = esp_timer_get_time();
 
     if (dispatched) {
@@ -3389,8 +3598,13 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
            across the two ranges, not only within one. */
         decode_candidate_range(mon, dc, cands, n_cand, 1, 2, noise_db, slot_sec,
                                t_start, start_off_ms, true, NULL, NULL,
-                               &dedup, &r_worker);
+                               &dedup, cand_ok, &r_worker);
     }
+#if FT8_WSX_PIECES
+    /* Only RECORDS which failures to try; the pass itself runs after the
+     * TX gate has opened - see wsx_piece_pass(). */
+    wsx_piece_plan(mon, dc, cands, n_cand, cand_ok, &dedup, slot_sec, slot_idx);
+#endif
 
 #if FT8_SUBTRACT_PASSES > 1
     /* ---- subtract-and-repeat --------------------------------------------
@@ -3479,7 +3693,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
             n_cand_sub = n_cand2;
             decode_candidate_range(s_sub_mon, dc, cands2, n_cand2, 0, 1,
                                    noise_db, slot_sec, t_start, start_off_ms,
-                                   false, NULL, NULL, &dedup, &r_sub);
+                                   false, NULL, NULL, &dedup, NULL, &r_sub);
         }
         ESP_LOGI(TAG, "slot %d subtract pass: removed %d, +%d decode(s), %d ms",
                  slot_idx, n_removed, r_sub.n_decoded,
@@ -4362,6 +4576,11 @@ static void ft8_decode_task(void *arg)
         // fully returned - by then ft8_qso_advance() has run and (on progress)
         // replaced the ARMED request with the fresh message.
         s_decode_jobs_done++;
+#if FT8_WSX_PIECES
+        /* HERE and not in decode_slot: the gate above is open, so the TX hold
+         * never waits for this pass. */
+        wsx_piece_pass(job.slot_sec);
+#endif
     }
 
     // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
@@ -5055,6 +5274,10 @@ static void ft8_task(void *arg)
                  * now exactly the 15 s the decoder will work on. */
                 slotcap_take(s_cap_scratch, (uint32_t)slot_samples, slot_sec,
                              ft8_op_mode_name());
+#if FT8_WSX_PIECES
+                /* Same buffer, same moment, for the WSJT-X piece pass. */
+                wsx_piece_take_audio(s_cap_scratch, slot_samples, sproto, slot_sec);
+#endif
 #if FT8_SUBTRACT_PASSES > 1
                 /* The decode task cannot read s_cap_scratch - by the time it
                  * runs, THIS task is filling it with the next slot. Copy it,

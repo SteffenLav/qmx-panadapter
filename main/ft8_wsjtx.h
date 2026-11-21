@@ -60,4 +60,6 @@ void wsx_prof_print(void);
  * npasses limits ft8b's metric passes (1..5, 0 = all), maxosd -1 = BP only. */
 void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd);
 int  wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out);
+int  wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out,
+                      float* snr_out, int* itone_out /* [79] */);
 void wsx_piece_end(void);

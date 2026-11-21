@@ -269,6 +269,14 @@ idf_component_register(
         "manual.bin"
 )
 
+# The WSJT-X port on the Tab5: the PIECE path only (ft8b on ft8_lib's failed
+# candidates, see FT8_WSX_PIECES in ft8_test.c). The full port does not fit
+# the Tab5 (24.7 MB). ft8_test.c never sees FT8_DECODER_WSJTX here - that
+# define switches the whole decoder, and only a host build that runs the full
+# port sets it.
+set_source_files_properties(ft8_wsjtx.c
+    PROPERTIES COMPILE_DEFINITIONS "FT8_DECODER_WSJTX=1;WSX_PIECE_ONLY=1")
+
 # ---------------------------------------------------------------------------
 # The web page is COMPRESSED AT BUILD TIME (#229).
 #

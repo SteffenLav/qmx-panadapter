@@ -2472,6 +2472,16 @@ void wsx_piece_begin(const int16_t* iwave, int npasses, int maxosd)
 
 int wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out)
 {
+    return wsx_piece_try_ex(f1, xdt, imetric, msg, f_out, dt_out, NULL, NULL);
+}
+
+/* As wsx_piece_try, plus jt9's SNR (ft8b's xsnr, -25 floor) and the 79
+ * channel tones. The tones let a caller test the decode against another
+ * decoder's payloads exactly (ft8_encode -> compare), with no text or hash
+ * involved. */
+int wsx_piece_try_ex(float f1, float xdt, int imetric, char* msg, float* f_out, float* dt_out,
+                     float* snr_out, int* itone_out)
+{
     int si = nint(f1 / 3.125f);
     if (si < 1) si = 1;
     if (si > NH1) si = NH1;
@@ -2485,6 +2495,8 @@ int wsx_piece_try(float f1, float xdt, int imetric, char* msg, float* f_out, flo
     snprintf(msg, 38, "%s", m37);
     if (f_out) *f_out = f1;
     if (dt_out) *dt_out = xdt - 0.5f;
+    if (snr_out) *snr_out = xsnr;
+    if (itone_out) memcpy(itone_out, itone, sizeof(int) * NN);
     return 1;
 }
 
