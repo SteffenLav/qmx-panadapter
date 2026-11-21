@@ -39,5 +39,15 @@ void wsx_default_params(wsx_params_t* p);
 void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p,
                      wsx_callback_t cb, void* ctx);
 
+/* The same, split where WSJT-X splits it in time. early() is call 41 and
+ * reads only iwave[0 .. 41*3456 = 141696) (11.8 s); late() is calls 47 and
+ * 50 on the whole slot. late() must follow early() for the SAME slot, with
+ * nothing in between: the decoder state is one static. Not reentrant. */
+#define WSX_EARLY_SAMPLES (41 * 3456)
+void wsx_decode_early(const int16_t* iwave, const wsx_params_t* p,
+                      wsx_callback_t cb, void* ctx);
+void wsx_decode_late(const int16_t* iwave, const wsx_params_t* p,
+                     wsx_callback_t cb, void* ctx);
+
 /* -DWSX_PROF builds only: per-stage times to stderr. */
 void wsx_prof_print(void);

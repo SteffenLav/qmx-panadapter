@@ -1543,17 +1543,43 @@ void wsx_default_params(wsx_params_t* p)
     snprintf(p->hiscall, sizeof p->hiscall, "W9XYZ");
 }
 
-void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+/* One jt9 call: id2a = iwave(1:nzhsym*3456), zero after - jt9.f90's id2a. */
+static void run_call(const int16_t* iwave, int nzhsym, const wsx_params_t* p,
+                     wsx_callback_t cb, void* ctx)
 {
     static float id2a[NMAX];
-    static const int nearly[3] = {41, 47, 50};
+    int n = nzhsym * 3456;
+    if (n > NMAX) n = NMAX;
+    for (int i = 0; i < NMAX; i++) id2a[i] = i < n ? (float)iwave[i] : 0.f;
+#ifdef WSX_PROF
+    double t0 = prof_now();
+    int d0 = st.ndecodes;
+#endif
+    decode_call(id2a, nzhsym, p, cb, ctx);
+#ifdef WSX_PROF
+    fprintf(stderr, "  call %d: %6.0f ms, ndecodes %d -> %d\n", nzhsym, 1e3 * (prof_now() - t0), d0, st.ndecodes);
+#endif
+}
+
+/* The 41 call reads only iwave[0 .. 41*3456), so it can run while the rest of
+ * the slot is still arriving - what WSJT-X does at 11.8 s into the slot. */
+void wsx_decode_early(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+{
     memset(&st, 0, sizeof st);
-    for (int c = 0; c < 3; c++) {
-        int n = nearly[c] * 3456;
-        if (n > NMAX) n = NMAX;
-        for (int i = 0; i < NMAX; i++) id2a[i] = i < n ? (float)iwave[i] : 0.f;
-        decode_call(id2a, nearly[c], p, cb, ctx);
-    }
+    run_call(iwave, 41, p, cb, ctx);
+}
+
+/* Calls 47 and 50, continuing the state wsx_decode_early() left. */
+void wsx_decode_late(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+{
+    run_call(iwave, 47, p, cb, ctx);
+    run_call(iwave, 50, p, cb, ctx);
+}
+
+void wsx_decode_slot(const int16_t* iwave, const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+{
+    wsx_decode_early(iwave, p, cb, ctx);
+    wsx_decode_late(iwave, p, cb, ctx);
 }
 
 #endif /* FT8_DECODER_WSJTX */

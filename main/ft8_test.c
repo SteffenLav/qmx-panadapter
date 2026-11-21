@@ -2963,7 +2963,7 @@ static void ft8_decode_worker_task(void *arg)
  * false-decode screen depends on the absolute level. */
 typedef struct {
     decode_result_t       *out;
-    const decode_ctx_t    *dc;
+    bool                   rx_only;
     int64_t                slot_sec;
     bool                   may_early_advance;
     bool                   sim_suppresses_real;
@@ -2993,7 +2993,7 @@ static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
     int freq_hz = (int)lroundf(freq);
     ESP_LOGI(TAG, "decoded: '%s' (wsjtx sync=%.1f freq=%dHz snr=%d dt=%d%s)",
              text, sync, freq_hz, snr, (int)lroundf(dt_ms), nap ? " AP" : "");
-    if (!k->sim_suppresses_real && !k->dc->rx_only) {
+    if (!k->sim_suppresses_real && !k->rx_only) {
         ft8_screen_record_decode(text, (int)lroundf(sync), snr, freq_hz, k->slot_sec,
                                  (int)lroundf(dt_ms));
         if (k->may_early_advance && !out->early_advanced && ft8_qso_msg_is_for_us(text)) {
@@ -3002,7 +3002,7 @@ static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
             ft8_qso_advance(k->slot_sec);
         }
     }
-    if (!k->dc->rx_only) {
+    if (!k->rx_only) {
         char sp_call[16], sp_grid[8];
         if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
             ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
@@ -3012,40 +3012,123 @@ static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
     }
 }
 
-static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result_t *out)
+static void wsx_result_reset(decode_result_t *out)
 {
-    static int16_t *pcm = NULL;            /* PSRAM, 360 KB, kept */
     out->early_advanced = false;
     out->n_decoded = out->n_osd = out->n_attempted = out->n_dup = 0;
     out->n_timing = out->n_js8ev = out->js8ev_dropped = 0;
     out->n_sub = 0;
-    if (!pcm) pcm = heap_caps_malloc(WSX_NMAX * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!pcm) { ESP_LOGE(TAG, "wsjtx: no PSRAM for the slot copy"); return; }
-    int n = s_sub_audio_samples < WSX_NMAX ? s_sub_audio_samples : WSX_NMAX;
-    float fpeak = 0.0f;
-    for (int i = 0; i < n; i++) { float a = fabsf(s_sub_audio[i]); if (a > fpeak) fpeak = a; }
-    float gain = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;     /* = slotcap_take() */
-    for (int i = 0; i < n; i++) {
-        float x = s_sub_audio[i] * gain;
-        int32_t v = (int32_t)(x < 0.0f ? x - 0.5f : x + 0.5f);
-        pcm[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
-    }
-    for (int i = n; i < WSX_NMAX; i++) pcm[i] = 0;
+}
 
+static void wsx_params_now(wsx_params_t *p, bool *sim_mode)
+{
     qmx_settings_t qs;
     settings_load_all(&qs);
-    wsx_params_t p;
-    wsx_default_params(&p);
+    *sim_mode = qs.sim_mode_en;
+    wsx_default_params(p);
     /* WSJT-X's AP passes use the operator's own call; no call = no MyCall AP,
      * exactly as ft8apset does with a blank mycall. */
     char me[16] = {0};
     settings_get_my_callsign(me, sizeof(me));
-    snprintf(p.mycall, sizeof p.mycall, "%s", me);
-    p.hiscall[0] = 0;
-    p.hash_if = ft8_hash_if();
-    wsx_sink_t k = { .out = out, .dc = dc, .slot_sec = slot_sec,
-                     .may_early_advance = !dc->rx_only, .sim_suppresses_real = qs.sim_mode_en };
-    wsx_decode_slot(pcm, &p, wsx_on_decode, &k);
+    snprintf(p->mycall, sizeof p->mycall, "%s", me);
+    p->hiscall[0] = 0;
+    p->hash_if = ft8_hash_if();
+}
+
+/* ---- the early call (41), run from the CAPTURE loop ----------------------
+ *
+ * WSJT-X decodes at 11.8 s into the slot (nzhsym 41) while audio is still
+ * arriving, and that call finds ~90 % of a slot's decodes (measured on the
+ * corpus, 2026-11-21: 20-26 of 21-30). Run at the slot's end instead, as the
+ * first version did, those surface ~2 s later and the weak tail from call 50
+ * lands past the reply backstop.
+ *
+ * State shared with the decode task: s_wsx_pcm, s_wsx_gain, s_wsx_early and
+ * s_wsx_early_slot. The capture task writes them at ~11.8 s; the decode task
+ * reads them only for a job queued AFTER this capture finished, so the two
+ * never overlap. A slot whose early call did not run (capture cut before
+ * 11.8 s, a late arm) takes the full three calls in wsx_run_slot.
+ *
+ * ⚠ GAIN. The corpus is normalised on the WHOLE slot's peak; here only the
+ * first 11.8 s exist. The gain is fixed from that part with 6 dB of headroom
+ * and later samples clip only if they are 2x louder. The decode itself is
+ * level-invariant - ft8b's SNR screen is a ratio of two powers of the same
+ * data - so only int16 rounding differs from the corpus. */
+static int16_t        *s_wsx_pcm = NULL;          /* PSRAM, WSX_NMAX int16 */
+static float           s_wsx_gain = 0.0f;
+static decode_result_t s_wsx_early;               /* PSRAM-sized: ~2 KB */
+static int64_t         s_wsx_early_slot = -1;
+
+static bool wsx_pcm_alloc(void)
+{
+    if (!s_wsx_pcm)
+        s_wsx_pcm = heap_caps_malloc(WSX_NMAX * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_wsx_pcm) ESP_LOGE(TAG, "wsjtx: no PSRAM for the slot copy");
+    return s_wsx_pcm != NULL;
+}
+static void wsx_pcm_fill(const float *src, int from, int to)
+{
+    for (int i = from; i < to; i++) {
+        float x = src[i] * s_wsx_gain;
+        int32_t v = (int32_t)(x < 0.0f ? x - 0.5f : x + 0.5f);
+        s_wsx_pcm[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    }
+}
+
+static void wsx_early_call(const float *cap, int64_t slot_sec)
+{
+    s_wsx_early_slot = -1;
+    if (!wsx_pcm_alloc()) return;
+    float fpeak = 0.0f;
+    for (int i = 0; i < WSX_EARLY_SAMPLES; i++) { float a = fabsf(cap[i]); if (a > fpeak) fpeak = a; }
+    s_wsx_gain = (fpeak > 1e-6f) ? (16383.0f / fpeak) : 0.0f;
+    wsx_pcm_fill(cap, 0, WSX_EARLY_SAMPLES);
+    for (int i = WSX_EARLY_SAMPLES; i < WSX_NMAX; i++) s_wsx_pcm[i] = 0;
+    wsx_params_t p;
+    bool sim_mode;
+    wsx_params_now(&p, &sim_mode);
+    wsx_result_reset(&s_wsx_early);
+    wsx_sink_t k = { .out = &s_wsx_early, .rx_only = false, .slot_sec = slot_sec,
+                     .may_early_advance = true, .sim_suppresses_real = sim_mode };
+    int64_t t0 = esp_timer_get_time();
+    wsx_decode_early(s_wsx_pcm, &p, wsx_on_decode, &k);
+    s_wsx_early_slot = slot_sec;
+    ESP_LOGI(TAG, "wsjtx early call (41): %d decode(s), %d ms", s_wsx_early.n_decoded,
+             (int)((esp_timer_get_time() - t0) / 1000));
+}
+
+static void wsx_run_slot(const decode_ctx_t *dc, int64_t slot_sec, decode_result_t *out)
+{
+    wsx_result_reset(out);
+    if (!wsx_pcm_alloc()) return;
+    int n = s_sub_audio_samples < WSX_NMAX ? s_sub_audio_samples : WSX_NMAX;
+    const bool have_early = (s_wsx_early_slot == slot_sec);
+    s_wsx_early_slot = -1;                       /* one use */
+    if (!have_early) {                           /* the whole slot: = slotcap_take() */
+        float fpeak = 0.0f;
+        for (int i = 0; i < n; i++) { float a = fabsf(s_sub_audio[i]); if (a > fpeak) fpeak = a; }
+        s_wsx_gain = (fpeak > 1e-6f) ? (32767.0f / fpeak) : 0.0f;
+    }
+    /* With an early call, samples below WSX_EARLY_SAMPLES are already in
+     * s_wsx_pcm at the gain call 41 used; rewriting them from s_sub_audio
+     * gives the same values. */
+    wsx_pcm_fill(s_sub_audio, 0, n);
+    for (int i = n; i < WSX_NMAX; i++) s_wsx_pcm[i] = 0;
+
+    wsx_params_t p;
+    bool sim_mode;
+    wsx_params_now(&p, &sim_mode);
+    wsx_sink_t k = { .out = out, .rx_only = dc->rx_only, .slot_sec = slot_sec,
+                     .may_early_advance = !dc->rx_only, .sim_suppresses_real = sim_mode };
+    if (have_early) {
+        /* The early call's decodes were published at ~13 s; fold its counts
+         * and DT samples into this slot's result so the slot line, the
+         * auto-sync and the one-advance-per-slot rule all see them. */
+        *out = s_wsx_early;
+        wsx_decode_late(s_wsx_pcm, &p, wsx_on_decode, &k);
+    } else {
+        wsx_decode_slot(s_wsx_pcm, &p, wsx_on_decode, &k);
+    }
 }
 #endif
 
@@ -4794,6 +4877,9 @@ static void ft8_task(void *arg)
             int64_t stft_us   = 0;
             ft8_tx_request_t late_txreq;
             bool    late_tx   = false;
+#ifdef FT8_DECODER_WSJTX
+            bool wsx_early_done = false;
+#endif
             if (e == ESP_OK) {
                 while (processed < n_blocks) {
                     int avail = dsp_ft8_capture_progress();
@@ -4803,6 +4889,14 @@ static void ft8_task(void *arg)
                         stft_us += esp_timer_get_time() - ts;
                         processed++;
                     }
+#ifdef FT8_DECODER_WSJTX
+                    /* WSJT-X's nzhsym-41 decode, at 11.8 s - see wsx_early_call. */
+                    if (!wsx_early_done && avail >= WSX_EARLY_SAMPLES &&
+                        sproto == FTX_PROTOCOL_FT8 && proto_for_mode() == FTX_PROTOCOL_FT8) {
+                        wsx_early_done = true;
+                        wsx_early_call(s_cap_scratch, slot_sec);
+                    }
+#endif
                     if (avail >= cap_target) break;             // slot in (or early-decode cut)
                     int into_slot_ms = (int)((esp_timer_get_time() - t0) / 1000);
                     if (into_slot_ms >= ms_to_boundary) break;                          // boundary
