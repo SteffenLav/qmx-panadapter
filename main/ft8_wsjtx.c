@@ -1420,6 +1420,522 @@ static struct {
     float candidate[MAXCAND][3];
 } st;
 
+/* ================================================================== ft8_a7
+ * lib/ft8/ft8_a7.f90: "a7" decodes. Every decode is remembered per even/odd
+ * sequence; at nzhsym 50 each message heard in the SAME sequence one cycle
+ * earlier is tried again as 206 candidate messages (the next steps of that
+ * QSO) at its old frequency and DT. jt9 on one WAV never has a previous
+ * cycle, so this is the part of WSJT-X's live decoder that a single-file
+ * referee cannot see; jt9 given many WAVs in ONE process does run it.
+ *
+ * Not reproduced: candidates genft8 would pack as anything other than i3=1
+ * or i3=4 (a nonstandard call with a report). They are skipped (distance
+ * 1e30) instead of packed as free text; jt9's free-text codeword for such a
+ * message cannot be the best match for a real a7 signal. */
+#define MAXDEC 200
+static float a7_dt0[MAXDEC][2][2], a7_f0[MAXDEC][2][2];   /* (i, j=seq, k=prev/cur) */
+static char  a7_msg0[MAXDEC][2][2][38];
+static int   a7_ndec[2][2];
+static int   a7_jseq;
+static int   a7_nutc0 = -1;
+
+/* chkcall.f90 */
+static int chkcall(const char* w)
+{
+    int n1 = (int)strlen(w);
+    if (n1 > 11 || strpbrk(w, ".+-?")) return 0;
+    const char* sl = strchr(w, '/');
+    if (n1 > 6 && !sl) return 0;
+    char bc[14];
+    snprintf(bc, 7, "%s", w);                                  /* bc = w(1:6) */
+    if (sl) {
+        int i0 = (int)(sl - w) + 1;                            /* 1-based */
+        if ((i0 - 1 > n1 - i0 ? i0 - 1 : n1 - i0) > 6) return 0;
+        if (i0 >= 2 && i0 <= n1 - 1) {
+            if (i0 - 1 <= n1 - i0) snprintf(bc, sizeof bc, "%s", w + i0);
+            else { memcpy(bc, w, i0 - 1); bc[i0 - 1] = 0; }
+        }
+    }
+    int nbc = (int)strlen(bc);
+    while (nbc > 0 && bc[nbc - 1] == ' ') nbc--;
+    if (nbc > 6) return 0;
+    #define ISL(c) ((c) >= 'A' && (c) <= 'Z')
+    #define ISD(c) ((c) >= '0' && (c) <= '9')
+    if (!ISL(bc[0]) && !(nbc > 1 && ISL(bc[1]))) return 0;
+    if (bc[0] == 'Q' && strncmp(bc, "QU1RK", 5) != 0) return 0;
+    int i1 = 0;
+    if (nbc > 1 && ISD(bc[1])) i1 = 2;
+    if (nbc > 2 && ISD(bc[2])) i1 = 3;
+    if (i1 == 0 || i1 == nbc) return 0;
+    int n = 0;
+    for (int i = i1; i < nbc; i++) { if (!ISL(bc[i])) return 0; n++; }
+    return n >= 1 && n <= 3;
+}
+
+/* stdcall (qra/q65/q65_set_list.f90) */
+static int stdcall(const char* c)
+{
+    int n = (int)strlen(c);
+    while (n > 0 && c[n - 1] == ' ') n--;
+    int i;
+    for (i = n; i >= 2; i--) if (ISD(c[i - 1])) break;
+    int iarea = i, npdig = 0, nplet = 0, nslet = 0;
+    for (i = 1; i <= iarea - 1; i++) { if (ISD(c[i - 1])) npdig++; if (ISL(c[i - 1])) nplet++; }
+    for (i = iarea + 1; i <= n; i++) if (ISL(c[i - 1])) nslet++;
+    return !(iarea < 2 || iarea > 3 || nplet == 0 || npdig >= iarea - 1 || nslet > 3);
+}
+
+/* split77.f90: words (upper case, <= 13 chars); nw is computed BEFORE the
+ * "CQ xx CALL" merge and not after it, exactly as in the Fortran. */
+static int split77(const char* msg, char w[19][14], int nw[19])
+{
+    int k = 0, n = 0;
+    char c0 = ' ';
+    memset(w, 0, 19 * 14);
+    memset(nw, 0, 19 * sizeof(int));
+    for (const char* p = msg; *p; p++) {
+        char c = *p;
+        if (c == ' ' && c0 == ' ') continue;
+        if (c != ' ' && c0 == ' ') { if (k == 19) break; k++; n = 0; }
+        n++;
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if (c != ' ' && n <= 13) w[k - 1][n - 1] = c;
+        c0 = c;
+    }
+    for (int i = 0; i < k; i++) nw[i] = (int)strlen(w[i]);
+    if (k >= 3 && chkcall(w[2]) && strcmp(w[0], "CQ") == 0) {
+        char t[14];
+        snprintf(t, sizeof t, "CQ_%.10s", w[1]);
+        strcpy(w[0], t);
+        for (int i = 1; i < 18; i++) strcpy(w[i], w[i + 1]);
+        w[18][0] = 0;
+        k--;
+    }
+    return k;
+}
+
+static int isgrid4(const char* g)
+{
+    return strlen(g) == 4 && g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R' &&
+           ISD(g[2]) && ISD(g[3]);
+}
+
+static void rtrim(char* s) { int n = (int)strlen(s); while (n > 0 && s[n - 1] == ' ') s[--n] = 0; }
+
+/* ft8_a7_save */
+static void ft8_a7_save(int jseq, float dt, float f, const char* msg)
+{
+    char w[19][14];
+    int nw[19];
+    if (strchr(msg, '/') || strchr(msg, '<')) return;
+    int nwords = split77(msg, w, nw);
+    if (nwords < 1) return;
+    if (strncmp(w[0], "CQ_", 3) == 0) return;
+    int j = jseq;
+    a7_ndec[j][1]++;
+    int i = a7_ndec[j][1];
+    if (i > MAXDEC) return;
+    a7_dt0[i - 1][j][1] = dt;
+    a7_f0[i - 1][j][1] = f;
+    char* m0 = a7_msg0[i - 1][j][1];
+    snprintf(m0, 38, "%s %s", w[0], w[1]);
+    if (strcmp(w[0], "CQ") == 0 && nw[1] <= 2) snprintf(m0, 38, "CQ %s %s", w[1], w[2]);
+    rtrim(m0);
+    if (isgrid4(w[nwords - 1])) {
+        char t[38];
+        snprintf(t, sizeof t, "%s %s", m0, w[nwords - 1]);
+        strcpy(m0, t);
+    }
+    nwords = split77(m0, w, nw);
+    char key[16];
+    snprintf(key, sizeof key, " %s", w[1]);
+    int nprev = a7_ndec[j][0] < MAXDEC ? a7_ndec[j][0] : MAXDEC;
+    for (int q = 0; q < nprev; q++) {
+        if (a7_f0[q][j][0] <= -98.0f) continue;
+        const char* hit = strstr(a7_msg0[q][j][0], key);
+        int i2 = hit ? (int)(hit - a7_msg0[q][j][0]) + 1 : 0;   /* Fortran index() */
+        if (fabsf(f - a7_f0[q][j][0]) <= 3.0f && i2 >= 3) a7_f0[q][j][0] = -98.0f;
+    }
+}
+
+/* The rotation at the top of ft8_decode's decode(): a new UTC moves this
+ * sequence's current table to "previous". */
+static void a7_new_call(int nutc, int nzhsym)
+{
+    if (nzhsym == 41) a7_jseq = (nutc / 5) % 2;
+    if (a7_nutc0 == -1) {
+        memset(a7_msg0, 0, sizeof a7_msg0);
+        memset(a7_dt0, 0, sizeof a7_dt0);
+        memset(a7_f0, 0, sizeof a7_f0);
+    }
+    if (nzhsym == 41 || nutc != a7_nutc0) {
+        int j = a7_jseq, iz = a7_ndec[j][1];
+        int n = iz < MAXDEC ? iz : MAXDEC;
+        for (int i = 0; i < n; i++) {
+            a7_dt0[i][j][0] = a7_dt0[i][j][1];
+            a7_f0[i][j][0] = a7_f0[i][j][1];
+            memcpy(a7_msg0[i][j][0], a7_msg0[i][j][1], 38);
+        }
+        a7_ndec[j][0] = iz;
+        a7_ndec[j][1] = 0;
+        a7_nutc0 = nutc;
+        for (int i = 0; i < MAXDEC; i++) { a7_dt0[i][j][1] = 0; a7_f0[i][j][1] = 0; }
+    }
+}
+
+/* pack28 for what a7 packs: CQ, a <hash>, a nonstandard call (hashed) or a
+ * standard call. The hash saves pack28 makes are left to the caller. */
+static uint32_t ihashcall22(const char* cw)
+{
+    static const char c[] = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/";
+    uint64_t n8 = 0;
+    int L = (int)strlen(cw);
+    for (int i = 0; i < 11; i++) {
+        char ch = i < L ? cw[i] : ' ';
+        const char* q = strchr(c, ch);
+        n8 = 38 * n8 + (uint64_t)((q && ch) ? (q - c) : 0);
+    }
+    return (uint32_t)((47055833459ull * n8) >> (64 - 22));
+}
+static uint32_t pack28(const char* c13)
+{
+    const uint32_t NTOKENS = 2063592, MAX22 = 4194304;
+    static const char a1[] = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", a2[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                      a3[] = "0123456789", a4[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if (strcmp(c13, "CQ") == 0) return 2;
+    if (c13[0] == '<') {
+        char t[14];
+        snprintf(t, sizeof t, "%s", c13 + 1);
+        char* gt = strchr(t, '>');
+        if (gt) *gt = 0;
+        return NTOKENS + ihashcall22(t);
+    }
+    if (!stdcall(c13)) return NTOKENS + ihashcall22(c13);
+    int n = (int)strlen(c13), iarea;
+    for (iarea = n; iarea >= 2; iarea--) if (ISD(c13[iarea - 1])) break;
+    char cs[7] = "      ";
+    if (iarea == 2) { cs[0] = ' '; memcpy(cs + 1, c13, n < 5 ? n : 5); }
+    else memcpy(cs, c13, n < 6 ? n : 6);
+    int i1 = (int)(strchr(a1, cs[0]) - a1), i2 = (int)(strchr(a2, cs[1]) - a2),
+        i3 = (int)(strchr(a3, cs[2]) - a3), i4 = (int)(strchr(a4, cs[3]) - a4),
+        i5 = (int)(strchr(a4, cs[4]) - a4), i6 = (int)(strchr(a4, cs[5]) - a4);
+    uint32_t n28 = 36u * 10 * 27 * 27 * 27 * i1 + 10u * 27 * 27 * 27 * i2 + 27u * 27 * 27 * i3 +
+                   27u * 27 * i4 + 27u * i5 + i6;
+    return (n28 + NTOKENS + MAX22) & ((1u << 28) - 1);
+}
+
+/* A token is i3=1-packable as a call field: CQ, <hash>, or a standard call. */
+static int c28_ok(const char* t) { return strcmp(t, "CQ") == 0 || t[0] == '<' || stdcall(t); }
+
+/* genft8 + encode174_91 for one a7 candidate. Returns 0 when the message is
+ * a form this port does not pack (see the note at the top). */
+static int a7_pack(const char* msg, int8_t* cw, int* itone, char* msgsent)
+{
+    char w[19][14];
+    int nw[19];
+    int nwords = 0;
+    {   /* plain split on blanks: these messages never start "CQ xx CALL" */
+        char t[40];
+        snprintf(t, sizeof t, "%s", msg);
+        for (char* tok = strtok(t, " "); tok && nwords < 19; tok = strtok(NULL, " "))
+            snprintf(w[nwords++], 14, "%s", tok);
+    }
+    (void)nw;
+    int8_t b[77] = {0};
+    uint8_t payload[10];
+    if (nwords >= 2 && nwords <= 3 && c28_ok(w[0]) && c28_ok(w[1])) {
+        const uint32_t MAXGRID4 = 32400;
+        uint32_t igrid4 = MAXGRID4 + 1, ir = 0;
+        if (nwords == 3) {
+            const char* x = w[2];
+            char g4[5];
+            snprintf(g4, sizeof g4, "%s", x);
+            /* ⛔ pack77_1 tests is_grid4(w(nwords)(1:4)) FIRST, so "RR73" goes
+             * out as the GRID SQUARE RR73, never as irpt=3. Tested the other
+             * way round, every a7 RR73 candidate scored as noise: 17 of the
+             * port's 98 missing a7 decodes, 2026-11-21. */
+            if (isgrid4(g4))
+                igrid4 = (uint32_t)((((x[0] - 'A') * 18 + (x[1] - 'A')) * 10 + (x[2] - '0')) * 10 + (x[3] - '0'));
+            else if (strcmp(x, "RRR") == 0) igrid4 = MAXGRID4 + 2;
+            else if (strcmp(x, "RR73") == 0) igrid4 = MAXGRID4 + 3;
+            else if (strcmp(x, "73") == 0) igrid4 = MAXGRID4 + 4;
+            else {
+                if (x[0] == 'R') { ir = 1; x++; }
+                int irpt = atoi(x);
+                if (irpt >= -50 && irpt <= -31) irpt += 101;
+                igrid4 = MAXGRID4 + (uint32_t)(irpt + 35);
+            }
+        }
+        uint32_t n28a = pack28(w[0]), n28b = pack28(w[1]);
+        int q = 0;
+        for (int i = 27; i >= 0; i--) b[q++] = (n28a >> i) & 1;
+        b[q++] = 0;                                            /* ipa */
+        for (int i = 27; i >= 0; i--) b[q++] = (n28b >> i) & 1;
+        b[q++] = 0;                                            /* ipb */
+        b[q++] = (int8_t)ir;
+        for (int i = 14; i >= 0; i--) b[q++] = (igrid4 >> i) & 1;
+        b[q++] = 0; b[q++] = 0; b[q++] = 1;                    /* i3 = 1 */
+        bits_to_payload(b, payload);
+        snprintf(msgsent, 38, "%s", msg);
+    } else {
+        ftx_message_t m;
+        if (ftx_message_encode(&m, &lk_if, msg) != FTX_MESSAGE_RC_OK) return 0;
+        if (ftx_message_get_i3(&m) != 4) return 0;
+        memcpy(payload, m.payload, 10);
+        for (int i = 0; i < 77; i++) b[i] = (payload[i / 8] >> (7 - i % 8)) & 1;
+        ftx_message_offsets_t off;
+        char t[64];
+        if (ftx_message_decode(&m, &lk_if, t, &off) != FTX_MESSAGE_RC_OK) return 0;
+        snprintf(msgsent, 38, "%s", t);
+    }
+    /* encode174_91: 77 bits + CRC14 (computed over 77 bits and 5 zeros) */
+    int8_t m91[91], m96[96] = {0};
+    memcpy(m96, b, 77);
+    int crc = get_crc14(m96, 96);
+    memcpy(m91, b, 77);
+    for (int i = 0; i < 14; i++) m91[77 + i] = (crc >> (13 - i)) & 1;
+    encode174_91_nocrc(m91, cw);
+    uint8_t tones[NN];
+    ft8_encode(payload, tones);
+    for (int i = 0; i < NN; i++) itone[i] = tones[i];
+    return 1;
+}
+
+/* ft8_a7d. Returns nharderrors (-1 = no decode). */
+static int ft8_a7d(float* dd0, int* newdat, const char* call_1, const char* call_2,
+                   const char* grid4, float* xdt, float* f1, float xbase, float* dmin_out,
+                   char* msg37, float* xsnr)
+{
+    static cf cd0[NFFT2], ctwk[32], csymb[32], cs[NN + 1][8];
+    static float s8[NN + 1][8];
+    float bmeta[174], bmetb[174], bmetc[174], bmetd[174];
+    float llr[4][174], s2[512], dmm[206];
+#ifdef A7_DEBUG
+    float dm1[6] = {0};
+#endif
+    const float fs2 = 12000.0f / NDOWN, dt2 = 1.0f / fs2, twopi = 8.0f * atanf(1.0f);
+
+    int std_1 = stdcall(call_1);
+    if (strncmp(call_1, "CQ", 2) == 0 && (call_1[2] == 0 || call_1[2] == ' ')) std_1 = 1;
+    int std_2 = stdcall(call_2);
+
+    float delfbest = 0;
+    int ibest = 0;
+    ft8_downsample(dd0, newdat, *f1, cd0);
+    int i0 = nint((*xdt + 0.5f) * fs2);
+    float smax = 0;
+    for (int idt = i0 - 10; idt <= i0 + 10; idt++) {
+        float sync = sync8d(cd0, idt, ctwk, 0);
+        if (sync > smax) { smax = sync; ibest = idt; }
+    }
+    smax = 0;
+    for (int ifr = -5; ifr <= 5; ifr++) {
+        float delf = ifr * 0.5f, dphi = twopi * delf * dt2, phi = 0;
+        for (int i = 0; i < 32; i++) { ctwk[i] = cosf(phi) + I * sinf(phi); phi = fmodf(phi + dphi, twopi); }
+        float sync = sync8d(cd0, ibest, ctwk, 1);
+        if (sync > smax) { smax = sync; delfbest = delf; }
+    }
+    *f1 = *f1 + delfbest;
+    int nd = 0;
+    ft8_downsample(dd0, &nd, *f1, cd0);
+    float ss[9];
+    for (int idt = -4; idt <= 4; idt++) ss[idt + 4] = sync8d(cd0, ibest + idt, ctwk, 0);
+    int il = 0;
+    for (int q = 1; q < 9; q++) if (ss[q] > ss[il]) il = q;
+    ibest = il - 4 + ibest;
+    *xdt = (ibest - 1) * dt2 - 0.5f;
+    for (int k = 1; k <= NN; k++) {
+        int i1 = ibest + (k - 1) * 32;
+        if (i1 >= 0 && i1 + 31 <= NP2 - 1) memcpy(csymb, cd0 + i1, sizeof csymb);
+        else memset(csymb, 0, sizeof csymb);
+        c2c(csymb, 32, -1);
+        for (int q = 0; q < 8; q++) { cs[k][q] = csymb[q] / 1e3f; s8[k][q] = cabsf(csymb[q]); }
+    }
+    for (int nsym = 1; nsym <= 3; nsym++) {
+        int nt = 1 << (3 * nsym);
+        for (int ihalf = 1; ihalf <= 2; ihalf++)
+            for (int k = 1; k <= 29; k += nsym) {
+                int ks = ihalf == 1 ? k + 7 : k + 43;
+                for (int i = 0; i < nt; i++) {
+                    int i1 = i / 64, i2 = (i & 63) / 8, i3 = i & 7;
+                    if (nsym == 1) s2[i] = cabsf(cs[ks][graymap[i3]]);
+                    else if (nsym == 2) s2[i] = cabsf(cs[ks][graymap[i2]] + cs[ks + 1][graymap[i3]]);
+                    else s2[i] = cabsf(cs[ks][graymap[i1]] + cs[ks + 1][graymap[i2]] + cs[ks + 2][graymap[i3]]);
+                }
+                int i32 = 1 + (k - 1) * 3 + (ihalf - 1) * 87;
+                int ibmax = nsym == 1 ? 2 : nsym == 2 ? 5 : 8;
+                for (int ib = 0; ib <= ibmax; ib++) {
+                    int bit = ibmax - ib;
+                    float m1 = -INFINITY, m0 = -INFINITY;
+                    for (int i = 0; i < nt; i++) {
+                        if ((i >> bit) & 1) { if (s2[i] > m1) m1 = s2[i]; }
+                        else if (s2[i] > m0) m0 = s2[i];
+                    }
+                    float bm = m1 - m0;
+                    if (i32 + ib > 174) continue;
+                    if (nsym == 1) {
+                        bmeta[i32 + ib - 1] = bm;
+                        float den = fmaxf(m1, m0);
+                        bmetd[i32 + ib - 1] = den > 0.f ? bm / den : 0.f;
+                    } else if (nsym == 2) bmetb[i32 + ib - 1] = bm;
+                    else bmetc[i32 + ib - 1] = bm;
+                }
+            }
+    }
+    normalizebmet(bmeta, 174); normalizebmet(bmetb, 174);
+    normalizebmet(bmetc, 174); normalizebmet(bmetd, 174);
+    for (int i = 0; i < 174; i++) {
+        llr[0][i] = 2.83f * bmeta[i]; llr[1][i] = 2.83f * bmetb[i];
+        llr[2][i] = 2.83f * bmetc[i]; llr[3][i] = 2.83f * bmetd[i];
+    }
+
+    /* pack28's hash saves: every candidate packs call_1 (or QU1RK) and call_2 */
+    save_hash_call((strncmp(call_1, "CQ", 2) == 0) ? "QU1RK" : call_1);
+    save_hash_call(call_2);
+
+    float pbest = 0, dmin = 1.e30f;
+    int nharderrors = -1;
+    char msgbest[38] = {0};
+    const int is_cq = strncmp(call_1, "CQ", 2) == 0 && (call_1[2] == 0 || call_1[2] == ' ');
+    for (int imsg = 1; imsg <= 206; imsg++) {
+        char msg[40];
+        int i = imsg;
+        snprintf(msg, sizeof msg, "%s %s", call_1, call_2);
+        if (is_cq && i != 5) snprintf(msg, sizeof msg, "QU1RK %s", call_2);
+        if (!std_1) {
+            if (i == 1 || i >= 6) snprintf(msg, sizeof msg, "<%s> %s", call_1, call_2);
+            if (i >= 2 && i <= 4) snprintf(msg, sizeof msg, "%s <%s>", call_1, call_2);
+        } else if (!std_2) {
+            if (i <= 4 || i == 6) snprintf(msg, sizeof msg, "<%s> %s", call_1, call_2);
+            if (i >= 7) snprintf(msg, sizeof msg, "%s <%s>", call_1, call_2);
+        }
+        char base[40];
+        snprintf(base, sizeof base, "%s", msg);
+        rtrim(base);
+        if (i == 2) snprintf(msg, sizeof msg, "%s RRR", base);
+        if (i == 3) snprintf(msg, sizeof msg, "%s RR73", base);
+        if (i == 4) snprintf(msg, sizeof msg, "%s 73", base);
+        if (i == 5) {
+            if (std_2) {
+                snprintf(msg, sizeof msg, "CQ %s", call_2);
+                if (call_1[2] == '_') snprintf(msg, sizeof msg, "%s %s", call_1, call_2);
+                if (strcmp(grid4, "RR73") != 0) { char t[40]; snprintf(t, sizeof t, "%s %s", msg, grid4); strcpy(msg, t); }
+            } else snprintf(msg, sizeof msg, "CQ %s", call_2);
+        }
+        if (i == 6 && std_2) snprintf(msg, sizeof msg, "%s %s", base, grid4);
+        if (i >= 7) {
+            int isnr = -50 + (i - 7) / 2;
+            if (i & 1) snprintf(msg, sizeof msg, "%s %c%02d", base, isnr < 0 ? '-' : '+', abs(isnr));
+            else snprintf(msg, sizeof msg, "%s R%c%02d", base, isnr < 0 ? '-' : '+', abs(isnr));
+        }
+        rtrim(msg);
+
+        int8_t cw[174];
+        int itone[NN];
+        char msgsent[38];
+        dmm[imsg - 1] = 1.e30f;
+        if (!a7_pack(msg, cw, itone, msgsent)) continue;
+        float pow_ = 0;
+        for (int k = 1; k <= NN; k++) pow_ += s8[k][itone[k - 1]] * s8[k][itone[k - 1]];
+        float d[4];
+        for (int m = 0; m < 4; m++) {
+            float s = 0;
+            for (int q = 0; q < 174; q++) s += ((llr[m][q] >= 0.f) ^ cw[q]) * fabsf(llr[m][q]);
+            d[m] = s;
+        }
+        float dm = fminf(fminf(d[0], d[1]), fminf(d[2], d[3]));
+        dmm[imsg - 1] = dm;
+#ifdef A7_DEBUG
+        if (imsg <= 6) dm1[imsg - 1] = dm;
+#endif
+        if (dm < dmin) {
+            dmin = dm;
+            snprintf(msgbest, sizeof msgbest, "%s", msgsent);
+            pbest = pow_;
+            int m = (dm == d[0]) ? 0 : (dm == d[1]) ? 1 : (dm == d[2]) ? 2 : 3;
+            nharderrors = 0;
+            for (int q = 0; q < 174; q++) nharderrors += ((2 * cw[q] - 1) * llr[m][q] < 0.f);
+        }
+    }
+    int il1 = 0;
+    for (int q = 1; q < 206; q++) if (dmm[q] < dmm[il1]) il1 = q;
+    dmm[il1] = 1.e30f;
+    int il2 = 0;
+    for (int q = 1; q < 206; q++) if (dmm[q] < dmm[il2]) il2 = q;
+    float dmin2 = dmm[il2];
+    *xsnr = -25.f;
+    float arg = pbest / xbase / 3.0e6f - 1.0f;
+    if (arg > 0.f) *xsnr = fmaxf(-25.0f, 10.0f * log10f(arg) - 27.0f);
+#ifdef A7_DEBUG
+    fprintf(stderr, "  d[1..6]=%.1f %.1f %.1f %.1f %.1f %.1f\n", dm1[0], dm1[1], dm1[2], dm1[3], dm1[4], dm1[5]);
+    fprintf(stderr, "a7d '%s' '%s' g='%s' f=%.1f dt=%.2f dmin=%.1f dmin2=%.1f nh=%d best='%s'\n",
+            call_1, call_2, grid4, *f1, *xdt, dmin, dmin2, nharderrors, msgbest);
+#endif
+    if (dmin > 100.0f || dmin2 / dmin < 1.3f) nharderrors = -1;
+    snprintf(msg37, 38, "%s", msgbest);
+    if (strncmp(msg37, "CQ ", 3) == 0 && std_2 && strcmp(grid4, "    ") == 0) nharderrors = -1;
+    if (strncmp(msg37, "QU1RK ", 6) == 0) nharderrors = -1;
+    *dmin_out = dmin;
+    return nharderrors;
+}
+
+/* The a7 block at the end of ft8_decode's decode(), nzhsym 50 only. */
+#ifdef A7_DEBUG
+static float a7_raw[NMAX];
+#endif
+static void a7_run(const wsx_params_t* p, wsx_callback_t cb, void* ctx)
+{
+    int j = a7_jseq;
+    if (!p->lapon || a7_ndec[j][0] < 1) return;
+    int newdat = 1;
+    int n = a7_ndec[j][0] < MAXDEC ? a7_ndec[j][0] : MAXDEC;
+    for (int i = 0; i < n; i++) {
+        if (a7_f0[i][j][0] == -99.0f) break;
+        if (a7_f0[i][j][0] == -98.0f) continue;
+        const char* m0 = a7_msg0[i][j][0];
+        if (strchr(m0, '<')) continue;
+        char call_1[14] = {0}, call_2[14] = {0}, grid4[5] = "    ";
+        const char* s1 = strchr(m0, ' ');
+        if (!s1) continue;                       /* Fortran: i1 = 0, call_1 empty */
+        snprintf(call_1, sizeof call_1, "%.*s", (int)(s1 - m0), m0);
+        const char* s2 = strchr(s1 + 1, ' ');
+        if (s2) {
+            snprintf(call_2, sizeof call_2, "%.*s", (int)(s2 - s1 - 1), s1 + 1);
+            for (int q = 0; q < 4; q++) grid4[q] = s2[1 + q] ? s2[1 + q] : ' ';
+            for (int q = 0; q < 4; q++) if (!s2[1 + q]) { for (int r = q; r < 4; r++) grid4[r] = ' '; break; }
+        } else {
+            snprintf(call_2, sizeof call_2, "%s", s1 + 1);
+        }
+        if (strcmp(grid4, "RR73") == 0 || strchr(grid4, '+') || strchr(grid4, '-')) strcpy(grid4, "    ");
+        char g4[5];
+        snprintf(g4, sizeof g4, "%s", grid4);
+        rtrim(g4);
+        float xdt = a7_dt0[i][j][0], f1 = a7_f0[i][j][0];
+        int si = nint(f1 / 3.125f);
+        if (si < 1) si = 1;
+        if (si > NH1) si = NH1;
+        float xbase = powf(10.0f, 0.1f * (st.sbase[si] - 40.0f));
+        char msg37[38];
+        float dmin, xsnr;
+        /* a7d tests grid4 against "    " (blank) and "RR73"; it builds the
+         * messages with the trimmed grid, as trim() does in Fortran. */
+#ifdef A7_DEBUG
+        if (getenv("A7_RAW")) {   /* debug: the raw slot instead of the residual */
+            float x1 = xdt, f2 = f1, dm2, xs2; char m2[38]; int nd2 = 1;
+            ft8_a7d(a7_raw, &nd2, call_1, call_2, g4[0] ? g4 : "    ", &x1, &f2, xbase, &dm2, m2, &xs2);
+            newdat = 1;
+        }
+#endif
+        int nh = ft8_a7d(st.dd, &newdat, call_1, call_2, g4[0] ? g4 : "    ", &xdt, &f1, xbase,
+                         &dmin, msg37, &xsnr);
+        if (nh >= 0) {
+            int nsnr = (int)xsnr;                  /* nsnr=xsnr: truncation */
+            if (cb) cb(ctx, 10.0f, nsnr, xdt, f1, msg37, 7, 1.0f);
+            ft8_a7_save(j, xdt, f1, msg37);
+        }
+    }
+}
+
 static void ft8apset(const wsx_params_t* p, int* apsym)
 {
     memset(apsym, 0, sizeof(int) * 58);
@@ -1444,8 +1960,15 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
     apctx_t ap;
     ap.p = p;
     g_hash = p->hash_if;
+    a7_new_call(p->nutc, nzhsym);
+#ifdef A7_DEBUG
+    if (nzhsym == 50) memcpy(a7_raw, iwave, sizeof a7_raw);
+#endif
     ft8apset(p, ap.apsym);
-    if (strlen(p->hiscall) >= 3) save_hash_call(p->hiscall);   /* ft8apset does this */
+    /* ft8apset's save_hash_call(hiscall), and pack77's pack28 saves of both
+     * calls in "MYCALL HISCALL RRR" */
+    if (strlen(p->hiscall) >= 3) save_hash_call(p->hiscall);
+    if (strlen(p->mycall) >= 3) save_hash_call(p->mycall);
     if (nzhsym <= 47) {
         memcpy(st.dd, iwave, sizeof st.dd);
         memcpy(st.dd1, st.dd, sizeof st.dd);
@@ -1520,6 +2043,7 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
                     memcpy(st.itone_save[d], itone, sizeof itone);
                     float qual = 1.0f - (nharderrors + dmin) / 60.0f;
                     if (cb) cb(ctx, sync, nsnr, xdt, f1, msg37, iaptype, qual);
+                    ft8_a7_save(a7_jseq, xdt, f1, msg37);
                 }
             }
         }
@@ -1527,6 +2051,7 @@ static void decode_call(const float* iwave, int nzhsym, const wsx_params_t* p,
 l800:
     st.ndec_early = 0;
     if (nzhsym < 50) st.ndec_early = st.ndecodes;
+    if (nzhsym == 50) a7_run(p, cb, ctx);          /* label 900 */
 }
 
 void wsx_default_params(wsx_params_t* p)

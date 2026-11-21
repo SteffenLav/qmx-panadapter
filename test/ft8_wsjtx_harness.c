@@ -67,17 +67,37 @@ static void on_decode(void* ctx, float sync, int snr, float dt, float freq,
     if (ap) nap++; else ndec++;
 }
 
+/* jt9.f90: nutc is the 6 digits before ".wav" (4 if preceded by '_'). */
+static int nutc_from_name(const char* path)
+{
+    const char* e = strstr(path, ".wav");
+    if (!e) e = strstr(path, ".WAV");
+    if (!e || e - path < 6) return 0;
+    char t[8] = {0};
+    if (e[-5] == '_') memcpy(t, e - 4, 4); else memcpy(t, e - 6, 6);
+    for (char* q = t; *q; q++) if (*q < '0' || *q > '9') return 0;
+    return atoi(t);
+}
+
+/* One WAV, or several in ONE run: like jt9 given several files, the hash
+ * table and the a7 (previous-cycle) state carry from file to file. With
+ * several, each file's lines follow a "FILE\t<path>" line. */
 int main(int argc, char** argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s <wav>\n", argv[0]); return 1; }
+    if (argc < 2) { fprintf(stderr, "usage: %s <wav> [<wav> ...]\n", argv[0]); return 1; }
     static int16_t iwave[WSX_NMAX];
-    memset(iwave, 0, sizeof iwave);
-    if (load_wav(iwave, WSX_NMAX, argv[1]) < 0) { fprintf(stderr, "bad wav %s\n", argv[1]); return 1; }
-    wsx_params_t p;
-    wsx_default_params(&p);
-    p.hash_if = &hif;
     clock_t t0 = clock();
-    wsx_decode_slot(iwave, &p, on_decode, NULL);
+    for (int f = 1; f < argc; f++) {
+        memset(iwave, 0, sizeof iwave);
+        if (load_wav(iwave, WSX_NMAX, argv[f]) < 0) { fprintf(stderr, "bad wav %s\n", argv[f]); return 1; }
+        wsx_params_t p;
+        wsx_default_params(&p);
+        p.hash_if = &hif;
+        p.nutc = nutc_from_name(argv[f]);
+        if (argc > 2) printf("FILE\t%s\n", argv[f]);
+        wsx_decode_slot(iwave, &p, on_decode, NULL);
+        fflush(stdout);
+    }
     wsx_prof_print();
     fprintf(stderr, "decodes=%d ap=%d ms=%.0f\n", ndec, nap, 1000.0 * (clock() - t0) / CLOCKS_PER_SEC);
     return 0;

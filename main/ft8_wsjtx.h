@@ -20,6 +20,8 @@ typedef struct {
     int lapon;           /* AP decoding on (jt9: on) */
     int napwid;          /* AP width, Hz (jt9: 75) */
     int nqso_progress;   /* 0..5 (jt9: 0) */
+    int nutc;            /* slot id: jseq = (nutc/5)%2 picks the even/odd a7
+                          * table. jt9: the last 6 digits of the WAV name. */
     char mycall[13];     /* jt9 default K1ABC */
     char hiscall[13];    /* jt9 default W9XYZ */
     /* Callsign hash table for unpack (jt9: packjt77's, filled by every
@@ -27,8 +29,8 @@ typedef struct {
     ftx_callsign_hash_interface_t* hash_if;
 } wsx_params_t;
 
-/* One decode. nap = 0 for a plain decode, 1..6 for an a priori one (jt9
- * prints these with a trailing "aN"). */
+/* One decode. nap = 0 for a plain decode, 1..6 for an a priori one, 7 for
+ * an a7 (previous-cycle) one (jt9 prints these with a trailing "aN"). */
 typedef void (*wsx_callback_t)(void* ctx, float sync, int snr, float dt, float freq,
                                const char* msg, int nap, float qual);
 
