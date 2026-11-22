@@ -2,7 +2,7 @@
 
 Reaching the Tab5 from outside your home.
 
-## The short version
+## The short answer
 
 The web interface has **no password and no TLS**, and it can key the radio. So
 do not expose it to the internet directly. Put it behind a tunnel instead, and
