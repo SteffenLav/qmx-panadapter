@@ -53,9 +53,27 @@ analysis is below.
 Both PDFs are in `docs/qmx-reference/` (gitignored — vendor copyright), with
 `pdftotext -layout` extracts alongside.
 
-⚠ **QDX firmware is frozen.** The last release is `1_10_.zip`, July 2023 — three
-years old. Hans's effort moved to the QMX. Do not plan around a QDX firmware
-change; in particular, do not wait for `TA`.
+⛔ **CORRECTED 2026-11-22 — THIS WAS WRONG.** It said the QDX firmware was
+frozen at `1_10_.zip`, July 2023, and that nothing newer would come. **There is
+a 1.12.** Mark N8MH, who has four QDX and has been operating one on the air
+through this firmware, reports he lost five of his first ten days to **1.12
+being broken on transmit**.
+
+Two lessons, and the second is the one that costs:
+
+- The release list this document was built from was stale, and nothing in the
+  document could have revealed that. It was written from vendor documents with
+  no QDX on the bench — see the warning at the top — and a frozen-firmware
+  claim is exactly the kind of assertion that rots silently.
+- **The QDX firmware version is therefore a variable, not a constant.** A user
+  on 1.12 may see transmit fail for reasons that have nothing to do with our
+  code, and we would have no way to tell that apart from our own defect.
+  `VN;` already reports it. Record it in any QDX fault report before
+  diagnosing anything.
+
+What still stands: do not *wait* for a QDX firmware change, and in particular
+do not wait for `TA` — the PCM path below is the answer regardless. Hans's
+main effort did move to the QMX.
 
 ⚠ **The QDX manual's command list is not exhaustive.** The changelog records a
 `TP` command (STM32 temperature sensor) that never appears in the manual's
