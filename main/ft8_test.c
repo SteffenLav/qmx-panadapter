@@ -546,6 +546,25 @@ static volatile bool  s_ft8_running  = false;
 // writer each, single-word RV32 stores - volatile is sufficient.
 static volatile uint32_t s_decode_jobs_queued = 0;
 static volatile uint32_t s_decode_jobs_done   = 0;
+
+/* ⭐ THE "RX: n decoded" LINE AND THE PIECE PASS (2026-11-22, operator on
+ * the glass: "A LOT of stations decoded and streaming into the Tab5 screen -
+ * but the text line in the pane is not following along").
+ *
+ * It is not an overrun and it is not a refresh problem. The line is written
+ * ONCE per slot, at the end of decode_slot(), and wsx_piece_pass() runs AFTER
+ * decode_slot() has returned - it must, so the TX hold never waits for it.
+ * Every piece decode therefore arrives after the number was latched. The pane
+ * already refreshes (the pass calls ft8_screen_view_request_refresh()), which
+ * is exactly why the rows appear while the count does not move.
+ *
+ * MEASURED on bench1 over 4087 on-air slots: the pass adds 1.68 decodes a
+ * slot, +12.5 %. So the glass was under-reporting by that much, every slot.
+ *
+ * Both of these are touched only by the decode task - decode_slot() and
+ * wsx_piece_pass() run in the same loop of it - so no lock is needed. */
+static int  s_rx_line_n = 0;           /* the count the line last showed */
+static char s_rx_line[48] = { 0 };     /* byte-for-byte what we wrote */
 // True for the whole lifetime of one ft8_task (capture) instance. A fast
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
 // first finished tearing down; the two clobber the shared s_decode_queue and
@@ -3400,7 +3419,21 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     wsx_piece_end();
     pl->ready = false;
     s_pc_full = false;                 /* the buffer is free for the next slot */
-    if (n_new > 0) ft8_screen_view_request_refresh();
+    if (n_new > 0) {
+        ft8_screen_view_request_refresh();
+        /* ...and move the count on the glass with them. ONLY if the line is
+         * still the one this slot wrote: this runs seconds after decode_slot()
+         * returned, and in that window a TX, a tune or an error may own the
+         * status line. Overwriting that with a decode count would hide
+         * something the operator needs more. */
+        char cur[64];
+        ft8_status_get(cur, sizeof(cur));
+        if (strcmp(cur, s_rx_line) == 0) {
+            s_rx_line_n += n_new;
+            snprintf(s_rx_line, sizeof(s_rx_line), "RX: %d decoded", s_rx_line_n);
+            ft8_status_set("%s", s_rx_line);
+        }
+    }
     /* One line per slot, zero included: the instrument for the on-air yield. */
     ESP_LOGI(TAG, "slot %d wsjtx pieces: tried %d of %d, +%d new, %d dup, %d ms "
                   "(setup %d ms), %s",
@@ -4188,7 +4221,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
      * It also skips ft8_status_set(): the status line says what the RX slot
      * did, and overwriting it with an alternate's count would make the glass
      * read 0 on a perfectly good primary slot. */
-    ft8_status_set("RX: %d decoded", n_shown);
+    /* Remember what was written, so the piece pass can tell its own line
+     * from a TX or error message that replaced it - see s_rx_line above. */
+    s_rx_line_n = n_shown;
+    snprintf(s_rx_line, sizeof(s_rx_line), "RX: %d decoded", n_shown);
+    ft8_status_set("%s", s_rx_line);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: mon=%d off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
