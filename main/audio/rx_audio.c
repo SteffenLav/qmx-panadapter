@@ -91,6 +91,13 @@ static rxaud_mode_t mode_from_cat_str(const char *m)
      * chain below already produces the complex baseband an envelope detector
      * needs. Only the detector was missing. See am_demod.h. */
     if (strcmp(m, "AM") == 0)  return RXAUD_MODE_AM;
+    /* DiGi plays as USB (operator, 2026-11-22: "play DiGi as USB - why not").
+     * It was RXAUD_MODE_NONE, so on an FT8/FT4/WSPR dial the speaker and the
+     * web page's Listen were silent and the task slept - which read as a
+     * broken Listen. DiGi-R too: compute_passband_edges_hz() in ui.c, the
+     * passband authority, draws both above the dial, so USB is the side the
+     * operator sees. The RTTY page already ran DiGi on the USB setup. */
+    if (strcmp(m, "DiGi") == 0 || strcmp(m, "DiGi-R") == 0) return RXAUD_MODE_SSB;
     return RXAUD_MODE_NONE;
 }
 
@@ -1716,7 +1723,8 @@ static void rx_audio_task(void *arg)
                                                             : RXAUD_MODE_NONE;
         /* The QMX streams the same I/Q in every mode, so RTTY needs no
          * particular one; in a mode the audio path does not demodulate
-         * (DIGI) it runs on the USB setup, D=8 = 6 kHz. */
+         * (FM, TUNE) it runs on the USB setup, D=8 = 6 kHz. DiGi is USB in
+         * mode_from_cat_str() since 2026-11-22. */
         if (mode == RXAUD_MODE_NONE && rtty) mode = RXAUD_MODE_SSB;
         bool active = (mode != RXAUD_MODE_NONE);
 
