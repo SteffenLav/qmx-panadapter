@@ -4414,6 +4414,7 @@ static lv_obj_t *s_slider_charge_limit_pct = NULL;
 static lv_obj_t *s_check_distance_miles = NULL;
 static lv_obj_t *s_check_wspr_miles     = NULL;   /* DRAWER_SEC_WSPRDIST */
 static lv_obj_t *s_check_tx_subnet = NULL;   /* T206 TX interlock, drawer row */
+static lv_obj_t *s_check_server = NULL;    // "Server mode" checkbox - synced when a wake ends the mode
 static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panadapter only)
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
@@ -9928,6 +9929,22 @@ static void display_sleep_enter(void)
     ESP_LOGI(TAG, "display sleep: backlight off (touch to wake)");
 }
 
+static void sync_cb(lv_obj_t *cb, bool on);
+
+/* Everything that follows server mode going OFF, whoever turned it off: the
+ * setter (drawer, web) or a touch wake. It used to be written out twice - the
+ * wake cleared the flag inline and never told the drawer, so the "Server mode"
+ * checkbox still read ticked after a touch had ended the mode (found
+ * 2026-11-18). Caller holds the display lock. */
+static void server_mode_ended(const char *why)
+{
+    rx_audio_suspend(false);
+    if (!s_server_was_muted) rx_audio_set_muted(false);
+    sync_cb(s_check_server, false);
+    ESP_LOGI(TAG, "server mode off - %s%s", why,
+             s_server_was_muted ? " (speaker left muted, as it was)" : "");
+}
+
 static void display_sleep_wake(void)
 {
     qmx_settings_t c;
@@ -9949,9 +9966,7 @@ static void display_sleep_wake(void)
      * crashed device rather than as a mode. */
     if (s_server_mode) {
         s_server_mode = false;
-        rx_audio_suspend(false);
-        if (!s_server_was_muted) rx_audio_set_muted(false);
-        ESP_LOGI(TAG, "server mode off - woken by touch");
+        server_mode_ended("woken by touch");
     }
     ESP_LOGI(TAG, "display sleep: woken by touch");
 }
@@ -11086,7 +11101,14 @@ bool ui_get_server_mode(void) { return s_server_mode; }
 
 void ui_set_server_mode(bool on)
 {
-    if (s_server_mode == on) return;
+    /* The web action calls this from httpd, and both branches touch LVGL
+     * (input devices, the checkbox). The lock is recursive, so the drawer's
+     * own callback, which already holds it, is unaffected. */
+    if (!display_lock(500)) {
+        ESP_LOGW(TAG, "server mode %s: display lock busy, not changed", on ? "on" : "off");
+        return;
+    }
+    if (s_server_mode == on) { display_unlock(); return; }
     s_server_mode = on;
     if (on) {
         /* Reuse the idle-sleep path: it already turns the backlight off and
@@ -11118,12 +11140,11 @@ void ui_set_server_mode(bool on)
                       "is muted; the browser is unaffected (ws_push_task reads "
                       "the DSP directly)");
     } else {
-        display_sleep_wake();
-        rx_audio_suspend(false);
-        if (!s_server_was_muted) rx_audio_set_muted(false);
-        ESP_LOGI(TAG, "server mode off - drawing resumed%s",
-                 s_server_was_muted ? " (speaker left muted, as it was)" : "");
+        display_sleep_wake();   /* sees s_server_mode already false: no double tail */
+        server_mode_ended("drawing resumed");
     }
+    sync_cb(s_check_server, on);
+    display_unlock();
 }
 
 bool ui_any_overlay_active(void)
@@ -17002,6 +17023,7 @@ static void drawer_refresh_checkboxes(void)
     sync_cb(s_check_charge_limit,   c.charge_limit_en);
     sync_cb(s_cb_bt,                c.bt_mouse_en);
     sync_cb(s_check_rit_pill,       c.rit_pill_show);
+    sync_cb(s_check_server,         ui_get_server_mode());
     /* These three are owned by a module rather than read straight from the
        struct, so they are asked rather than copied. */
     sync_cb(s_switch_iq,            iq_balance_is_enabled());
@@ -18057,9 +18079,9 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        lv_obj_t *cb = make_drawer_checkbox(sec, ui_get_server_mode(),
-                                            drawer_check_server_cb, NULL);
-        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
+        s_check_server = make_drawer_checkbox(sec, ui_get_server_mode(),
+                                              drawer_check_server_cb, NULL);
+        lv_obj_align(s_check_server, LV_ALIGN_TOP_RIGHT, 0, 6);
 
         lv_obj_t *note = lv_label_create(sec);
         lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
