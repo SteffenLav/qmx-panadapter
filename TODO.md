@@ -204,6 +204,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
+| T216 | **Drag the spectrum/waterfall split from the frequency scale.** Long-press the 32 px scale, the whole scale lights up, drag. 100..400 px, persisted (`spectrum_h`), shared by the panadapter, CW and RTTY pages. `SPECTRUM_H`/`WATERFALL_H` are now variables; both canvases allocate once at the maximum. Built, gates pass, NOT flashed and NOT touched on glass. | Robert VE7ZN |
 | T215 | **`status_task` held TWO `qmx_settings_t` (4268 B each, MEASURED from the ELF) on a 13 KB stack** - its own loop local and `status_battery_display_level()`'s. Mark N8MH crashed on it twice 2026-11-17. The real non-QDX slice (`c7c48bcb`). | Mark N8MH |
 | T214 | **DECISION: leave the FT8 subtract pass and OSD compiled out?** Both are wired and measured; the piece pass (T208) now spends the slot budget they would need. | operator |
 | T213 | **`tools/bench.json` bench1 role line is stale** - says v2.0.2, board reports `988e35c8`. | — |

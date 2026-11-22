@@ -94,6 +94,7 @@ char *config_io_export(size_t *out_len)
     APP("rtty_contest_next  = %u\n", (unsigned)(c.rtty_contest.serial_next ? c.rtty_contest.serial_next : 1));
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
+    APP("spectrum_h         = %u\n", (unsigned)c.spectrum_h);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
     APP("ema_alpha          = %.2f\n", (double)c.ema_alpha);
     APP("db_min             = %.0f\n", (double)c.db_min);
@@ -510,6 +511,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "spectrum_h"))        settings_set_spectrum_h((uint16_t)atoi(val));
             else if (!strcasecmp(key, "brightness"))        settings_set_brightness_pct((uint8_t)atoi(val));
             else if (!strcasecmp(key, "ema_alpha"))         settings_set_ema_alpha((float)atof(val));
             else if (!strcasecmp(key, "db_min"))            settings_set_db_min((float)atof(val));

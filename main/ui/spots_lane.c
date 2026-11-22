@@ -1047,7 +1047,12 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
 
 // The overlay's height is passed in at build time, but the row geometry has to be
 // checkable without it, so the test pins the value ui.c actually uses.
-#define SPECTRUM_H_ASSUMED 200
+#define SPECTRUM_H_ASSUMED     200
+/* ⛔ THESE THREE MUST TRACK ui.c's SPECTRUM_H_MIN / _DEF / _MAX (T216).
+ * They are pinned here on purpose - the test has to be runnable without the
+ * UI built - so a change to the drag range in ui.c has to be copied here. */
+#define SPECTRUM_H_MIN_ASSUMED 100
+#define SPECTRUM_H_MAX_ASSUMED 400
 
 void spots_lane_selftest(void)
 {
@@ -1111,25 +1116,36 @@ void spots_lane_selftest(void)
     for (int r = 0; r < LABEL_ROWS; r++) re3[r] = -10000;
     pick_row(0, 50, re3);
     T_CHECK(pick_row(50 + LABEL_PAD - 1, 50, re3) == 1, "one px short should go to row 1");
-    // --- vertical geometry
-    const int H = SPECTRUM_H_ASSUMED;
+    /* --- vertical geometry, AT EVERY HEIGHT THE DRAG CAN PRODUCE (T216).
+     *
+     * This used to check one pinned height because the spectrum had one. It
+     * now has a range, and the row geometry is the part of this file most
+     * likely to stop fitting at the short end - label_block_top() centres a
+     * fixed LABEL_ROWS * ROW_H block, which cannot shrink. Checking only the
+     * default would pass while the minimum pushed labels off the canvas. */
+    static const int heights[] = { SPECTRUM_H_MIN_ASSUMED,
+                                   SPECTRUM_H_ASSUMED,
+                                   SPECTRUM_H_MAX_ASSUMED };
+    for (unsigned hi = 0; hi < sizeof(heights) / sizeof(heights[0]); hi++) {
+    const int H = heights[hi];
     // The label block is centred on the middle of the spectrum.
     int blk_top = label_block_top(H), blk_bot = blk_top + LABEL_ROWS * ROW_H;
     int blk_mid = (blk_top + blk_bot) / 2;
     T_CHECK(blk_mid > H / 2 - ROW_H && blk_mid < H / 2 + ROW_H,
-            "label block centre %d is not near mid-spectrum %d", blk_mid, H / 2);
-    T_CHECK(blk_top >= 0, "label block starts above the spectrum (%d)", blk_top);
+            "H=%d: label block centre %d is not near mid-spectrum %d", H, blk_mid, H / 2);
+    T_CHECK(blk_top >= 0, "H=%d: label block starts above the spectrum (%d)", H, blk_top);
     // Every row must fit, and its line must run DOWNWARDS with usable length.
     for (int r = 0; r < LABEL_ROWS; r++) {
         int ly = label_row_y(H, r);
-        T_CHECK(ly + FONT_H < H, "row %d text ends at %d, past the spectrum (%d)", r, ly + FONT_H, H);
+        T_CHECK(ly + FONT_H < H, "H=%d: row %d text ends at %d, past the spectrum", H, r, ly + FONT_H);
         int top = line_top_y(H, r);
-        T_CHECK(top > ly, "row %d line starts at %d, ABOVE its own label at %d (must drop)", r, top, ly);
-        T_CHECK(H - top >= 8, "row %d line is only %d px to the axis", r, H - top);
+        T_CHECK(top > ly, "H=%d: row %d line starts at %d, ABOVE its own label at %d (must drop)", H, r, top, ly);
+        T_CHECK(H - top >= 8, "H=%d: row %d line is only %d px to the axis", H, r, H - top);
     }
     // Rows must be ordered top to bottom.
     for (int r = 1; r < LABEL_ROWS; r++)
-        T_CHECK(label_row_y(H, r) > label_row_y(H, r - 1), "row %d is not below row %d", r, r - 1);
+        T_CHECK(label_row_y(H, r) > label_row_y(H, r - 1), "H=%d: row %d is not below row %d", H, r, r - 1);
+    }
 
     s_view_lo = save_lo; s_view_hi = save_hi;
 
@@ -1143,6 +1159,19 @@ int spots_lane_top_hit_y(void)
 {
     if (!s_lane_h) return 0;        // not built yet
     return s_lane_y + label_block_top(s_lane_h) - LABEL_EXT_CLICK;
+}
+
+void spots_lane_set_geometry(int y, int h)
+{
+    if (!s_lane || h <= 0) return;
+    if (y == s_lane_y && h == s_lane_h) return;
+    s_lane_y = y;
+    s_lane_h = h;
+    lv_obj_set_size(s_lane, DISPLAY_H_RES, h);
+    lv_obj_align(s_lane, LV_ALIGN_TOP_LEFT, 0, y);
+    /* Ticks and labels are positioned per repaint from s_lane_h, so one
+     * repaint is the whole update - nothing here needs to touch the pools. */
+    if (s_visible) repaint();
 }
 
 void spots_lane_set_view(uint32_t lo_hz, uint32_t hi_hz)

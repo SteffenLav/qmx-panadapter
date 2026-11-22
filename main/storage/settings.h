@@ -409,6 +409,7 @@ typedef struct {
     uint32_t js8_freq_hz; // last JS8 preset frequency in Hz, default 14078000
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
+    uint16_t spectrum_h;   // T216: spectrum height in px (100..400); the waterfall takes the rest
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
     char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
     /* US state/province, two letters, upper case, EMPTY when not set.
@@ -1079,6 +1080,10 @@ void     settings_set_ftx_freq_hz(uint8_t op_mode, uint32_t hz);
 void settings_set_cw_pitch_hz(uint16_t hz);
 // Save waterfall colour-map index (debounced flush).
 void settings_set_colormap_idx(uint8_t idx);
+/* T216 spectrum/waterfall split. Clamped by the UI, not here - settings.c
+ * stores what it is given so an out-of-range value from an imported config is
+ * visible rather than silently rewritten. */
+void settings_set_spectrum_h(uint16_t px);
 
 // Operator identity. Pass NULL or empty to clear. Used by the FT8
 // transmitter (v0.11+) and shown in the FT8 view info pane.
@@ -1222,6 +1227,7 @@ uint8_t settings_get_wspr_rx_cycles(void);
 uint8_t settings_get_wf_rows_per_s(void);
 /* Narrow read, same reason as the rows/s one above it. */
 uint8_t settings_get_spec_peak_s(void);
+uint16_t settings_get_spectrum_h(void);   // T216, narrow: ui.c reads it at build and after an import
 /* The spectrum EMA coefficient, 0..1. Narrow for the same reason again:
  * ui_sync_smoothing_controls() runs on httpd. ⚠ This is the COEFFICIENT, not
  * the smoothing percentage the drawer and the web form show - those invert it

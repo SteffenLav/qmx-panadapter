@@ -759,3 +759,17 @@ void ui_drawer_map_masks(uint64_t *basic, uint64_t *adv);
  * or reboot your QMX/+" prompt stays hidden: obeying it mid-boot starves
  * internal RAM for the whole session. */
 void ui_notify_boot_complete(void);
+
+/* ---- T216: the spectrum/waterfall split (Robert VE7ZN) -------------------
+ * Long-press the frequency scale between the two panes, then drag. Shared by
+ * the panadapter, CW and RTTY pages because all three show the SAME spectrum
+ * and waterfall objects - there is one of each, hidden and slid per mode.
+ * ui_set_spectrum_h() clamps to 100..400 px, persists, and must run on the
+ * LVGL thread.
+ *
+ * ⚠ A config IMPORT (qmx-config.txt "spectrum_h") writes the setting but does
+ * NOT move the panes - config_io runs off the LVGL thread and nothing here
+ * polls. The imported split appears at the next boot. There is no web control
+ * for the same reason; the gesture is the only live path. */
+void ui_set_spectrum_h(int h);
+int  ui_get_spectrum_h(void);

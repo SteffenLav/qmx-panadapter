@@ -105,7 +105,27 @@ static const char *TAG = "ui";
 #define TOP_BAR_H       60
 #define DRAWER_W        520  /* Phase 5.10D Stage 2: settings drawer width (520 in v0.8.x to fit WiFi button + smoothing slider) */
 #define BOTTOM_BAR_H    36
-#define SPECTRUM_H      200
+/* ⭐ THE SPECTRUM HEIGHT IS A VARIABLE, NOT A CONSTANT (T216, Robert VE7ZN).
+ *
+ * Long-pressing the frequency scale between the spectrum and the waterfall
+ * arms a drag that moves the boundary. SPECTRUM_H was a #define used at 51
+ * sites and WATERFALL_H derives from it at 32 more, so rather than edit 83
+ * call sites the macro now expands to the variable and every site follows.
+ *
+ * ⛔ THE TWO CANVASES ARE ALLOCATED ONCE, AT SPECTRUM_H_MAX / the waterfall
+ * height that goes with SPECTRUM_H_MIN - never re-allocated on a drag. Both
+ * row strides are independent of the height (DISPLAY_H_RES and WF_CANVAS_W),
+ * so a shorter canvas is simply the top of the same buffer. Re-allocating
+ * PSRAM inside a touch handler, with the render task reading the old pointer
+ * on the other core, is a use-after-free waiting for a busy band.
+ *
+ * Costs ~1.3 MB more PSRAM of ~15 MB free. Measured sizes at the defaults:
+ * spectrum 1280x200x2 = 500 KB, waterfall 1792x740x2 = 2.53 MB. */
+#define SPECTRUM_H_MIN  100
+#define SPECTRUM_H_MAX  400
+#define SPECTRUM_H_DEF  200
+static int s_spectrum_h = SPECTRUM_H_DEF;
+#define SPECTRUM_H      (s_spectrum_h)
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
 #define BANDPLAN_H      22  /* coarse CW/Digi/Phone band-plan strip under the freq axis */
 /* Live spots take NO layout height: they are a see-through overlay on the
@@ -2587,7 +2607,11 @@ static void ui_set_zoom_pan(float zoom, int pan_bins)
     ui_set_zoom_apply(zoom, pan_bins);
 }
 
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
+#define WF_H_OF(spec_h) (DISPLAY_V_RES - TOP_BAR_H - (spec_h) - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
+#define WATERFALL_H     WF_H_OF(SPECTRUM_H)
+/* The tallest waterfall is the one that goes with the SHORTEST spectrum - that
+ * is the allocation, and it never changes. 470 rows at the current numbers. */
+#define WATERFALL_H_MAX WF_H_OF(SPECTRUM_H_MIN)
 
 /* ⭐ THE WATERFALL CANVAS IS WIDER THAN THE SCREEN (#298 phase 3).
  *
@@ -4851,6 +4875,9 @@ static int     s_wf_stroll_off = 0;   /* the pan gesture's own offset, added on 
 
 static void wf_apply_x(void);    /* defined beside the row push, used from ui_init */
 static void wf_clear_all(void);
+/* T216. Declared here because split_drag_cb (build_label_bar, far above the
+ * definition) calls it with final=false for the live drag. */
+static void ui_apply_spectrum_h(int h, bool final);
 static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the waterfall (not drawn into the
                                       // bitmap — that trailed as rows scrolled); a single current-position line
 
@@ -6617,8 +6644,11 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_spectrum_obj, 0, 0);
     lv_obj_clear_flag(s_spectrum_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 1280 x 200 x 2 bytes = 512 KB in PSRAM
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H, 16,
+    /* 1280 x 400 x 2 bytes = 1.02 MB in PSRAM - allocated at SPECTRUM_H_MAX,
+     * never re-allocated. A shorter spectrum uses the top SPECTRUM_H rows of
+     * this buffer; the row stride is DISPLAY_H_RES either way. See the note on
+     * SPECTRUM_H. */
+    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H_MAX, 16,
                                          LV_DRAW_BUF_STRIDE_ALIGN);
     s_spec_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_spec_canvas_buf) {
@@ -6780,6 +6810,69 @@ static void draw_label_ticks(void)
     if (s_label_canvas) lv_obj_invalidate(s_label_canvas);
 }
 
+/* ==== T216: drag the spectrum/waterfall split from the frequency scale ====
+ *
+ * ⭐ WHY THE SCALE AND NOT EITHER PANE. The spectrum and the waterfall are both
+ * working surfaces - tap-to-tune, one-finger pan, pinch-zoom - so a long-press
+ * there would have to be told apart from a tune that paused. The 32 px scale
+ * between them had NO touch handler at all, so this gesture displaces nothing.
+ * The operator proposed the target; it was the right one.
+ *
+ * ⛔ PRESSED/PRESSING/RELEASED, NOT LV_EVENT_GESTURE. Same reason as
+ * freq_kp_swipe_cb above: lv_indev_scroll_handler() claims scroll_obj before
+ * gesture detection runs, and indev_gesture() then bails. That event never
+ * fires here.
+ *
+ * The long press is the arming step, so a stray graze on the scale cannot move
+ * the layout. While armed the whole scale lights up - the operator's own
+ * description of what should tell him the drag is live. */
+static lv_obj_t *s_split_glow    = NULL;   /* the "lit up" overlay, hidden when idle */
+static bool      s_split_armed   = false;
+static int       s_split_base_h  = 0;      /* SPECTRUM_H when the drag armed */
+static lv_coord_t s_split_base_y = 0;      /* finger y when the drag armed      */
+
+static void split_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        s_split_armed  = true;
+        s_split_base_h = SPECTRUM_H;
+        s_split_base_y = p.y;
+        if (s_split_glow) lv_obj_clear_flag(s_split_glow, LV_OBJ_FLAG_HIDDEN);
+        ESP_LOGI(TAG, "split: armed at %d px", s_split_base_h);
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        if (!s_split_armed) return;
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        /* Dragging DOWN grows the spectrum, which is what the finger is doing
+         * to the boundary - the scale follows the finger, it does not oppose
+         * it. Applied live so the operator sees the layout he is choosing. */
+        ui_apply_spectrum_h(s_split_base_h + (p.y - s_split_base_y), false);
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (!s_split_armed) return;
+        s_split_armed = false;
+        if (s_split_glow) lv_obj_add_flag(s_split_glow, LV_OBJ_FLAG_HIDDEN);
+        /* The expensive half of the resize - waterfall clear and peak reset -
+         * runs exactly once, here. See ui_apply_spectrum_h's `final`. */
+        ui_apply_spectrum_h(SPECTRUM_H, true);
+        /* Persist on release only. Writing NVS on every PRESSING event would
+         * be a few hundred writes per drag. */
+        settings_set_spectrum_h((uint16_t)SPECTRUM_H);
+        ESP_LOGI(TAG, "split: saved %d px", SPECTRUM_H);
+    }
+}
+
 static void build_label_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -6821,6 +6914,30 @@ static void build_label_bar(lv_obj_t *parent)
             lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, tick_xs[i] - 28, -3);
         }
     }
+
+    /* T216. Created LAST so it draws over the tick canvas and the labels -
+     * "the whole scale lit up" has to be visible through whatever is already
+     * on the bar. Not clickable: the press belongs to the bar underneath. */
+    s_split_glow = lv_obj_create(bar);
+    lv_obj_set_size(s_split_glow, DISPLAY_H_RES, LABEL_BAR_H);
+    lv_obj_align(s_split_glow, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(s_split_glow, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_bg_opa(s_split_glow, LV_OPA_30, 0);
+    lv_obj_set_style_border_color(s_split_glow, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_border_width(s_split_glow, 2, 0);
+    lv_obj_set_style_radius(s_split_glow, 0, 0);
+    lv_obj_set_style_pad_all(s_split_glow, 0, 0);
+    lv_obj_clear_flag(s_split_glow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_split_glow, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_split_glow, LV_OBJ_FLAG_HIDDEN);
+
+    /* The bar had no handler at all before this - see split_drag_cb. */
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(bar, UI_FLAG_NOT_HOT);
+    lv_obj_add_event_cb(bar, split_drag_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(bar, split_drag_cb, LV_EVENT_PRESSING,     NULL);
+    lv_obj_add_event_cb(bar, split_drag_cb, LV_EVENT_RELEASED,     NULL);
+    lv_obj_add_event_cb(bar, split_drag_cb, LV_EVENT_PRESS_LOST,   NULL);
 }
 
 // ==== Band-plan strip: coarse CW/Digi/Phone reference for the current band ====
@@ -7837,7 +7954,10 @@ static void build_waterfall(lv_obj_t *parent)
     // Allocate 2x WATERFALL_H so we can use the "double buffer" scroll trick:
     // new rows are written to both write_head and write_head+WATERFALL_H positions,
     // and the canvas view pointer moves through the buffer instead of memmove'ing.
-    size_t buf_size = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    /* At WATERFALL_H_MAX, not WATERFALL_H - the split moves, the buffer does
+     * not. 1792 x 940 x 2 = 3.37 MB. The mirror offset and the head modulus
+     * are the CURRENT WATERFALL_H, which is always <= this. */
+    size_t buf_size = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, WATERFALL_H_MAX * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
         ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_size);
@@ -7906,8 +8026,12 @@ static void build_waterfall(lv_obj_t *parent)
      * So the canvas now owns the ENTIRE 2x-height buffer for the whole session,
      * and the view window is chosen with lv_image_set_offset_y(), which is a
      * field write plus an invalidate - no cache drop, no set_src. */
+    /* ⛔ THE SOURCE HEIGHT IS WATERFALL_H_MAX * 2 AND IS SET ONCE, EVER.
+     * Re-pointing it on a split change would reintroduce the blink described
+     * above, once per drag. Only the OBJECT's height follows the split, below;
+     * the window into this source stays an offset_y. */
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
-                         WF_CANVAS_W, WATERFALL_H * 2, LV_COLOR_FORMAT_RGB565);
+                         WF_CANVAS_W, WATERFALL_H_MAX * 2, LV_COLOR_FORMAT_RGB565);
     /* set_buffer sized the object to the SOURCE (2x tall). Clamp it back to one
      * screenful, which is what makes the offset a window rather than a scroll
      * of an oversized object. */
@@ -7922,7 +8046,7 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
-    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H * 2 * 2);
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H_MAX * 2 * 2);
     wf_apply_x();   /* the view starts centred in the slack, not at column 0 */
     lv_obj_invalidate(s_wf_canvas);
 
@@ -9317,6 +9441,18 @@ void ui_init(lv_display_t *disp)
     // for why).
     build_edge_swipe_strips(scr);
     build_resource_monitor(scr);
+
+    /* ⛔ T216: SEED THE SPLIT BEFORE ANY PANE IS BUILT, not with
+     * ui_set_spectrum_h() afterwards. Every build_* below reads SPECTRUM_H for
+     * its own size and position; building at 200 and then moving everything
+     * would do the same work twice and leave any pane that caches a height at
+     * build time (the spots lane did) pointing at the wrong one. */
+    {
+        int saved = (int)settings_get_spectrum_h();
+        if (saved < SPECTRUM_H_MIN) saved = SPECTRUM_H_MIN;
+        if (saved > SPECTRUM_H_MAX) saved = SPECTRUM_H_MAX;
+        s_spectrum_h = saved;
+    }
 
     build_top_bar(scr);
     build_spectrum(scr);
@@ -13626,10 +13762,120 @@ static void wf_apply_x(void)
     if (s_wf_canvas) lv_obj_set_x(s_wf_canvas, s_wf_stroll_off - s_wf_view_x);
 }
 
+/* ⭐ MOVE THE SPECTRUM/WATERFALL BOUNDARY (T216, Robert VE7ZN).
+ *
+ * Everything that follows is pure geometry plus two invalidations. The buffers
+ * are already big enough for any height in the range (see SPECTRUM_H) so
+ * nothing is allocated or freed here - which is what makes it safe to call
+ * from the drag handler while the render task is mid-push on the other core.
+ *
+ * ⛔ THE WATERFALL IS CLEARED, DELIBERATELY. Its rows live in a ring whose
+ * modulus IS the old WATERFALL_H; reinterpreting them against a new modulus
+ * shows real history at wrong times, which is worse than showing none. The web
+ * UI keeps its image on a drag because a <canvas> has no such ring.
+ *
+ * ⛔ THE SPECTRUM TRACE CHANGES SHAPE, AND THAT IS CORRECT. SPECTRUM_H is the
+ * dB axis length (ui.c dB->y mapping), so a shorter spectrum compresses the
+ * same dB range into fewer pixels. Do not "fix" this by rescaling db_min/max:
+ * the operator set those, and silently moving them would change what the
+ * numbers on the axis mean.
+ *
+ * ⛔ `final` SPLITS THE CHEAP WORK FROM THE EXPENSIVE WORK, and it is not an
+ * optimisation to drop. LV_EVENT_PRESSING arrives per frame, and the full path
+ * memsets 3.37 MB of PSRAM in wf_clear_all() plus 10240 peak entries. Doing
+ * that 60 times a second during a drag would stall the render task on core 0,
+ * on the same bus the waterfall is being pushed over. The drag calls this with
+ * final=false (geometry only) and once with final=true on release. */
+void ui_set_spectrum_h(int h) { ui_apply_spectrum_h(h, true); }
+
+static void ui_apply_spectrum_h(int h, bool final)
+{
+    if (h < SPECTRUM_H_MIN) h = SPECTRUM_H_MIN;
+    if (h > SPECTRUM_H_MAX) h = SPECTRUM_H_MAX;
+
+    /* ⛔ A final call with the height UNCHANGED still has work to do - it is
+     * how the drag's release commits the clears it skipped per frame. Only the
+     * geometry is guarded by `changed`. Returning early on `h == s_spectrum_h`
+     * left every drag ending on a stale waterfall and a stale peak hold. */
+    const bool changed = (h != s_spectrum_h);
+    if (!changed && !final) return;
+
+    if (changed) {
+    s_spectrum_h = h;                       /* every SPECTRUM_H/WATERFALL_H site follows */
+
+    if (s_spectrum_obj) lv_obj_set_size(s_spectrum_obj, DISPLAY_H_RES, SPECTRUM_H);
+    if (s_spec_canvas && s_spec_canvas_buf) {
+        /* The canvas is a plain one with no offset window, so this really does
+         * have to re-point. Once per drag-release, not per row - the blink the
+         * waterfall was cured of is not reachable at this rate. */
+        lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
+                             DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+        memset(s_spec_canvas_buf, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
+    }
+
+    if (s_label_bar)
+        lv_obj_align(s_label_bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
+
+    if (s_waterfall_obj) {
+        lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0,
+                     TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
+        lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
+    }
+    if (s_wf_canvas) {
+        lv_obj_set_size(s_wf_canvas, WF_CANVAS_W, WATERFALL_H);
+        s_wf_head = 0;                      /* ring restarts with the new modulus */
+        lv_image_set_offset_y(s_wf_canvas, 0);
+    }
+    if (s_wf_cursor)     lv_obj_set_size(s_wf_cursor, 2, WATERFALL_H);
+    if (s_rit_wf_marker) lv_obj_set_size(s_rit_wf_marker, 2, WATERFALL_H);
+
+    /* The RTTY/CW log button is placed 30 px into the waterfall - see the note
+     * at its creation. It is a fixed offset from the boundary, so it moves. */
+    if (s_log_btn)
+        lv_obj_set_pos(s_log_btn, 1088, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H + 30);
+
+    /* Spot callsigns are centred on the middle of the spectrum. */
+    spots_lane_set_geometry(TOP_BAR_H, SPECTRUM_H);
+
+    /* ⛔ THE PEAK HOLD HOLDS PIXEL Y VALUES, NOT dB. After a shrink every
+     * stored y can be past the bottom of the shorter canvas, so the next push
+     * would draw outside it. Reset to the floor rather than rescale: a rescale
+     * would invent peaks at heights they were never measured at.
+     *
+     * Clamping (not resetting) would be wrong too - it would pin a row of
+     * false peaks along the new bottom edge.
+     *
+     * This is deferred to `final` because a stale peak y is not a memory
+     * fault: the canvas buffer is allocated at SPECTRUM_H_MAX rows, so a write
+     * past the current height lands in allocated-but-unseen memory. It is a
+     * visual artefact for the length of the drag and nothing more. */
+    s_frame_ytop_valid = false;             /* partial invalidate has no valid previous frame */
+
+    if (s_spec_canvas) lv_obj_invalidate(s_spec_canvas);
+
+    /* The tick canvas is LABEL_BAR_H tall and is a CHILD of the bar, so it
+     * travelled with it above - no redraw is needed for a move. */
+    }   /* end if (changed) */
+
+    if (final) {
+        if (s_peak_buk)
+            for (int i = 0; i < PEAK_BUCKETS * DISPLAY_H_RES; i++)
+                s_peak_buk[i] = (int16_t)SPECTRUM_H;
+        if (s_peak_show)
+            for (int i = 0; i < DISPLAY_H_RES; i++)
+                s_peak_show[i] = (int16_t)SPECTRUM_H;
+        wf_clear_all();
+        ESP_LOGI(TAG, "split: spectrum %d px, waterfall %d px", SPECTRUM_H, WATERFALL_H);
+    }
+}
+
+int ui_get_spectrum_h(void) { return s_spectrum_h; }
+
 static void wf_clear_all(void)
 {
     if (!s_wf_canvas_buf) return;
-    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H * 2 * 2);
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H_MAX * 2 * 2);
     s_wf_view_x    = WF_MARGIN;
     s_wf_anchor_ok = false;          /* re-anchored on the next row */
     wf_apply_x();

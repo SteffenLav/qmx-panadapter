@@ -45,6 +45,12 @@
 // Build the overlay. (x spans the display; `y`/`h` are the spectrum's own rect.)
 void spots_lane_build(lv_obj_t *parent, int y, int h);
 
+// Follow the spectrum when the operator drags the spectrum/waterfall split
+// (T216). Same `y`/`h` meaning as spots_lane_build. The label block is centred
+// on the spectrum's middle, so this must be called or the callsigns stay at the
+// old centre - a copy of the height lives here as well as in ui.c.
+void spots_lane_set_geometry(int y, int h);
+
 // Publish the currently visible frequency window. Call from wherever the
 // frequency axis is recomputed so the two can never disagree.
 void spots_lane_set_view(uint32_t lo_hz, uint32_t hi_hz);

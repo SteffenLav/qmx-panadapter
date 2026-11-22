@@ -56,6 +56,7 @@ static const char *TAG = "settings";
 #define KEY_FT8_FREQ   "ft8_freq"
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
+#define KEY_SPECTRUM_H "spec_h"   /* T216: spectrum height in px; waterfall takes the rest */
 #define KEY_CW_CAL     "cw_cal"
 #define KEY_SB_LOWCUT  "sb_lowcut"
 #define KEY_FT4_FREQ   "ft4_freq"
@@ -227,6 +228,9 @@ static const char *TAG = "settings";
 #define DEF_CW_CAL      (0)
 #define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
+/* T216. 200 is what every device shipped with before the split could move,
+ * so an upgrade keeps the layout people already have. */
+#define DEF_SPECTRUM_H  (200)
 #define DEF_BRIGHTNESS  (100)
 #define DEF_LAST_MODE     (0)
 #define DEF_WIFI_ENABLED  (true)
@@ -503,6 +507,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_ROWS         142  /* rows of decoded CW drawn */
 #define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
 #define DIRTY_TXSUBNET        162  /* TX subnet interlock (T206) */
+#define DIRTY_SPECTRUM_H      163  /* T216 spectrum/waterfall split height, px */
 #define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
 #define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
@@ -543,7 +548,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_OTA_AUTODL,
     DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
     DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
-    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_MY_STATE, DIRTY_CW_CAL,
+    DIRTY_COLORMAP, DIRTY_SPECTRUM_H, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_MY_STATE, DIRTY_CW_CAL,
     DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
@@ -720,6 +725,7 @@ static void flush_task(void *arg)
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
         }
         if (dirty_test(&dirty_local, DIRTY_COLORMAP))  nvs_set_u8(s_nvs, KEY_COLORMAP, snap->colormap_idx);
+        if (dirty_test(&dirty_local, DIRTY_SPECTRUM_H)) nvs_set_u16(s_nvs, KEY_SPECTRUM_H, snap->spectrum_h);
         if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap->brightness_pct);
         if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap->last_ui_mode);
         if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap->last_unix_time);
@@ -1059,6 +1065,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->spur_mode = 0;
     out->zoom_factor = DEF_ZOOM;
     out->colormap_idx = DEF_COLORMAP;
+    out->spectrum_h   = DEF_SPECTRUM_H;
     out->brightness_pct = DEF_BRIGHTNESS;
     out->last_ui_mode = DEF_LAST_MODE;
     out->last_unix_time = 0;
@@ -1307,6 +1314,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u16(s_nvs, KEY_SB_LOWCUT, &out->sb_lowcut_hz);
     { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
+    nvs_get_u16(s_nvs, KEY_SPECTRUM_H, &out->spectrum_h);
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
     nvs_get_u8(s_nvs, KEY_LAST_MODE, &out->last_ui_mode);
     nvs_get_u32(s_nvs, KEY_LAST_TIME, &out->last_unix_time);
@@ -1921,6 +1929,19 @@ void settings_set_colormap_idx(uint8_t idx)
     s_pending.colormap_idx = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_COLORMAP);
+}
+
+void settings_set_spectrum_h(uint16_t px)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spectrum_h == px) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.spectrum_h = px;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPECTRUM_H);
 }
 
 void settings_set_brightness_pct(uint8_t pct)
@@ -2952,6 +2973,15 @@ float settings_get_ema_alpha(void)
     if (!s_ready) return DEF_EMA_ALPHA;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     float v = s_pending.ema_alpha;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint16_t settings_get_spectrum_h(void)
+{
+    if (!s_ready) return DEF_SPECTRUM_H;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.spectrum_h;
     xSemaphoreGive(s_mutex);
     return v;
 }
