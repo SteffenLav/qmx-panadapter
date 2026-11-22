@@ -143,6 +143,22 @@ because the radio knows which country you are in but not which state.
 On a reasonably busy band, expect roughly **15–20 distinct messages per slot** in
 either mode. That is messages, not contacts — one QSO produces several.
 
+**A second decode pass (v2.1.0).** When the first pass has finished, a second one
+works through the strongest signals it could not resolve, within a six-second
+budget. Measured on the air over 1213 cycles on 20 m, it adds **about 20%** more
+messages per cycle — 11.3 a cycle before, 13.6 after.
+
+Two things to expect from it:
+
+- Its decodes **appear a few seconds later** than the rest, so the list grows
+  again after it first settles, and the **RX:** count steps up a second time.
+- They are **shown and spotted, but never acted on**. A message that arrives
+  this way does not answer a call, does not advance a QSO and never keys the
+  radio — by then the reply window for that cycle has passed.
+
+Nothing to switch on. On a quiet band it finds little and costs nothing you can
+see.
+
 Decoding uses **both processor cores**: the decode task works one half of the
 candidate list on core 1 while a helper takes the other half on core 0, and both
 run against a waterfall that was built during the capture rather than after it.

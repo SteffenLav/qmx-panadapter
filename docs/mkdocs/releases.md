@@ -4,7 +4,30 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v2.0.2** - 2026-11-18
+**v2.1.0** - 2026-11-22
+
+**FT8 decodes about 20% more stations per cycle, the spectrum no longer breaks up on a busy band, and live spots work again.**
+
+- **FT8 decodes about 20% more stations per cycle.** Measured on the air over 1213 cycles: 11.3 decodes a cycle before, 13.6 now. A second decode pass works through the signals the first pass could not resolve. These extra decodes arrive a few seconds after the rest - they are shown and spotted, but they never answer a call and never key the radio. See [FT8 Receive](guide/ft8-rx.md).
+- **The decode count on the FT8 page keeps up.** It used to sit on **RX: capturing...** for whole cycles while stations were still appearing in the list. It now shows the count for the cycle, and steps up again when the second pass finishes.
+- **The spectrum and waterfall no longer break up on a busy band.** On a band with signals the spectrum was redrawn in full on almost every update; it is now redrawn only where it changed.
+- **Live spots work again.** No RBN spot had been collected since 6 November. CW and RTTY spots are collected separately from FT8 ones, so one no longer crowds out the other. FT8 spots from RBN are no longer shown - 55 of every 80 sat inside one 3 kHz slice of the band. The spot lane draws at most 30 at a time, so a busy band no longer slows it down.
+- **The spectrum keeps up while you drag it.** The RIT marker, the spot lane and the RTTY lines now move with the drag instead of catching up at the end.
+- **WSPR publishes to wsprnet.org by default.** If you have already chosen a setting, your choice is kept.
+- **Auto Pounce is offered at the R-report step**, not only at the opening call.
+- **A refused transmit says why in the browser.** With **Refuse TX from off-network** on, the web page used to go quiet with no message. Any refusal now appears as a red notice you can tap away. The setting is still off by default. See [Remote Access](guide/remote-access.md#the-tx-interlock).
+- **New manual chapter: [Remote Access](guide/remote-access.md).** Worked examples for Tailscale and WireGuard, what the TX interlock does and does not stop, and why the stop commands are never refused.
+- Fixed: a crash in the status bar task. It could restart the Tab5 shortly after an FT8 decode.
+- Fixed: the **Server mode** tick box in the drawer stayed ticked after the Tab5 woke up, when server mode had already ended.
+
+**Known, not fixed**
+
+- The receive-audio health check was not re-run on this build. It last passed on a build six commits back, and none of the six touches the audio path.
+- The decode improvement was measured on 20 m. The gain per cycle ranged from about 19% to 28% depending on the band.
+
+**What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). The extra FT8 decodes never arm a transmission.
+
+### v2.0.2 - 2026-11-18
 
 **RTTY contacts go into the log, the log window no longer blocks the screen, and the web radio has a new MP3 decoder.**
 
@@ -1365,7 +1388,7 @@ Every goal on the original roadmap is met in v2.0.0. What remains is proof on th
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.0.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.1.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

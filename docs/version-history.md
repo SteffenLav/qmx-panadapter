@@ -4890,3 +4890,30 @@ Commits: `v2.0.0..v2.0.1` - `0e1e3ade`, `a7876364`.
 **What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). Its web row now says that, with **Refuse TX from off-network** on, a request that would transmit must come from the Tab5's own network. The RTTY Log and Contest controls do not transmit.
 
 Commits: `v2.0.1..v2.0.2`.
+
+### Shipped in v2.1.0 — 2026-11-22
+
+**FT8 decodes about 20% more stations per cycle, the spectrum no longer breaks up on a busy band, and live spots work again.**
+
+- **FT8: about 20% more decodes per cycle.** A second decode pass runs after the first on the strongest candidates the first pass failed to resolve, inside a 6 s budget. Measured on the air over 1213 cycles on 20 m: 11.26 decodes a cycle before, 13.62 after, +2,868 messages = +21.0%. The comparison is matched rather than a cross-version A/B: the first pass is unchanged from v2.0.2 (`FT8_MAX_CANDIDATES` 140, `FT8_FIND_MIN_SCORE` 5, `FT8_LDPC_MAX_ITERS` 30, `FT8_DECODE_BUDGET_MS` 11000, no standing patch changed), so the second pass's per-cycle gain is exactly what v2.0.2 would have missed on the same audio. Per build the gain ran 18.9%..28.1% with the band. The pass runs after the TX gate opens, so it never delays a reply; its decodes land about 2.5 s late, are shown and spotted, and never advance a QSO or arm TX.
+- **The FT8 decode count was being overwritten.** The status line is one string written by two tasks each cycle - the decode count and the capture task's `RX: capturing...`. Whichever wrote last held it for the remaining ~15 s. Measured from a new status-change log: of 32 counts, the median survived 214 ms, the shortest 9 ms. `RX: capturing...` is now written only until the first cycle has decoded. `3f303fdd`, `d62e6939`, `10f1f949`.
+- **The spectrum repainted in full on any live band.** The partial-invalidate test bounded the dirty rectangle in Y only, and the band is the union of every column's vertical change, so one tall signal invalidated all 1280x200. Measured on bench1: a dead band ran 22.8 fps with the partial path accepted on 100% of pushes; a live one ran 10.9 fps and was rejected on 94%. Now bounded in X as well, and the test is on area. `e9990eb3`.
+- **RBN had collected nothing since 2026-11-06** - the source string did not match, and one query cannot serve both CW/RTTY and FT8. Split into two. `15d0fdc9`, `12d2925e`. FT8 spots from RBN dropped: 55 of every 80 sat in one 3 kHz slice. `145054f5`. The lane draws at most 30 visible. `cab82392`.
+- **Overlays that are not canvas pixels now ride the pan drag** - RIT marker, spot lane, RTTY lines. `5a937306`.
+- **WSPR publishes to wsprnet.org by default.** `KEY_WSPR_NET` is written only when the setting is changed, so a stored choice still wins. `b678d052`.
+- **Auto Pounce is offered at the R-report step.** `10f0c448`.
+- **A refused web transmit is now visible** - an opaque red toast any tap closes, used by every "did not transmit" refusal. `64a7d6d3`, `103b9c12`, `6567357a`.
+- **New manual chapter, Remote Access** - Tailscale, WireGuard, the port-forward case stated plainly, what the TX interlock does and does not stop, and that stops are never refused. `65e5b53f`. The PDF builder works from an explicit chapter list and had no row for it, so it is wired in as chapter 11. `a91fe928`.
+- Fixed: `status_task` held TWO `qmx_settings_t` at once - its own loop local and `status_battery_display_level()`'s. `sizeof` is 4268 B, measured from the ELF, so 8536 B of a 13312-byte stack went on a struct read for three booleans and a grid square. Found by Mark N8MH on a port of this code, who hit the stack-protection fault twice. `bac79528`.
+- Fixed: a wake that ends server mode now unticks the drawer tick box. `988e35c8`.
+- Fixed: the TX guard checkers walked only `.c`, so a keying site inside an included `.inc` was invisible and the count silently dropped. Found by Mark N8MH. `4ec17259`.
+
+**Known, not fixed**
+
+- `tools/audio_health.py` was not re-run on this build. It needs RX audio on - the `rx_audio` task parks when the speaker, web audio and RTTY are all off, and then prints nothing. Last real result: PASS on `988e35c8`, 58 windows, A1-A5 ok. The six commits since touch `status.c`, `settings.c`, `ft8_test.c`, `ft8_status.c` and `ft8_screen_view.c` - none the audio path.
+- The decode measurement is from 20 m only.
+- The FT8 subtract pass and OSD order 1 are built but compiled out; the second pass now spends the slot budget they would need.
+
+**What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). The second decode pass never arms a transmission.
+
+Commits: `v2.0.2..v2.1.0`.

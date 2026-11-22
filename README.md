@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *40 m CW, zoomed x2 around 7.019.470 MHz, with RBN/DXC spots labelled directly on the trace (v1.16.7). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, bandwidth, centre freq, S-meter, zoom. Bottom bar: battery, SD, firmware version, UTC clock, WiFi, callsign, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v2.0.2.** v2.0.2 logs RTTY contacts on the Tab5 and in the browser, lets the log window move out of the way, and replaces the web radio's MP3 decoder for licence reasons. Every goal on the original roadmap is met. A complete, self-contained station for the QMX: spectrum and waterfall, the digital modes **FT8, FT4, JS8, RTTY and WSPR** and a CW page - each one a page of its own in the left drawer - with on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v2.0.0 adds MODE: RTTY**: decoded and sent on the Tab5 and in the browser, with Auto speed, shift and polarity, CQ, Answer, Exch and 73 in one press, or typed live - see [RTTY](#rtty). **Receive audio no longer breaks up or drifts in pitch on a busy band.** **No page is a beta any more**: where a limit remains, the guide states it. v1.26.3 made the QSO log safe when it fills up, and v1.26.0 gave the browser noise reduction and an auto-notch - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for every release.
+> **Release — v2.1.0.** v2.1.0 decodes about 20% more FT8 stations per cycle - a second decode pass works through the signals the first pass could not resolve, measured on the air over 1213 cycles. The spectrum no longer breaks up on a busy band, live spots work again, and a new chapter covers reaching the Tab5 from outside your home. v2.0.2 logs RTTY contacts on the Tab5 and in the browser, lets the log window move out of the way, and replaces the web radio's MP3 decoder for licence reasons. Every goal on the original roadmap is met. A complete, self-contained station for the QMX: spectrum and waterfall, the digital modes **FT8, FT4, JS8, RTTY and WSPR** and a CW page - each one a page of its own in the left drawer - with on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware. **v2.0.0 adds MODE: RTTY**: decoded and sent on the Tab5 and in the browser, with Auto speed, shift and polarity, CQ, Answer, Exch and 73 in one press, or typed live - see [RTTY](#rtty). **Receive audio no longer breaks up or drifts in pitch on a busy band.** **No page is a beta any more**: where a limit remains, the guide states it. v1.26.3 made the QSO log safe when it fills up, and v1.26.0 gave the browser noise reduction and an auto-notch - see [docs/mkdocs/releases.md](docs/mkdocs/releases.md) for every release.
 >
 > ⚠ **Switch your QMX on only after the Tab5 has settled** — once the spectrum is running and WiFi shows a network. Powering the radio while the Tab5 is still starting leaves it short of memory for the whole session, which can make the web interface unreachable. See [Quick Start](docs/mkdocs/quick-start.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v2.0.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v2.1.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -921,6 +921,17 @@ Click **▶** to listen, open **Radio** in the bottom bar, and tick
 Full chapter: [tab5.lav.dk/guide/web-dsp](https://tab5.lav.dk/guide/web-dsp/)
 
 ---
+
+## Remote Access
+
+Reaching the Tab5 from outside your home. The web interface has no password and
+no TLS, and it can key the radio, so put it behind a tunnel rather than
+exposing it to the internet. Tailscale needs no router changes; WireGuard needs
+one forwarded port and no account. The **TX interlock** is a second lock that
+refuses a transmit request arriving from outside your own network - it is off
+by default, and it is not a login. Stop commands are never refused.
+
+See [Remote Access](docs/mkdocs/guide/remote-access.md) for worked examples.
 
 ## Web API
 
