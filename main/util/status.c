@@ -124,10 +124,17 @@ int status_battery_display_level(void)
     int level = battery_get_level();
     if (level < 0) return level;
 
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    if (cfg.charge_limit_en && level > (int)cfg.charge_limit_pct)
-        return (int)cfg.charge_limit_pct;
+    /* ⛔ THREE FIELDS, NOT A 4268-BYTE SNAPSHOT. This function is called
+     * from inside status_task's loop, which until 2026-11-22 held a
+     * qmx_settings_t of its own - two copies live at once, 8536 B of a
+     * 13312-byte stack. Mark N8MH crashed on exactly that twice on
+     * 2026-11-17 ("Stack protection fault, task status"). See
+     * settings_get_status_fields(). */
+    bool    limit_en  = false;
+    uint8_t limit_pct = 0;
+    settings_get_status_fields(&limit_en, &limit_pct, NULL);
+    if (limit_en && level > (int)limit_pct)
+        return (int)limit_pct;
     return level;
 }
 
@@ -265,8 +272,25 @@ static void status_task(void *arg)
     // style needs recolor enabled, but the runtime API lv_label_set_recolor()
     // is what we need. We set it from the UI side. Here we just format strings.
 
+    /* ⭐ The stack margin, MEASURED rather than assumed. This task has
+     * crashed on a full stack twice before (4 KB, #218) and Mark N8MH hit it
+     * again on his port in 2026-11, both times "Stack protection fault, task
+     * status". Each new low is one line, so a shrinking margin is visible in
+     * an ordinary capture long before it becomes a panic. It never repeats a
+     * number it has already printed. */
+    size_t stack_low = (size_t)-1;
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+        {
+            size_t free_b = (size_t)uxTaskGetStackHighWaterMark(NULL)
+                            * sizeof(StackType_t);
+            if (free_b < stack_low) {
+                stack_low = free_b;
+                ESP_LOGI(TAG, "stack low-water: %u B free", (unsigned)free_b);
+            }
+        }
 
         // --- #218: the bottom-bar version label doubles as the update line ---
         //
@@ -454,8 +478,14 @@ static void status_task(void *arg)
         int  level    = battery_get_level();
         bool charging = battery_is_charging();
 
-        qmx_settings_t cfg;
-        settings_load_all(&cfg);
+        /* ⛔ NOT settings_load_all() - see status_battery_display_level()
+         * above, which this loop calls while its own locals are still live. */
+        bool    cfg_charge_limit_en  = false;
+        uint8_t cfg_charge_limit_pct = 0;
+        bool    cfg_resmon_en        = false;
+        settings_get_status_fields(&cfg_charge_limit_en,
+                                   &cfg_charge_limit_pct,
+                                   &cfg_resmon_en);
 
         // Battery care: stop charging at a user-set percentage. Uses the
         // compensated level (|I| x R + polarisation while actively charging -
@@ -506,11 +536,11 @@ static void status_task(void *arg)
          * back. The operator's escape hatch has to work when the sensor does
          * not. */
         if (battery_present()) {
-            if (cfg.charge_limit_en) {
+            if (cfg_charge_limit_en) {
                 if (level < 0) {
                     /* No usable reading this tick - hold whatever state we are
                        in and wait for the next poll a second from now. */
-                } else if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                } else if (!s_charge_cutoff_active && level >= (int)cfg_charge_limit_pct) {
                     int rv = -1, rm = 0;
                     (void)battery_get_raw_mv(&rv); (void)battery_get_charge_ma(&rm);
                     bsp_set_charge_en(false);
@@ -520,13 +550,13 @@ static void status_task(void *arg)
                        voltage a minute later and the real drop falls out. */
                     ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%) "
                                   "[batcal cut: raw=%dmV ma=%d]",
-                             level, (unsigned)cfg.charge_limit_pct, rv, rm);
+                             level, (unsigned)cfg_charge_limit_pct, rv, rm);
                 } else if (s_charge_cutoff_active &&
-                           level < (int)cfg.charge_limit_pct - CHARGE_LIMIT_HYSTERESIS_PCT) {
+                           level < (int)cfg_charge_limit_pct - CHARGE_LIMIT_HYSTERESIS_PCT) {
                     bsp_set_charge_en(true);
                     s_charge_cutoff_active = false;
                     ESP_LOGI(TAG, "battery care: charging resumed at %d%% (limit %u%%)",
-                             level, (unsigned)cfg.charge_limit_pct);
+                             level, (unsigned)cfg_charge_limit_pct);
                 }
             } else if (s_charge_cutoff_active) {
                 // Feature turned off mid-cutoff - restore normal charging.
@@ -541,7 +571,7 @@ static void status_task(void *arg)
         // "< 16KB" crash-risk line is a static reminder of this project's own
         // documented failure floor (see CLAUDE.md's internal-RAM-exhaustion
         // history), not a live value.
-        if (cfg.resmon_en) {
+        if (cfg_resmon_en) {
             size_t ram_free   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             size_t ram_min    = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
             size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -731,8 +761,12 @@ static void status_task(void *arg)
                 gps_page_grid(gi.lat_deg, gi.lon_deg, gbuf);
                 if (gbuf[0]) gps_grid = gbuf;
             }
-            if (gps_autogrid_step(&s_autogrid, gps_grid, cfg.my_grid)) {
-                ESP_LOGI(TAG, "grid from GPS: '%s' -> '%s'", cfg.my_grid, gbuf);
+            /* my_grid came off the loop's qmx_settings_t until 2026-11-22.
+             * It is 7 bytes; the struct it arrived in was 4268. */
+            char my_grid[16] = { 0 };
+            settings_get_my_grid(my_grid, sizeof(my_grid));
+            if (gps_autogrid_step(&s_autogrid, gps_grid, my_grid)) {
+                ESP_LOGI(TAG, "grid from GPS: '%s' -> '%s'", my_grid, gbuf);
                 settings_set_my_grid(gbuf);
                 /* Persist WHAT WE WROTE, not just the grid itself: this is the
                  * only record that distinguishes a later hand edit from a
@@ -795,5 +829,16 @@ void status_bar_start(void)
     // the cheap side of the trade.
     // 8192 -> 11264: a qmx_settings_t local in this file, generous not
     // incremental - see sd_archive.c's comment for why.
+    //
+    // ⭐ 2026-11-22: the qmx_settings_t locals are GONE - both of them. The
+    // loop held one and status_battery_display_level(), which the loop calls,
+    // held a second, so 8536 B of this stack was two copies of a struct read
+    // for three booleans and a grid square. sizeof(qmx_settings_t) = 4268 B,
+    // measured from the ELF with gdb, not estimated. Mark N8MH hit the
+    // resulting fault twice on 2026-11-17 on his port of this file.
+    //
+    // The size is deliberately NOT raised with the fix. Raising it at the same
+    // time would make a future crash here unattributable - and the margin is
+    // now MEASURED every boot (the low-water log below) instead of guessed.
     psram_task_create(status_task, "status", 13312, NULL, 2, tskNO_AFFINITY);
 }

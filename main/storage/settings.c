@@ -4024,6 +4024,40 @@ bool settings_get_tx_subnet_interlock(void)
     return v;
 }
 
+/* The three fields status_task reads, under one mutex take, with NO
+ * qmx_settings_t copy.
+ *
+ * ⛔ WHY THIS EXISTS: status_task held TWO of those structs at once - its
+ * own loop local and status_battery_display_level()'s, which the loop calls -
+ * on a 13312-byte stack. MEASURED from the ELF with gdb, 2026-11-22:
+ * sizeof(qmx_settings_t) is 4268 B, so the two were 8536 B, 64 % of the
+ * stack, leaving ~4.8 KB for LVGL label/layout calls and logging underneath.
+ * Mark N8MH hit it twice on 2026-11-17 on his port of this code: "Stack
+ * protection fault, task status", both panics decoding to the same function.
+ * Our own stack comment in status.c records the same pressure from the other
+ * end - 8192 -> 11264 was raised BECAUSE of a qmx_settings_t local.
+ *
+ * Same remedy as 5d0b76da (tx_band_guard), which copied the whole struct onto
+ * a stack for two fields and crashed every CW send. Reading a 4 KB settings
+ * snapshot to look at three booleans is the bug; a bigger stack only moves
+ * the edge. */
+void settings_get_status_fields(bool *charge_limit_en,
+                                uint8_t *charge_limit_pct,
+                                bool *resmon_en)
+{
+    if (!s_ready) {
+        if (charge_limit_en)  *charge_limit_en  = false;
+        if (charge_limit_pct) *charge_limit_pct = 0;
+        if (resmon_en)        *resmon_en        = false;
+        return;
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (charge_limit_en)  *charge_limit_en  = s_pending.charge_limit_en;
+    if (charge_limit_pct) *charge_limit_pct = s_pending.charge_limit_pct;
+    if (resmon_en)        *resmon_en        = s_pending.resmon_en;
+    xSemaphoreGive(s_mutex);
+}
+
 void settings_set_pskreporter_en(bool v)
 {
     if (!s_ready) return;

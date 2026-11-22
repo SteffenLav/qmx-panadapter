@@ -1716,6 +1716,15 @@ void settings_set_date_src(uint8_t src);
 // battery reaches charge_limit_pct and resumed with a hysteresis gap below
 // it, to avoid holding the pack at 100% indefinitely (long-term battery
 // wear). charge_limit_pct is clamped to 50..100.
+/* The three fields status_task reads, under one mutex take and with NO
+ * qmx_settings_t copy on the caller's stack. sizeof(qmx_settings_t) is
+ * 4268 B (measured from the ELF, 2026-11-22) and status_task held two at
+ * once on a 13 KB stack - see the comment on the definition in settings.c.
+ * Any NULL argument is skipped. */
+void settings_get_status_fields(bool *charge_limit_en,
+                                uint8_t *charge_limit_pct,
+                                bool *resmon_en);
+
 void settings_set_charge_limit_en(bool v);
 void settings_set_charge_limit_pct(uint8_t pct);
 
