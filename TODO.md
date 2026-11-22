@@ -25,6 +25,14 @@ are kept for history and are stale in both directions.
 - `tools/check_tx_guard.py` and `tools/check_unattended_tx.py` both **PASS**.
 - `tools/audio_health.py` on bench1's capture: **PASS on 988e35c8**, 58
   windows, A1–A5 all ok. That is T201's release gate, met.
+- ⛔ **NOT re-measured on the release candidate.** The operator chose to skip
+  it, 2026-11-22. The gate needs RX AUDIO ON - the `rx_audio` task parks when
+  the speaker, web audio and RTTY are all off, so it prints nothing and the
+  tool says "no fields", which means NOT MEASURED, not pass and not fail. FT8
+  decoding does not keep it alive. So the newest build carries the audio gate
+  from `988e35c8`, six builds back; those six touched status.c, settings.c,
+  ft8_test.c, ft8_status.c and ft8_screen_view.c, none of them the audio path.
+  Say this in the release notes rather than implying the gate was run.
 
 ⛔ **This is not a release.** No tag, no README banner, no PDF, no site push.
 
