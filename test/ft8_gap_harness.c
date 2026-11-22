@@ -24,7 +24,9 @@
 #ifndef MAXC
 #define MAXC 140
 #endif
-#define DT_SHIFT 0.57f
+#ifndef DT_SHIFT
+#define DT_SHIFT 0.67f
+#endif
 
 static int load_wav(int16_t* out, int nmax, const char* path)
 {
