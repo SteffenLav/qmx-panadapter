@@ -1,12 +1,78 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-10-22
+**Last updated:** 2026-11-22 — reconciled against the code and against bench1, not against the rows below.
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
-**Repo state:** **v1.20.0 released 2026-10-16.** ⛔ Do not read the number off this line — `git tag --sort=-creatordate` and `git log --oneline origin/main..HEAD` are the authority, for the reason stated two lines below. On 2026-10-17 there were 16 commits unpushed on top of it. Earlier: v1.19.0 (2026-10-15), v1.18.0 (2026-10-12, PA-voltage ceiling, Bryan N0LUF's Output power write fix, JS8 compound callsigns proven on air, the SPIFFS diag-log budget). Prior: v1.17.1 (2026-10-11), v1.17.0 (2026-10-10, JS8 Normal, GPS stats, line in, keyer speed), v1.16.12 (2026-10-07), v1.16.11 (2026-10-03), v1.16.10 (2026-10-02). The per-version changelog is `docs/version-history.md` and is complete to v1.17.1 — this file does not duplicate it.
+**Repo state:** ⛔ **Do not read a version off this line.** `git tag --sort=-creatordate` and `git log --oneline origin/main..HEAD` are the authority. On 2026-11-22: last tag **v2.0.2**, **101 commits unpushed on `main`**, bench1 running `v2.0.2-105-g988e35c8`. The per-release changelog is `docs/mkdocs/releases.md`.
 
 ⛔ **THE HEADLINE IN THIS FILE WAS TEN DAYS AND FOUR RELEASES STALE** (it read "v1.5.0 released 2026-08-06", then "v1.16.10 is out"). A version banner in prose cannot keep up with a release cadence of days, which is the same rot `CLAUDE.md` records for its patch count. **Read `git tag --sort=-creatordate` for what shipped; read this file only for what is OPEN.**
+
+---
+
+## ▶▶▶▶▶ THE WORK QUEUE, 2026-11-22 — READ THIS FIRST
+
+⭐ **RECONCILED AGAINST THE CODE AND AGAINST THE BOARD, not against the rows
+below.** Every claim here was checked by grep, by `git merge-base
+--is-ancestor`, or by reading bench1's own capture. The queues under this one
+are kept for history and are stale in both directions.
+
+**State, measured 2026-11-22:**
+
+- `main` is **101 commits ahead of `origin/main`**. Nothing below is public.
+- **bench1 reports `v2.0.2-105-g988e35c8`** — it is running HEAD, on air. So
+  "BUILT, NOT FLASHED" in any older row is stale for anything on main.
+- `tools/check_tx_guard.py` and `tools/check_unattended_tx.py` both **PASS**.
+- `tools/audio_health.py` on bench1's capture: **PASS on 988e35c8**, 58
+  windows, A1–A5 all ok. That is T201's release gate, met.
+
+⛔ **This is not a release.** No tag, no README banner, no PDF, no site push.
+
+### Closed since the 2026-11-05 queue — verified, on main, NOT RELEASED
+
+| ID | Item | Proof |
+|---|---|---|
+| ~~T207~~ | A web TX refusal now says why in the browser | `64a7d6d3`, in main |
+| ~~T206~~ | TX subnet interlock, **default OFF** (operator's decision, do not flip) | `5b20cf84`; `storage/settings.c:1161` |
+| ~~T204~~ | Movable log window, drag follows the finger | `2b5b6131`, in main |
+| ~~T201~~ | RX audio gaps on a busy band | `audio_health.py` PASS on 988e35c8 |
+| ~~T199~~ | T199 adoption dead with WiFi on | `0e1e3ade` + `a7876364`, in main |
+| ~~T198~~ | DMA pool cliff — 11 KB of web-radio `.bss` to PSRAM | `35a9b0c5`, in main |
+| ~~T197~~ | Full SPIFFS lost the QSO log | `c8e1c55a` + `2111d3ce`, in main |
+
+### NEW — the work that landed from the decoder track, 2026-11-19..22
+
+| ID | Item | Who | Note |
+|---|---|---|---|
+| T208 | ⭐ **The WSJT-X piece pass runs on the Tab5 and is ON by default.** `FT8_WSX_PIECES` (`main/ft8_test.c:387`): the real `ft8b` on the 60 strongest candidates `ft8_lib` failed, OSD order 0 depth 1, 6 s budget, DT shift 0.67 s. **MEASURED on bench1, on air, 4087 slots: base 54,824 decodes, +6,856 from the pass = +12.5 %**, 1.68/slot, 4152 ms mean, 389 slots (9.5 %) budget-bound. ⚠ **Piece decodes land ~2.5 s late**, past the reply deadline — operator accepted 2026-11-21: shown and spotted, never advance a QSO, never arm TX. **That caveat must be in the release note.** | — | OPEN: the note, not the code |
+| T209 | ⛔ **The embedded manual, the PDF and the site do not contain the Remote Access page.** `main/manual.bin` was last built `c7102e9b` (2026-11-18); three doc commits since, including `65e5b53f` which added `docs/mkdocs/guide/remote-access.md`. The PDF is still named `v2.0.2`. `site/` has not been pushed. The tunnel guide was **announced to groups.io on 2026-11-22**, so shipping without it breaks a public promise. | operator (announced) | RELEASE GATE |
+| T210 | **CW decoder speed bug** — named to Mark N8MH 2026-11-21 as one of the three non-QDX slices to land first. **No commit since v2.0.2.** | Mark N8MH | promised |
+| T211 | **AGC ceiling restore** — the third non-QDX slice named to Mark. **No commit since v2.0.2.** | Mark N8MH | promised |
+| T212 | **`{"action":"radio_probe"}` — Phase 2 of the QDX slice plan.** `VN;` returns `VN1_10;` with no `QMX` suffix, which is a clean discriminator. Mark has volunteered as field tester (4 QDX, 2 more coming, plus a QMX+). ⚠ **QDX firmware 1.12 exists and is broken on transmit** — record the version before diagnosing anything. | Mark N8MH | not built |
+| T213 | **`tools/bench.json` says bench1 is "on v2.0.2 (flashed 2026-11-18)". The board reports `988e35c8`.** A stale role line silently flashes the other tree's firmware and then PASSES the MAC verify — the one entry in that file worth re-reading. | — | minutes |
+| T214 | **DECISION: the subtract pass and OSD are wired, measured and compiled out.** `FT8_SUBTRACT_PASSES` is 1 (`ft8_test.c:502`); OSD order 1 is off. Host worth: subtract +8.0 %, subtract+OSD additive to 288 of 362. But the piece pass now spends 4.2 s of the slot, so the budget that would pay for them is gone. Leave both off? | operator | decision owed |
+
+### Still open — unexplained, nothing done since v2.0.2
+
+| ID | Item | Who |
+|---|---|---|
+| T203 | Heard CW station drawn ~490 Hz above the BW lines, Tab5 + web, then correct with no change (bench1, 2026-11-15). One occurrence. | — |
+| T202 | `qso.prev.adi` grew to 413 at the first rotation in the field. Rotation itself confirmed; the count is not understood. | Randy N4OPI |
+| T187 | The first `KY` after a QMX power cycle was held by the radio, not keyed, and came out 33 s later. Measured in the capture, never explained. | — |
+| T177 | Web audio carries 1–3 holes/s of exact zero, 135 samples (11 ms), from `rx_audio.c` read-timeout gap frames. Measured over 12 captures; no fix. | — |
+
+### Waiting on a user
+
+| ID | Item | Who |
+|---|---|---|
+| T205 | Linux/macOS flasher hung at "Running stub..." on esptool 4.7.0. Fix is on main, **host-harness only — never proven on his machine**, and the stub hang is still unexplained. | Mark N5OBC |
+
+### Decision owed by the operator
+
+| ID | Item | Who |
+|---|---|---|
+| T181 | Tab5 Log window has no Name / QTH / Remarks — **grep confirms they are still absent from `main/ui/ui.c`**; the web one got them in T179. Wants a layout shown before anything is built. | Gyula HA3HZ |
+| T214 | Subtract pass / OSD — see the NEW table above. | operator |
 
 ---
 
@@ -129,6 +195,13 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
+| T214 | **DECISION: leave the FT8 subtract pass and OSD compiled out?** Both are wired and measured; the piece pass (T208) now spends the slot budget they would need. | operator |
+| T213 | **`tools/bench.json` bench1 role line is stale** - says v2.0.2, board reports `988e35c8`. | — |
+| T212 | **`radio_probe` - Phase 2 of the QDX slice plan.** `VN;` with no `QMX` suffix is the discriminator. QDX firmware 1.12 exists and is broken on TX. | Mark N8MH |
+| T211 | **AGC ceiling restore** - non-QDX slice promised to Mark N8MH 2026-11-21. No commit since v2.0.2. | Mark N8MH |
+| T210 | **CW decoder speed bug** - non-QDX slice promised to Mark N8MH 2026-11-21. No commit since v2.0.2. | Mark N8MH |
+| T209 | **manual.bin, the PDF and the site predate the Remote Access page** (`65e5b53f`). The tunnel guide was announced to groups.io 2026-11-22. RELEASE GATE. | operator |
+| T208 | **The WSJT-X piece pass on the Tab5, ON by default** (`FT8_WSX_PIECES`). Measured on bench1 on air, 4087 slots: **+12.5 % decodes**. Piece decodes land ~2.5 s late and never arm TX - the release note must say so. | — |
 | T207 | **A web TX refusal is silent in the browser - the page never shows WHY** (Randy N4OPI, groups.io 2026-11-19, on T206). He confirmed the interlock works from the WebUI - "No TX from foreign network. However, no message explaining why." MEASURED in `main/net/www/index.html`: the DEVICE side is right - `tx_subnet_cmd_ok()` (`main/net/webserver.c:661`) answers 403 with the reason in words and `tx_interlock:true` in the body, added so a page could tell it from the band guard. The PAGE throws it away: 64 `sendCmd(` call sites, only 19 keep the return value, and **`tx_interlock` appears 0 times in the whole page**. `wireCqRestart()` is the shape of it - `await sendCmd({action:"cq_start"})`, reply ignored, button says "Calling..." then reverts with nothing said. This is T94 again one layer up: the refusal reaches the browser and the browser drops it. ✅ **FIXED `b6ffdb0b`, VERIFIED 2026-11-19.** `sendCmd()` itself shows the refusal, so the 45 silent call sites and the next one written are covered at once; the eight callers that already render the reason in place pass `{ quiet: true }` (rtty_log, rtty_send, set_screen, cw_tune, cw_send, out_power, ota_install, js8_submode). Banner is `position:fixed` like `#no-persist-banner` and sits BELOW it when both are up; it renders `r.error` verbatim and only picks the lead - "Transmit refused" vs "Refused" - off `tx_interlock`. **Proven** (WiFi joined, interlock ON, web UI): Call CQ -> "Transmit refused: CQ run was refused: this request came from an outside address, which is not on the Tab5's own network..."; the × dismisses it, it auto-hides after 12 s, and with the interlock OFF the same button calls CQ with no banner. check_web + check_webui pass. ⚠ NOT flashed, NOT seen on a real Tab5, and a non-interlock refusal (plain "Refused" lead) was not exercised. | Randy N4OPI |
 | T206 | **TX interlock: a web request from off-subnet may not key the radio** (2026-11-18, from the operator's remote-access requirement). The web API has no authentication and no TLS, so a port-forwarded Tab5 is a transmitter anyone can key. `main/tx_subnet.c` reads the peer with `getpeername()` on the request's own socket - never a header, because a header is supplied by the thing being checked - and refuses with 403 + `tx_interlock:true`. `tools/check_tx_guard.py` now refuses the build if a web TX site skips it (mutation-checked both ways). Setting `tx_subnet_interlock`, **DEFAULT OFF**, in the drawer and `/api/settings`. Stops (`cancel`/`pause`/`skip`/`tune_stop`/`rtty_stop`) are deliberately NOT interlocked - refusing a stop would hold a transmitter on the air. ⚠ **It is NOT a login**: it stops the internet, not a guest on the WiFi; real remote access belongs in a tunnel or a TLS reverse proxy. **IMPLEMENTED, on main `5b20cf84`, flashed bench1 2026-11-18.** Proven on bench1: setting round-trips through `/api/settings`; with it OFF and ON, LAN `cw_send`/`rtty_send` pass the door (inert requests, no keying). ⛔ The REFUSE path has never run on a device - only `test/net_guard_harness.c` on the host; bench1 has no second network and no IPv6 address. Drawer row (right drawer, Server mode) checked on glass by the operator 2026-11-18: fits, no overlap; ticking it set the API flag true, unticking set it false. **Default OFF decided by the operator 2026-11-18** - opt-in, per device, not to be flipped. | Operator |
 | T205 | **Linux/macOS flasher hung at "Running stub..." on old esptool** (Mark N5OBC, groups.io 2026-11-17). Fixed in `flash.command` (stub probe -> `--no-stub` fallback) and `flash-recovery.command` (esptool-5 subcommand names). Host-harness tested only; the stub hang is unexplained and the fix is unproven on his machine. Ships in the next release. | Mark N5OBC |
