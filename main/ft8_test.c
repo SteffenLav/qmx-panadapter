@@ -2860,7 +2860,9 @@ static void decode_candidate_range(monitor_t *mon, const decode_ctx_t *dc,
              * nothing has confirmed puts our mistakes into somebody else's
              * database, where they cannot be withdrawn. When the alternate
              * path has been proven on air this is the line to revisit. */
-            if (!dc->rx_only) {
+            /* ft8_screen_slot_is_current(): a slot captured before a band
+             * change must not be spotted at the NEW dial (see ft8_screen.c). */
+            if (!dc->rx_only && ft8_screen_slot_is_current(slot_sec)) {
                 char sp_call[16], sp_grid[8];
                 if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
                     ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
@@ -3083,7 +3085,7 @@ static void wsx_on_decode(void *vctx, float sync, int snr, float dt, float freq,
             ft8_qso_advance(k->slot_sec);
         }
     }
-    if (!k->rx_only) {
+    if (!k->rx_only && ft8_screen_slot_is_current(k->slot_sec)) {   /* old band: no spot */
         char sp_call[16], sp_grid[8];
         if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
             ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
@@ -3428,7 +3430,8 @@ static void wsx_piece_pass(int64_t job_slot_sec)
         if (!sim_mode) {
             ft8_screen_record_decode(text, 0, snr_db, freq_hz, pl->slot_sec, dt_ms);
             char sp_call[16], sp_grid[8];
-            if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
+            if (ft8_screen_slot_is_current(pl->slot_sec) &&      /* old band: no spot */
+                ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
                 ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
                 pskreporter_spot(sp_call, sp_grid, cat_get_frequency() + (uint32_t)freq_hz,
                                  snr_db, ftx_protocol_name(FTX_PROTOCOL_FT8), pl->slot_sec);
@@ -3897,8 +3900,10 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
          * second time costs a few microseconds per structured frame per slot
          * and no memory at all. It is outside the candidate loop and outside
          * FT8_DECODE_BUDGET_MS, which is what the "ONE call, deliberately"
-         * note in that loop is protecting. */
-        if (js8_chat_init()) {
+         * note in that loop is protecting.
+         * Not for a slot captured before a band/mode change: its frames
+         * would be stamped with the NEW band below (ft8_screen.c). */
+        if (ft8_screen_slot_is_current(slot_sec) && js8_chat_init()) {
             /* ⛔ STAMP THE BAND AT CREATION, not at render time. The pane and
              * the API both draw from this store minutes later, by which point
              * the dial may have moved - so the band has to be captured in the

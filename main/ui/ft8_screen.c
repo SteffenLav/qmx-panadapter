@@ -261,6 +261,10 @@ void ft8_screen_record_decode(const char *text,
                               int64_t utc_sec, int dt_ms)
 {
     char call[FT8_CALL_MAX_LEN];
+    if (!ft8_screen_slot_is_current(utc_sec)) {
+        ESP_LOGI(TAG, "late decode from before the band/mode change dropped: '%s'", text);
+        return;
+    }
     if (!ft8_screen_extract_call(text, call, sizeof(call))) {
         return;
     }
@@ -440,8 +444,26 @@ int ft8_screen_active_count(void)
     return n;
 }
 
+/* UTC second of the last clear. Set BEFORE the mutex, so even a clear that
+ * times out below still stops the old band's late decodes from entering. */
+static volatile int64_t s_valid_from_utc = 0;
+
+bool ft8_screen_slot_is_current(int64_t slot_sec)
+{
+    return slot_sec >= s_valid_from_utc;
+}
+
 void ft8_screen_clear(void)
 {
+    /* ⛔ THE LIST REFILLED FROM THE OLD BAND (operator, 2026-11-22, seen on
+     * bench1 and in the simulator): 20 m -> 40 m, and 20 m stations stayed
+     * until they aged out. The clear itself worked; decodes of the slot
+     * captured on 20 m arrived AFTER it - the slot's own decode about 1 s
+     * after the slot, the WSJT-X piece pass 2-6 s after - and were recorded
+     * as new. The same late decodes were spotted to PSK Reporter at
+     * cat_get_frequency(), i.e. on the NEW band. Hypothesis from the code,
+     * confirmed on screen only after this fix. */
+    s_valid_from_utc = (int64_t)time(NULL);
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         ESP_LOGW(TAG, "clear: mutex timeout");
         return;

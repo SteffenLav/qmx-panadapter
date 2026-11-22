@@ -74,6 +74,13 @@ void ft8_screen_sort_rows(ft8_call_t *rows, int n,
 // Takes mutex internally.
 void ft8_screen_clear(void);
 
+// True if a decode from the slot that started at slot_sec (UTC) belongs on the
+// current band and sub-mode: the slot started no earlier than the last
+// ft8_screen_clear(). A clear marks a band or sub-mode change, and a slot
+// captured before it decodes up to ~6 s later (the WSJT-X piece pass). Those
+// late decodes must neither refill the list nor be spotted on the new dial.
+bool ft8_screen_slot_is_current(int64_t slot_sec);
+
 // Extract the TRANSMITTING callsign from a decoded message (WSJT-X token
 // heuristic; strips <angle brackets> from hash-resolved calls). Public for
 // the PSK Reporter spot feeder.
