@@ -24,7 +24,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import ft8_vs_wsjtx as V  # noqa: E402
 
-K = 40
+K = int(os.environ.get("GAP_K", "60"))
 DF, DDT = 3.2, 0.16
 
 
@@ -58,6 +58,7 @@ def main():
             runs[cur].add(hfold(V.norm(f[1])))
     cls = collections.Counter()
     snr = collections.defaultdict(list)
+    dlt = collections.defaultdict(list)
     nslots = 0
     for wav, ours in runs.items():
         j = jt9_lines(wav)
@@ -101,6 +102,7 @@ def main():
                         c = "beyond_k"
                     else:
                         c = "tried_pos" if ex else "tried_hard"
+                        dlt[c].append((best[2] - dt, best[1] - fq))
             cls[c] += 1
             snr[c].append(s)
     tot = sum(cls.values())
@@ -109,6 +111,16 @@ def main():
         v = snr[k]
         med = sorted(v)[len(v) // 2] if v else 0
         print(f"  {k:10} {cls[k]:5}  {100 * cls[k] / max(1, tot):5.1f} %   median SNR {med:+d} dB")
+    for k in ("tried_pos", "tried_hard"):
+        d = dlt[k]
+        if not d:
+            continue
+        adt = sorted(abs(x[0]) for x in d); adf = sorted(abs(x[1]) for x in d)
+        far = sum(1 for x in d if abs(x[0]) > 0.05)
+        sdt = sorted(x[0] for x in d)
+        print(f"  {k}: signed dt p10 {sdt[len(sdt)//10]*1000:+.0f} p50 {sdt[len(sdt)//2]*1000:+.0f} p90 {sdt[9*len(sdt)//10]*1000:+.0f} ms")
+        print(f"  {k}: |cand dt - jt9 dt| p50 {adt[len(adt)//2]*1000:.0f} ms p90 {adt[int(.9*len(adt))]*1000:.0f} ms, "
+              f"> 50 ms: {far} of {len(d)}; |df| p50 {adf[len(adf)//2]:.2f} p90 {adf[int(.9*len(adf))]:.2f} Hz")
 
 
 if __name__ == "__main__":

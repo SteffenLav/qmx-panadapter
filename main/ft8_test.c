@@ -393,7 +393,7 @@ int ft8_op_mode_slot_ms(void)
 #endif
 #define FT8_WSX_PIECE_K          60     /* ft8_lib failures tried, strongest first. K20 -> K40 (BP): +491 -> +597 jt9-confirmed on 456 on-air slots. With OSD-0 depth 1 and the packed OSD, under the 6 s budget: K40 +848, K60 +919, K80 +922 (budget-bound). */
 #define FT8_WSX_PIECE_BUDGET_MS  6000   /* wall-clock cap for one slot's pass */
-#define FT8_WSX_PIECE_DT_SHIFT   0.57f  /* ft8_lib time - this = WSJT-X DT (measured) */
+#define FT8_WSX_PIECE_DT_SHIFT   0.67f  /* ft8_lib time - this = the DT ft8b is given. NOT 0.57: that was the mean over candidates that DECODED, i.e. those already inside ft8b's +-50 ms search. The failures sat +50..+150 ms late (p10..p90). K60 OSD-0 d1, 6 s budget, jt9 referee: 0.57 -> 0.67 = +919 -> +1294 (457 on-air slots), +273 -> +394 (130 busy), +715 -> +1043 (307-slot corpus of another day); 0.65..0.69 flat. Mechanism not established. */
 
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when

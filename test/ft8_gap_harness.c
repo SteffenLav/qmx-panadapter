@@ -21,7 +21,9 @@
 #include "common/monitor.h"
 #include "ft8_wsjtx.h"
 
+#ifndef MAXC
 #define MAXC 140
+#endif
 #define DT_SHIFT 0.57f
 
 static int load_wav(int16_t* out, int nmax, const char* path)
