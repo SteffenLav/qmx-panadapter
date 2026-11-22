@@ -2676,7 +2676,36 @@ static void t_clock_cb(lv_timer_t *t)
             // readout, by request.
             char status[96];
             ft8_status_get(status, sizeof(status));
-            lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
+
+            /* ⭐ SECOND LINE: THE LAST TWO CYCLES' REAL COUNTS.
+             *
+             * Operator, 2026-11-22: "I see two 'RX: xx decoded' during one
+             * cycle - then next cycle I see none only: RX: capturing... I need
+             * real numbers that can be compared to other sw apps".
+             *
+             * The first line is a single slot the capture task also writes, so
+             * a count can lose its turn and never be seen. These numbers come
+             * from the DECODER (ft8_recent_cycle_decodes), so a cycle whose
+             * text was overwritten still shows up here.
+             *
+             * [0] is the current cycle and keeps climbing for ~6 s while the
+             * WSJT-X piece pass runs, which is why it can differ from the
+             * first line for a few seconds and then agree.
+             *
+             * Measured at montserrat_24 in a 288 px label
+             * (tools/measure_label.py): "last 2: 24  19" is 141.4 px. */
+            char line2[48] = { 0 };
+            int  cyc[2];
+            int  ncyc = ft8_recent_cycle_decodes(cyc, 2);
+            if (ncyc >= 2)
+                snprintf(line2, sizeof(line2), "\nlast 2: %d  %d", cyc[0], cyc[1]);
+            else if (ncyc == 1)
+                snprintf(line2, sizeof(line2), "\nlast 2: %d", cyc[0]);
+
+            char both[160];
+            snprintf(both, sizeof(both), "%s%s",
+                     status[0] ? status : "Idle", line2);
+            lv_label_set_text(s_lbl_tx, both);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);

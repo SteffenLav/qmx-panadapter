@@ -564,6 +564,39 @@ static volatile uint32_t s_decode_jobs_done   = 0;
  * Both of these are touched only by the decode task - decode_slot() and
  * wsx_piece_pass() run in the same loop of it - so no lock is needed. */
 static int  s_rx_line_n = 0;           /* the count the line last showed */
+
+/* ⭐ THE LAST FEW CYCLES' DECODE COUNTS, for the pane's second line.
+ *
+ * Operator, 2026-11-22: "I see two 'RX: xx decoded' during one cycle - then
+ * next cycle I see none only: RX: capturing... I need real numbers that can
+ * be compared to other sw apps".
+ *
+ * ⛔ RECORDED HERE, BY THE DECODER - deliberately NOT read back off the
+ * status string. The status line is a single slot that the capture task also
+ * writes ("RX: capturing..."), so a count can be overwritten before anyone
+ * sees it, and that is exactly the complaint. A cycle's number must survive
+ * losing its turn on the line.
+ *
+ * [0] is the newest and is still GROWING for ~6 s after the base decode,
+ * while the WSJT-X piece pass adds to it - the same number the first line
+ * steps to. Finished entries never change.
+ *
+ * The decode task writes, the LVGL timer reads, no lock: these are
+ * single-word RV32 stores and the worst a torn read can do is show a count
+ * one cycle stale on one 1 Hz frame. Same reasoning as s_decode_jobs_done. */
+#define FT8_CYC_HIST 4
+static volatile int s_cyc_n[FT8_CYC_HIST];
+static volatile int s_cyc_valid = 0;        /* how many entries are real */
+
+int ft8_recent_cycle_decodes(int *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = s_cyc_valid;
+    if (n > max)          n = max;
+    if (n > FT8_CYC_HIST) n = FT8_CYC_HIST;
+    for (int i = 0; i < n; i++) out[i] = s_cyc_n[i];
+    return n;
+}
 static char s_rx_line[48] = { 0 };     /* byte-for-byte what we wrote */
 // True for the whole lifetime of one ft8_task (capture) instance. A fast
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
@@ -3421,6 +3454,9 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     s_pc_full = false;                 /* the buffer is free for the next slot */
     if (n_new > 0) {
         ft8_screen_view_request_refresh();
+        /* The cycle's own number, which must be right whether or not the
+         * status line still belongs to this slot. */
+        if (s_cyc_valid > 0) s_cyc_n[0] += n_new;
         /* ...and move the count on the glass with them. ONLY if the line is
          * still the one this slot wrote: this runs seconds after decode_slot()
          * returned, and in that window a TX, a tune or an error may own the
@@ -4226,6 +4262,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     s_rx_line_n = n_shown;
     snprintf(s_rx_line, sizeof(s_rx_line), "RX: %d decoded", n_shown);
     ft8_status_set("%s", s_rx_line);
+
+    /* Push this cycle onto the history, newest first. The piece pass adds to
+     * s_cyc_n[0] afterwards - see FT8_CYC_HIST. */
+    for (int i = FT8_CYC_HIST - 1; i > 0; i--) s_cyc_n[i] = s_cyc_n[i - 1];
+    s_cyc_n[0] = n_shown;
+    if (s_cyc_valid < FT8_CYC_HIST) s_cyc_valid++;
     ESP_LOGI(TAG,
         "slot %d UTC %lld: mon=%d off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",

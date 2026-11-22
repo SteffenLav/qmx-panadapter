@@ -11,6 +11,13 @@
 #include "ft8/message.h"
 #include "ft8/constants.h"   // ftx_protocol_t
 
+/* The last few FT8 cycles' decode counts, newest first, for the pane's second
+ * line. Returns how many entries were written (0 before the first decode).
+ * out[0] is the CURRENT cycle and is still growing while the WSJT-X piece
+ * pass runs - about 6 s after the base decode. Recorded by the decoder, so a
+ * cycle whose status text was overwritten still reports its own number. */
+int ft8_recent_cycle_decodes(int *out, int max);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
