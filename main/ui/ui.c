@@ -3291,6 +3291,7 @@ static bool          s_bot_wifi_fan_valid = false;
 static lv_obj_t *s_bot_wifi_ip = NULL;
 static lv_coord_t s_bot_wifi_min_x = 0;  /* leftmost x the WiFi zone may use (clock's right edge) */
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
+static void reposition_bot_version(void);
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
 static lv_obj_t *s_bot_sd_slash = NULL; /* diagonal stroke over the SD dot+label when NO card is in */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
@@ -8124,12 +8125,14 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_align_to(s_bot_sd_slash, s_bot_diag_dot, LV_ALIGN_LEFT_MID, -4, 0);
     lv_obj_add_flag(s_bot_sd_slash, LV_OBJ_FLAG_HIDDEN);
 
-    // Firmware version, centered between the battery text and the UTC clock.
+    // Firmware version, centered between the "SD" label and the UTC clock -
+    // see reposition_bot_version().
     s_bot_version = lv_label_create(bar);
     lv_label_set_text(s_bot_version, "");
     lv_obj_set_style_text_color(s_bot_version, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
+    reposition_bot_version();
 
 
     // WiFi status, left to right: strength fan, SSID, IP address.
@@ -14026,6 +14029,28 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     display_unlock();
 }
 
+// Centre the version line on the midpoint between the right edge of the "SD"
+// label and the left edge of the clock.
+//
+// It was a fixed centre at x = 390 (LV_ALIGN_CENTER, -250). The SD label moves
+// with the battery text, so the gaps were unequal: 90/108 px on a Tab5 showing
+// "80% (limit)", 140/61 px with "--%". The update offer "v2.0.2 -> v2.1.0
+// tap?" is ~300 px wide; at x = 390 it ran into the clock (operator,
+// 2026-11-22: centre the whole sentence, space on both sides).
+//
+// LV_ALIGN_CENTER is kept, so a text change re-centres on the same midpoint
+// without a call here; only a move of the SD label needs one, which is why
+// reposition_diag_dot() calls this.
+static void reposition_bot_version(void)
+{
+    if (!s_bot_version || !s_bot_diag_label || s_bot_clock_x0 < 0) return;
+    lv_obj_t *bar = lv_obj_get_parent(s_bot_version);
+    lv_obj_update_layout(s_bot_diag_label);
+    lv_coord_t sd_x2 = lv_obj_get_x2(s_bot_diag_label);
+    lv_coord_t mid   = (sd_x2 + s_bot_clock_x0) / 2;
+    lv_obj_align(s_bot_version, LV_ALIGN_CENTER, mid - lv_obj_get_content_width(bar) / 2, 0);
+}
+
 // Re-anchor the diag-log dot to the right edge of the battery voltage text
 // (s_bot_left), whose width changes with its content ("82%", "82% (4.1V)",
 // "82% (4.1V)  [charge glyph]", ...). Called after every s_bot_left update
@@ -14045,6 +14070,7 @@ static void reposition_diag_dot(void)
     // The GPS symbol is not part of this group either: it belongs to
     // the right-hand chain instead - see its creation block, and
     // ui_set_bottom_wifi() which lays that chain out from the edge.
+    reposition_bot_version();       // the SD label moved, so the midpoint did
 }
 
 void ui_set_bottom_left(const char *text)
