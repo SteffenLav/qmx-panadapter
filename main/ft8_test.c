@@ -565,38 +565,24 @@ static volatile uint32_t s_decode_jobs_done   = 0;
  * wsx_piece_pass() run in the same loop of it - so no lock is needed. */
 static int  s_rx_line_n = 0;           /* the count the line last showed */
 
-/* ⭐ THE LAST FEW CYCLES' DECODE COUNTS, for the pane's second line.
+/* ⭐ HAS ANY CYCLE DECODED YET?
  *
- * Operator, 2026-11-22: "I see two 'RX: xx decoded' during one cycle - then
- * next cycle I see none only: RX: capturing... I need real numbers that can
- * be compared to other sw apps".
+ * The one thing the capture task needs to know before it writes
+ * "RX: capturing...": that message is shown only until the first cycle has
+ * produced a count, because after that the count is the better text and the
+ * two writers were racing for the same slot - see the comment at that write,
+ * and 3f303fdd for the measurement.
  *
- * ⛔ RECORDED HERE, BY THE DECODER - deliberately NOT read back off the
- * status string. The status line is a single slot that the capture task also
- * writes ("RX: capturing..."), so a count can be overwritten before anyone
- * sees it, and that is exactly the complaint. A cycle's number must survive
- * losing its turn on the line.
+ * This briefly carried the last four cycles' counts as well, for a second
+ * pane line ("last 2: 24  19", 6c27b9e0). The operator removed that line the
+ * same day - "it does not add more information i think" - once the race was
+ * fixed and the first line stopped losing its number. The history existed to
+ * survive a fault that no longer happens; only this flag is still earned.
  *
- * [0] is the newest and is still GROWING for ~6 s after the base decode,
- * while the WSJT-X piece pass adds to it - the same number the first line
- * steps to. Finished entries never change.
- *
- * The decode task writes, the LVGL timer reads, no lock: these are
- * single-word RV32 stores and the worst a torn read can do is show a count
- * one cycle stale on one 1 Hz frame. Same reasoning as s_decode_jobs_done. */
-#define FT8_CYC_HIST 4
-static volatile int s_cyc_n[FT8_CYC_HIST];
-static volatile int s_cyc_valid = 0;        /* how many entries are real */
+ * Written by the decode task, read by the capture task, no lock: one
+ * single-word RV32 store that only ever goes 0 -> 1. */
+static volatile int s_cyc_valid = 0;
 
-int ft8_recent_cycle_decodes(int *out, int max)
-{
-    if (!out || max <= 0) return 0;
-    int n = s_cyc_valid;
-    if (n > max)          n = max;
-    if (n > FT8_CYC_HIST) n = FT8_CYC_HIST;
-    for (int i = 0; i < n; i++) out[i] = s_cyc_n[i];
-    return n;
-}
 static char s_rx_line[48] = { 0 };     /* byte-for-byte what we wrote */
 // True for the whole lifetime of one ft8_task (capture) instance. A fast
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
@@ -3454,9 +3440,6 @@ static void wsx_piece_pass(int64_t job_slot_sec)
     s_pc_full = false;                 /* the buffer is free for the next slot */
     if (n_new > 0) {
         ft8_screen_view_request_refresh();
-        /* The cycle's own number, which must be right whether or not the
-         * status line still belongs to this slot. */
-        if (s_cyc_valid > 0) s_cyc_n[0] += n_new;
         /* ...and move the count on the glass with them. ONLY if the line is
          * still the one this slot wrote: this runs seconds after decode_slot()
          * returned, and in that window a TX, a tune or an error may own the
@@ -4263,11 +4246,7 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon,
     snprintf(s_rx_line, sizeof(s_rx_line), "RX: %d decoded", n_shown);
     ft8_status_set("%s", s_rx_line);
 
-    /* Push this cycle onto the history, newest first. The piece pass adds to
-     * s_cyc_n[0] afterwards - see FT8_CYC_HIST. */
-    for (int i = FT8_CYC_HIST - 1; i > 0; i--) s_cyc_n[i] = s_cyc_n[i - 1];
-    s_cyc_n[0] = n_shown;
-    if (s_cyc_valid < FT8_CYC_HIST) s_cyc_valid++;
+    s_cyc_valid = 1;   /* a cycle has decoded - see the flag's comment */
     ESP_LOGI(TAG,
         "slot %d UTC %lld: mon=%d off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d js8f=%d dup=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms/%dst applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
