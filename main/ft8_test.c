@@ -5146,7 +5146,24 @@ static void ft8_task(void *arg)
             monitor_t *mon = s_mon_pool[bi];
             monitor_reset(mon);
 
-            ft8_status_set("RX: capturing...");
+            /* ⛔ ONLY UNTIL THE FIRST CYCLE HAS DECODED.
+             *
+             * This write and the decode task's count are the SAME single
+             * slot, and they land within a few hundred ms of each other every
+             * slot - whichever writes last owns the line for the next 15 s.
+             * MEASURED on bench1 2026-11-22 from the status-change log: of 32
+             * counts, the median survived 214 ms before this line replaced
+             * it, the shortest 9 ms. That is what the operator saw - "two
+             * 'RX: xx decoded' during one cycle, then next cycle none, only
+             * RX: capturing...". The pattern looked random because it is a
+             * race, not a rule.
+             *
+             * Once a cycle has decoded, the count IS the liveness signal: it
+             * changes every slot, and it carries a number worth reading.
+             * "capturing..." carried neither. It is still shown before the
+             * first decode, which is the only time it says something the
+             * count cannot. */
+            if (s_cyc_valid == 0) ft8_status_set("RX: capturing...");
             // Capture-start offset from the UTC slot boundary. Should stay ~0;
             // if it climbs ~0.2 s/slot the capture window is drifting off the
             // FT8 timing grid (the ~3-min decode-death bug). Self-anchors: it's
