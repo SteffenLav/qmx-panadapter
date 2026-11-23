@@ -286,6 +286,9 @@
     -webkit-tap-highlight-color: transparent;
   }
   #listenbtn.on  { background: var(--accent); color: var(--bg); }
+  /* Stereo (binaural CW) - see listenPaint(). Small, so the button grows by
+     about one character and the full top bar keeps its fit. */
+  #listenbtn sup.st { font-size: 0.6em; margin-left: 0.2em; vertical-align: super; line-height: 0; }
   /* Asked for and not yet arriving - the device may be in a mode it does not
      demodulate, so the button must not claim to be playing. */
   #listenbtn.wait { background: #1f2937; color: var(--warn, #fbbf24); }
@@ -14988,6 +14991,7 @@ let audioTail = new Float32Array(2);
 /* The right ear's tail, for stereo frames (binaural CW, 0x04). A mono frame
    copies audioTail here, so a switch to stereo starts from the same join. */
 let audioTailR = new Float32Array(2);
+let audioStereo = false;   /* the last frame was 0x04 - drives the ST mark */
 let audioPhase = 0;
 /* ⛔ 0.9 s OF BUFFER, AND IT IS NOT A GUESS. The first version held 0.18 s and
    the operator heard it break up within a minute. The instrument said why, and
@@ -15144,6 +15148,7 @@ function audioFrame(buf) {
      the slots). src is then the LEFT ear and srcR the right; for 0x03 srcR
      stays null and everything below runs exactly as it did in mono. */
   const st = buf[0] === FRAME_TYPE_AUDIO_ST;
+  if (st !== audioStereo) { audioStereo = st; listenPaint(); }   /* the ST mark */
   const n = st ? (buf.length - AUDIO_HDR_LEN) >> 1 : buf.length - AUDIO_HDR_LEN;
 
   /* [previous chunk's tail][this chunk], so the first output sample can
@@ -15315,7 +15320,13 @@ function listenPaint() {
   /* The word, not only the glyph - see the #listenbtn CSS note. "Stop" rather
      than a square for the same reason: a square is only obvious once you
      already know what it does. */
-  b.innerHTML = audioWantOn ? "&#9632; Stop" : "&#9654; Listen";
+  /* ST: the frames ARRIVING are stereo (0x04) - binaural CW. Driven by what is
+     received, not by the mode or the setting, so it cannot claim a stereo
+     image the listener is not hearing. A superscript inside this button, not
+     a control of its own: the top bar has no room for one. */
+  b.innerHTML = audioWantOn
+    ? "&#9632; Stop" + (audioStereo && audioFrames > 0 ? '<sup class="st">ST</sup>' : "")
+    : "&#9654; Listen";
   b.title = !audioWantOn
     ? "Listen to the receiver here (the Tab5's own demodulated audio)"
     : (audioFrames === 0
