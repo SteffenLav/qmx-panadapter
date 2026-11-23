@@ -11861,6 +11861,9 @@ const FRAME_TYPE_TAKEOVER = 0x02;
    first, and a page that read an audio frame as "you were displaced" would
    disconnect itself on the first one. */
 const FRAME_TYPE_AUDIO = 0x03;
+/* The same, stereo: interleaved left-ear, right-ear pairs. Sent only while
+   the binaural CW split is on (webserver_ws.c WS_FRAME_TYPE_AUDIO_ST). */
+const FRAME_TYPE_AUDIO_ST = 0x04;
 const AUDIO_HDR_LEN = 6;
 let wsDisplaced = false;
 /* When the current socket opened, and the last few close codes - see ws.onclose. */
@@ -14979,6 +14982,9 @@ let audioLatePainted = 0, audioDroppedPainted = 0;
    interpolate across the join; audioPhase is the fractional read position
    within [tail, chunk]. */
 let audioTail = new Float32Array(2);
+/* The right ear's tail, for stereo frames (binaural CW, 0x04). A mono frame
+   copies audioTail here, so a switch to stereo starts from the same join. */
+let audioTailR = new Float32Array(2);
 let audioPhase = 0;
 /* ⛔ 0.9 s OF BUFFER, AND IT IS NOT A GUESS. The first version held 0.18 s and
    the operator heard it break up within a minute. The instrument said why, and
@@ -15130,14 +15136,29 @@ function audioFrame(buf) {
   audioSeq = seq;
   audioFrames++;
 
-  const n = buf.length - AUDIO_HDR_LEN;
+  /* 0x04 is the binaural CW split: interleaved left-ear, right-ear pairs,
+     already in the order the Tab5's own jack plays them (rx_audio.c crosses
+     the slots). src is then the LEFT ear and srcR the right; for 0x03 srcR
+     stays null and everything below runs exactly as it did in mono. */
+  const st = buf[0] === FRAME_TYPE_AUDIO_ST;
+  const n = st ? (buf.length - AUDIO_HDR_LEN) >> 1 : buf.length - AUDIO_HDR_LEN;
 
   /* [previous chunk's tail][this chunk], so the first output sample can
      interpolate across the join instead of starting again from zero. */
   const T   = audioTail.length;
   const src = new Float32Array(T + n);
   src.set(audioTail, 0);
-  for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+  let srcR = null;
+  if (st) {
+    srcR = new Float32Array(T + n);
+    srcR.set(audioTailR, 0);
+    for (let i = 0; i < n; i++) {
+      src[T + i]  = ULAW[buf[AUDIO_HDR_LEN + 2 * i]];
+      srcR[T + i] = ULAW[buf[AUDIO_HDR_LEN + 2 * i + 1]];
+    }
+  } else {
+    for (let i = 0; i < n; i++) src[T + i] = ULAW[buf[AUDIO_HDR_LEN + i]];
+  }
 
   /* T18 / T184 noise reduction and auto-notch, on the decoded 12 kHz samples
      and before the resampler. Same sample count in and out, so nothing below
@@ -15151,10 +15172,11 @@ function audioFrame(buf) {
     if ((eng || notch) && rate === 12000) {
       /* A new start, another mode, another engine: begin from nothing, so no
          noise estimate and no notch is carried from one signal to the next. */
-      const key = eng + "|" + lastMode + "|" + (notch ? 1 : 0);
+      const key = eng + "|" + lastMode + "|" + (notch ? 1 : 0) + "|" + (st ? 2 : 1);
       if (key !== nrRunKey) {
         if (eng === 1) nrReset(nrInst);
         if (eng === 2) snInst = snInst ? snReset(snInst) : snCreate();
+        if (eng === 2 && st) snInstR = snInstR ? snReset(snInstR) : snCreate();
         if (notch) anInst = anInst ? anReset(anInst) : anCreate();
         nrRunKey = key;
       }
@@ -15162,10 +15184,19 @@ function audioFrame(buf) {
       if (eng === 1) src.set(nrProcess(nrInst, seg, lv.wet, an), T);
       else if (eng === 2) src.set(snProcess(snInst, seg, lv.floor, an), T);
       else anProcess(an, seg);                           /* notch alone: in place, no delay */
+      /* The right ear gets its OWN spectral state: each ear has its own
+         stations and its own noise. Stereo only arises in CW, where the
+         spectral NR is the only engine and the notch is never offered
+         (anWanted is voice-only), so nothing else needs a second copy. */
+      if (srcR && eng === 2) srcR.set(snProcess(snInstR, srcR.subarray(T), lv.floor, null), T);
       /* T194 make-up gain - see NR_LEVELS. Here, not in the NR block, because
          the harnesses check that block's own output level. */
       const mk = eng === 1 ? lv.mkRn : (eng === 2 && !nrCw() ? lv.mkSn : 0);
-      if (mk) { const g = Math.pow(10, mk / 20); for (let i = T; i < src.length; i++) src[i] *= g; }
+      if (mk) {
+        const g = Math.pow(10, mk / 20);
+        for (let i = T; i < src.length; i++) src[i] *= g;
+        if (srcR) for (let i = T; i < srcR.length; i++) srcR[i] *= g;
+      }
     } else nrRunKey = "";
   }
 
@@ -15209,19 +15240,23 @@ function audioFrame(buf) {
   const outN = Math.max(0, Math.ceil((src.length - 1 - audioPhase) / ratio));
   if (outN <= 0) return;
 
-  const ab = audioCtx.createBuffer(1, outN, audioCtx.sampleRate);
+  /* A mono buffer plays in both ears; a 2-channel one plays channel 0 LEFT. */
+  const ab = audioCtx.createBuffer(srcR ? 2 : 1, outN, audioCtx.sampleRate);
   const ch = ab.getChannelData(0);
+  const chR = srcR ? ab.getChannelData(1) : null;
   let pos = audioPhase;
   let produced = 0;
   for (let i = 0; i < outN && pos < src.length - 1; i++) {
     const k = pos | 0, f = pos - k;
     ch[i] = src[k] * (1 - f) + src[k + 1] * f;
+    if (chR) chR[i] = srcR[k] * (1 - f) + srcR[k + 1] * f;
     pos += ratio;
     produced++;
   }
   /* Carry: keep the last T input samples, and express the read position
      relative to where they will sit at the front of the next chunk. */
   audioTail = src.slice(src.length - T);
+  audioTailR = srcR ? srcR.slice(srcR.length - T) : audioTail.slice();
   audioPhase = pos - (src.length - T);
   if (audioPhase < 0) audioPhase = 0;
   if (produced === 0) return;
@@ -15362,6 +15397,7 @@ let nrOn = false, nrLevel = 2, nrInst = null, nrLoading = false, nrLoadErr = "";
    spectral NR. CW always uses the spectral one. anOn: the auto-notch, its own
    switch. nrRunKey names what audioFrame() is running, "" when nothing is. */
 let nrType = 0, anOn = false, snInst = null, anInst = null, nrRunKey = "";
+let snInstR = null;   /* the right ear's spectral NR, binaural CW only */
 try {
   nrOn = localStorage.getItem("nrOn") === "1";
   const v = parseInt(localStorage.getItem("nrLevel"), 10);
@@ -15476,7 +15512,7 @@ function connectWs() {
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
     if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
-    if (buf.length && buf[0]===FRAME_TYPE_AUDIO) { audioFrame(buf); return; }
+    if (buf.length && (buf[0]===FRAME_TYPE_AUDIO || buf[0]===FRAME_TYPE_AUDIO_ST)) { audioFrame(buf); return; }
     if (buf.length<HEADER_LEN+SPEC_W) return;
     if (buf[0]!==FRAME_TYPE_SPECTRUM) return;
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)

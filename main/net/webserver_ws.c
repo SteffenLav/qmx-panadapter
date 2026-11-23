@@ -28,6 +28,12 @@
  * pages keep working; one that knows 0x02 as "you were displaced" would have
  * disconnected itself on the first audio frame. */
 #define WS_FRAME_TYPE_AUDIO     0x03
+/* The same frame, STEREO: interleaved left-ear/right-ear mu-law pairs, sent
+ * only while the panoramic (binaural) CW split is on. A new type and not a
+ * flag in 0x03's reserved byte: a client that predates it ignores an unknown
+ * first byte (silence in binaural), where one reading 0x03 would play the
+ * pairs as mono at twice the rate. */
+#define WS_FRAME_TYPE_AUDIO_ST  0x04
 /* ⛔ THE CEILING IS TCP_SND_BUF, AND IT IS 2880 BYTES ON THIS DEVICE.
  *
  * Everything that has ever worked on this socket fits under it: the spectrum
@@ -936,10 +942,13 @@ static void ws_push_task(void *arg)
          * four times the size of the spectrum frame: letting it decide would
          * close sessions that are carrying the spectrum perfectly well. */
         if (rx_audio_web_is_enabled()) {
-            int n = rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES);
+            /* Stereo uses the SAME byte ceiling (see WS_AUDIO_MAX_SAMPLES):
+               1800 bytes is 900 instants of two ears. */
+            const bool st = rx_audio_web_stereo();
+            int n = rx_audio_web_read(s_audio_pcm, WS_AUDIO_MAX_SAMPLES, st);
             if (n > 0) {
                 uint8_t *p = s_audio_txbuf + WS_WIRE_HDR_LEN;
-                p[0] = WS_FRAME_TYPE_AUDIO;
+                p[0] = st ? WS_FRAME_TYPE_AUDIO_ST : WS_FRAME_TYPE_AUDIO;
                 p[1] = 0;                                  /* reserved */
                 p[2] = (uint8_t)s_audio_seq;
                 p[3] = (uint8_t)(s_audio_seq >> 8);

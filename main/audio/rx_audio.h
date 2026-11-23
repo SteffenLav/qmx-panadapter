@@ -88,8 +88,13 @@ bool rx_audio_restart_pending(void);
 bool     rx_audio_any_listener(void);
 void     rx_audio_web_set_enabled(bool en);
 bool     rx_audio_web_is_enabled(void);
+// True while the panoramic (binaural) CW split is producing two different ears.
+bool     rx_audio_web_stereo(void);
 // Drain up to `max` samples at RX_AUDIO_WEB_RATE_HZ into dst; returns how many.
-int      rx_audio_web_read(int16_t *dst, int max);
+// stereo=false: one averaged sample per instant. stereo=true: interleaved
+// LEFT-ear, RIGHT-ear pairs (as the Tab5's own jack plays them), so the count
+// is even and covers count/2 instants.
+int      rx_audio_web_read(int16_t *dst, int max, bool stereo);
 // Samples the producer overwrote because the reader fell behind - the one
 // number that says whether a break-up was the link or the device.
 uint32_t rx_audio_web_dropped(void);
