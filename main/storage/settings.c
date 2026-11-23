@@ -288,7 +288,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      6                        /* 192 bits; highest used 162, 29 spare */
+#define DIRTY_WORDS      6                        /* 192 bits; highest used 163, 28 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -4009,6 +4009,11 @@ void settings_set_tx_subnet_interlock(bool v)
     s_pending.tx_subnet_interlock = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_TXSUBNET);
+    /* Logged because a user who ticks this box and still transmits has to be
+     * answerable from the diag alone - see tx_subnet.c. The guard logs its
+     * decisions; this logs the moment the switch moved, which is the other
+     * half of the same question. */
+    ESP_LOGW(TAG, "TX interlock setting -> %s", v ? "ON" : "OFF");
 }
 
 // Narrow accessor: row_activate_ex() (ft8_screen_view.c) reads this on the

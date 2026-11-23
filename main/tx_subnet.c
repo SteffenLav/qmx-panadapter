@@ -12,6 +12,10 @@
 
 static const char *TAG = "tx_subnet";
 
+/* -1 not yet seen, 0 off, 1 on. Logged on CHANGE rather than once per boot, so
+ * a toggle made after the first transmit is in the capture too. */
+static int s_state_logged = -1;
+
 /* One sentence for every refusal, because the operator and the user who hits
  * it have to be able to connect the two. It says what to do about it, and it
  * deliberately does NOT claim that anything was authenticated. */
@@ -39,9 +43,35 @@ bool tx_subnet_allows_fd(int sockfd, const char *what, char *err, size_t err_len
 {
     if (err && err_len) err[0] = 0;
 
-    /* Off is the default - see tx_subnet.h. Read it first, so the whole
-     * mechanism costs nothing on a device that is not using it. */
-    if (!settings_get_tx_subnet_interlock()) return true;
+    /* ⛔ EVERY DECISION LEAVES A LINE, INCLUDING THE ONES THAT ALLOW.
+     *
+     * This used to be silent whenever it said yes, and that cost a diagnosis.
+     * Randy N4OPI reported TX going out from off-subnet on v2.1.0 (2026-11-23)
+     * with the interlock ticked. His diag holds the keying - "web requested CQ
+     * start", key down, 3.0 W - and not one word about this decision. Three
+     * explanations fitted that log equally well:
+     *   - the setting was not actually on at the moment of the request;
+     *   - a router between his two segments NATs, so the peer we see is the
+     *     router's own on-subnet address and the interlock allows it correctly;
+     *   - the guard is broken.
+     * Nothing in the capture separated them. A guard that only speaks when it
+     * refuses is an instrument that reads the same whether it is working or
+     * switched off - the same fault as a silent capture (see the serial capture
+     * rules). It now says what it decided, who asked, and against what.
+     *
+     * Off is still read first, so the mechanism costs nothing else on a device
+     * that is not using it. */
+    const bool on = settings_get_tx_subnet_interlock();
+    if (s_state_logged != (int)on) {
+        s_state_logged = (int)on;
+        ESP_LOGW(TAG, "TX interlock is %s",
+                 on ? "ON - off-subnet requests may not key"
+                    : "OFF - any caller that reaches the API may key");
+    }
+    if (!on) {
+        ESP_LOGI(TAG, "%s allowed: TX interlock is off", what ? what : "TX");
+        return true;
+    }
 
     if (sockfd < 0) {
         ESP_LOGW(TAG, "%s REFUSED: no socket for this request", what ? what : "TX");
@@ -112,6 +142,17 @@ bool tx_subnet_allows_fd(int sockfd, const char *what, char *err, size_t err_len
         return false;
     }
 
+    {
+        /* The line that was missing from Randy's capture. It is W, beside the
+         * refusals, because a filtered log that keeps only the refusals cannot
+         * answer "did this request reach the guard at all?". */
+        char ours_s[20], mask_s[20];
+        fmt_ipv4(ours_s, sizeof ours_s, ours);
+        fmt_ipv4(mask_s, sizeof mask_s, mask);
+        ESP_LOGW(TAG, "%s ALLOWED by the TX interlock: peer %s is on-subnet "
+                      "(ours %s mask %s)",
+                 what ? what : "TX", peer_s, ours_s, mask_s);
+    }
     return true;
 }
 
