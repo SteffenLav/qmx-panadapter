@@ -10600,7 +10600,10 @@ function drawSpotPreview(ctx, box, pxW, pxH, col) {
 /* Tune to a spot: frequency AND mode, the way the Tab5 does it. */
 function tuneToSpot(box) {
   if (!box || !box.hz) return;
-  sendCmd({ action: "set_freq", hz: box.hz });
+  /* jump:true - the Tab5 re-frames on a picked spot (ui_note_frequency_jump);
+     without it a pick is ordinary tuning, the view pages, and the VFO lands
+     at the opposite edge. Only spot picks send it, as on the Tab5. */
+  sendCmd({ action: "set_freq", hz: box.hz, jump: true });
   if (box.mode) sendCmd({ action: "set_mode", mode: box.mode });
   holdLocalFreq(box.hz);
 }

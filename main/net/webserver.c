@@ -1940,6 +1940,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
              * spot could send the RX "far outside the band plan" from the
              * browser (operator, 2026-11-09). */
             uint32_t hz = ui_cw_tune_clamp_hz((uint32_t)argv);
+            /* "jump":true - the browser's SPOT PICK, and only that. The Tab5's
+             * own spot tap calls ui_note_frequency_jump() before it tunes
+             * (spots_lane.c tune_to_spot), so the still display re-frames on
+             * the picked station. This endpoint never did: the browser's pick
+             * arrived as ordinary tuning, the still display PAGED instead, and
+             * the VFO landed at the OPPOSITE edge of the new view (operator,
+             * 2026-11-23, web UI edge counter; the Tab5 screen was right).
+             * Before the tune - the flag is consumed by the update it causes. */
+            {
+                const cJSON *jj = cJSON_GetObjectItem(root, "jump");
+                if (cJSON_IsTrue(jj)) ui_note_frequency_jump();
+            }
             /* FORCED, because every caller of this action is a COMMIT.
              *
              * It used to be the rate-limited cat_set_frequency(), whose return
