@@ -28,11 +28,12 @@ list.
 
 ### 1. Check the mode
 
-**CW, CW-R, USB, LSB, AM and DiGi** produce audio. **FM produces none** — see
-[Which modes produce audio](#which-modes-produce-audio).
+Only **CW, CW-R, USB, LSB and AM** produce audio. **DiGi and FM produce none, by
+design** — see [Which modes produce audio](#which-modes-produce-audio).
 
-DiGi plays as USB, so on an FT8, FT4, JS8 or WSPR dial you hear the digital tones in
-the passband the screen shows.
+This catches more people than anything else, because **FT8, FT4, JS8 and WSPR all run
+in DiGi**. If you are on a digital mode and expecting to hear the band, you will not.
+Switch to USB to listen.
 
 ### 2. RX audio is off by default, and enabling it needs a restart
 
@@ -178,7 +179,7 @@ Three live controls tune the effect mid-QSO without leaving the exchange, groupe
 
 !!! note "Which modes produce audio"
 
-    **CW, CW-R, USB, LSB, AM and DiGi** (DiGi plays as USB). There is no FM demodulator and none is planned,
+    **CW, CW-R, USB, LSB and AM.** There is no FM demodulator and none is planned,
     so an FM signal has to be listened to in USB or not at all.
 
     AM is demodulated on the Tab5 itself, from the I/Q the radio sends, so the
@@ -297,10 +298,10 @@ Audio and the panoramic split are not the same thing, and it is worth being clea
 | CW, CW-R | Yes | **Yes** |
 | USB, LSB | **Yes** | No — single channel, both ears the same |
 | AM | **Yes**, to about 3 kHz | No — AM has no stereo content to split |
-| DiGi, DiGi-R | **Yes**, played as USB | No — single channel |
+| DiGi | No | No |
 | FM | No | No |
 
-So you **do** get audio on SSB and AM; what you do not get there is the left/right split, because that is a CW feature. In FM there is no audio at all — nothing is broken if you hear silence there.
+So you **do** get audio on SSB and AM; what you do not get there is the left/right split, because that is a CW feature. In DiGi and FM there is no audio at all — nothing is broken if you hear silence in those.
 
 ## Known Limitations
 
