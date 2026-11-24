@@ -362,6 +362,8 @@ typedef struct {
     unsigned pi_partial, pi_no_array, pi_stale, pi_overlay, pi_wide;
     unsigned pi_band_mean_px;
     unsigned pi_cols_mean_px;   /* mean WIDTH of the changed region */
+    unsigned pi_strips;         /* wide pushes repainted as per-strip bands */
+    unsigned pi_strips_nobuf;   /* strips would fit, LVGL area buffer would not */
     /* Carpet: rows written into the buffer, and how many of those actually
      * moved the view. rows/shifts should equal the shift batch. */
     unsigned wf_shifts, wf_rows_written;

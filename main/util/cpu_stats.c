@@ -157,10 +157,10 @@ static void cpu_stats_task(void *arg)
                 /* Which branch kept the spectrum on the full-canvas
                  * invalidate. partial should dominate on a quiet band. */
                 ESP_LOGI(TAG, "partial inval: ok %u | rejected: noarr %u stale %u overlay %u wide %u"
-                              " | band %u x %u px",
+                              " (strips %u, nobuf %u) | band %u x %u px",
                          sfs.pi_partial, sfs.pi_no_array, sfs.pi_stale,
-                         sfs.pi_overlay, sfs.pi_wide, sfs.pi_cols_mean_px,
-                         sfs.pi_band_mean_px);
+                         sfs.pi_overlay, sfs.pi_wide, sfs.pi_strips, sfs.pi_strips_nobuf,
+                         sfs.pi_cols_mean_px, sfs.pi_band_mean_px);
 
                 ESP_LOGI(TAG, "carpet: %u rows -> %u shifts (batch %d)",
                          sfs.wf_rows_written, sfs.wf_shifts,

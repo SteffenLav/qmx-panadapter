@@ -68,6 +68,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "hid_cursor.h"
 #include "util/hid_rotate.h"
 #include "util/wf_shift.h"
+#include "src/display/lv_display_private.h"       /* inv_p: room left for invalid areas, see the strip path in ui_push_spectrum */
 #include "src/widgets/image/lv_image_private.h"   /* img->offset: the CW carpet shift, see ui_push_waterfall_row */
 #include "util/qmx_prompt_gate.h"   // WHEN the "turn on your QMX" prompt may appear
 #include "memory_modal.h"
@@ -5039,6 +5040,8 @@ static volatile uint32_t s_pi_wide;       /* area covered >= 2/3           */
 static volatile uint64_t s_pi_band_sum;   /* band height, for the mean     */
 static volatile uint32_t s_pi_band_n;
 static volatile uint64_t s_pi_cols_sum;   /* band WIDTH, for the mean      */
+static volatile uint32_t s_pi_strips;     /* wide, repainted as strips     */
+static volatile uint32_t s_pi_strips_nobuf; /* strips fitted, LVGL buffer did not */
 
 // "Breathing" opacity animation for edge-swipe grip handles: fades between
 // near-invisible and the normal resting opacity so the user notices the
@@ -12157,6 +12160,9 @@ void ui_spec_frame_stats(ui_spec_frame_stats_t *out)
     out->pi_wide     = s_pi_wide;
     out->pi_band_mean_px = s_pi_band_n ? (unsigned)(s_pi_band_sum / s_pi_band_n) : 0;
     out->pi_cols_mean_px = s_pi_band_n ? (unsigned)(s_pi_cols_sum / s_pi_band_n) : 0;
+    out->pi_strips       = s_pi_strips;
+    out->pi_strips_nobuf = s_pi_strips_nobuf;
+    s_pi_strips = 0; s_pi_strips_nobuf = 0;
     s_pi_partial = 0; s_pi_no_array = 0; s_pi_stale = 0;
     s_pi_overlay = 0; s_pi_wide = 0;
     s_pi_band_sum = 0; s_pi_band_n = 0; s_pi_cols_sum = 0;
@@ -12753,6 +12759,26 @@ void ui_push_spectrum(const float *bins, int n_bins)
      * width, i.e. exactly today's behaviour. */
     int col_lo = DISPLAY_H_RES;  /* empty: lo > hi */
     int col_hi = -1;
+    /* ⭐ PER-STRIP BANDS - the fallback when the one rectangle above is still
+     * too big (Mark Hammond N8MH, a6832e6b, 2026-11-20).
+     *
+     * The rectangle fails on the most common live picture: a strong carrier
+     * makes it full HEIGHT, and a noise floor that moves a few pixels in every
+     * column makes it full WIDTH. Mark measured exactly that on WWV (65/65
+     * pushes wide, core 0 4-9 % idle, speaker audio starved) and 4 -> 25 %
+     * free with strips. Each SPEC_STRIP_W column strip keeps its own band, so
+     * only the strips under the carrier go tall. */
+#define SPEC_STRIP_W 80
+#define SPEC_STRIPS  ((DISPLAY_H_RES + SPEC_STRIP_W - 1) / SPEC_STRIP_W)
+    int strip_lo[SPEC_STRIPS], strip_hi[SPEC_STRIPS];
+    for (int i = 0; i < SPEC_STRIPS; i++) { strip_lo[i] = SPECTRUM_H; strip_hi[i] = -1; }
+#define SPEC_STRIP_ADD(xx, lo_, hi_) do {                                     \
+        int _s = (xx) / SPEC_STRIP_W;                                         \
+        if (_s >= 0 && _s < SPEC_STRIPS) {                                    \
+            if ((lo_) < strip_lo[_s]) strip_lo[_s] = (lo_);                   \
+            if ((hi_) > strip_hi[_s]) strip_hi[_s] = (hi_);                   \
+        }                                                                     \
+    } while (0)
     const uint16_t fg = 0x07E0;  // green in RGB565
     const uint16_t grid_color = 0x4208;  // dim grey grid lines
 
@@ -13339,6 +13365,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                      * the band carries +/-1 in y. */
                     if (x - 1 < col_lo) col_lo = x - 1;
                     if (x     > col_hi) col_hi = x;
+                    SPEC_STRIP_ADD(x, lo3 - 1, hi3 + 1);
                 }
                 peak_prev_moved = (pprev != py);
                 peak_prev_old   = pprev;
@@ -13360,6 +13387,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 if (hi2 + 1 > band_hi) band_hi = hi2 + 1;
                 if (x - 1 < col_lo) col_lo = x - 1;
                 if (x     > col_hi) col_hi = x;
+                SPEC_STRIP_ADD(x, lo2 - 1, hi2 + 1);
             }
             s_frame_ytop[x] = (int16_t)y_top;
         }
@@ -13726,6 +13754,40 @@ void ui_push_spectrum(const float *bins, int n_bins)
             s_pi_partial++;
         }
     }
+    /* Wide, but the per-column history is trustworthy (no overlay move, no
+     * gap): try the strips. Used only when their summed area is under 2/3 of
+     * the canvas - above that one full invalidate is cheaper. */
+    bool use_strips = false;
+    int  n_strips   = 0;
+    if (!have_band && s_frame_ytop && s_frame_ytop_valid && !overlay_moved) {
+        long area = 0;
+        for (int i = 0; i < SPEC_STRIPS; i++) {
+            if (strip_hi[i] < strip_lo[i]) continue;
+            if (strip_lo[i] < 0) strip_lo[i] = 0;
+            if (strip_hi[i] > SPECTRUM_H - 1) strip_hi[i] = SPECTRUM_H - 1;
+            area += (long)(strip_hi[i] - strip_lo[i] + 1) * (SPEC_STRIP_W + 2);
+            n_strips++;
+        }
+        use_strips = area * 3 < (long)SPECTRUM_H * DISPLAY_H_RES * 2;
+        /* ⛔ LVGL HOLDS AT MOST LV_INV_BUF_SIZE (32) INVALID AREAS between two
+         * refreshes, and when it runs out it invalidates the WHOLE SCREEN
+         * (lv_refr.c, lv_inv_area: "If no place for the area add the
+         * screen") - 1280 x 720, far worse than the 256 kpx canvas this path
+         * exists to avoid. Up to 16 strips land on top of the waterfall,
+         * labels and animations already queued, and nothing in Mark's version
+         * checked. So: only if they ALL fit, with room to spare; otherwise
+         * one canvas invalidate, which is exactly the behaviour before
+         * strips. The worst case is therefore never worse than before.
+         * Added in the port, not measured: s_pi_strips_nobuf counts it. */
+        if (use_strips) {
+            lv_display_t *d = lv_obj_get_display(s_spec_canvas);
+            if (d && (int)d->inv_p + n_strips > LV_INV_BUF_SIZE - 4) {
+                use_strips = false;
+                s_pi_strips_nobuf++;
+            }
+        }
+        if (use_strips) s_pi_strips++;
+    }
     if (have_band) {
         /* ⛔ SCREEN coordinates, built from the object's own coords - in x as
          * well as y. Getting x wrong leaves a vertical stripe of the spectrum
@@ -13737,10 +13799,28 @@ void ui_push_spectrum(const float *bins, int n_bins)
         a.y2 = a.y1 + band_hi;
         a.y1 = a.y1 + band_lo;
         lv_obj_invalidate_area(s_spec_canvas, &a);
+    } else if (use_strips) {
+        lv_area_t c;
+        lv_obj_get_coords(s_spec_canvas, &c);
+        for (int i = 0; i < SPEC_STRIPS; i++) {
+            if (strip_hi[i] < strip_lo[i]) continue;
+            lv_area_t a = c;
+            /* +-1 px: a column's joining line reaches into its neighbour. */
+            a.x1 = c.x1 + i * SPEC_STRIP_W - 1;
+            a.x2 = c.x1 + (i + 1) * SPEC_STRIP_W;
+            if (a.x1 < c.x1) a.x1 = c.x1;
+            if (a.x2 > c.x2) a.x2 = c.x2;
+            a.y1 = c.y1 + strip_lo[i];
+            a.y2 = c.y1 + strip_hi[i];
+            lv_obj_invalidate_area(s_spec_canvas, &a);
+        }
     } else {
         lv_obj_invalidate(s_spec_canvas);
     }
     if (s_frame_ytop) s_frame_ytop_valid = true;
+#undef SPEC_STRIP_ADD
+#undef SPEC_STRIPS
+#undef SPEC_STRIP_W
 #undef SPEC_SIG
 
     // Update freq axis labels every frame so zoom/pan changes are reflected.
