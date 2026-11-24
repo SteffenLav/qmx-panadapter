@@ -34,6 +34,7 @@ static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_cq_show_others = NULL;
 static lv_obj_t *s_cb_hide_worked   = NULL;  // hide worked-before rows outright (Randy N4OPI)
 static lv_obj_t *s_cb_skip_directed = NULL;  // robot: pass over a CQ aimed elsewhere (Randy N4OPI)
+static lv_obj_t *s_cb_tap_auto     = NULL;  // a row tap starts the auto QSO, no Confirm window
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
@@ -130,6 +131,7 @@ static void save_btn_cb(lv_event_t *e)
     f.cq_show_others     = lv_obj_has_state(s_cb_cq_show_others, LV_STATE_CHECKED);
     f.hide_worked_before = lv_obj_has_state(s_cb_hide_worked, LV_STATE_CHECKED);
     f.robot_skip_directed_cq = lv_obj_has_state(s_cb_skip_directed, LV_STATE_CHECKED);
+    f.tap_auto_work      = lv_obj_has_state(s_cb_tap_auto, LV_STATE_CHECKED);
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
@@ -571,6 +573,19 @@ static void modal_build(void)
     s_cb_skip_directed = make_labeled_checkbox(panel, "Skip CQs not for me", RIGHT_COL_X, 600, &lbl_skip_directed);
     lv_obj_set_style_text_color(lbl_skip_directed, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
+    /* A tap on a decode starts the auto QSO at once (operator, 2026-11-24:
+     * "it can be a race to actually get to work a station asap"). Row 7 of
+     * the right column, y=654, under "Skip CQs not for me" - the cell the
+     * 54 px pitch below freed and nothing used. NOT an unattended-TX switch:
+     * it only answers what the operator tapped, so it carries no warning.
+     *
+     * ⭐ 212.5 px at montserrat_24 (tools/measure_label.py). The operator's
+     * "Single-click will Auto-work" is 324.8 px and would clip like "Skip
+     * CQs not aimed at me" (317.9) did in this same column. */
+    lv_obj_t *lbl_tap_auto;
+    s_cb_tap_auto = make_labeled_checkbox(panel, "Tap to Auto-work", RIGHT_COL_X, 654, &lbl_tap_auto);
+    lv_obj_set_style_text_color(lbl_tap_auto, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -760,6 +775,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_cq_show_others, f->cq_show_others);
     apply_checkbox_state(s_cb_hide_worked, f->hide_worked_before);
     apply_checkbox_state(s_cb_skip_directed, f->robot_skip_directed_cq);
+    apply_checkbox_state(s_cb_tap_auto, f->tap_auto_work);
     apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,

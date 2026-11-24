@@ -5218,6 +5218,8 @@ const SET_FIELDS = [
      promised the broad thing would be wrong about continents. */
   ["FT8 filters", "filters.robot_skip_directed_cq", "bool", "Auto-answer: skip CQs not aimed at me",
    "While Auto-answer CQ (robot) is running, pass over a CQ that was clearly meant for someone else: CQ DX from a station in your own country, and a US state call when you are not in the USA. Continent calls (CQ EU, CQ NA) and contest or activity calls are always answered - deciding those needs data the Tab5 does not carry, and a wrong skip costs you a contact. Needs your callsign set"],
+  ["FT8 filters", "filters.tap_auto_work",      "bool", "Tap to Auto-work (Tab5 screen)",
+   "A tap on a decode row on the Tab5 starts the automatic QSO at once, as a long press does, instead of opening the Confirm window. A click on this page already works that way"],
   ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.cq_show_others",     "bool", "Show other CQs while I call CQ",

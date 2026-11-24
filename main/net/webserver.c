@@ -7287,6 +7287,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(f, "cq_show_others",     c.ft8_filters.cq_show_others);
     cJSON_AddBoolToObject(f, "hide_worked_before", c.ft8_filters.hide_worked_before);
     cJSON_AddBoolToObject(f, "robot_skip_directed_cq", c.ft8_filters.robot_skip_directed_cq);
+    cJSON_AddBoolToObject(f, "tap_auto_work",      c.ft8_filters.tap_auto_work);
     cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
     cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
     cJSON_AddBoolToObject(f, "cq_manual_pick",     c.ft8_filters.cq_manual_pick);
@@ -8133,6 +8134,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         BOOLF("cq_show_others",     cq_show_others);
         BOOLF("hide_worked_before", hide_worked_before);
         BOOLF("robot_skip_directed_cq", robot_skip_directed_cq);
+        BOOLF("tap_auto_work",      tap_auto_work);
         BOOLF("skip_tx1",           skip_tx1);
         BOOLF("auto_pileup",        auto_pileup);
         BOOLF("cq_manual_pick",     cq_manual_pick);

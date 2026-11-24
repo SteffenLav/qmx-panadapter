@@ -667,6 +667,16 @@ static void row_activate(int idx) { row_activate_ex(idx, false); }
 // of the confirmation modal.
 static void row_pounce_direct(int idx) { row_activate_ex(idx, true); }
 
+// A finger (or mouse) tap on a row. With "Tap to Auto-work" on, it is the
+// long press without the wait (operator, 2026-11-24: "it can be a race to
+// actually get to work a station asap after discovering it"). Only the two
+// touch paths call this; the Confirm window's up/down nudge and the JS8
+// conversation tap keep row_activate(), because they are not a first pick.
+static void row_tap(int idx)
+{
+    row_activate_ex(idx, settings_get_ft8_tap_auto_work());
+}
+
 static void row_activate_ex(int idx, bool direct)
 {
     if (!s_rows) return;
@@ -782,7 +792,21 @@ static void row_activate_ex(int idx, bool direct)
     ft8_tx_request_t req;
     char err[64];
     if (ft8_qso_build_manual_reply(match, reply_freq_hz, &req, NULL, err, sizeof(err))) {
-        if (direct) {
+        if (direct && req.kind == FT8_TX_KIND_73) {
+            // A closing 73 has no exchange left to automate - the Confirm
+            // window's own rule (ft8_tx_modal_show hides Auto Pounce for it).
+            // The long press never gets here (it is gated to CQ rows); a
+            // "Tap to Auto-work" tap can.
+            ft8_tx_modal_show(&req);
+        } else if (direct && ft8_qso_is_busy(NULL, 0) &&
+                   ft8_qso_get_state() == FT8_QSO_WAIT_DONE) {
+            // Only a closing message is in the way: queue the CALL, the same
+            // hand-over the Confirm window's Auto Pounce does (pounce_btn_cb),
+            // so the shortcut and the button cannot drift apart.
+            ft8_screen_view_request_reply(match->call);
+            ui_toast("Queued - will call after this exchange");
+            ESP_LOGI(TAG, "direct pounce queued behind the closing message: %s", match->call);
+        } else if (direct) {
             // Straight into the auto-sequencer, exactly what the modal's own
             // "Auto Pounce" button does - so the shortcut and the button cannot
             // drift apart.
@@ -928,7 +952,7 @@ static void row_touch_cb(lv_event_t *e)
             uint32_t held = lv_tick_elaps(s_press_start_ms);
             if (confirm >= 0 && held >= ROW_POUNCE_HOLD_MS && row_is_cq(confirm))
                 row_pounce_direct(confirm);
-            else if (confirm >= 0) row_activate(confirm);
+            else if (confirm >= 0) row_tap(confirm);
         } else {
             // A tap that never crossed the hold-to-drag gate, but also
             // never moved far enough to be a scroll - fire immediately on
@@ -941,7 +965,7 @@ static void row_touch_cb(lv_event_t *e)
             lv_point_t pt = s_press_start_pt;
             if (indev) lv_indev_get_point(indev, &pt);
             int row = screen_y_to_row(pt.y);
-            if (row >= 0) row_activate(row);
+            if (row >= 0) row_tap(row);
         }
 
     } else if (code == LV_EVENT_PRESS_LOST) {

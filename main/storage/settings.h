@@ -286,6 +286,14 @@ typedef struct {
      * at all. Declining wrongly costs a contact; answering a CQ that was not
      * for us costs one slot. */
     bool    robot_skip_directed_cq;
+    /* --- A tap on a decode row starts the automatic QSO at once, as a long
+     * press does, instead of opening the Confirm window. Appended, so an old
+     * NVS blob reads back 0 (=off) and nothing changes for anyone who does
+     * not ask. Operator, 2026-11-24: "it can be a race to actually get to work
+     * a station asap after discovering it" - the Confirm window costs a
+     * second tap and can lose the slot. The closing 73 still opens the
+     * window: there is no exchange left to automate. */
+    bool    tap_auto_work;
 } ft8_filters_t;
 
 // Power calibration ("Calibrate Power" WSPR-drawer button, main/ui/
@@ -1177,6 +1185,8 @@ void settings_set_onboarded(bool v);
 
 // FT8 CQ-run reply include/exclude filters (debounced flush).
 void settings_set_ft8_filters(const ft8_filters_t *f);
+/* Narrow accessor for the row-tap path (taskLVGL) - see settings_get_ft8_skip_tx1(). */
+bool settings_get_ft8_tap_auto_work(void);
 bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read on taskLVGL
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 

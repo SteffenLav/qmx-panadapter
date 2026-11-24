@@ -2406,6 +2406,17 @@ void settings_set_ft8_filters(const ft8_filters_t *f)
     mark_dirty(DIRTY_FT8_FILT);
 }
 
+// Narrow accessor for the decode-row tap (ft8_screen_view.c row_activate),
+// on taskLVGL - same reason as settings_get_ft8_skip_tx1() below.
+bool settings_get_ft8_tap_auto_work(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.ft8_filters.tap_auto_work;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 // Narrow accessor: ft8_qso_build_manual_reply() reads this on taskLVGL (it's
 // called directly from both ft8_screen_view.c's row touch handler and
 // ft8_pileup_modal.c's), where a full qmx_settings_t is the stack-overflow
