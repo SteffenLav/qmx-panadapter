@@ -4917,3 +4917,29 @@ Commits: `v2.0.1..v2.0.2`.
 **What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). The second decode pass never arms a transmission.
 
 Commits: `v2.0.2..v2.1.0`.
+
+### Shipped in v2.1.1 — 2026-11-24
+
+**A pounce that lost its station to someone else comes back, Tap to Auto-work, and a resizable spectrum.**
+
+- **Busy-dropped pounce resumes and re-calls.** The busy-drop path never saved the resume record, so a station that answered us after the drop was ignored (HB9SFL, 2026-11-24). It now saves, and marks the record for re-call: when that station signs off (73/RR73/RRR) or calls CQ inside `QSO_RESUME_WINDOW_SEC`, while idle or running CQ, the exchange is restored once. Seen on air: IK2LHP and IQ5PJ re-called and logged. `469666cc`, `3d476e2a`. Up to four records. `70860ad7`, built for the Tab5 in `0bcd947a` (stringop-truncation the host compiler did not flag).
+- **Tap to Auto-work** - Options box, off by default. `38a71a8a`, `ebb9063f`.
+- **Auto-work pileup skips a caller not heard in their last two slots.** `295ad1ce`.
+- **A cancelled pounce drops the orange highlight at once.** `4c001139`.
+- **Late decodes from before a band change** no longer refill the list or get spotted (slot-time gate). `ad604b4e`.
+- **T216: drag the spectrum/waterfall split** from the frequency scale, 100..400 px, persisted as `spectrum_h`. `ffc10eae`.
+- **Per-strip spectrum invalidate** from Mark N8MH (`a6832e6b`), used only when every strip fits LVGL's 32-area invalidate buffer with 4 to spare. `06fdab26`. Not measured here: the wide case never occurred on bench1.
+- **BLE wheel logging stalled the USB host.** Per-click wheel lines plus a hex line per report put 1.5-5.6 kB/s on the 115200 UART0 console; in a 30 s wheel test the USB host missed transfers in 8 seconds, speaker intake fell to 35 k smp/s and CAT timed out. Now a 10 s summary: 0 short seconds. `36d80cbc`. The general cost of a log line on UART0 is T218.
+- **Web Listen in stereo for binaural CW** (frame type 0x04, ST mark). `fdd6a488`, `a1c6424c`. **Web spot pick re-frames** (`jump:true`). `585b3cae`.
+- **TX interlock logs allows** (`c65a19b6`); NAT limit documented (`34496e70`). T217 closed: Randy N4OPI's router translates between his networks.
+- DiGi plays as USB (`63a606a4`) was reverted before release (`5567fda7`): DiGi stays silent.
+- Long dropdown list stays on screen and takes the wheel. `9b0db284`.
+
+**Known, not fixed**
+
+- Audio gate on `36d80cbc`, 48 windows: A1, A3, A4, A5 ok; A2 failed, I2Sovf rose in 2/47 windows (+3, +1). No cause found.
+- Comeback-resume (partner answers after a drop), Tap to Auto-work, pileup skip and highlight fix not seen on air on the release build; 20 m closed. CQ sent on 20 m on the release candidate: 3.4 W, SWR 1.15.
+
+**What can key the radio** - no new arming site; the `rearm_current` row names the resume triggers.
+
+Commits: `v2.1.0..v2.1.1`.

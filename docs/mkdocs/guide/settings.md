@@ -622,8 +622,9 @@ and has three states:
 | **Blue** | A mouse or keyboard is ready to use |
 
 **What works:** moving the pointer, left click, and the scroll wheel — the wheel
-scrolls whatever is under the pointer, so the decode list, the settings drawer
-and the manual all scroll.
+scrolls whatever is under the pointer, so the decode list, the settings drawer,
+the manual and an open dropdown list all scroll. A long dropdown list stays on
+screen *(v2.1.1)*.
 
 !!! note "The pointer disappears when the mouse sleeps"
     A Bluetooth mouse switches itself off after about half a minute of not being

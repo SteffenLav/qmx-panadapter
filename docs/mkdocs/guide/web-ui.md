@@ -106,6 +106,7 @@ device - so the two screens can never disagree about who is on the air.
 - Spots fade with age and are gone at 30 minutes, exactly as on the Tab5.
 - **Click a callsign to tune to it** - frequency *and* mode (CW, DiGi, or USB/LSB
   by band). Bandwidth is deliberately left alone: the QMX keeps a filter per mode.
+  The view centres on the station *(v2.1.1)*, the same as a spot tap on the Tab5.
 - Counts at the bottom corners - `< spots (3)` - say how many more are on this
   band just outside your window; click one to jump to the nearest.
 - On a crowded band only so many callsigns fit; unworked and fresher spots keep

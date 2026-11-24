@@ -433,6 +433,10 @@ page. There is no setting for this: one listener at a time was the point.
 Only the modes the Tab5 demodulates produce audio: **CW, CW-R, USB, LSB and AM**. In any
 other mode the button lights up but nothing arrives, and hovering it says so.
 
+**Binaural CW plays in stereo in the browser too** *(v2.1.1)*. With the panoramic CW
+split on, the browser gets the left and right ears as the Tab5's own jack plays them,
+and a small **ST** mark shows on the button. Every other mode stays mono.
+
 **Hover the ■ button for the health of the stream** — it reports frame gaps, re-primes
 and chunks dropped to clock drift. On a quiet network all three stay at zero.
 

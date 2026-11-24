@@ -4,7 +4,32 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v2.1.0** - 2026-11-22
+**v2.1.1** - 2026-11-24
+
+**A pounce that lost its station to someone else comes back, Tap to Auto-work, and a resizable spectrum.**
+
+- **A station dropped as busy is not forgotten.** If it answers you within 5 minutes, the QSO resumes. If it signs off with the other station or calls CQ inside those 5 minutes, the Tab5 calls it again, once. Up to four such stations are remembered. See [FT8 Transmit](guide/ft8-tx.md).
+- **Tap to Auto-work** *(Gyula HA3HZ)* - in FT8 Options, off by default. A tap on a decode starts the QSO at once, with no Confirm window. The closing 73 still opens it.
+- **Auto-work pileup skips a caller not heard for about 75 s**, so a report is not sent to a station that has left.
+- **Cancelling a pounce removes the orange highlight at once.**
+- **After a band change, late decodes from the old band no longer refill the list or get spotted.**
+- **Drag the boundary between spectrum and waterfall** *(Robert VE7ZN)*. Long-press the frequency scale, then drag. See [Gestures](reference/gestures.md).
+- **Less redraw work with a strong carrier on a busy band** *(Mark N8MH)*.
+- **A long dropdown list stays on screen** and scrolls with the mouse wheel.
+- **A Bluetooth mouse wheel no longer breaks up the audio.** Every wheel click wrote to the debug log, and on a busy band that held up the USB link to the radio.
+- **Web page: Listen plays binaural CW in stereo**, with an **ST** mark on the button. See [Audio](guide/audio.md#listen-in-the-browser).
+- **Web page: picking a spot centres the view on the station**, as on the Tab5.
+- **The TX interlock logs the requests it allows**, not only the ones it refuses. It cannot see past a router that translates addresses between two of your networks; [Remote Access](guide/remote-access.md) explains.
+- DiGi stays silent on the speaker and in the browser, as in v2.1.0.
+
+**Known, not fixed**
+
+- The busy-station resume and re-call, Tap to Auto-work, the pileup skip and the highlight fix were not all seen on the air for this build: 20 m was closed during the final test. The re-call was seen on the air on an earlier build the same day. A CQ was sent on 20 m on the release candidate.
+- The receive-audio health check ran 48 windows on the release candidate. Four checks passed; the codec-underrun check failed on 2 of 47 windows (4 underruns in 8 minutes). No cause is known.
+
+**What can key the radio** - no new entry in the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md). The `rearm_current` row now names the busy-station resume and re-call as its automatic triggers.
+
+### v2.1.0 - 2026-11-22
 
 **FT8 decodes about 20% more stations per cycle, the spectrum no longer breaks up on a busy band, and live spots work again.**
 
@@ -1388,7 +1413,7 @@ Every goal on the original roadmap is met in v2.0.0. What remains is proof on th
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.1.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v2.1.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

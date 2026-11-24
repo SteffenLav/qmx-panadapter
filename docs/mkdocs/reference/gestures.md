@@ -75,6 +75,7 @@ spectrum gesture.
 | **Wheel** (BLE mouse) | Tune in fixed steps: 10 Hz a click in CW and the digital modes, 100 Hz in SSB |
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
+| **Long-press the frequency scale, then drag** *(v2.1.1)* | Move the boundary between spectrum and waterfall. The scale lights up when the long-press is taken. The spectrum can be 100 to 400 px high, and the height is kept over a restart |
 
 Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, the **Tune snap** setting (500 Hz unless you change it) in USB/LSB and the digital modes, 1 kHz in AM.
 

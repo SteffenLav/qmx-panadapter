@@ -96,7 +96,7 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 - A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
 - Stations you've worked before still appear in the pileup unless **Never auto-call worked-before** is checked — the pileup follows the same rule as the auto-answer.
 
-The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Options modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
+The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Options modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot. *(v2.1.1)* A caller not heard in their last two slots (about 75 s) is skipped, so a report is not sent to a station that has left.
 
 #### Pick callers myself
 
@@ -235,6 +235,8 @@ Gyula HA3HZ, who saw it twice. Tapping **Transmit** by hand always did the right
 thing here; it was only the automatic run that was a rung behind.
 
 **A busy pick is abandoned, not waited for** (Roy KI0ER's reasoning adopted verbatim): when *you* pounce on a station that turns out to be mid-QSO with someone else, the Tab5 politely holds — a deliberate pounce means you want *that* station. But the robot picked its target off a list, so when its pick engages a third station the robot **moves on to a different CQ caller** instead of idling through someone else's QSO. No grey-list strike: busy is not unresponsive.
+
+**A station dropped as busy is not forgotten** *(v2.1.1)*. If it answers you within 5 minutes, the QSO resumes where it stopped. If it signs off with the other station (73, RR73 or RRR) or calls CQ inside those 5 minutes, while you are idle or calling CQ, the Tab5 sends your last message to it again - once per drop. Up to four dropped stations are remembered at a time. A station dropped because it did not answer at all is not called again.
 
 Each QSO takes **~90 seconds** (6 FT8 slots × 15 s/slot). If a station doesn't respond in 4 slots, the panadapter times out and resumes scanning CQ.
 
