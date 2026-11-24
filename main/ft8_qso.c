@@ -1445,7 +1445,12 @@ static int resume_record_save_locked(void)
                  QSO_RESUME_MAX, s_resume[k].call, s_target);
     }
     resume_rec_t *r = &s_resume[k];
-    strncpy(r->call, s_target, sizeof(r->call) - 1);
+    /* memcpy, not strncpy: both are FT8_CALL_MAX_LEN arrays, and GCC on the
+     * Tab5 build rejects strncpy(dst, src, sizeof - 1) between equal-size
+     * arrays as -Werror=stringop-truncation. The host compiler did not, so
+     * 70860ad7 reached main uncompiled for the P4. */
+    _Static_assert(sizeof(r->call) == sizeof(s_target), "resume call size");
+    memcpy(r->call, s_target, sizeof(r->call));
     r->call[sizeof(r->call) - 1] = '\0';
     r->state      = s_state;
     r->req        = s_cur_req;
@@ -1490,7 +1495,7 @@ static void resume_restore(int k)
     if (k < 0 || k >= QSO_RESUME_MAX) return;
     lock();
     resume_rec_t *r = &s_resume[k];
-    strncpy(s_target, r->call, sizeof(s_target) - 1);
+    memcpy(s_target, r->call, sizeof(s_target));   // equal sizes, see save
     s_target[sizeof(s_target) - 1] = '\0';
     s_state        = r->state;
     s_cur_req      = r->req;
