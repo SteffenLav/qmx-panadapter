@@ -2278,7 +2278,22 @@ typedef enum {
     PILE_SKIP_WORKED_BEFORE,
     PILE_SKIP_WORKED_RECENTLY,
     PILE_SKIP_GREYLIST,
+    PILE_SKIP_NOT_HEARD,
 } pile_skip_t;
+
+/* Auto-work only a caller heard in one of their last two slots.
+ *
+ * ⛔ The pile-up keeps an entry for an hour (PILEUP_MAX_AGE_S, ft8_pileup.c),
+ * which is right for the operator picking from the list by hand - he can see
+ * the age. The automatic drain had no age test at all. Seen 2026-11-24:
+ * U01YXC was decoded ONCE ('OZ1LAV U01YXC RQ47', an AP decode) while we were
+ * working IK2LHP, never again, and the drain took him 76 s later and sent our
+ * report six times - three minutes - to nobody. A caller who is still waiting
+ * repeats every 30 s; one missed in two of their slots has gone, or was never
+ * there. 75 s from the slot start they were last heard in = their previous
+ * slot or the one before (30 s per own-parity slot, plus the ~13 s into our
+ * slot at which this runs, plus margin). Manual picks are not affected. */
+#define PILEUP_AUTO_MAX_AGE_S 75
 
 static const char *pile_skip_name(pile_skip_t r)
 {
@@ -2286,6 +2301,7 @@ static const char *pile_skip_name(pile_skip_t r)
     case PILE_SKIP_WORKED_BEFORE:   return "worked-before";
     case PILE_SKIP_WORKED_RECENTLY: return "worked just now";
     case PILE_SKIP_GREYLIST:        return "grey-listed";
+    case PILE_SKIP_NOT_HEARD:       return "not heard lately";
     default:                        return "ok";
     }
 }
@@ -2319,10 +2335,15 @@ static int pileup_pick_best(const ft8_pileup_entry_t *pile, int n,
                             const qmx_settings_t *qs, pile_skip_t *why)
 {
     int best = -1;
+    const int64_t now = (int64_t)time(NULL);
     for (int i = 0; i < n; i++) {
         if (!pile[i].call[0]) { why[i] = PILE_OK; continue; }
         why[i] = pileup_candidate_skip(pile[i].call, qs);
         if (why[i] != PILE_OK) continue;
+        if (now - pile[i].last_seen_utc > PILEUP_AUTO_MAX_AGE_S) {
+            why[i] = PILE_SKIP_NOT_HEARD;
+            continue;
+        }
         if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
     }
     return best;
