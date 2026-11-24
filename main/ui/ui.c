@@ -3484,10 +3484,13 @@ static void output_power_area_refresh(void)
     s_outpwr_n = power_cal_list_watts(band, s_outpwr_w, s_outpwr_v, PWRCAL_STEPS);
 
     if (s_outpwr_n == 0) {
-        char nc_txt[64];
-        snprintf(nc_txt, sizeof(nc_txt), "Not calibrated for %s",
-                 (band && band[0]) ? band : "this band");
-        lv_label_set_text(s_outpwr_nc_lbl, nc_txt);
+        /* Says what calibrating BUYS, not what is missing: "Not calibrated
+         * for 20M" read as a fault in the radio (operator, 2026-11-24). The
+         * radio is fine - it sends at the QMX's own power setting - and the
+         * button below already says "Calibrate this band". 409 px in
+         * montserrat_24 against 488 px of section; the operator's longer
+         * "Calibrate this band to set output power (W)" is 531 px and ran off. */
+        lv_label_set_text(s_outpwr_nc_lbl, "Calibrate to set output power (W)");
         lv_obj_clear_flag(s_outpwr_nc_lbl, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_cal_btn) lv_obj_clear_flag(s_outpwr_cal_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_outpwr_recal_btn) lv_obj_add_flag(s_outpwr_recal_btn, LV_OBJ_FLAG_HIDDEN);
@@ -16594,11 +16597,13 @@ static void wspr_dbm_area_refresh(void)
     if (n_ach == 0) {
         /* Not calibrated (or no swept point classifies as ANY standard
          * step - power_cal_voltage_for_dbm()'s own header). The STORED
-         * declared power (whatever it was) is left alone - WSPR still
-         * transmits declaring it, this only gates offering a NEW pick
-         * until there is real data to pick from. */
+         * declared power is left alone. ⚠ This used to say "WSPR still
+         * transmits declaring it" - no longer true: wspr_tx.c REFUSES a burst
+         * on an uncalibrated band (the declared dBm is published worldwide),
+         * so the label says that is what calibrating unlocks. Worst case
+         * "Calibrate to transmit WSPR on 160M" = 443 px of 488 (montserrat_24). */
         char nc_txt[64];
-        snprintf(nc_txt, sizeof(nc_txt), "Not calibrated for %s",
+        snprintf(nc_txt, sizeof(nc_txt), "Calibrate to transmit WSPR on %s",
                  (band && band[0]) ? band : "this band");
         lv_label_set_text(s_wspr_dbm_nc_lbl, nc_txt);
         lv_obj_clear_flag(s_wspr_dbm_nc_lbl, LV_OBJ_FLAG_HIDDEN);

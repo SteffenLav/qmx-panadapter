@@ -11253,7 +11253,7 @@ function updateOutPwrPill() {
     sl.hidden = true;
     if (!saying) {
       val.classList.add("say");
-      val.textContent = (outPwrInfo && sameBand) ? "not calibrated - run Calibrate Power on the Tab5" : "--";
+      val.textContent = (outPwrInfo && sameBand) ? "calibrate this band on the Tab5 to set output power (W)" : "--";
     }
     return;
   }
