@@ -254,6 +254,21 @@ static void test_tx_peer_allowed(void)
     CHECK(net_tx_peer_allowed(ip(192,168,2,8), ours, ip(255,255,0,0)),
           "a /16 covers 192.168.2.8\n");
 
+    /* T217, Randy N4OPI's DMZ (2026-11-24): Tab5 on 10.0.x, his PC on
+     * 192.168.x. Direct to 10.0.x it KEYED with the box ticked; through the
+     * WAN port forward it was refused. Either the router NATs inside->DMZ, or
+     * this compare lets a different private range through. These two lines
+     * rule out the second: the PC's own address is refused, the router's DMZ
+     * address is allowed. The board cannot show us which one it saw - his
+     * v2.1.0 did not log allows (c65a19b6 does). */
+    {
+        const uint32_t dmz = ip(10,0,0,20);
+        CHECK(!net_tx_peer_allowed(ip(192,168,1,30), dmz, m24),
+              "T217: a 192.168 PC must be refused by a 10.0/24 Tab5\n");
+        CHECK(net_tx_peer_allowed(ip(10,0,0,1), dmz, m24),
+              "T217: the router's own DMZ address is on-subnet (NAT case)\n");
+    }
+
     /* A /32: nothing but ourselves, and that must not break. */
     CHECK(net_tx_peer_allowed(ours, ours, ip(255,255,255,255)), "/32 allows ourselves\n");
     CHECK(!net_tx_peer_allowed(ip(192,168,1,51), ours, ip(255,255,255,255)),
