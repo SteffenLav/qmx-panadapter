@@ -77,6 +77,8 @@ note: amber | Transmit sends this message once; Auto Pounce runs the whole excha
 
 **A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
 
+**Tap to Auto-work (skip the confirm window).** With **Tap to Auto-work** ticked in the Options modal, a tap on a decode starts Auto Pounce at once — no Confirm FT8 Transmission window. Use it when you want to answer a station in the very next slot. A closing `RR73`/`73` row still opens the window. Off by default.
+
 The reply follows **correct FT8/FT4 parity** — if you're replying to an even slot, you transmit on the odd slot, and vice versa. For FT4 the countdown timer correctly counts down in 7.5-second slot increments, not 15-second FT8 ones.
 
 **Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Options modal, pouncing a station opens with your signal report straight away instead of the grid exchange — saving one round trip. If the station has already dropped out of the decode list, it falls back to the normal grid exchange automatically.
