@@ -205,6 +205,7 @@ number when something new arrives; never close a gap.
 
 | ID | Item | Who |
 |---|---|---|
+| T218 | **Every ESP_LOG line goes to UART0 at 115200 (11.5 kB/s); a log burst may stall the tasks that log, USB included.** Seen 2026-11-24: per-click BLE wheel logging (1.5-5.6 kB/s) coincided with USB host missing transfers (8 short s in 30 s), speaker 35k smp/s, CAT TX timeouts; removing it (`36d80cbc`) gave 0/0/0 (confounds: half click rate, rx_audio parked). Capture reads USB-Serial-JTAG, not UART0. Cost per log line NOT measured. Candidates: raise UART0 baud, or drop UART0 as console. | — |
 | T217 | ✅ **CLOSED 2026-11-24, working as designed.** Randy N4OPI's DMZ test: direct 192.168->10.0 keys (router NAT, peer is its own on-subnet address), WAN port forward is refused with the box ticked. Harness case added. | Randy N4OPI |
 | T216 | ✅ **DONE.** Drag the spectrum/waterfall split from the frequency scale (`ffc10eae`). Long-press the 32 px scale, the whole scale lights up, drag. 100..400 px, persisted (`spectrum_h`), shared by the panadapter, CW and RTTY pages. Flashed bench1 and confirmed on glass by the operator 2026-11-23. | Robert VE7ZN |
 | T215 | **`status_task` held TWO `qmx_settings_t` (4268 B each, MEASURED from the ELF) on a 13 KB stack** - its own loop local and `status_battery_display_level()`'s. Mark N8MH crashed on it twice 2026-11-17. The real non-QDX slice (`c7c48bcb`). | Mark N8MH |
