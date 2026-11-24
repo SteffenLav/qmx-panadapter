@@ -9045,6 +9045,30 @@ static void wheel_tune_flush(void)
     ui_update_frequency(s_wheel_target_hz);
 }
 
+/* Wheel outcomes, COUNTED and summarised every 10 s - not logged per click.
+ *
+ * ⛔ A wheel turn is ~10 reports a second, and each one used to write 1-3
+ * lines here plus a hex line in bt_hid_mouse.c. Measured 2026-11-24 on
+ * bench1 (06fdab26): a 30 s wheel test put 1.5-5.6 kB/s on a console whose
+ * UART0 carries 11.5 kB/s, and in exactly that window the USB host missed
+ * transfers (8 short seconds vs 0 in the 60 s before), the speaker dropped to
+ * 35 k smp/s and CAT timed out. Whether the log volume is the mechanism is
+ * what this change tests; the per-click lines had no diagnostic job left
+ * either way - the summary still says what the wheel did. */
+static struct { int notpan, noscroll, limit, scrolled, chained; } s_wl;
+static int64_t s_wl_last_us;
+static void wheel_log_tick(void)
+{
+    int64_t now = esp_timer_get_time();
+    if (now - s_wl_last_us < 10000000) return;
+    s_wl_last_us = now;
+    if (!(s_wl.notpan | s_wl.noscroll | s_wl.limit | s_wl.scrolled | s_wl.chained)) return;
+    ESP_LOGI(TAG, "wheel (10 s): scrolled %d (chained %d), at limit %d, "
+                  "no scrollable %d, not over panadapter %d",
+             s_wl.scrolled, s_wl.chained, s_wl.limit, s_wl.noscroll, s_wl.notpan);
+    memset(&s_wl, 0, sizeof s_wl);
+}
+
 // True when the clicks were used for tuning, so the caller leaves scrolling
 // alone. Tunes only when the pointer is over the spectrum or the waterfall AND
 // nothing is on top of them: the walk answers the occlusion question the same
@@ -9065,9 +9089,7 @@ static bool wheel_tune_take(int clicks)
         // Logged because a wheel that does nothing is indistinguishable from a
         // wheel that is not wired up - which is precisely how the first version
         // of this went out. `hit` is the object LVGL would give the press to.
-        ESP_LOGI(TAG, "wheel %+d at (%d,%d): not over the panadapter (press target %p, spectrum %p, waterfall %p)",
-                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
-                 (void *)hit, (void *)s_spectrum_obj, (void *)s_waterfall_obj);
+        s_wl.notpan++;   // counted, see wheel_log_tick()
         return false;
     }
 
@@ -9257,6 +9279,7 @@ static void mouse_timer_cb(lv_timer_t *t)
      * see the note there. It had to run before the pan check, and leaving a
      * copy behind would be a second call per tick that only ever differs in a
      * case nobody would find again. */
+    wheel_log_tick();
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
 
@@ -9272,8 +9295,7 @@ static void mouse_timer_cb(lv_timer_t *t)
         // Log it: a silent no-op here is exactly how the first version of this
         // was undiagnosable - the wheel clicks were arriving and being thrown
         // away with nothing to say so.
-        ESP_LOGI(TAG, "wheel %+d at (%d,%d): no scrollable under the cursor",
-                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
+        s_wl.noscroll++;   // counted, see wheel_log_tick()
         return;
     }
 
@@ -9307,14 +9329,12 @@ static void mouse_timer_cb(lv_timer_t *t)
         lv_obj_scroll_by(o, 0, dy, LV_ANIM_OFF);
         lv_coord_t after = lv_obj_get_scroll_y(o);
         if (after != before) {
-            ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d%s",
-                     clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
-                     (int)before, (int)after, (o == target) ? "" : " (chained to parent)");
+            s_wl.scrolled++;
+            if (o != target) s_wl.chained++;
             return;
         }
     }
-    ESP_LOGI(TAG, "wheel %+d at (%d,%d): nothing under the cursor could scroll further",
-             clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
+    s_wl.limit++;   // counted, see wheel_log_tick()
 }
 
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)

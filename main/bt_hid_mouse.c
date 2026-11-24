@@ -1083,14 +1083,14 @@ static void handle_report(uint16_t conn, const uint8_t *d, int len)
 {
     hid_link_t *L = link_for(conn);   /* which device sent this */
 
-    // Log the first few of ANY report, and ALWAYS log one whose wheel byte is
-    // non-zero. The wheel is the thing under investigation and it is rare
-    // compared to movement, so a plain first-N budget is spent on movement
-    // before a single scroll is ever seen - which is exactly how the wheel
-    // ended up undiagnosable on the previous build.
+    // Log the first few reports only - enough to see the layout on a new
+    // device. ⛔ It used to ALSO log every report whose byte 5 was non-zero
+    // (the wheel, while the wheel was under investigation). That was every
+    // wheel click, ~10 lines a second while scrolling, and on 2026-11-24 the
+    // USB host missed transfers in exactly the seconds the wheel turned - see
+    // wheel_log_tick() in ui.c, which now counts what the wheel did instead.
     static int logged = 0;
-    bool wheelish = (len >= 6 && d[5] != 0);
-    if (logged < 12 || wheelish) {
+    if (logged < 12) {
         logged++;
         char hex[64] = "";
         int n = 0;
