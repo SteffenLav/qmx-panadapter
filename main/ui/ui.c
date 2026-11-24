@@ -21395,7 +21395,7 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
  * a list longer than the screen (PA voltage limit, 15 rows at montserrat_28)
  * ran off the bottom edge, had nothing left to scroll, and the wheel - which
  * looks for the deepest object that CAN scroll - fell through to the drawer.
- * Measured in the simulator: wheel over the open list moved the drawer
+ * Measured: wheel over the open list moved the drawer
  * 0 -> 6 px, the list not at all. The rows past the edge were unreachable
  * with a finger too. Here the list keeps its full height when it fits, is
  * moved up when only its position is wrong, and is cut to the screen (and
