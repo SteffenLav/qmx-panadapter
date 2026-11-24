@@ -108,9 +108,37 @@ you want it.
 |---|---|
 | Stops | Someone on the internet who found your forwarded port |
 | Does **not** stop | A guest on your WiFi, or anyone holding the WiFi key |
+| Does **not** stop | A caller on another of your own networks, if the router between them translates addresses |
 
 It is a second lock, not a login. "On my LAN" is a weak identity. The tunnel is
 the first lock and the important one.
+
+### A router that translates addresses passes the interlock
+
+The check reads the address off the connection, which is the only address a
+caller cannot choose. That address is the last thing that spoke to the Tab5. If
+a router sits between two of your networks and translates addresses as it
+passes traffic — NAT, masquerading, "DMZ" on many home routers — then the
+address the Tab5 reads is the **router's**, not the computer behind it. The
+router is on the Tab5's own network, so the request is allowed.
+
+That is the interlock working as built, not a fault. No check of this kind can
+see past a translating router; the address of the original caller is gone before
+the request arrives.
+
+**How to tell.** Transmit once with the interlock on and look at the Tab5's log
+(Settings → Diagnostics, or `/api/log`). Every transmit decision is recorded,
+including the ones it allows:
+
+```
+W (73118) tx_subnet: CQ run ALLOWED by the TX interlock: peer 192.168.1.167 is
+on-subnet (ours 192.168.1.210 mask 255.255.255.0)
+```
+
+If the `peer` address is your router rather than the computer you are sitting
+at, the traffic is being translated. Put the Tab5 and the computer on the same
+network, or route between the two networks without translating, and the
+interlock will then see the real caller.
 
 ### Stops are never refused
 

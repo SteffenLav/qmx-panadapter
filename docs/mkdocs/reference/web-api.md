@@ -334,6 +334,10 @@ is **HTTP 403** with `{"ok":false,"tx_interlock":true,"error":"..."}`, so a
 client can tell it apart from a band-guard refusal. Receive, the display and
 every read-only call are untouched.
 
+Every decision is logged, including the ones it allows, with the peer address,
+the Tab5's own address and the netmask - so `/api/log` can answer whether a
+request reached the interlock at all, and what it decided.
+
 It is **off by default**, because driving this radio across a network is a
 legitimate thing to do - a shared-radio front end, or your own station behind a
 tunnel.
@@ -346,7 +350,10 @@ The actions that **stop** something are never interlocked: `tune_stop`,
     It stops the internet. It does not stop anyone else on your WiFi - they are
     on the same subnet and they pass. The peer address is read from the TCP
     connection, so `X-Forwarded-For` and friends cannot fake it, and that also
-    means a reverse proxy on your LAN passes as a local caller. For real remote
+    means a reverse proxy on your LAN passes as a local caller - as does
+    anything behind a router that translates addresses (NAT) on the way in,
+    because the address the Tab5 reads is then the router's. No socket-based
+    check can see past a translating router. For real remote
     access put the Tab5 behind a VPN, a tunnel or a proxy that does the
     authentication, and leave this on as the second lock. Over plain HTTP a
     password would cross in clear and the token could be replayed to key your

@@ -41,6 +41,18 @@
  * local - which is the correct answer, because the proxy is where the login
  * lives.
  *
+ * ⛔ AND THEREFORE IT CANNOT SEE PAST A NAT. A router that TRANSLATES
+ * addresses between two of the operator's networks is the last thing that
+ * spoke to us, so the peer we read is the ROUTER - which is on our subnet, so
+ * the request is ALLOWED. The address of the machine behind it is gone before
+ * the request arrives; no socket-based check can recover it, and reading a
+ * header instead would defeat the whole guard (above). This is a LIMIT OF THE
+ * DESIGN, not a defect, and it is the first thing to establish when somebody
+ * reports that the interlock did not refuse - Randy N4OPI, 2026-11-23, PC on
+ * 192.168.x and Tab5 on 10.0.x in a DMZ. Documented for users in
+ * docs/mkdocs/guide/remote-access.md, "A router that translates addresses
+ * passes the interlock".
+ *
  * DEFAULT OFF. settings: tx_subnet_interlock, stored POSITIVE (true =
  * enforce), the opposite convention to tx_band_guard_off - see settings.h for
  * why. Two reasons it must not default on:

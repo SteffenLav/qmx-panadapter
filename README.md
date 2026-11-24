@@ -929,7 +929,10 @@ no TLS, and it can key the radio, so put it behind a tunnel rather than
 exposing it to the internet. Tailscale needs no router changes; WireGuard needs
 one forwarded port and no account. The **TX interlock** is a second lock that
 refuses a transmit request arriving from outside your own network - it is off
-by default, and it is not a login. Stop commands are never refused.
+by default, and it is not a login. It reads the address off the connection, so
+a router that translates addresses between two of your own networks passes it:
+the address the Tab5 sees is then the router's. Stop commands are never
+refused.
 
 See [Remote Access](docs/mkdocs/guide/remote-access.md) for worked examples.
 
