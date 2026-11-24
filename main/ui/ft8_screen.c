@@ -456,7 +456,7 @@ bool ft8_screen_slot_is_current(int64_t slot_sec)
 void ft8_screen_clear(void)
 {
     /* ⛔ THE LIST REFILLED FROM THE OLD BAND (operator, 2026-11-22, seen on
-     * bench1 and in the simulator): 20 m -> 40 m, and 20 m stations stayed
+     * bench1): 20 m -> 40 m, and 20 m stations stayed
      * until they aged out. The clear itself worked; decodes of the slot
      * captured on 20 m arrived AFTER it - the slot's own decode about 1 s
      * after the slot, the WSJT-X piece pass 2-6 s after - and were recorded
