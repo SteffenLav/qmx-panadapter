@@ -4357,6 +4357,16 @@ void ft8_qso_abort(void)
     // A mid-exchange abort is resumable too (no-op for CQ/idle aborts - the
     // save helper only records WAIT_* exchange states).
     resume_record_save_locked();
+    /* The aborted station is no longer "being worked", so its row drops the
+     * orange working highlight now, not when MANUAL_TARGET_TTL_S (5 min) runs
+     * out. The pounce paths set s_manual_target as well as s_target, and
+     * ft8_qso_get_working_target() falls back to it once the state is IDLE -
+     * so a pounce cancelled before it ever transmitted stayed orange
+     * (operator, 2026-11-24: "please leave him unhighlighted as i changed my
+     * mind"). Only when it names the station being aborted: a manual target
+     * for someone else is not ours to clear. */
+    if (target[0] && s_manual_target[0] && strcmp(s_manual_target, target) == 0)
+        s_manual_target[0] = '\0';
     s_state         = FT8_QSO_IDLE;
     s_target[0]     = '\0';
     s_have_cur      = false;
