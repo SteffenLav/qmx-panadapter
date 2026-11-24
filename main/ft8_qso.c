@@ -1389,6 +1389,16 @@ static bool             s_resume_from_cq;
 static int              s_resume_freq_hz;
 static int              s_resume_partner_hz;
 static int64_t          s_resume_at;        // time(NULL) at abandonment
+/* Set only when the record was saved because the partner was BUSY with a third
+ * party (the partner_busy_with() abandon in ft8_qso_advance()). Such a partner
+ * did nothing wrong - they picked someone else first - so when they finish
+ * with that station (73/RR73/RRR to them, or a fresh CQ) inside the window,
+ * we call them again: resume_target_free_heard(). Operator, 2026-11-24, after
+ * HB9SFL sent "N8MZN HB9SFL 73" 57 s after dropping us and nothing re-called:
+ * "i should have retried working him automatically after his 73 to the other
+ * station". A timeout or an abort leaves it false: a station that never
+ * answered is not re-called just because it went on to work others. */
+static bool             s_resume_recall;
 
 // True while we're draining the pileup (auto-work-pileup): the current QSO was
 // started by try_start_pileup_pounce(). Lets a timed-out pileup pounce advance
@@ -1415,6 +1425,7 @@ static void resume_record_save_locked(void)
     s_resume_freq_hz  = s_freq_hz;
     s_resume_partner_hz = s_partner_freq_hz;
     s_resume_at       = (int64_t)time(NULL);
+    s_resume_recall   = false;          // only the busy-abandon path sets it
 }
 
 static bool resume_record_fresh(const char *call)
@@ -1467,6 +1478,33 @@ static bool resume_comeback_heard(int64_t slot_sec)
         if (strcmp(t1, s_my_call) != 0) continue;
         if (strcmp(t2, s_resume_call) != 0) continue;
         return true;
+    }
+    return false;
+}
+
+// Did the partner we dropped for being BUSY finish with that station THIS slot?
+// Their message must be a sign-off to a third party (73 / RR73 / RRR - the same
+// three words partner_busy_with() reads as "free") or a fresh CQ. A message to
+// US is the comeback path, not this one.
+static bool resume_target_free_heard(int64_t slot_sec)
+{
+    if (!s_resume_recall || !s_my_call[0]) return false;
+    if (!resume_record_fresh(s_resume_call)) return false;
+    ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    for (int i = 0; i < n; i++) {
+        if (snap[i].last_utc != slot_sec) continue;
+        if (strcmp(snap[i].call, s_resume_call) != 0) continue;
+        const char *text = snap[i].last_text;
+        if (strncmp(text, "CQ ", 3) == 0) return true;
+        char t1[16], t2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(text, t1, sizeof(t1), t2, sizeof(t2), rest, sizeof(rest)))
+            return false;
+        if (strcmp(t1, s_my_call) == 0) return false;   // to us: the comeback path
+        if (strcmp(t2, s_resume_call) != 0) return false;
+        return strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0 ||
+               strcmp(rest, "RRR") == 0;
     }
     return false;
 }
@@ -3396,6 +3434,21 @@ static void ft8_qso_advance_body(int64_t slot_sec)
             resume_restore();
             ft8_status_set("QSO %s: partner came back - resuming", who);
             ESP_LOGI(TAG, "resume (auto): %s heard again - continuing exchange", who);
+        } else if (interruptible && resume_target_free_heard(slot_sec)) {
+            /* They finished with the station they chose over us: call again
+             * with the message we were repeating. Their answer cannot come
+             * before the slot after our burst, so this slot and the next are
+             * not misses. */
+            char who[FT8_CALL_MAX_LEN];
+            strncpy(who, s_resume_call, sizeof(who) - 1);
+            who[sizeof(who) - 1] = '\0';
+            if (st0 == FT8_QSO_CQ) ft8_tx_disarm();
+            resume_restore();
+            lock();
+            s_min_scan_utc = slot_sec + 30;
+            unlock();
+            ft8_status_set("QSO %s: free again - calling", who);
+            ESP_LOGI(TAG, "resume (re-call): %s finished with the other station - calling again", who);
         }
     }
 
@@ -3593,6 +3646,17 @@ static void ft8_qso_advance_body(int64_t slot_sec)
             ft8_status_set("%s busy with %s - moving on",
                            target, with[0] ? with : "someone");
             lock();
+            /* ⛔ SAVE THE RESUME RECORD FIRST. The history note at
+             * partner_busy_with() promised that the 5-minute resume window
+             * "still re-engages automatically if the target addresses us
+             * again" - but this path never saved one, so nothing could. Seen
+             * 2026-11-24: HB9SFL took N8MZN over us (abandoned here at
+             * 112.7 s), then sent "OZ1LAV HB9SFL R-21" twice, 207 s and 237 s
+             * later, and nothing answered. The timeout and abort paths have
+             * always saved; this one was added later without it. */
+            resume_record_save_locked();
+            s_resume_recall = (s_resume_call[0] != '\0' &&
+                               strcmp(s_resume_call, target) == 0);
             s_state         = FT8_QSO_IDLE;
             s_target[0]     = '\0';
             s_have_cur      = false;
