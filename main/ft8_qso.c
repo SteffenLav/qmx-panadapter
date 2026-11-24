@@ -3447,6 +3447,14 @@ static void ft8_qso_advance_body(int64_t slot_sec)
             lock();
             s_min_scan_utc = slot_sec + 30;
             unlock();
+            /* ⛔ ARM IT NOW. resume_restore() only puts the request back; the
+             * comeback path gets its arm from the WAIT_* handler processing
+             * the partner's message, but here there is no message to us, so
+             * nothing armed and the call waited for some later trigger. Seen
+             * on its first run, 2026-11-24: re-call at 215.9 s, first burst
+             * only at 245.6 s, one slot after IK2LHP's next CQ re-triggered
+             * it. Same helper the state changes use - not a new arming site. */
+            arm_current_replacing_armed();
             ft8_status_set("QSO %s: free again - calling", who);
             ESP_LOGI(TAG, "resume (re-call): %s finished with the other station - calling again", who);
         }
