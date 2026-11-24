@@ -196,6 +196,12 @@ PATCHES = [
      "PATCHED (qmx-panadapter, 2026-08-03)",
      "a root-port recover that races the hub FSM abort()s the device"),
 
+    ("apply_hub_root_gone_tolerant.ps1", "idf",
+     "components/usb/hub.c",
+     "PATCHED (qmx-panadapter, T182)",
+     "a device unplugged after it was already freed abort()s the device "
+     "(T182, hub.c:435 dev_tree_node_dev_gone NOT_FOUND; upstream esp-usb fix)"),
+
     ("apply_usb_dwc_hal_chan_error_tolerant.ps1", "idf",
      "components/hal/usb_dwc_hal.c",
      "g_qmx_usb_chan_err_no_halt",
