@@ -585,8 +585,7 @@ static void source_list_open_cb(lv_event_t *e)
     lv_obj_t *list = lv_dropdown_get_list(lv_event_get_target(e));
     if (!list) return;
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
-    lv_obj_set_height(list, LV_SIZE_CONTENT);
+    ui_dropdown_list_unfold(list);   /* full height when it fits, scrollable when not */
 }
 
 /* ⛔ THE DROPDOWN STORES NOTHING. It holds a PENDING choice that Save

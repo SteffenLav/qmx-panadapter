@@ -723,6 +723,11 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 // is the visible one. Register once at build time; deletion deregisters.
 void ui_kbd_add_scrollable(lv_obj_t *obj);
 
+/* An open dropdown's list: every option when it fits on screen, otherwise cut
+ * to the screen and scrollable (finger and mouse wheel). Call from the
+ * dropdown's LV_EVENT_CLICKED handler, after any font change. */
+void ui_dropdown_list_unfold(lv_obj_t *list);
+
 // User-defined keyboard shortcuts (#233). Bindings store an ACTION ID, so the
 // numbering in ui.c's k_kbd_actions[] is a persisted contract: append freely,
 // never renumber. ui_kbd_bindings_set() validates and persists in one step.

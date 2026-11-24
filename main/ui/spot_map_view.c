@@ -2971,8 +2971,7 @@ static void zoom_dropdown_open_cb(lv_event_t *e)
      * confirmed one - the freeze could equally have been fallout from the
      * LIST tab's own CPU-saturation event landing moments earlier (see
      * TABLE_MAX_ROWS's comment); nothing pins down which. */
-    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
-    lv_obj_set_height(list, LV_SIZE_CONTENT);
+    ui_dropdown_list_unfold(list);   /* full height when it fits, scrollable when not */
 }
 
 void spot_map_view_init(lv_obj_t *parent)

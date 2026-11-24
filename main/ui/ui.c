@@ -8663,9 +8663,18 @@ static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     // BUTTON, scrolled its label a pixel or two inside itself, and the drawer
     // never moved - so scrolling appeared to jam until the pointer was moved off
     // the control. An OPEN dropdown still gets the wheel, and correctly so: its
-    // list lives on the top layer, which is searched first.
+    // list is the screen's topmost child while open, so it is searched first.
     if (lv_obj_check_type(parent, &lv_dropdown_class) && !lv_dropdown_is_open(parent))
         return NULL;
+    // An OPEN dropdown's list owns the wheel while the pointer is on it, even
+    // when every option fits and there is nothing to scroll. It is a child of
+    // the SCREEN, not of the drawer, so returning it ends the chain at the
+    // screen - otherwise the wheel fell through to the drawer and moved it
+    // behind the open list (operator, 2026-11-24). LVGL 9.2 puts the list on
+    // the screen (lv_dropdown_open), not on the top layer as an older note
+    // above once assumed; topmost-child-first still finds it before the drawer.
+    if (lv_obj_check_type(parent, &lv_dropdownlist_class))
+        return parent;
 
     if (lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE) &&
         lv_obj_get_scroll_bottom(parent) + lv_obj_get_scroll_top(parent) > 0)
@@ -21354,12 +21363,11 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
          * height cap - including the WSPR "Declared power" one, which now
          * offers up to WSPR_STD_DBM_N (12) rows once a band's calibration
          * gets that granular. Operator, 2026-09-16: wanted every choice
-         * visible without scrolling. LVGL keeps the list on-screen by
-         * flipping it to open upward when there is not enough room below,
-         * so this is safe regardless of where in the drawer a dropdown
-         * sits. */
-        lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
-        lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
+         * visible without scrolling. ⚠ It was NOT safe anywhere in the
+         * drawer, as this comment once claimed: LVGL's own fit runs before
+         * this handler, so a list taller than the room ran off the screen.
+         * ui_dropdown_list_unfold() now does the fit afterwards. */
+        ui_dropdown_list_unfold(list);
     }
 }
 
@@ -21373,8 +21381,51 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
     lv_obj_t *list = lv_dropdown_get_list(dd);
     if (!list) return;
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
-    lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
+    ui_dropdown_list_unfold(list);
+}
+
+/* Show every option of an OPEN dropdown list when they fit on the screen,
+ * and a scrollable list that stays on the screen when they do not.
+ *
+ * ⛔ WHY THIS EXISTS (operator, 2026-11-24: "in every dropdown menu I am not
+ * able to scroll with the mouse wheel ... the wheel will scroll the drawer
+ * behind it"). The "fully unfolded" recipe - max height uncapped, height =
+ * content - runs on LV_EVENT_CLICKED, which LVGL sends AFTER lv_dropdown_open()
+ * has already clipped the list to the room on screen. So it undid that clip:
+ * a list longer than the screen (PA voltage limit, 15 rows at montserrat_28)
+ * ran off the bottom edge, had nothing left to scroll, and the wheel - which
+ * looks for the deepest object that CAN scroll - fell through to the drawer.
+ * Measured in the simulator: wheel over the open list moved the drawer
+ * 0 -> 6 px, the list not at all. The rows past the edge were unreachable
+ * with a finger too. Here the list keeps its full height when it fits, is
+ * moved up when only its position is wrong, and is cut to the screen (and
+ * so becomes scrollable) only when it is taller than the screen. */
+#define DD_LIST_MARGIN_PX 8
+void ui_dropdown_list_unfold(lv_obj_t *list)
+{
+    if (!list) return;
+    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> every option shown
+    lv_obj_set_height(list, LV_SIZE_CONTENT);
+    lv_obj_update_layout(list);
+
+    const int32_t scr_h = lv_obj_get_height(lv_screen_active());
+    const int32_t room  = scr_h - 2 * DD_LIST_MARGIN_PX;
+    int32_t h = lv_obj_get_height(list);
+    lv_area_t a;
+    lv_obj_get_coords(list, &a);
+    int32_t y = a.y1;
+    if (h > room) {                       // cannot fit at all: cut it, it scrolls
+        h = room;
+        lv_obj_set_height(list, h);
+        y = DD_LIST_MARGIN_PX;
+    } else if (y + h > scr_h - DD_LIST_MARGIN_PX) {
+        y = scr_h - DD_LIST_MARGIN_PX - h;  // fits, but hangs off the bottom
+    } else if (y < DD_LIST_MARGIN_PX) {
+        y = DD_LIST_MARGIN_PX;              // fits, but hangs off the top
+    }
+    /* The list is a child of the screen (lv_dropdown_open), so its y is in
+     * screen coordinates. */
+    if (y != a.y1) lv_obj_set_y(list, y);
 }
 
 // Applies immediately, but only takes effect on the NEXT boot: NimBLE must be
