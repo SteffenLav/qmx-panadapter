@@ -2466,6 +2466,18 @@ static void t_clock_cb(lv_timer_t *t)
         // Re-armed for the next contact the moment this one stops being DONE,
         // so every completed QSO announces itself exactly once.
         if (qso_st != FT8_QSO_DONE)    s_web_done_said    = false;
+        // A held QSO is logged or dropped up to a minute after DONE, often
+        // while the next contact runs. Its outcome is a record the browser
+        // must see once, so it goes to the sticky result on the edge.
+        {
+            static uint32_t s_hold_seq_seen;
+            char hold_txt[64];
+            uint32_t seq = ft8_qso_hold_event(hold_txt, sizeof(hold_txt));
+            if (seq != s_hold_seq_seen) {
+                s_hold_seq_seen = seq;
+                if (hold_txt[0]) web_result_set_sticky("%s", hold_txt);
+            }
+        }
         if (qso_st != FT8_QSO_TIMEOUT) s_web_timeout_said = false;
         char b[128];
 
@@ -2632,13 +2644,21 @@ static void t_clock_cb(lv_timer_t *t)
             // fine on the Tab5 (you are sitting in front of it) and useless
             // from another room. The sticky copy survives that transition
             // because it is a record, not a mirror of the state.
+            //
+            // A QSO with no report from the partner is NOT complete in the log
+            // sense: it is held for their report and may never be logged
+            // (ft8_rcvd_hold.h). Say that, in amber, instead of "complete".
+            bool held = ft8_qso_done_log_held();
             if (!s_web_done_said) {
                 s_web_done_said = true;
-                web_result_set_sticky("%s  QSO complete", target);
+                if (held) web_result_set_sticky("%s  QSO done - waiting for their report to log", target);
+                else      web_result_set_sticky("%s  QSO complete", target);
             }
-            snprintf(b, sizeof(b), "QSO %s: complete!", target);
+            if (held) snprintf(b, sizeof(b), "QSO %s: done\nno report yet - log held", target);
+            else      snprintf(b, sizeof(b), "QSO %s: complete!", target);
             lv_label_set_text(s_lbl_tx, b);
-            lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);
+            lv_obj_set_style_text_color(s_lbl_tx, held ? lv_color_hex(0xFFC060)
+                                                       : lv_palette_main(LV_PALETTE_GREEN), 0);
 
         } else if (qso_st == FT8_QSO_TIMEOUT) {
             // Orange-red: QSO timed out. Tapping clears it - and so does time.

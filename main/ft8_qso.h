@@ -185,6 +185,15 @@ ft8_qso_state_t ft8_qso_get_state(void);
 bool ft8_qso_is_hound_active(void);
 void            ft8_qso_get_target(char *buf, size_t len);
 
+/* A finished QSO with no received report is HELD, not logged, until the
+ * partner's report arrives or the hold runs out (ft8_rcvd_hold.h).
+ * ft8_qso_done_log_held(): the QSO now in DONE went to the hold - say so
+ * instead of "complete". ft8_qso_hold_event(): text of the last hold outcome
+ * ("logged (report -12)" / "NOT logged"); the return value changes on every
+ * new outcome, so a caller shows it on the edge. */
+bool            ft8_qso_done_log_held(void);
+uint32_t        ft8_qso_hold_event(char *buf, size_t len);
+
 // Which station's rows should be held at the top of the decode list, or "" for
 // none. Don WB0LQW: while working someone, "there is no station that I am as
 // interested in", and their replies were sorting down-screen where he had to go

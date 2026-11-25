@@ -547,7 +547,11 @@ static void add_ft8_tx_status(cJSON *root)
         st = "done";
         char target[FT8_CALL_MAX_LEN];
         ft8_qso_get_target(target, sizeof(target));
-        snprintf(b, sizeof(b), "QSO %s: complete!", target);
+        // Held for their report (ft8_rcvd_hold.h) is not "complete".
+        if (ft8_qso_done_log_held())
+            snprintf(b, sizeof(b), "QSO %s: done - no report yet, log held", target);
+        else
+            snprintf(b, sizeof(b), "QSO %s: complete!", target);
     } else if (qso_st == FT8_QSO_TIMEOUT) {
         st = "timeout";
         char target[FT8_CALL_MAX_LEN];
