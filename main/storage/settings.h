@@ -1565,6 +1565,10 @@ void settings_get_my_callsign(char *out, size_t out_sz);
 bool settings_get_wspr_pa_reduce(void);         // narrow getter - small-stack callers
 void settings_set_wspr_pa_reduce(bool v);       // #290 halve PA voltage while WSPR TX is on
 void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a volt, 0 = none
+/* T219: PA voltage before WSPR's declared-power write, and WSPR's own last
+ * write, tenths of a volt. Returns true when a restore is owed. 0 = clear. */
+bool settings_get_wspr_decl_restore(uint16_t *before_x10, uint16_t *ours_x10);
+void settings_set_wspr_decl_restore(uint16_t before_x10, uint16_t ours_x10);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF

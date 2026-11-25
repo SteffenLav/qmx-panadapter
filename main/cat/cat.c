@@ -167,6 +167,7 @@ static size_t s_q3_resp_len = 0;
 static volatile bool s_vox_disabled = false;  // true once Q3; readback confirms VOX OFF
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 static uint64_t s_wspr_pa_check_us = 0; // last non-blocking WSPR PA-guard check
+static uint64_t s_wspr_decl_check_us = 0; // last T219 pre-WSPR voltage restore check
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -369,6 +370,11 @@ static volatile bool     s_split_query_pending = false;
  * turning the operator's PA UP, the one thing its own comment forbids. */
 static volatile bool     s_pa_awaiting_reply = false;
 static volatile int16_t  s_pa_voltage_x10 = -1;      /* -1 = not yet known    */
+/* T219: a PA write that must first learn the value it replaces. See
+ * cat_request_pa_voltage_x10_noting_prior(). 0 = no such write pending. */
+static volatile uint16_t s_pa_note_for_x10 = 0;
+static int               s_pa_note_stage   = 0;      /* poll task only        */
+static int64_t           s_pa_note_deadline_us = 0;  /* poll task only        */
 // Last SSB filter width the user set. While non-zero and we're in USB/LSB, the
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
@@ -539,6 +545,29 @@ void cat_request_pa_voltage_x10(uint16_t v_x10)
     s_pending_pa_mv10 = v_x10;
 }
 
+/* T219 (Randy N4OPI, 2026-11-25): WSPR -> FT8 left Max. PA voltage at WSPR's
+ * declared-power value, because nothing had recorded the value it replaced.
+ *
+ * Same write as above, but the poll task first reads the radio's CURRENT
+ * value, and hands it to wspr_pa_decl_note_prior() just before the write goes
+ * out. Done here, in the task that owns the pipe, because only here is the
+ * order certain:
+ *  - Reading the cache from the caller does not work. It is -1 on the paths
+ *    that matter most (boot into WSPR before CAT is up; just after link-up,
+ *    which clears it). Queueing a query next to the write from the caller
+ *    gives no order either: the caller cannot tell when the reply landed.
+ *  - A fresh query, not the cached value: the cache cannot see a change made
+ *    on the radio's own front panel. So the poll task clears the cache and
+ *    then queries, and waits for THAT answer.
+ * Bounded: if the radio has not answered in 1.5 s the write goes out anyway
+ * and the prior is reported as -1 (unknown). A declared power that is not
+ * applied is the dangerous direction; a restore that cannot happen is not. */
+void cat_request_pa_voltage_x10_noting_prior(uint16_t v_x10)
+{
+    s_pa_note_for_x10 = v_x10;
+    s_pending_pa_mv10 = v_x10;
+}
+
 void cat_query_pa_voltage(void)
 {
     s_pa_query_pending = true;
@@ -571,6 +600,16 @@ int cat_get_split_state(void)
 int16_t cat_get_pa_voltage_x10(void)
 {
     return s_pa_voltage_x10;
+}
+
+/* T219: false while a PA write, or the read-back that follows it, is still on
+ * its way. A write does NOT clear the cache (only a raw terminal command does),
+ * so until the read-back lands cat_get_pa_voltage_x10() still holds the value
+ * from BEFORE the write. A confirm-by-read-back check must not act on that. */
+bool cat_pa_voltage_settled(void)
+{
+    return s_pending_pa_mv10 == 0 && s_pa_note_for_x10 == 0
+        && !s_pa_query_pending && !s_pa_awaiting_reply;
 }
 
 void cat_request_ssb_bandwidth(uint32_t hz)
@@ -2721,6 +2760,13 @@ static void poll_task(void *arg)
                 s_wspr_pa_check_us = now;
                 wspr_pa_guard_periodic_check();
             }
+            /* T219: the pre-WSPR voltage restore. 5 s, not 15 s: the case it
+             * covers is an operator who leaves WSPR for FT8 and transmits
+             * within seconds. Non-blocking, same shape as the call above. */
+            if (now - s_wspr_decl_check_us > 5000000ULL) {
+                s_wspr_decl_check_us = now;
+                wspr_pa_decl_restore_check();
+            }
         }
         // Re-assert IQ mode: queued on resume-from-pause and by the dead-stream
         // watchdog. Runs here because this task owns the pipe; it blocks for up
@@ -2890,8 +2936,36 @@ static void poll_task(void *arg)
             continue;
         }
         uint16_t pav = s_pending_pa_mv10;
+        /* T219: hold a noting-prior write until the radio has said what it is
+         * replacing - see cat_request_pa_voltage_x10_noting_prior(). Another
+         * writer that replaced the pending value cancels the note: its write is
+         * not WSPR's, and the prior belongs to nobody. */
+        int16_t pa_prior = -1;
+        bool    pa_noting = false;
+        if (pav != 0 && s_pa_note_for_x10 != 0) {
+            if (s_pa_note_for_x10 != pav) {
+                s_pa_note_for_x10 = 0;
+                s_pa_note_stage   = 0;
+            } else if (s_pa_note_stage == 0) {
+                s_pa_note_stage = 1;
+                s_pa_note_deadline_us = esp_timer_get_time() + 1500000;
+                s_pa_voltage_x10   = -1;     /* wait for a FRESH answer, not the cache */
+                s_pa_query_pending = true;
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;                    /* the query branch above sends it next */
+            } else if (s_pa_voltage_x10 < 0
+                       && esp_timer_get_time() < s_pa_note_deadline_us) {
+                pav = 0;                     /* not yet: poll as normal, check again */
+            } else {
+                pa_noting = true;
+                pa_prior  = s_pa_voltage_x10;   /* -1 = timed out, unknown */
+                s_pa_note_for_x10 = 0;
+                s_pa_note_stage   = 0;
+            }
+        }
         if (pav != 0) {
             s_pending_pa_mv10 = 0;
+            if (pa_noting) wspr_pa_decl_note_prior(pa_prior, pav);
             char mm[48];
             int n = snprintf(mm, sizeof(mm), "MMProtection|Max. PA voltage=%u.%u;",
                              (unsigned)(pav / 10), (unsigned)(pav % 10));

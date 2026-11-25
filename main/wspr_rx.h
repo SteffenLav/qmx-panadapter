@@ -370,6 +370,17 @@ void wspr_pa_guard_reclaim_on_link(void);
  * never confirmed and silently failed to reach the radio. */
 void wspr_pa_guard_periodic_check(void);
 
+/* T219: put back the Max. PA voltage the radio had before WSPR's declared-power
+ * write, once WSPR no longer owns the register. Non-blocking; called every 5 s
+ * from the CAT poll task and once from wspr_rx_stop(). See wspr_rx.c. */
+void wspr_pa_decl_restore_check(void);
+/* T219: called by the CAT poll task just before a noting-prior write goes out.
+ * prior_x10 is the radio's value at that moment, -1 if it did not answer. */
+void wspr_pa_decl_note_prior(int16_t prior_x10, uint16_t written_x10);
+/* T219: stand the restore down while something else drives the register
+ * through a WSPR stop/start of its own (the Calibrate Power sweep). */
+void wspr_pa_decl_hold(bool hold);
+
 /* Apply the Max. PA voltage a PAST Calibrate Power sweep measured as
  * producing `dbm` on the CURRENT band (adif_log_band_for_freq() of
  * cat_get_frequency()), so "Declared power" is something the radio was

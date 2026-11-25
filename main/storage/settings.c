@@ -181,6 +181,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_DBM       "wspr_dbm"
 #define KEY_WSPR_PARED     "wspr_pared"
 #define KEY_WSPR_PASAVE    "wspr_pasave"
+#define KEY_WSPR_DCLRST    "wspr_dclrst"   /* T219: pre-WSPR PA voltage owed on leave */
 #define KEY_PWR_CAL        "pwrcal"
 #define KEY_RADIO_UID      "radiouid"   /* UI; of the radio the table above belongs to */
 #define KEY_PWR_TARGET     "pwrtarget"
@@ -4613,6 +4614,52 @@ void settings_set_wspr_pa_saved_x10(uint16_t v)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "nvs_commit (wspr_pa_saved_x10) failed: 0x%x", err);
     }
+}
+
+/* T219: the Max. PA voltage the radio had before WSPR's declared-power write
+ * (before_x10), and the value WSPR itself wrote last (ours_x10). Packed into
+ * one u32 so the pair commits atomically. 0/0 = nothing owed.
+ *
+ * Kept OUT of qmx_settings_t on purpose: it is radio state, not a preference,
+ * so it must not travel in a config export, an import or the debounced
+ * snapshot flush. It is written straight to NVS for the same reason as
+ * wspr_pa_saved_x10 above: a reset inside the debounce window would lose it.
+ * Lazy-loaded on first read; written at most a few times per WSPR visit. */
+static uint32_t s_wspr_dclrst        = 0;
+static bool     s_wspr_dclrst_loaded = false;
+
+bool settings_get_wspr_decl_restore(uint16_t *before_x10, uint16_t *ours_x10)
+{
+    if (!s_ready) { if (before_x10) *before_x10 = 0; if (ours_x10) *ours_x10 = 0; return false; }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (!s_wspr_dclrst_loaded) {
+        uint32_t raw = 0;
+        if (nvs_get_u32(s_nvs, KEY_WSPR_DCLRST, &raw) == ESP_OK) s_wspr_dclrst = raw;
+        s_wspr_dclrst_loaded = true;
+    }
+    uint32_t v = s_wspr_dclrst;
+    xSemaphoreGive(s_mutex);
+    uint16_t b = (uint16_t)(v >> 16), o = (uint16_t)(v & 0xFFFFu);
+    if (before_x10) *before_x10 = b;
+    if (ours_x10)   *ours_x10   = o;
+    return b != 0;
+}
+
+void settings_set_wspr_decl_restore(uint16_t before_x10, uint16_t ours_x10)
+{
+    if (!s_ready) return;
+    uint32_t v = before_x10 ? (((uint32_t)before_x10 << 16) | ours_x10) : 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = s_wspr_dclrst_loaded && s_wspr_dclrst == v;
+    s_wspr_dclrst = v;
+    s_wspr_dclrst_loaded = true;
+    xSemaphoreGive(s_mutex);
+    if (same) return;
+    esp_err_t err = v ? nvs_set_u32(s_nvs, KEY_WSPR_DCLRST, v)
+                      : nvs_erase_key(s_nvs, KEY_WSPR_DCLRST);
+    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;   /* erasing what was never there */
+    if (err == ESP_OK) err = nvs_commit(s_nvs);
+    if (err != ESP_OK) ESP_LOGW(TAG, "nvs (wspr_dclrst) failed: 0x%x", err);
 }
 
 void settings_set_ft8_op_mode(uint8_t v)

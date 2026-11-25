@@ -24,6 +24,9 @@ void power_cal_modal_init(void);
 // if it was running, and resumes it when the window closes.
 void power_cal_modal_show(void);
 
+/* T219: true while a sweep is driving Max. PA voltage (Start to PC_DONE). */
+bool power_cal_sweep_active(void);
+
 // Runtime lookup against a PAST sweep's persisted results (settings.h
 // pwr_cal), independent of whether this modal has ever been opened this
 // session. Returns false (out_v_x10/out_w_x100 untouched) if `band` was

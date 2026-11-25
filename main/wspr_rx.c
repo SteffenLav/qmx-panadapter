@@ -46,6 +46,7 @@
  * rather than included wholesale. Definition in power_cal_modal.c. */
 extern bool power_cal_voltage_for_dbm(const char *band, int8_t target_dbm, uint16_t *out_v_x10,
                                        uint16_t *out_w_x100);
+extern bool power_cal_sweep_active(void);   /* T219 - same reason */
 #include "wspr_rx.h"
 #include "wspr_sched.h"   // UTC-anchored TX schedule - see that header for why
 #include "wspr_wav.h"
@@ -3597,7 +3598,18 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
         return;
     }
 
-    cat_request_pa_voltage_x10(v_x10);
+    /* T219: the first declared-power write of a visit records what it
+     * replaces, so leaving WSPR can put it back. See
+     * wspr_pa_decl_restore_check(). Once a record exists it is kept - it
+     * holds the value from BEFORE WSPR, and a later write in the same visit
+     * (a dBm change, a band change) only moves what WSPR itself set. */
+    uint16_t owed_before, owed_ours;
+    if (settings_get_wspr_decl_restore(&owed_before, &owed_ours)) {
+        if (owed_ours != v_x10) settings_set_wspr_decl_restore(owed_before, v_x10);
+        cat_request_pa_voltage_x10(v_x10);
+    } else {
+        cat_request_pa_voltage_x10_noting_prior(v_x10);
+    }
     /* Say what the radio will ACTUALLY put out at v_x10, not the nominal
      * figure `dbm` implies - see power_cal_voltage_for_dbm()'s own header
      * (operator, 2026-09-16: "PA 3.8 V = 500 mW", not just "PA 3.8 V"). */
@@ -3609,6 +3621,125 @@ void wspr_pa_apply_declared_dbm(int8_t dbm)
              band, v_x10 / 10, v_x10 % 10, wbuf, dbm);
     s_pa_cal_status_ok = true;
     ESP_LOGI(TAG, "declared-power calibration: %s", s_pa_cal_status);
+}
+
+/* ---- T219: give the radio back the voltage it had before WSPR ---------
+ *
+ * Randy N4OPI, 2026-11-25: after WSPR -> FT8 the QMX's Max. PA voltage stayed
+ * at WSPR's declared-power value; he reset 11.5 V by hand. Read from the code,
+ * not measured (his logs do not cover the WSPR visit):
+ *
+ *  - wspr_rx_start() writes the calibrated voltage via
+ *    wspr_pa_apply_declared_dbm().
+ *  - On leave, ui.c calls output_power_area_refresh(), which writes ONLY when
+ *    a stored Output-power target exists for the band. Without one it
+ *    displays and does not command (Bryan N0LUF's fix, correctly).
+ *  - wspr_pa_guard_release() restores wspr_pa_saved_x10, which the retired
+ *    6.0 V guard is the only writer of, so it is 0.
+ *  So nothing put the old value back.
+ *
+ * The record is {before, ours}: the radio's value just before WSPR's first
+ * write (read fresh by the CAT poll task, see
+ * cat_request_pa_voltage_x10_noting_prior()), and WSPR's own last write.
+ *
+ * Rules, each from an earlier fault in this file:
+ *  - Restore only while the radio still reads `ours`. Any other value means
+ *    the operator set it by hand since, the Output-power control wrote its
+ *    target, or this is a different radio - not ours to touch (the
+ *    wspr_pa_guard_reclaim_on_link() rule). The record is then DROPPED, not
+ *    kept: unlike the old guard there is no single fixed target value that
+ *    identifies "still our doing" later, and a stale `before` applied on a
+ *    future visit would be a guess.
+ *  - Keep the record until the radio reads `before` back. A single MM write
+ *    on the leave path is often refused (Dirk DK7CVD; see
+ *    wspr_pa_guard_release_pending()). Resend while it still reads `ours`.
+ *  - Stand down while WSPR owns the register: wspr_rx_owns_pa(), not
+ *    wspr_rx_running() - a faulted WSPR page still owns it (John W5JSS).
+ *  - Stand down when an Output-power target exists for the current band: that
+ *    control writes it on leave and on band change, and the operator chose it.
+ *
+ * ⭐ IN NVS, so it survives a power cut. A WSPR beacon runs unattended for
+ * hours; the QMX keeps MM settings in EEPROM, so after a cut it comes back at
+ * the declared voltage. Without NVS the record dies with the Tab5 and the next
+ * FT8 session is at beacon power - Roy KI0ER's 2026-09-02 report, exactly. The
+ * read-back rule above is what makes a persisted value safe to act on. */
+static volatile bool s_decl_hold = false;
+
+void wspr_pa_decl_hold(bool hold)
+{
+    s_decl_hold = hold;
+}
+
+void wspr_pa_decl_note_prior(int16_t prior_x10, uint16_t written_x10)
+{
+    uint16_t before, ours;
+    if (settings_get_wspr_decl_restore(&before, &ours)) {
+        /* Already owed from earlier in this visit, or from before a power cut:
+         * the older `before` is the true pre-WSPR value. */
+        if (ours != written_x10) settings_set_wspr_decl_restore(before, written_x10);
+        return;
+    }
+    if (prior_x10 < 0) {
+        ESP_LOGW(TAG, "declared power: the radio did not report its Max. PA voltage "
+                      "before WSPR set %u.%u V - it cannot be restored on leaving",
+                 written_x10 / 10, written_x10 % 10);
+        return;
+    }
+    if ((uint16_t)prior_x10 == written_x10) return;   /* nothing changes, nothing owed */
+    settings_set_wspr_decl_restore((uint16_t)prior_x10, written_x10);
+    ESP_LOGI(TAG, "declared power: Max. PA voltage %d.%d -> %u.%u V; %d.%d V is "
+                  "restored on leaving WSPR",
+             prior_x10 / 10, prior_x10 % 10, written_x10 / 10, written_x10 % 10,
+             prior_x10 / 10, prior_x10 % 10);
+}
+
+void wspr_pa_decl_restore_check(void)
+{
+    uint16_t before, ours;
+    if (!settings_get_wspr_decl_restore(&before, &ours)) return;   /* the normal case */
+    if (wspr_rx_owns_pa() || s_decl_hold || power_cal_sweep_active()) return;
+    /* A write still in flight leaves the cache holding the value from before
+     * it - right after WSPR's own write that reads as `before`, and this would
+     * clear the record as "restored". Wait for the read-back.
+     * Bounded: a lost reply leaves "awaiting" set until another query goes
+     * out, so after three unsettled ticks ask again rather than wait for ever. */
+    static int unsettled_ticks = 0;
+    if (!cat_pa_voltage_settled()) {
+        if (++unsettled_ticks >= 3) { unsettled_ticks = 0; cat_query_pa_voltage(); }
+        return;
+    }
+    unsettled_ticks = 0;
+
+    int16_t cur = cat_get_pa_voltage_x10();
+    if (cur < 0) { cat_query_pa_voltage(); return; }   /* ask; check again next tick */
+
+    if ((uint16_t)cur == before) {
+        settings_set_wspr_decl_restore(0, 0);
+        ESP_LOGI(TAG, "declared power: radio confirms %u.%u V restored after WSPR",
+                 before / 10, before % 10);
+        return;
+    }
+    if ((uint16_t)cur != ours) {
+        settings_set_wspr_decl_restore(0, 0);
+        ESP_LOGW(TAG, "declared power: radio reads %d.%d V, not WSPR's %u.%u V - "
+                      "set since by hand or by Output power; not restoring %u.%u V",
+                 cur / 10, cur % 10, ours / 10, ours % 10, before / 10, before % 10);
+        return;
+    }
+    const char *band = adif_log_band_for_freq(cat_get_frequency());
+    uint16_t target_w;
+    if (band && band[0] && settings_get_pwr_target_watts(band, &target_w)) {
+        settings_set_wspr_decl_restore(0, 0);
+        ESP_LOGI(TAG, "declared power: %s has an Output power target - that control "
+                      "sets Max. PA voltage, not this restore", band);
+        return;
+    }
+    /* Still at WSPR's value. The write's own read-back (cat.c) confirms it on
+     * a later tick; cat_pa_voltage_settled() above keeps a tick inside that
+     * window from resending. */
+    cat_request_pa_voltage_x10(before);
+    ESP_LOGW(TAG, "declared power: WSPR has let go - restoring Max. PA voltage "
+                  "%u.%u -> %u.%u V", ours / 10, ours % 10, before / 10, before % 10);
 }
 
 bool wspr_pa_calibrated_status(char *out, size_t out_sz)
@@ -3686,6 +3817,11 @@ void wspr_rx_stop(void)
      * keep the Output power control gated on a page nobody is looking at. */
     s_fault[0] = '\0';
     s_retry_left = WSPR_FAULT_RETRIES;
+
+    /* T219: first restore attempt now, not on the poll task's next 5 s tick.
+     * After s_fault is cleared, because wspr_rx_owns_pa() reads it. Covers
+     * every caller of this function: the swipe, the web mode switch, OTA. */
+    wspr_pa_decl_restore_check();
 }
 
 /* ⭐ THE MEMORY ARRIVES 1.8 SECONDS LATE, SO TRY AGAIN RATHER THAN LEAVING A

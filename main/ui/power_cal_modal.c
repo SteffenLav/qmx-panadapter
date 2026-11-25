@@ -207,6 +207,15 @@ static void enter_state(pwrcal_state_t st)
     s_state_enter_ms = (uint32_t)(esp_timer_get_time() / 1000);
 }
 
+/* T219: true while the sweep drives Max. PA voltage itself (any state between
+ * Start and PC_DONE, the restore of the pre-sweep value included). The WSPR
+ * pre-visit restore stands down for it - see wspr_pa_decl_restore_check(). A
+ * read of one enum from the CAT poll task; a torn read is not possible. */
+bool power_cal_sweep_active(void)
+{
+    return s_state != PC_IDLE && s_state != PC_DONE;
+}
+
 static uint32_t state_elapsed_ms(void)
 {
     return (uint32_t)(esp_timer_get_time() / 1000) - s_state_enter_ms;
@@ -772,6 +781,12 @@ static void start_btn_cb(lv_event_t *e)
      * armed/keyed first, releases the PA-voltage guard, and only then
      * returns, so this never keys the radio out from under WSPR mid-burst. */
     s_wspr_was_running = wspr_rx_running();
+    /* T219: wspr_rx_stop() would otherwise restore the pre-WSPR voltage right
+     * here, in the sweep's face, and the sweep would then record THAT as the
+     * value to put back. Held until begin_step() below makes
+     * power_cal_sweep_active() true; WSPR resumes on close and keeps its
+     * record, so the restore happens when the operator really leaves WSPR. */
+    wspr_pa_decl_hold(true);
     if (s_wspr_was_running) {
         wspr_rx_stop();
         ESP_LOGI(TAG, "WSPR receive stopped for the calibration sweep - "
@@ -825,6 +840,7 @@ static void start_btn_cb(lv_event_t *e)
     if (s_cancel_lbl) lv_label_set_text(s_cancel_lbl, "Cancel");
 
     begin_step(0);
+    wspr_pa_decl_hold(false);   /* power_cal_sweep_active() covers it from here */
     if (!s_timer) s_timer = lv_timer_create(timer_cb, 150, NULL);
     ESP_LOGI(TAG, "calibration started, band=%s prior_mode=%s orig_pa=%u.%uV",
              s_band, s_prior_mode, s_orig_pa_x10 / 10, s_orig_pa_x10 % 10);

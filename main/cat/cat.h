@@ -420,8 +420,12 @@ void cat_request_mode(const char *mode);
  * SESSION, never per burst - a burst-by-burst guard would be thousands of
  * EEPROM writes over a night of beaconing. */
 void    cat_request_pa_voltage_x10(uint16_t v_x10);
+/* T219: same write, but reads the radio's current value first and reports it
+ * to wspr_pa_decl_note_prior() before writing. WSPR's declared power only. */
+void    cat_request_pa_voltage_x10_noting_prior(uint16_t v_x10);
 void    cat_query_pa_voltage(void);
 int16_t cat_get_pa_voltage_x10(void);   /* -1 until the radio has answered */
+bool    cat_pa_voltage_settled(void);   /* T219: no PA write or read-back in flight */
 
 void cat_request_ssb_bandwidth(uint32_t hz);
 
