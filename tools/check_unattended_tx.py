@@ -44,8 +44,12 @@ INVENTORY = os.path.join(REPO, "docs", "unattended-tx-inventory.md")
 # implementations are skipped - only callers are sites.
 # rtty_tx_send: R010 RTTY TX - keys the radio when idle (rtty_tx.c).
 # rtty_tx_macro: the four RTTY messages, calls rtty_tx_send - keys the same way.
-ARMING_CALLS = ("ft8_tx_arm", "wspr_tx_arm", "rtty_tx_send", "rtty_tx_macro")
-IMPL_FILES = ("main/ft8_tx.c", "main/wspr_tx.c", "main/rtty_tx.c")
+# cat_request_cw_send: CW page send - KY on the QMX (cat.c).
+#   Missing here until 2026-11-25: the KY path keyed the radio without a row
+#   in the inventory. Found on feat/qdx-iq (196e36ad).
+ARMING_CALLS = ("ft8_tx_arm", "wspr_tx_arm", "rtty_tx_send", "rtty_tx_macro",
+                "cat_request_cw_send")
+IMPL_FILES = ("main/ft8_tx.c", "main/wspr_tx.c", "main/rtty_tx.c", "main/cat/cat.c")
 
 SKIP_DIRS = {".git", "build", "managed_components", "graphify-out",
              ".claude", "__pycache__", "scratchpad", "node_modules", "test"}
