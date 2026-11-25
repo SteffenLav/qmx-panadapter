@@ -624,6 +624,29 @@ static qmx_settings_t   s_pending;       // staged values awaiting flush
 static TickType_t       s_last_change_tick = 0;
 static TaskHandle_t     s_flush_task     = NULL;
 
+/* ---- Urgent writes: flush_task commits them, the caller never does -------
+ * Two values must reach NVS at once, not after the 500 ms debounce, because a
+ * reset inside that window strands the radio at a reduced Max. PA voltage:
+ * wspr_pa_saved_x10 (the retired guard) and wspr_dclrst (T219). Both used to
+ * call nvs_set + nvs_commit in the CALLER, and some callers run on "cat_poll",
+ * a 4 KB internal-RAM stack (cat.c): wspr_pa_decl_note_prior(),
+ * wspr_pa_decl_restore_check(), wspr_pa_guard_periodic_check() and
+ * wspr_pa_guard_reclaim_on_link(). An NVS write is one of the deepest paths in
+ * the firmware (-fstack-usage, IDF 5.4.4: Page::writeItem 112, cmpItem 128,
+ * findItem 112, esp_flash_write 112 ...), and stack overflows have cost this
+ * project several crash loops - settings_flush itself twice, see below.
+ * So the setters only stage the value and wake flush_task, which has a 7.5 KB
+ * stack and is already the NVS writer. settings_urgent_sync() lets a caller
+ * that must not race the radio write wait for the commit (T219, 2026-11-25). */
+#define URG_WSPR_PASAVE  (1u << 0)
+#define URG_WSPR_DCLRST  (1u << 1)
+static uint32_t s_urgent          = 0;   /* bits still to write; under s_mutex */
+static uint32_t s_urgent_req_gen  = 0;   /* bumped per request; under s_mutex */
+static volatile uint32_t s_urgent_done_gen = 0;   /* last gen committed */
+
+/* T219 record, see settings_get_wspr_decl_restore(). Loaded in settings_init. */
+static uint32_t s_wspr_dclrst     = 0;
+
 // ---- Internal helpers --------------------------------------------------
 static float u32_to_float(uint32_t u)
 {
@@ -682,8 +705,36 @@ static void flush_task(void *arg)
         return;
     }
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(100));
+        /* 100 ms poll as before; an urgent write wakes it at once. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
         if (!s_ready) continue;
+
+        uint32_t urg = 0, urg_gen = 0, dclrst = 0;
+        uint16_t pasave = 0;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        urg = s_urgent;  s_urgent = 0;
+        urg_gen = s_urgent_req_gen;
+        dclrst  = s_wspr_dclrst;
+        pasave  = s_pending.wspr_pa_saved_x10;
+        xSemaphoreGive(s_mutex);
+        if (urg) {
+            esp_err_t e = ESP_OK, e2;
+            if (urg & URG_WSPR_PASAVE) e = nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, pasave);
+            if (urg & URG_WSPR_DCLRST) {
+                e2 = dclrst ? nvs_set_u32(s_nvs, KEY_WSPR_DCLRST, dclrst)
+                            : nvs_erase_key(s_nvs, KEY_WSPR_DCLRST);
+                if (e2 == ESP_ERR_NVS_NOT_FOUND) e2 = ESP_OK;  /* erasing what was never there */
+                if (e == ESP_OK) e = e2;
+            }
+            panic_hook_crumb_enter("nvs:settings-commit");
+            e2 = nvs_commit(s_nvs);
+            panic_hook_crumb_exit();
+            if (e == ESP_OK) e = e2;
+            if (e != ESP_OK) ESP_LOGW(TAG, "nvs (urgent %02lx) failed: 0x%x", (unsigned long)urg, e);
+            s_urgent_done_gen = urg_gen;
+        } else {
+            s_urgent_done_gen = urg_gen;   /* nothing staged: every request is done */
+        }
 
         dirty_t dirty_local = {0};
         bool do_flush = false;
@@ -972,6 +1023,29 @@ static void flush_task(void *arg)
     }
 }
 
+/* Stage done by the caller under s_mutex; this marks it and wakes the writer. */
+static void urgent_kick_locked(uint32_t bit)
+{
+    s_urgent |= bit;
+    s_urgent_req_gen++;
+}
+
+bool settings_urgent_sync(uint32_t timeout_ms)
+{
+    if (!s_ready || !s_flush_task) return false;
+    if (xTaskGetCurrentTaskHandle() == s_flush_task) return true;   /* would wait on itself */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint32_t want = s_urgent_req_gen;
+    xSemaphoreGive(s_mutex);
+    TickType_t t0 = xTaskGetTickCount();
+    while ((int32_t)(s_urgent_done_gen - want) < 0) {
+        if (xTaskGetTickCount() - t0 >= pdMS_TO_TICKS(timeout_ms)) return false;
+        xTaskNotifyGive(s_flush_task);
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return true;
+}
+
 // ---- Public API --------------------------------------------------------
 void settings_init(void)
 {
@@ -1004,6 +1078,10 @@ void settings_init(void)
     // match the zero/default value (e.g. settings_set_last_ui_mode(0) when
     // NVS already holds 1) is wrongly treated as a no-op and never written.
     load_from_nvs(&s_pending);
+    {   /* T219 record: read here, never lazily - its readers run on cat_poll. */
+        uint32_t raw = 0;
+        if (nvs_get_u32(s_nvs, KEY_WSPR_DCLRST, &raw) == ESP_OK) s_wspr_dclrst = raw;
+    }
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
     /* 3072 -> 4608: measured 2026-09-06 with only 232 BYTES of headroom left
@@ -4586,33 +4664,30 @@ void settings_set_wspr_pa_saved_x10(uint16_t v)
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     if (s_pending.wspr_pa_saved_x10 == v) { xSemaphoreGive(s_mutex); return; }
     s_pending.wspr_pa_saved_x10 = v;
+    urgent_kick_locked(URG_WSPR_PASAVE);
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_PA);
+    if (s_flush_task) xTaskNotifyGive(s_flush_task);
 
-    /* ⛔ ALSO WRITE IMMEDIATELY, not just via the debounced flush task -
-     * same reasoning and same fix shape as settings_set_last_ui_mode()'s own
-     * comment: this value can be followed within the DEBOUNCE_MS (500 ms)
-     * window by a reset, and losing it there is not a cosmetic annoyance the
-     * way a wrong boot page is - it strands the radio at the reduced PA
-     * voltage with nothing left to remember what to restore it to.
+    /* ⛔ WRITTEN AT ONCE, not after the debounce: a reset inside the 500 ms
+     * DEBOUNCE_MS window strands the radio at the reduced PA voltage with
+     * nothing left to remember what to restore it to. Hardware-confirmed
+     * 2026-09-14: a 12.0 -> 6.0 V reduction was captured here, a firmware
+     * flash (a warm reset) landed inside the window, and NVS still held 0 on
+     * the next boot - the radio stayed at 6.0 V with no record.
      *
-     * Hardware-confirmed 2026-09-14: a WSPR reduction (12.0 -> 6.0 V) was
-     * captured in wspr_pa_saved_x10, and a firmware flash (a warm reset)
-     * landed inside that window before the debounced flush ever ran. NVS
-     * still held wspr_pa_saved_x10=0 on the next boot - the radio came back
-     * up still at 6.0 V with no record it had ever been anything else, and
-     * every later "already at target, leaving it alone" log line was
-     * correct-by-its-own-logic and permanently wrong for this radio.
+     * The write itself is flush_task's, woken above (see the "Urgent writes"
+     * block at the top of this file for why it is no longer done here: two
+     * callers run on the 4 KB cat_poll stack). A NON-zero value is the
+     * "remember before writing the radio" case, so wait for its commit: the
+     * window that 2026-09-14 hit goes from 500 ms to zero, not to "small".
+     * Zero (a clear) does not wait - a lost clear is re-done on the next link
+     * by wspr_pa_guard_reclaim_on_link(), which reads the radio first.
      *
-     * Left marked dirty above too, deliberately: DIRTY_WSPR_PA is shared
-     * with wspr_pa_reduce, and clearing it here (the way
-     * settings_set_last_ui_mode() clears its own dirty bit) could drop an
-     * unrelated pending write to THAT field. A redundant identical write
-     * from flush_task afterwards costs nothing. */
-    nvs_set_u16(s_nvs, KEY_WSPR_PASAVE, v);
-    esp_err_t err = nvs_commit(s_nvs);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_commit (wspr_pa_saved_x10) failed: 0x%x", err);
+     * Left marked dirty too: DIRTY_WSPR_PA is shared with wspr_pa_reduce, and
+     * a redundant identical write from the debounced flush costs nothing. */
+    if (v && !settings_urgent_sync(500)) {
+        ESP_LOGW(TAG, "wspr_pa_saved_x10=%u not yet committed after 500 ms", v);
     }
 }
 
@@ -4622,21 +4697,15 @@ void settings_set_wspr_pa_saved_x10(uint16_t v)
  *
  * Kept OUT of qmx_settings_t on purpose: it is radio state, not a preference,
  * so it must not travel in a config export, an import or the debounced
- * snapshot flush. It is written straight to NVS for the same reason as
- * wspr_pa_saved_x10 above: a reset inside the debounce window would lose it.
- * Lazy-loaded on first read; written at most a few times per WSPR visit. */
-static uint32_t s_wspr_dclrst        = 0;
-static bool     s_wspr_dclrst_loaded = false;
-
+ * snapshot flush. Read once in settings_init(); written as an urgent write by
+ * flush_task (see "Urgent writes" at the top of this file) - its callers run
+ * on cat_poll, so neither the getter nor the setter may touch NVS itself.
+ * The caller that must not race the radio write (cat.c, before WSPR's first
+ * declared-power MM) calls settings_urgent_sync(). */
 bool settings_get_wspr_decl_restore(uint16_t *before_x10, uint16_t *ours_x10)
 {
     if (!s_ready) { if (before_x10) *before_x10 = 0; if (ours_x10) *ours_x10 = 0; return false; }
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (!s_wspr_dclrst_loaded) {
-        uint32_t raw = 0;
-        if (nvs_get_u32(s_nvs, KEY_WSPR_DCLRST, &raw) == ESP_OK) s_wspr_dclrst = raw;
-        s_wspr_dclrst_loaded = true;
-    }
     uint32_t v = s_wspr_dclrst;
     xSemaphoreGive(s_mutex);
     uint16_t b = (uint16_t)(v >> 16), o = (uint16_t)(v & 0xFFFFu);
@@ -4650,16 +4719,11 @@ void settings_set_wspr_decl_restore(uint16_t before_x10, uint16_t ours_x10)
     if (!s_ready) return;
     uint32_t v = before_x10 ? (((uint32_t)before_x10 << 16) | ours_x10) : 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    bool same = s_wspr_dclrst_loaded && s_wspr_dclrst == v;
+    if (s_wspr_dclrst == v) { xSemaphoreGive(s_mutex); return; }
     s_wspr_dclrst = v;
-    s_wspr_dclrst_loaded = true;
+    urgent_kick_locked(URG_WSPR_DCLRST);
     xSemaphoreGive(s_mutex);
-    if (same) return;
-    esp_err_t err = v ? nvs_set_u32(s_nvs, KEY_WSPR_DCLRST, v)
-                      : nvs_erase_key(s_nvs, KEY_WSPR_DCLRST);
-    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;   /* erasing what was never there */
-    if (err == ESP_OK) err = nvs_commit(s_nvs);
-    if (err != ESP_OK) ESP_LOGW(TAG, "nvs (wspr_dclrst) failed: 0x%x", err);
+    if (s_flush_task) xTaskNotifyGive(s_flush_task);
 }
 
 void settings_set_ft8_op_mode(uint8_t v)

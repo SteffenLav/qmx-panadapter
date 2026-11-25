@@ -168,6 +168,7 @@ static volatile bool s_vox_disabled = false;  // true once Q3; readback confirms
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 static uint64_t s_wspr_pa_check_us = 0; // last non-blocking WSPR PA-guard check
 static uint64_t s_wspr_decl_check_us = 0; // last T219 pre-WSPR voltage restore check
+#define CAT_POLL_STACK 4096         // internal RAM; high-water logged in poll_task
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -2766,6 +2767,19 @@ static void poll_task(void *arg)
             if (now - s_wspr_decl_check_us > 5000000ULL) {
                 s_wspr_decl_check_us = now;
                 wspr_pa_decl_restore_check();
+
+                /* Own stack high-water mark, logged on each NEW low only, so
+                 * a deeper path shows in the capture the first time it runs.
+                 * This 4 KB stack is internal RAM; NVS work stays off it (see
+                 * settings.c, "Urgent writes"). Cheap: scans this task's own
+                 * stack, not every task's like task_stacks_report() does. */
+                static uint32_t s_poll_hwm_min = UINT32_MAX;
+                uint32_t hwm = (uint32_t)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+                if (hwm < s_poll_hwm_min) {
+                    s_poll_hwm_min = hwm;
+                    if (hwm < 768) ESP_LOGW(TAG, "cat_poll stack: %lu B free of %d - LOW", (unsigned long)hwm, CAT_POLL_STACK);
+                    else           ESP_LOGI(TAG, "cat_poll stack: %lu B free of %d", (unsigned long)hwm, CAT_POLL_STACK);
+                }
             }
         }
         // Re-assert IQ mode: queued on resume-from-pause and by the dead-stream
@@ -3984,7 +3998,7 @@ static void link_task(void *arg)
 
             band_scan_restore(pre_freq, pre_mode_digit);
             xTaskCreatePinnedToCore(
-                poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
+                poll_task, "cat_poll", CAT_POLL_STACK, NULL, 5, &s_poll_task, 1);
 
             xEventGroupWaitBits(s_evt_group, EVT_DEV_GONE,
                                 pdTRUE, pdFALSE, portMAX_DELAY);

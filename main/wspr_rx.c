@@ -3687,6 +3687,11 @@ void wspr_pa_decl_note_prior(int16_t prior_x10, uint16_t written_x10)
     }
     if ((uint16_t)prior_x10 == written_x10) return;   /* nothing changes, nothing owed */
     settings_set_wspr_decl_restore((uint16_t)prior_x10, written_x10);
+    /* Runs on cat_poll, right before the MM write: wait for the commit so a
+     * reset just after the write cannot lose the record. The commit itself is
+     * on the settings_flush stack, not this one (settings.c, "Urgent writes"). */
+    if (!settings_urgent_sync(500))
+        ESP_LOGW(TAG, "declared power: restore record not committed within 500 ms");
     ESP_LOGI(TAG, "declared power: Max. PA voltage %d.%d -> %u.%u V; %d.%d V is "
                   "restored on leaving WSPR",
              prior_x10 / 10, prior_x10 % 10, written_x10 / 10, written_x10 % 10,

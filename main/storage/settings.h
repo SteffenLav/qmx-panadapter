@@ -1569,6 +1569,12 @@ void settings_set_wspr_pa_saved_x10(uint16_t v);// value to restore, tenths of a
  * write, tenths of a volt. Returns true when a restore is owed. 0 = clear. */
 bool settings_get_wspr_decl_restore(uint16_t *before_x10, uint16_t *ours_x10);
 void settings_set_wspr_decl_restore(uint16_t before_x10, uint16_t ours_x10);
+
+/* Wait until every urgent NVS write staged so far (wspr_pa_saved_x10,
+ * wspr_dclrst) is committed by the settings_flush task. The setters never
+ * write NVS on the caller's stack, because some callers run on the 4 KB
+ * cat_poll stack. False on timeout. Does no NVS work itself. */
+bool settings_urgent_sync(uint32_t timeout_ms);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
