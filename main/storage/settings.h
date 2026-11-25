@@ -897,6 +897,12 @@ typedef struct {
      * 0 bands ticked, or hopping off, means stay on wspr_dial_hz. */
     uint16_t wspr_hop_mask;
     bool     wspr_hop_en;
+    /* FT8/FT4 receive band hopping (Mark N8MH, 2026-11-25). Bit i = band i of
+     * ft8_hop.c's kHopBands (the same order as WSPR's: 160 80 60 40 30 20 17
+     * 15 12 10 6). More than one bit = hopping on; there is no separate
+     * switch, the same rule as wspr_hop_mask. A band the radio lacks is
+     * skipped, not forgotten. 0 = off. */
+    uint16_t ft8_hop_mask;
 
     /* ⭐ THE MASTER SWITCH FOR THE WHOLE WSPR PAGE, DEFAULT OFF.
      *
@@ -1577,6 +1583,7 @@ void settings_set_wspr_decl_restore(uint16_t before_x10, uint16_t ours_x10);
 bool settings_urgent_sync(uint32_t timeout_ms);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
+void settings_set_ft8_hop_mask(uint16_t v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
 void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default ON since 2026-11-19
 void settings_set_wspr_dump_cycles(uint8_t v);

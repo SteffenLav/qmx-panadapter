@@ -185,3 +185,7 @@ void ft8_screen_view_request_js8_flush(void);
  * are up at once now, so the question has no answer and the API reports
  * "all" literally rather than this returning a constant that reads like a
  * live reading. */
+
+/* FT8/FT4 band hopping: open the band picker (ui/band_hop_picker.c). Called
+ * from the settings drawer; parents to lv_layer_top(). LVGL task only. */
+void ft8_screen_view_open_hop_picker(void);

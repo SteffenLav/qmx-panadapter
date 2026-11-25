@@ -1409,6 +1409,9 @@
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
         <span id="dec-count"></span>
+        <!-- FT8/FT4 band hopping: the same line the Tab5 shows inside its
+             Preset button. Empty unless two or more bands are ticked. -->
+        <span id="dec-hop" style="margin-left:12px"></span>
         <!-- The receive status - "RX: capturing..." / "RX: 11 decoded" - moved
              down here from the top status box (operator, 2026-09-02). It belongs
              beside the count of what has been heard, and it leaves the top line
@@ -5402,6 +5405,10 @@ const SET_FIELDS = [
   /* Band NAMES, not the bitmask the setting stores: the device converts, so
      nobody has to know the encoding. Hopping is on whenever more than one band
      is listed - the same rule the Tab5 uses, not a second switch. */
+  /* Same rule and the same name format as WSPR's row below. FT8 and FT4 share
+     the list; FT4 skips 160 and 60, which have no FT4 frequency. */
+  ["FT8 filters", "ft8_hop_bands", "text", "FT8/FT4 band hopping",
+     "Comma-separated, e.g. 20,40,15. Two or more turns hopping on: two minutes per band, only while the page is idle. Leave empty to stay on one band"],
   ["WSPR", "wspr_hop_bands", "text", "Band hopping",
      "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
@@ -6888,11 +6895,16 @@ function decRenderTable() {
     + (c[0] === "km" ? decState.unit : c[1]) + arrow(c[0]) + "</th>").join("");
   document.getElementById("dec-order-reset").style.display = decState.sortKey === null ? "none" : "";
 
-  let rows = decState.rows;
-  if (decState.sortKey !== null) {
+  /* Band hopping: rows heard on the band before a hop come with ob:true and
+     their band. They are kept apart - the current band first, then each other
+     band under its own separator - and a column sort sorts inside each group,
+     never across them. An ob row has no data-call, so it cannot be clicked:
+     the device would refuse it anyway (its reply path reads the current band). */
+  const sortRows = (list) => {
+    if (decState.sortKey === null) return list;
     const col = DEC_SORT[decState.sortKey];
     const dir = decState.sortDir === "asc" ? 1 : -1;
-    rows = rows.slice().sort((a, b) => {
+    return list.slice().sort((a, b) => {
       const va = col.get(a), vb = col.get(b);
       if (va === null && vb === null) return 0;
       if (va === null) return 1;   // missing values always sink to the bottom
@@ -6900,9 +6912,27 @@ function decRenderTable() {
       if (col.type === "str") return dir * String(va).localeCompare(String(vb));
       return dir * (va - vb);
     });
-  }
+  };
+  const curRows = sortRows(decState.rows.filter(r => !r.ob));
+  const obBands = [];
+  decState.rows.forEach(r => { if (r.ob && !obBands.includes(r.band || "?")) obBands.push(r.band || "?"); });
+  const sepRow = (band, list) => {
+    const newest = Math.min(...list.map(r => r.age || 0));
+    const t = new Date(Date.now() - newest * 1000);
+    const hhmm = String(t.getUTCHours()).padStart(2, "0") + ":" + String(t.getUTCMinutes()).padStart(2, "0");
+    return '<tr><td colspan="' + DEC_COLS.length + '" style="text-align:center;color:#9a9a9a;'
+      + 'border-top:1px solid #555;border-bottom:1px solid #555;padding:3px 6px">'
+      + String(band).toLowerCase() + " - before the hop - " + hhmm + " UTC</td></tr>";
+  };
   const decBody = document.getElementById("dec-body");
-  decBody.innerHTML = rows.map(r => {
+  const rowHtml = r => {
+    if (r.ob) {
+      const tip = "Heard on " + String(r.band || "another band").toLowerCase() + " - not on this band";
+      return "<tr title='" + tip + "' style='color:#5a5a5a'>" + DEC_COLS.map(c =>
+        '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
+        + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
+        + "</td>").join("") + "</tr>";
+    }
     // Same emphasis the Tab5 uses: the station being worked held at the top,
     // and anything carrying your own callsign in reverse video.
     /* Emphasis, highest priority first. Worked-before is DIMMED rather than
@@ -6921,7 +6951,12 @@ function decRenderTable() {
       '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
       + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
       + "</td>").join("") + "</tr>";
-  }).join("");
+  };
+  decBody.innerHTML = curRows.map(rowHtml).join("")
+    + obBands.map(b => {
+        const list = sortRows(decState.rows.filter(r => r.ob && (r.band || "?") === b));
+        return sepRow(b, list) + list.map(rowHtml).join("");
+      }).join("");
 }
 document.getElementById("dec-order-reset").addEventListener("click", (ev) => {
   ev.preventDefault();
@@ -9409,6 +9444,19 @@ async function tick() {
         el.textContent = txt;
         el.classList.toggle("webr-done", /QSO complete$/.test(txt));
         el.classList.toggle("webr-warn", !wr && !!stuck);
+      }
+      /* Band hopping - same wording and colours as the Tab5's Preset button. */
+      {
+        const h = s.ft8.hop, el = document.getElementById("dec-hop");
+        if (el) {
+          let t = "", c = "#a0e0a0";
+          if (h && h.blocked) { t = "Hop paused: " + h.blocked; c = "#ffa040"; }
+          else if (h && h.next && h.secs >= 0)
+            t = "Hop: next " + h.next + "m in " + Math.floor(h.secs / 60) + ":" + String(h.secs % 60).padStart(2, "0");
+          else if (h) t = "Hop: " + h.bands;
+          el.textContent = t;
+          el.style.color = c;
+        }
       }
       if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity, true);
       /* The occupancy strip and the slot clock. Redrawn only when the picture

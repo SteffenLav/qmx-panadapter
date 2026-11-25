@@ -190,6 +190,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
+#define KEY_FT8_HOPM       "ft8_hopm"
 #define KEY_WSPR_EN        "wspr_en"
 #define KEY_WSPR_NET       "wspr_net"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
@@ -289,7 +290,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      6                        /* 192 bits; highest used 163, 28 spare */
+#define DIRTY_WORDS      6                        /* 192 bits; highest used 164, 27 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -509,6 +510,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_TXBAND_OFF      143  /* TX band guard disabled (T48) */
 #define DIRTY_TXSUBNET        162  /* TX subnet interlock (T206) */
 #define DIRTY_SPECTRUM_H      163  /* T216 spectrum/waterfall split height, px */
+#define DIRTY_FT8_HOPM        164  /* FT8/FT4 receive band-hop mask */
 #define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
 #define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
@@ -954,6 +956,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap->wspr_dump_cycles);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap->wspr_hop_mask);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap->wspr_hop_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_HOPM))     nvs_set_u16(s_nvs, KEY_FT8_HOPM, snap->ft8_hop_mask);
         if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap->wspr_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_NET))     nvs_set_u8(s_nvs, KEY_WSPR_NET,  snap->wspr_net_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap->ft8_op_mode);
@@ -1324,6 +1327,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_dump_cycles = 0;        /* never dump unless asked */
     out->wspr_hop_mask = 0;           /* nothing ticked until the operator does */
     out->wspr_hop_en   = false;
+    out->ft8_hop_mask  = 0;           /* FT8 hopping off until bands are ticked */
     /* LAUNCHED 2026-08-28: the WSPR page is in the swipe cycle by default.
      * It shipped dark behind a seven-tap unlock while the bug rate had not
      * flattened; that is over. Transmitting is still opt-in (wspr_tx_en). */
@@ -1755,6 +1759,7 @@ static void load_from_nvs(qmx_settings_t *out)
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_HOPM, &u16v) == ESP_OK) out->wspr_hop_mask = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_HOPE, &u8v) == ESP_OK) out->wspr_hop_en = (u8v != 0); }
+    { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_FT8_HOPM, &u16v) == ESP_OK) out->ft8_hop_mask = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_EN,   &u8v) == ESP_OK) out->wspr_en   = (u8v != 0); }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_NET,  &u8v) == ESP_OK) out->wspr_net_en = (u8v != 0); }
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
@@ -4574,6 +4579,16 @@ void settings_set_wspr_hop_mask(uint16_t v)
     s_pending.wspr_hop_mask = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_HOPM);
+}
+
+void settings_set_ft8_hop_mask(uint16_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_hop_mask == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ft8_hop_mask = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_HOPM);
 }
 
 void settings_set_wspr_hop_en(bool v)

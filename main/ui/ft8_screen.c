@@ -14,6 +14,9 @@
 #include "ft8_tx.h"    // ft8_tx_get_parity_lock() - pause aging on our TX parity
 #include "ft8_test.h"  // ft8_op_mode_slot_ms() - protocol slot grid for row parity
 #include "storage/settings.h"  // ft8_filters_t.max_age_sec - operator-tunable row aging
+#include "ft8_hop.h"     // ft8_slot_dial() - the band a decode was heard on
+#include "cat/cat.h"     // cat_get_frequency() - the current band
+#include "adif/adif_log.h" // adif_log_band_for_freq()
 
 static const char *TAG = "ft8_screen";
 
@@ -312,6 +315,10 @@ void ft8_screen_record_decode(const char *text,
     e->last_snr_db = (int16_t)snr_db;
     e->last_freq  = (int16_t)freq_off;
     e->last_dt_ms = (int16_t)dt_ms;
+    {
+        uint32_t d = ft8_slot_dial(utc_sec);
+        e->dial_hz = d ? d : cat_get_frequency();
+    }
     // Update grid ONLY if this message contains one - never clobber a stored
     // grid with empty when later messages omit it. A leftover unguarded
     // extract straight into e->last_grid used to do exactly that: every
@@ -361,8 +368,36 @@ bool ft8_screen_find_call(const char *call, ft8_call_t *out)
     return found;
 }
 
+/* Band of a row vs the radio's band now. A row with no dial, or a dial or
+ * radio outside every band, counts as current - the behaviour before rows
+ * carried a band, so nothing disappears that used to be shown. */
+static bool same_band(uint32_t row_hz, const char *cur_band)
+{
+    if (!row_hz || !cur_band || !cur_band[0]) return true;
+    const char *b = adif_log_band_for_freq(row_hz);
+    return !b[0] || strcmp(b, cur_band) == 0;
+}
+
+bool ft8_screen_row_on_current_band(const ft8_call_t *row)
+{
+    return row && same_band(row->dial_hz, adif_log_band_for_freq(cat_get_frequency()));
+}
+
+static void get_rows(ft8_call_t *out, int max, int *count_out, bool all_bands);
+
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
 {
+    get_rows(out, max, count_out, false);
+}
+
+void ft8_screen_get_all_bands(ft8_call_t *out, int max, int *count_out)
+{
+    get_rows(out, max, count_out, true);
+}
+
+static void get_rows(ft8_call_t *out, int max, int *count_out, bool all_bands)
+{
+    const char *cur_band = adif_log_band_for_freq(cat_get_frequency());
     int n = 0;
     if (count_out) *count_out = 0;
     if (!out || max <= 0) return;
@@ -398,14 +433,14 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
                 bool row_even = (sidx % 2) == 0;
                 if (row_even == tx_even) {
                     // Our TX parity: aging paused, keep the row visible.
-                    if (n < max) out[n++] = s_table[i];
+                    if (n < max && (all_bands || same_band(s_table[i].dial_hz, cur_band))) out[n++] = s_table[i];
                     continue;
                 }
             }
             s_table[i].occupied = false;   // station went quiet — drop it
             continue;
         }
-        if (n < max) out[n++] = s_table[i];
+        if (n < max && (all_bands || same_band(s_table[i].dial_hz, cur_band))) out[n++] = s_table[i];
     }
     if (s_mutex) xSemaphoreGive(s_mutex);
     if (count_out) *count_out = n;
@@ -425,6 +460,7 @@ int ft8_screen_active_count(void)
     bool tx_lock = ft8_tx_get_parity_lock(&tx_even);
     int  per_ms  = ft8_op_mode_slot_ms();
     int  stale_sec = row_stale_sec();
+    const char *cur_band = adif_log_band_for_freq(cat_get_frequency());
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         ESP_LOGW(TAG, "active_count: mutex timeout");
         return 0;
@@ -438,6 +474,7 @@ int ft8_screen_active_count(void)
             int64_t sidx = ((int64_t)s_table[i].last_utc * 1000 + per_ms / 2) / per_ms;
             if (((sidx % 2) == 0) != tx_even) continue;   // not our parity: genuinely stale
         }
+        if (!same_band(s_table[i].dial_hz, cur_band)) continue;   /* as get_all() */
         n++;
     }
     if (s_mutex) xSemaphoreGive(s_mutex);

@@ -12,6 +12,7 @@
 #include "ui.h"
 #include "ui_theme.h"
 #include "wspr_screen_view.h"
+#include "band_hop_picker.h"
 #include "wspr_spots.h"
 #include "net/wsprnet.h"
 #include "wspr_rx.h"
@@ -399,12 +400,8 @@ static bool      s_hdr_built;      /* have WE written the headings yet */
 static lv_obj_t *s_btn_clr;        /* clear the decode list (Samuel W7STF) */
 static lv_obj_t *s_lbl_clr;
 static int64_t   s_clr_armed_us;   /* two-tap arming, 0 = not armed */
-static lv_obj_t *s_hop_cb[16];
-static uint8_t   s_hop_band[16];   /* kBands index behind each checkbox */
-static int       s_hop_n;
 static lv_obj_t *s_btn_hop;        /* opens the picker */
 static lv_obj_t *s_lbl_hop;        /* says which bands are ticked */
-static lv_obj_t *s_hop_modal;      /* NULL when closed */
 
 static void hop_button_refresh(void);
 /* ---- HOVER THE WATERFALL TO NAME A TRACE ----------------------------------
@@ -804,15 +801,19 @@ static void clear_spots_cb(lv_event_t *e)
     if (s_lbl_clr) lv_label_set_text(s_lbl_clr, "Sure?");
 }
 
-static void hop_toggled_cb(lv_event_t *e)
+/* ---- THE BAND-HOP PICKER ----------------------------------------------
+ *
+ * The window itself is ui/band_hop_picker.c, shared with the FT8/FT4 page
+ * since 2026-11-25. What stays here is WSPR's part: which bands to offer and
+ * what a tick means.
+ *
+ * ⚠ THE LIST IS BUILT HERE, ON OPEN, NOT AT PAGE INIT. wspr_bands_available()
+ * filters against cat_get_band_list(), and CAT does not answer until ~17 s
+ * after boot. Built during init the filter always saw an empty radio list and
+ * silently offered every band in the table on every radio.
+ */
+static void hop_mask_changed(uint16_t mask)
 {
-    lv_obj_t *cb = lv_event_get_target(e);
-    uint16_t mask = 0;
-    for (int i = 0; i < s_hop_n; i++) {
-        if (s_hop_cb[i] && lv_obj_has_state(s_hop_cb[i], LV_STATE_CHECKED))
-            mask |= (uint16_t)(1u << s_hop_band[i]);
-    }
-    (void)cb;
     settings_set_wspr_hop_mask(mask);
     /* Hopping is ON exactly when more than one band is ticked. A separate
      * enable switch would be a second thing to get wrong, and "one band ticked"
@@ -821,127 +822,32 @@ static void hop_toggled_cb(lv_event_t *e)
     hop_button_refresh();
 }
 
-/* ---- THE BAND-HOP PICKER ----------------------------------------------
- *
- * A full-screen window with finger-sized rows, opened from the panel button.
- * The panel itself only ever shows WHICH bands are ticked; choosing them is a
- * deliberate act that gets room to happen in.
- *
- * ⚠ THE LIST IS BUILT HERE, ON OPEN, NOT AT PAGE INIT. That is not tidiness:
- * wspr_bands_available() filters against cat_get_band_list(), and CAT does not
- * answer until ~17 s after boot. Built during init the filter always saw an
- * empty radio list and silently offered every band in the table on every
- * radio. Built on open, the radio has long since answered.
- */
-static void hop_modal_close(void)
-{
-    if (!s_hop_modal) return;
-    lv_obj_del(s_hop_modal);
-    s_hop_modal = NULL;
-    for (int i = 0; i < 16; i++) s_hop_cb[i] = NULL;
-    s_hop_n = 0;
-    hop_button_refresh();
-}
-
-static void hop_close_cb(lv_event_t *e) { (void)e; hop_modal_close(); }
-
 static void hop_modal_open_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_hop_modal) return;
-
-    s_hop_modal = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_hop_modal, 1280, 720);
-    lv_obj_set_pos(s_hop_modal, 0, 0);
-    lv_obj_set_style_bg_color(s_hop_modal, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_hop_modal, LV_OPA_70, 0);
-    lv_obj_set_style_border_width(s_hop_modal, 0, 0);
-    lv_obj_clear_flag(s_hop_modal, LV_OBJ_FLAG_SCROLLABLE);
-    /* A scrim you dismiss, not a control you press - so the mouse pointer
-     * stays white over it (ui_theme.h). */
-    lv_obj_add_flag(s_hop_modal, UI_FLAG_NOT_HOT);
-    lv_obj_add_flag(s_hop_modal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_hop_modal, hop_close_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *panel = lv_obj_create(s_hop_modal);
-    lv_obj_set_size(panel, 780, 660);
-    lv_obj_center(panel);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_style_border_width(panel, 2, 0);
-    lv_obj_set_style_radius(panel, 10, 0);
-    lv_obj_set_style_pad_all(panel, 18, 0);
-    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    /* Presses inside the panel must not reach the scrim's dismiss handler. */
-    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *title = lv_label_create(panel);
-    lv_label_set_text(title, "Band hop");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);   /* 36 and 40 are not built into this image; 32 is */
-    lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    lv_obj_t *hint = lv_label_create(panel);
+    uint8_t idx[16];
+    int n = wspr_bands_available(idx, (int)sizeof(idx));
+    band_hop_choice_t ch[16];
+    for (int i = 0; i < n; i++) {
+        ch[i].name = kBands[idx[i]].name;
+        ch[i].bit  = idx[i];            /* the mask indexes the FULL table */
+    }
+    qmx_settings_t hs;
+    settings_load_all(&hs);
     /* Says how it works, in the order the questions actually arise. The
      * operator asked all three of these, which is the sign the window was
      * showing controls without explaining them:
      *   - what does a tick DO?       one cycle each, so two minutes per band
      *   - what if I tick only one?   nothing hops; the band selector wins
      *   - so what should I do?       pick at least two - say it plainly */
-    lv_label_set_text(hint,
+    band_hop_picker_open("Band hop",
         "Pick at least two bands.\n"
         "The radio moves to the next ticked band every cycle -\n"
         "two minutes on each - in the order listed below, then wraps.\n"
         "\n"
         "Fewer than two ticked means no hopping at all: the band\n"
-        "selector on the page decides, and the radio stays there.");
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 62);
-
-    qmx_settings_t hs;
-    settings_load_all(&hs);
-    s_hop_n = wspr_bands_available(s_hop_band, (int)sizeof(s_hop_band));
-
-    if (s_hop_n == 0) {
-        /* Says which of the two it is. "No bands" with the radio off reads as
-         * a broken feature; it is a disconnected radio. */
-        lv_obj_t *none = lv_label_create(panel);
-        lv_label_set_text(none, cat_is_ready()
-            ? "The radio reported no bands."
-            : "Waiting for the radio - connect the QMX and reopen this.");
-        lv_obj_set_style_text_font(none, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(none, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_align(none, LV_ALIGN_TOP_LEFT, 0, 238);
-    }
-
-    /* Two columns of finger-sized rows. 64 px pitch and a 32 px tick box: the
-     * grid this replaces used 30 px rows and a 20 px box, which is what made
-     * it unusable with a finger. */
-    for (int i = 0; i < s_hop_n; i++) {
-        lv_obj_t *cb = lv_checkbox_create(panel);
-        lv_checkbox_set_text(cb, kBands[s_hop_band[i]].name);
-        lv_obj_set_style_text_font(cb, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_set_style_pad_all(cb, 8, 0);
-        lv_obj_set_style_width(cb, 32, LV_PART_INDICATOR);
-        lv_obj_set_style_height(cb, 32, LV_PART_INDICATOR);
-        lv_obj_align(cb, LV_ALIGN_TOP_LEFT, (i % 2) * 340, 238 + (i / 2) * 64);
-        if (hs.wspr_hop_mask & (1u << s_hop_band[i]))
-            lv_obj_add_state(cb, LV_STATE_CHECKED);
-        lv_obj_add_event_cb(cb, hop_toggled_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        s_hop_cb[i] = cb;
-    }
-
-    lv_obj_t *done = lv_btn_create(panel);
-    lv_obj_set_size(done, 200, 64);
-    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_radius(done, 8, 0);
-    lv_obj_add_event_cb(done, hop_close_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *dl = lv_label_create(done);
-    lv_label_set_text(dl, "Done");
-    lv_obj_set_style_text_font(dl, &lv_font_montserrat_28, 0);
-    lv_obj_center(dl);
+        "selector on the page decides, and the radio stays there.",
+        ch, n, hs.wspr_hop_mask, hop_mask_changed, hop_button_refresh);
 }
 
 /* Opened from the settings drawer now that the button has moved off this page.

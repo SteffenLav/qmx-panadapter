@@ -39,6 +39,7 @@ LV_FONT_DECLARE(qmx_mono_25);   /* shared with the radio-menus screen */
 #include "bandplan.h"
 #include "ft8_robot.h"   // ft8_robot_stand_down - a band change stops auto-answer
 #include "ft8_qso.h"     // ft8_band_change_stand_down - a band change ends the QSO
+#include "ft8_hop.h"     // ft8_hop_owns_band_change - a hop keeps the decode list
 #include "ft8_tx.h"      // ft8_tx_disarm / ft8_tx_request_abort - safe power off
 #include "bsp/m5stack_tab5.h"   // bsp_generate_poweroff_signal
 #include "db_gridlines.h"   // round dBm gridlines derived from the dB Range sliders
@@ -3896,7 +3897,8 @@ static bool s_drawer_swipe_vertical = false;  /* this drag went vertical */
  * its own group and is visible everywhere. */
 #define DRAWER_SEC_WEBRADIO   54
 #define DRAWER_SEC_CWQSK      56  // T144: Semi QSK mode + delay
-#define N_DRAWER_SECTIONS     57   /* ids 0..56; 24 retired (no section built), 56 is CWQSK (T144) */
+#define DRAWER_SEC_FT8HOP     57  // FT8/FT4 receive band hopping (Mark N8MH)
+#define N_DRAWER_SECTIONS     58   /* ids 0..57; 24 retired (no section built), 57 is FT8HOP */
 
 /* Catches the mistake above at COMPILE time instead of as a crash minutes into
  * a session. Every id must be a valid index; raise N_DRAWER_SECTIONS when you
@@ -3911,6 +3913,7 @@ _Static_assert(DRAWER_SEC_SERVER < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS")
 _Static_assert(DRAWER_SEC_WEBRADIO < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_CWSIM   < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_MANLOG < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
+_Static_assert(DRAWER_SEC_FT8HOP < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 _Static_assert(DRAWER_SEC_WEBRADIO < N_DRAWER_SECTIONS, "raise N_DRAWER_SECTIONS");
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
@@ -4033,6 +4036,9 @@ static const drawer_item_t GRP_FT8[] = {
      * and it is invisible in every other sub-mode anyway, so hiding it behind
      * Advanced would hide it from exactly the operator who went looking. */
     { DRAWER_SEC_JS8SUB, "JS8 submode", true },
+    /* Basic: off until bands are ticked, so an operator who never finds it
+     * never gets the feature - the same reasoning as Bluetooth mouse. */
+    { DRAWER_SEC_FT8HOP, "FT8/FT4 band hopping", true },
     { DRAWER_SEC_SIMMODE, "Simulation mode", false },
 };
 /* The CW page's own practice toggle. Filed in its own group rather than in
@@ -4309,6 +4315,10 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * drawer after every sub-mode change so this is re-evaluated. */
     if (id == DRAWER_SEC_JS8SUB)
         return ft8 && ft8_op_mode_get() == FT8_OP_MODE_JS8;
+    /* FT8 and FT4 only: JS8 never hops (ft8_hop.c), so the control would
+     * do nothing there. Same sub-mode test as DRAWER_SEC_JS8SUB above. */
+    if (id == DRAWER_SEC_FT8HOP)
+        return ft8 && ft8_op_mode_get() != FT8_OP_MODE_JS8;
     if (id == DRAWER_SEC_SIMMODE) return ft8;
     if (id == DRAWER_SEC_DISTANCE) return ft8;
     /* CW practice has its own flag and its own page: showing it anywhere else
@@ -10768,7 +10778,14 @@ void ui_update_frequency(uint32_t freq_hz)
         // Band changed: flush decode list (stale signals from different band)
         if (current_band_idx != s_last_band_idx) {
             s_last_band_idx = current_band_idx;
-            ft8_screen_clear();
+            /* A band HOP keeps the list: the old band's rows stay, shown
+             * under a separator, until they age out. They cannot be acted
+             * on - ft8_screen_get_all() returns the current band only. Any
+             * other band change (the operator's) still clears it. */
+            if (ft8_hop_owns_band_change(freq_hz))
+                ESP_LOGI(TAG, "band hop: decode list kept");
+            else
+                ft8_screen_clear();
         }
     }
     uint32_t prev_freq_hz = s_last_qmx_freq_hz;
@@ -16356,6 +16373,12 @@ static void drawer_check_wspr_net_cb(lv_event_t *e)
     settings_set_wspr_net_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
+static void drawer_btn_ft8_hop_cb(lv_event_t *e)
+{
+    (void)e;
+    ft8_screen_view_open_hop_picker();   /* parents to lv_layer_top() */
+}
+
 static void drawer_btn_wspr_hop_cb(lv_event_t *e)
 {
     (void)e;
@@ -19695,6 +19718,27 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_js8alt_dd, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
 
         y += 190;
+    }
+    /* FT8/FT4 band hopping. One button that opens the picker - the WSPR
+     * section's shape (DRAWER_SEC_WSPRHOP) and the same rule: ticking a second
+     * band IS turning hopping on, so there is no separate switch. */
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_FT8HOP, y, 104);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Band hopping (FT8/FT4)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 50);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 44);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, drawer_btn_ft8_hop_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *bl = lv_label_create(btn);
+        lv_label_set_text(bl, "Choose bands...");
+        lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+        lv_obj_center(bl);
+        y += 104;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode

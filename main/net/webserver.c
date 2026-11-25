@@ -61,6 +61,7 @@
 #include "ui/power_cal_modal.h"  // power_cal_list_watts - the SAME calibrated
                                  // ladder the Tab5 slider walks (out_power)
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
+#include "ft8_hop.h"          // FT8/FT4 band hopping: band names, state
 #include "adif/adif_check.h"  // #263 "check my log" - completeness pass
 #include "util/dma_owners.h"
 #include "util/task_stacks.h"   // on-demand stack headroom (#329)
@@ -265,6 +266,22 @@ static void add_ft8_tx_status(cJSON *root)
     // not just set it - a toggle that cannot read the current value is a second
     // source of truth waiting to drift from the Tab5's own button.
     cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
+
+    /* FT8/FT4 band hopping - the browser's band line, same source as the
+     * Tab5's. Present only while two or more of the radio's bands are ticked. */
+    {
+        ft8_hop_state_t hs;
+        ft8_hop_get_state(&hs);
+        if (hs.hopping) {
+            cJSON *h = cJSON_AddObjectToObject(f, "hop");
+            if (h) {
+                cJSON_AddStringToObject(h, "bands", hs.bands);
+                if (hs.blocked) cJSON_AddStringToObject(h, "blocked", hs.blocked);
+                if (hs.next_band[0]) cJSON_AddStringToObject(h, "next", hs.next_band);
+                cJSON_AddNumberToObject(h, "secs", hs.secs_to_hop);
+            }
+        }
+    }
 
     /* ⛔ THE SAME WARNING THE TAB5 TOASTS (Randy N4OPI, 2026-10-27). The
      * "no decodes for over N min" notice reached the glass only, so a
@@ -7497,6 +7514,17 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         }
         cJSON_AddStringToObject(root, "wspr_hop_bands", hops);
     }
+    /* FT8/FT4 band hopping: band names, same rule as wspr_hop_bands above. */
+    {
+        char hops[64]; int hn = 0; hops[0] = 0;
+        for (int i = 0; i < ft8_hop_band_count(); i++) {
+            if (!(c.ft8_hop_mask & (1u << i))) continue;
+            hn += snprintf(hops + hn, sizeof(hops) - hn, "%s%s", hn ? "," : "",
+                           ft8_hop_band_name(i));
+            if (hn >= (int)sizeof(hops)) break;
+        }
+        cJSON_AddStringToObject(root, "ft8_hop_bands", hops);
+    }
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -8056,6 +8084,25 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         }
         settings_set_wspr_hop_mask(mask);
         settings_set_wspr_hop_en(__builtin_popcount(mask) > 1);
+    }
+    /* "20,40,15" -> FT8 hop mask. Same parsing and the same radio check as
+       wspr_hop_bands: a band the radio does not have is ignored, not set. */
+    if (cJSON_IsString(it = cJSON_GetObjectItem(root, "ft8_hop_bands"))) {
+        const char *txt = cJSON_GetStringValue(it);
+        uint16_t mask = 0;
+        char tmp[96];
+        snprintf(tmp, sizeof(tmp), "%s", txt ? txt : "");
+        for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
+            while (*tok == ' ') tok++;
+            char *e = tok + strlen(tok);
+            while (e > tok && (e[-1] == ' ' || e[-1] == 'm' || e[-1] == 'M')) *--e = 0;
+            for (int i = 0; i < ft8_hop_band_count(); i++)
+                if (strcasecmp(tok, ft8_hop_band_name(i)) == 0) {
+                    if (cat_radio_has_band(ft8_hop_band_name(i))) mask |= (uint16_t)(1u << i);
+                    break;
+                }
+        }
+        settings_set_ft8_hop_mask(mask);
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
@@ -9164,7 +9211,12 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     if (!snap) return httpd_resp_send_500(req);
 
     int n = 0;
-    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    /* ALL bands: after a band hop the previous band's rows are kept until they
+     * age out, and the browser shows them under a separator like the Tab5.
+     * Each row says its band ("band") and whether it is the radio's band now
+     * ("ob" = other band). A reply to an "ob" row is refused by the reply path,
+     * which reads ft8_screen_get_all() - current band only. */
+    ft8_screen_get_all_bands(snap, FT8_CALL_TABLE_SIZE, &n);
 
     qmx_settings_t qs;
     settings_load_all(&qs);
@@ -9230,9 +9282,16 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     ft8_qso_get_working_target(working, sizeof(working));
     // Hoisted: the worked-before test is band-scoped, and the band comes from the
     // dial - not from r->last_freq, which is the station's AUDIO tone.
-    const uint32_t dial_hz = cat_get_frequency();
+    const uint32_t cur_dial_hz = cat_get_frequency();
+    /* Two passes over the sorted rows: the current band first, then every
+     * other band - the order the separator needs. */
+    for (int pass = 0; pass < 2; pass++)
     for (int i = 0; i < n; i++) {
         const ft8_call_t *r = &snap[i];
+        const bool on_cur = ft8_screen_row_on_current_band(r);
+        if (on_cur != (pass == 0)) continue;
+        /* The band the row was HEARD on, for worked-before. */
+        const uint32_t dial_hz = r->dial_hz ? r->dial_hz : cur_dial_hz;
         bool is_partner = working[0] && strcasecmp(r->call, working) == 0;
         /* And anyone talking to US - the same exemption the Tab5 list makes,
          * swept here at the same time because the two lists filter separately
@@ -9300,6 +9359,11 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         // worked-before filter uses, so the browser cannot disagree with it.
         cJSON_AddBoolToObject(o, "wk",  dial_hz ? adif_log_contains_call_on_band(r->call, dial_hz) : false);
         cJSON_AddBoolToObject(o, "pin", pin[0] && strcmp(r->call, pin) == 0);
+        {
+            const char *bn = adif_log_band_for_freq(dial_hz);
+            if (bn[0]) cJSON_AddStringToObject(o, "band", bn);
+            if (!on_cur) cJSON_AddBoolToObject(o, "ob", true);
+        }
         cJSON_AddItemToArray(arr, o);
     }
     heap_caps_free(snap);

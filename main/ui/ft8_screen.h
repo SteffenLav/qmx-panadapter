@@ -31,6 +31,10 @@ typedef struct {
     int16_t  last_dt_ms;   // this station's decoded slot-timing offset (ms), RAW
                            // (includes our RX audio latency; the DT-follow logic
                            // in ft8_qso subtracts the band consensus to cancel it)
+    uint32_t dial_hz;      // dial of the slot this row was last heard on (the
+                           // per-slot latch, ft8_hop.h) - 0 = not known. Band
+                           // hopping keeps rows across a hop; this says which
+                           // band each one belongs to.
 } ft8_call_t;
 
 void ft8_screen_init(void);
@@ -44,7 +48,18 @@ void ft8_screen_record_decode(const char *text,
 // Snapshot occupied rows into out[0..max). count_out receives
 // number written. Takes mutex internally. Insertion order;
 // caller may sort.
+//
+// ⛔ CURRENT BAND ONLY. After a band hop the table keeps the previous band's
+// rows until they age out (they are shown under a separator), but a row heard
+// on another band can never be answered, picked by auto-answer, counted as
+// tone occupancy or replied to from the browser. Every consumer that ACTS on
+// a row reads this; only a list that DISPLAYS rows may read _all_bands below.
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
+
+// Every band's rows, for display only (the Tab5 list and /api/decodes).
+// Same aging as get_all(). Use ft8_screen_row_on_current_band() to split them.
+void ft8_screen_get_all_bands(ft8_call_t *out, int max, int *count_out);
+bool ft8_screen_row_on_current_band(const ft8_call_t *row);
 
 // Look one station up by callsign (case-insensitive), so a caller needing what
 // that station last SENT does not have to snapshot the whole ~11 KB table.

@@ -221,6 +221,7 @@ char *config_io_export(size_t *out_len)
     APP("wspr_rx_cycles     = %u\n", (unsigned)c.wspr_rx_cycles);
     APP("wspr_band_hop      = %s\n", yn(c.wspr_hop_en));
     APP("wspr_hop_mask      = %u\n", (unsigned)c.wspr_hop_mask);
+    APP("ft8_hop_mask       = %u\n", (unsigned)c.ft8_hop_mask);
     APP("wspr_publish       = %s\n", yn(c.wspr_net_en));
 
     // LoTW callsign cert + private key, single-line base64 DER (full-backup
@@ -636,6 +637,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wspr_rx_cycles"))    settings_set_wspr_rx_cycles((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wspr_band_hop"))     settings_set_wspr_hop_en(to_bool(val));
             else if (!strcasecmp(key, "wspr_hop_mask"))     settings_set_wspr_hop_mask((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "ft8_hop_mask"))      settings_set_ft8_hop_mask((uint16_t)atoi(val));
             else if (!strcasecmp(key, "wspr_publish"))      settings_set_wspr_net_en(to_bool(val));
             else break;   // unknown key: ignore, don't count
             applied++;

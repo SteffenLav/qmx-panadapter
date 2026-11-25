@@ -51,6 +51,8 @@
 #include "adif/adif_log.h"
 #include "adif_view_modal.h"
 #include "net/webserver_ws.h"  // webserver_ws_set_paused() - pause spectrum stream off Panadapter
+#include "band_hop_picker.h"   // FT8/FT4 band hopping picker, shared with WSPR
+#include "ft8_hop.h"
 
 static const char *TAG = "ft8_view";
 
@@ -208,7 +210,14 @@ typedef struct {
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
     int8_t  prev_slot_parity;    /* -1=unset 0=odd 1=even */
+    /* Band hopping: what this row IS. A separator and an other-band row are
+     * shown, never acted on - row_activate_ex() checks this first. */
+    int8_t  kind;                /* ROW_STATION / ROW_SEPARATOR / ROW_OTHER_BAND */
+    char    band[6];             /* "20m" - the band an other-band row was heard on */
 } row_widgets_t;
+#define ROW_STATION     0
+#define ROW_SEPARATOR   1
+#define ROW_OTHER_BAND  2
 
 static lv_obj_t *s_container   = NULL;
 static lv_obj_t *s_left_pane   = NULL;
@@ -217,6 +226,8 @@ static lv_obj_t *s_right_pane  = NULL;
 static lv_obj_t *s_lbl_mode     = NULL;
 static lv_obj_t *s_btn_freq     = NULL;  // "Preset: XX.XXX MHz" button (visual only)
 static lv_obj_t *s_btn_freq_hit = NULL;  // screen-level click target, see ft8_screen_view_init
+static lv_obj_t *s_lbl_hop_line = NULL;  // 2nd line in s_btn_freq while band hopping
+static void preset_button_paint(uint32_t hz);   /* the one writer of s_btn_freq */
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
 
@@ -640,6 +651,7 @@ static bool row_is_cq(int idx)
     if (!s_rows || idx < 0 || idx >= MAX_ROWS) return false;
     row_widgets_t *r = &s_rows[idx];
     if (!r->row || !r->l_msg || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return false;
+    if (r->kind != ROW_STATION) return false;   /* separator / other band: no pounce */
     const char *msg = lv_label_get_text(r->l_msg);
     return msg && strncmp(msg, "CQ ", 3) == 0;
 }
@@ -683,6 +695,16 @@ static void row_activate_ex(int idx, bool direct)
     if (idx < 0 || idx >= MAX_ROWS) return;
     row_widgets_t *r = &s_rows[idx];
     if (!r->row || !r->l_call || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return;
+
+    /* Band hopping: a separator is not a station, and a row heard on the band
+     * before a hop cannot be answered from this band. Said, not silent. */
+    if (r->kind == ROW_SEPARATOR) return;
+    if (r->kind == ROW_OTHER_BAND) {
+        char t[64];
+        snprintf(t, sizeof t, "Heard on %s - not on this band", r->band[0] ? r->band : "another band");
+        ui_toast(t);
+        return;
+    }
 
     const char *call = lv_label_get_text(r->l_call);
     if (!call || !call[0]) return;
@@ -1032,11 +1054,62 @@ static void build_row(int i)
     r->prev_slot_parity  = -1;
 }
 
+/* "20m" for a dial, "" outside every band. adif's table says "20M". */
+static void band_label(uint32_t hz, char *out, size_t n)
+{
+    if (!out || !n) return;
+    const char *b = hz ? adif_log_band_for_freq(hz) : "";
+    snprintf(out, n, "%s", b);
+    size_t l = strlen(out);
+    if (l && out[l - 1] == 'M') out[l - 1] = 'm';
+}
+
+/* A separator row: one line of text across the message column, every other
+ * cell blank. prev_slot_parity = -2 marks the row so update_row() restores
+ * its colours when it becomes a station again. */
+static void separator_row(int i, const char *text)
+{
+    if (!s_rows) return;
+    row_widgets_t *r = &s_rows[i];
+    if (!r->row) return;
+    r->kind = ROW_SEPARATOR;
+    r->band[0] = '\0';
+    if (r->prev_slot_parity != -2) {
+        r->prev_slot_parity = -2;
+        lv_label_set_text(r->l_slot, "");
+        lv_obj_set_style_bg_opa(r->l_call, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(r->l_msg,  LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(r->l_msg, lv_color_hex(0x9A9A9A), 0);
+        r->prev_color = -1;
+    }
+    set_text_if_changed(r->l_call,    r->prev_call,    sizeof(r->prev_call),    "");
+    set_text_if_changed(r->l_msg,     r->prev_msg,     sizeof(r->prev_msg),     text);
+    set_text_if_changed(r->l_country, r->prev_country, sizeof(r->prev_country), "");
+    set_text_if_changed(r->l_snr,     r->prev_snr,     sizeof(r->prev_snr),     "");
+    set_text_if_changed(r->l_dt,      r->prev_dt,      sizeof(r->prev_dt),      "");
+    set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      "");
+    set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      "");
+    set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     "");
+    if (lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN))
+        lv_obj_clear_flag(r->row, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void update_row(int i, const ft8_call_t *src)
 {
     if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
+
+    /* Band hopping keeps the previous band's rows until they age out. They
+     * are drawn dim and a tap on one starts nothing (row_activate_ex). */
+    const bool other_band = !ft8_screen_row_on_current_band(src);
+    r->kind = other_band ? ROW_OTHER_BAND : ROW_STATION;
+    r->band[0] = '\0';
+    if (other_band) band_label(src->dial_hz, r->band, sizeof r->band);
+    if (r->prev_slot_parity == -2) {         /* was a separator: restore its cells */
+        r->prev_slot_parity = -1;
+        r->prev_color = -1;
+    }
 
     /* Width, not truncation - see the layout note at the top of this file.
      * country_display() also falls back to Uwe's geo_coords table for the ~130
@@ -1168,8 +1241,11 @@ static void update_row(int i, const ft8_call_t *src)
              * button would look like it had done nothing - the same way the
              * Pause button first read before it lit up. */
             col = 5;
-        } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
-            col = 3; /* worked before on THIS band -> dim grey */
+        } else if (other_band) {
+            col = 6; /* heard on the band before a hop -> darker grey, never acted on */
+        } else if (adif_log_contains_call_on_band(src->call,
+                       src->dial_hz ? src->dial_hz : cat_get_frequency())) {
+            col = 3; /* worked before on the band it was HEARD on -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
             col = 1; /* CQ -> green */
         }
@@ -1186,6 +1262,7 @@ static void update_row(int i, const ft8_call_t *src)
             lv_color_t c = (col == 4) ? lv_color_black()            /* amber fill needs dark text */
                          : (col == 2) ? lv_color_white()            /* red fill needs light text */
                          : (col == 3) ? lv_color_hex(0x808080)      /* worked: dim grey */
+                         : (col == 6) ? lv_color_hex(0x5A5A5A)      /* other band: darker grey */
                          : (col == 5) ? lv_color_hex(0x9070C8)      /* grey-listed: violet */
                          : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
                          :              lv_color_white();
@@ -1229,7 +1306,10 @@ static void rebuild_list(void)
     ft8_call_t *snap = table_snapshot();
     if (!snap) return;              // retried on the next refresh tick
     int n = 0;
-    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    /* ALL bands: band hopping keeps the previous band's rows until they age
+     * out. They are drawn below a separator and never acted on - every path
+     * that acts on a row reads ft8_screen_get_all(), current band only. */
+    ft8_screen_get_all_bands(snap, FT8_CALL_TABLE_SIZE, &n);
     /* Who to hold at the top - read once, here, for the reasons at s_pin_call. */
     char prev_pin[sizeof(s_pin_call)];
     snprintf(prev_pin, sizeof(prev_pin), "%s", s_pin_call);
@@ -1278,10 +1358,9 @@ static void rebuild_list(void)
                    || qs.ft8_filters.excl_plain_cq;
 
     // Hide worked-before stations outright, when the operator asks for it
-    // (Randy N4OPI). The dial is read ONCE for the whole repaint, not per
-    // row: every row in one repaint belongs to the same dial by construction,
-    // and the row grey below reads it per row only because it was already
-    // written that way.
+    // (Randy N4OPI). Per row, by the band the row was HEARD on (dial_hz):
+    // since band hopping keeps rows across a hop, one repaint can hold two
+    // bands. hide_wb_freq is the fallback for a row with no dial.
     bool     hide_wb      = qs.ft8_filters.hide_worked_before;
     uint32_t hide_wb_freq = hide_wb ? cat_get_frequency() : 0;
 
@@ -1312,7 +1391,9 @@ static void rebuild_list(void)
     }
 
     int row = 0;
-    for (int i = 0; i < n && row < MAX_ROWS; i++) {
+    /* Which rows the display filters keep; drawn below, band by band. */
+    bool keep[FT8_CALL_TABLE_SIZE] = { false };
+    for (int i = 0; i < n; i++) {
         // THE STATION WE ARE WORKING IS NEVER HIDDEN BY A DISPLAY FILTER (#176).
         // Roy KI0ER, on "Show only CQ callers": "if there is an active QSO
         // occurring with my callsign, the message display should also show all
@@ -1351,7 +1432,8 @@ static void rebuild_list(void)
              * hidden row and a dim row can never disagree about who counts as
              * worked - and the grey stays unconditional, which is what every
              * operator who leaves this off still sees. */
-            if (hide_wb && adif_log_contains_call_on_band(snap[i].call, hide_wb_freq)) continue;
+            if (hide_wb && adif_log_contains_call_on_band(snap[i].call,
+                               snap[i].dial_hz ? snap[i].dial_hz : hide_wb_freq)) continue;
             if (cq_hide_our_parity) {
                 // Same nearest-slot parity rounding as the per-row E/O indicator.
                 int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
@@ -1360,7 +1442,43 @@ static void rebuild_list(void)
             if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
             if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         }
-        update_row(row++, &snap[i]);
+        keep[i] = true;
+    }
+
+    /* The current band first, in the shared order. */
+    bool cur[FT8_CALL_TABLE_SIZE];
+    for (int i = 0; i < n; i++) cur[i] = ft8_screen_row_on_current_band(&snap[i]);
+    for (int i = 0; i < n && row < MAX_ROWS; i++)
+        if (keep[i] && cur[i]) update_row(row++, &snap[i]);
+
+    /* Then each other band under its own separator: "20m - before the hop -
+     * 14:20 UTC", the time being the newest decode in that group. Normally
+     * one group - rows age out (90 s) inside one 2 min dwell. */
+    bool done[FT8_CALL_TABLE_SIZE] = { false };
+    for (int i = 0; i < n && row < MAX_ROWS; i++) {
+        if (!keep[i] || cur[i] || done[i]) continue;
+        char b[6], bj[6];
+        band_label(snap[i].dial_hz, b, sizeof b);
+        int64_t newest = 0;
+        for (int j = i; j < n; j++) {
+            if (!keep[j] || cur[j] || done[j]) continue;
+            band_label(snap[j].dial_hz, bj, sizeof bj);
+            if (strcmp(b, bj) == 0 && snap[j].last_utc > newest) newest = snap[j].last_utc;
+        }
+        char sep[64];
+        time_t t = (time_t)newest;
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        snprintf(sep, sizeof sep, "%s - before the hop - %02d:%02d UTC",
+                 b[0] ? b : "?", tm.tm_hour, tm.tm_min);
+        separator_row(row++, sep);
+        for (int j = i; j < n && row < MAX_ROWS; j++) {
+            if (!keep[j] || cur[j] || done[j]) continue;
+            band_label(snap[j].dial_hz, bj, sizeof bj);
+            if (strcmp(b, bj) != 0) continue;
+            done[j] = true;
+            update_row(row++, &snap[j]);
+        }
     }
     for (int i = row; i < MAX_ROWS; i++) {
         hide_row(i);
@@ -2396,21 +2514,14 @@ static void t_clock_cb(lv_timer_t *t)
         // The bar's value AND colour are owned by t_slotbar_cb (fast tick) so
         // it glides smoothly and can show TX-red without this 1 Hz tick fighting it.
     }
-    if (s_btn_freq) {
-        uint32_t hz = cat_get_frequency();
-        char b[40];
-        /* #302: the SAME grouped form as the top bar and the preset list.
-           This used to print "14.074 MHz", where the dot is a decimal point
-           and so is correct in either convention - which meant it did not
-           change when the operator picked the other one, and sat next to a
-           top bar that had. Consistency across the screen is the point of
-           the setting, so it follows the style like everything else. */
-        char fs[20];
-        format_freq_hz((uint32_t)hz, g_freq_style, fs, sizeof(fs));
-        snprintf(b, sizeof(b), "Preset: %s", fs);
-        lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
-        if (lbl) lv_label_set_text(lbl, b);
-    }
+    /* #302: the SAME grouped form as the top bar and the preset list.
+       This used to print "14.074 MHz", where the dot is a decimal point
+       and so is correct in either convention - which meant it did not
+       change when the operator picked the other one, and sat next to a
+       top bar that had. Consistency across the screen is the point of
+       the setting, so it follows the style like everything else.
+       Every 1 Hz, which also counts down the band-hop line. */
+    preset_button_paint(cat_get_frequency());
 
     // ADIF-log/Pileup dual-purpose button: swap label + colour to make an
     // active pileup impossible to miss. adif_or_pileup_btn_cb() re-checks the
@@ -3275,14 +3386,70 @@ static void adif_long_press_cb(lv_event_t *e)
    button lag behind until something else happens. */
 void ft8_screen_view_refresh_preset(void)
 {
-    if (!s_btn_freq) return;
-    uint32_t hz = cat_get_frequency();
-    if (!hz) return;
-    char fs[20], b[40];
-    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
-    snprintf(b, sizeof(b), "Preset: %s", fs);
+    preset_button_paint(cat_get_frequency());
+}
+
+/* THE ONE WRITER of the Preset button. There were three copies of the
+ * "Preset: %s" line (the 1 Hz tick, this refresh, apply_freq_preset); band
+ * hopping changes what the button says, and three copies would have shown
+ * two different buttons depending on which wrote last.
+ *
+ * Not hopping: "Preset: 14.074.000", one line, as before.
+ * Hopping (two or more of the radio's bands ticked): the band name replaces
+ * "Preset:", like the WSPR page's dial button, and a second, smaller line
+ * says where it goes next or why it is not hopping now. */
+static void preset_button_paint(uint32_t hz)
+{
+    if (!s_btn_freq || !hz) return;
     lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
-    if (lbl) lv_label_set_text(lbl, b);
+    if (!lbl) return;
+
+    ft8_hop_state_t hs;
+    ft8_hop_get_state(&hs);
+
+    char fs[20], b[48];
+    format_freq_hz(hz, g_freq_style, fs, sizeof(fs));
+
+    static int s_painted_hop = -1;   /* layout last applied: -1 unset, 0 one line, 1 two */
+    const int want = hs.hopping ? 1 : 0;
+    if (want != s_painted_hop) {
+        s_painted_hop = want;
+        lv_obj_set_style_pad_ver(s_btn_freq, want ? 3 : 8, 0);
+        lv_obj_set_style_text_font(lbl, want ? &lv_font_montserrat_24 : &lv_font_montserrat_28, 0);
+        if (want) lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 0);
+        else      lv_obj_center(lbl);
+        if (s_lbl_hop_line) {
+            if (want) lv_obj_clear_flag(s_lbl_hop_line, LV_OBJ_FLAG_HIDDEN);
+            else      lv_obj_add_flag(s_lbl_hop_line, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (!hs.hopping) {
+        snprintf(b, sizeof(b), "Preset: %s", fs);
+        lv_label_set_text(lbl, b);
+        return;
+    }
+    char bn[6];
+    band_label(hz, bn, sizeof bn);
+    snprintf(b, sizeof(b), "%s  %s", bn[0] ? bn : "--", fs);
+    lv_label_set_text(lbl, b);
+
+    if (!s_lbl_hop_line) return;
+    char h[64];
+    lv_color_t c;
+    if (hs.blocked) {
+        snprintf(h, sizeof h, "Hop paused: %s", hs.blocked);
+        c = lv_color_hex(0xFFA040);                 /* amber: the TX-armed colour family */
+    } else if (hs.next_band[0] && hs.secs_to_hop >= 0) {
+        snprintf(h, sizeof h, "Hop: next %sm in %d:%02d", hs.next_band,
+                 hs.secs_to_hop / 60, hs.secs_to_hop % 60);
+        c = lv_color_hex(0xA0E0A0);                 /* the drawer's section green */
+    } else {
+        snprintf(h, sizeof h, "Hop: %s", hs.bands);
+        c = lv_color_hex(0xA0E0A0);
+    }
+    lv_label_set_text(s_lbl_hop_line, h);
+    lv_obj_set_style_text_color(s_lbl_hop_line, c, 0);
 }
 
 void ft8_screen_view_refresh_cq_label(void)
@@ -3793,14 +3960,7 @@ static void apply_freq_preset(uint32_t freq_hz, ft8_op_mode_t mode, const char *
 
     // Optimistically update both labels without waiting for the FA poll.
     ui_update_frequency(freq_hz);               // top-bar "Freq:" label
-    if (s_btn_freq) {
-        char b[40];
-        char fs[20];
-        format_freq_hz((uint32_t)freq_hz, g_freq_style, fs, sizeof(fs));
-        snprintf(b, sizeof(b), "Preset: %s", fs);   /* #302 - see above */
-        lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
-        if (lbl) lv_label_set_text(lbl, b);
-    }
+    preset_button_paint(freq_hz);               /* #302 - see preset_button_paint */
 }
 
 static void ft8_freq_preset_cb(lv_event_t *e)
@@ -5105,6 +5265,19 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(freq_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(freq_lbl);
 
+    /* Band hopping's second line (child 1 - child 0 stays the main label,
+     * which three older lookups address by index). Hidden until hopping is
+     * on; preset_button_paint() owns it. 272 px = the button's content
+     * width; a long reason is cut with "..." rather than wrapping. */
+    s_lbl_hop_line = lv_label_create(s_btn_freq);
+    lv_label_set_text(s_lbl_hop_line, "");
+    lv_obj_set_width(s_lbl_hop_line, 272);
+    lv_label_set_long_mode(s_lbl_hop_line, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_lbl_hop_line, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_lbl_hop_line, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_lbl_hop_line, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_add_flag(s_lbl_hop_line, LV_OBJ_FLAG_HIDDEN);
+
     // Screen-level hit target, sized/positioned to exactly cover s_btn_freq's
     // own screen rect: s_left_pane sits at screen (0, MID_Y) with pad_top=8/
     // pad_left=16, s_btn_freq is offset (0,55) within that padded content
@@ -5664,4 +5837,41 @@ bool ft8_screen_view_is_active(void)
 void ft8_screen_view_request_refresh(void)
 {
     s_refresh_pending = true;
+}
+
+/* ---- FT8/FT4 band hopping: the picker ------------------------------------
+ * The window is ui/band_hop_picker.c, shared with WSPR. Offered: the radio's
+ * own bands, read when the window opens (CAT answers ~17 s after boot). The
+ * mask is shared by FT8 and FT4; FT4 has no 160 m or 60 m dial, so it skips
+ * those (ft8_hop.c) - the hint says so rather than offering two lists. */
+#define FT8_HOP_HINT \
+    "Pick at least two bands. The radio moves to the next\n" \
+    "ticked band on the even minute - two minutes on each,\n" \
+    "in the order below, then wraps.\n" \
+    "\n" \
+    "It hops only while the page is idle: never during a QSO,\n" \
+    "with TX armed, auto-answer or Hound on. FT4 skips 160 and 60."
+
+static void ft8_hop_mask_changed(uint16_t mask)
+{
+    settings_set_ft8_hop_mask(mask);
+    ft8_screen_view_refresh_preset();   /* the band line says what hops */
+}
+
+void ft8_screen_view_open_hop_picker(void)
+{
+    band_hop_choice_t ch[16];
+    int n = 0;
+    for (int i = 0; i < ft8_hop_band_count() && n < 16; i++) {
+        const char *name = ft8_hop_band_name(i);
+        if (!cat_radio_has_band(name)) continue;
+        ch[n].name = name;
+        ch[n].bit  = (uint8_t)i;
+        n++;
+    }
+    qmx_settings_t hs;
+    settings_load_all(&hs);
+    band_hop_picker_open("Band hop (FT8/FT4)", FT8_HOP_HINT,
+                         ch, n, hs.ft8_hop_mask, ft8_hop_mask_changed,
+                         ft8_screen_view_refresh_preset);
 }
