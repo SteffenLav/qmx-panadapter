@@ -41,6 +41,36 @@ static EventGroupHandle_t s_events = NULL;
 static int s_retry_count = 0;
 #define MAX_FAST_RETRIES 5
 
+/* ⭐ SILENT-CONNECT WATCHDOG (operator, 2026-11-25).
+ *
+ * bench1, boot of 7005d57a: "STA started, connecting to 'BV50'" and
+ * esp_wifi_remote_connect at 13.8 s, then NO WiFi event of any kind for
+ * minutes - no CONNECTED, no DISCONNECTED, no reason code. The retry chain
+ * lives in the DISCONNECTED handler, so with no event it never runs and the
+ * unit stays off the network until a reboot. The same signature is in 7 of
+ * 1343 boots of the bench1 capture, back to v1.13.0, each running 1-5 min,
+ * so it is old and rare, not new. Why the C6 swallows the connect is NOT
+ * known.
+ *
+ * The hosted-link watchdog in wifi_task does not see it: it watches only
+ * while connected.
+ *
+ * So: any WiFi event stamps s_last_wifi_evt_us. If the STA is started, not
+ * connected, not turned off and not scanning, and nothing has been heard
+ * for WIFI_SILENT_KICK_US, wifi_task re-issues disconnect + connect - the
+ * same pair reconnect_deferred_task() uses. At most WIFI_SILENT_MAX_KICKS
+ * per silent spell, then one toast asking for a restart (an in-place C6
+ * restart is not available - see hosted_relink()). Any event ends the
+ * spell and resets the count.
+ *
+ * ⚠ NOT YET SEEN TO RESCUE THE FAULT. Written from one capture; whether a
+ * second connect gets an answer when the first did not is the open question,
+ * and the log lines below are written to answer it. */
+static volatile int64_t s_last_wifi_evt_us = 0;
+static int              s_silent_kicks     = 0;
+#define WIFI_SILENT_KICK_US   (60LL * 1000 * 1000)
+#define WIFI_SILENT_MAX_KICKS 3
+
 // STA netif handle + whether esp_wifi_start() has been called this boot.
 static esp_netif_t *s_sta_netif = NULL;
 static bool s_wifi_started = false;
@@ -658,6 +688,13 @@ static void pref_scan_if_adrift(void)
 static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
 {
+    /* Any event proves the C6 is talking - see the silent-connect watchdog. */
+    s_last_wifi_evt_us = esp_timer_get_time();
+    if (s_silent_kicks) {
+        ESP_LOGI(TAG, "silent-connect watchdog: WiFi event %ld arrived after %d re-issued connect(s)",
+                 (long)id, s_silent_kicks);
+        s_silent_kicks = 0;
+    }
     if (id == WIFI_EVENT_STA_START) {
         // ⛔ POWER SAVE OFF. This device is a SERVER, and IDF's default
         // (WIFI_PS_MIN_MODEM) assumes the opposite: the radio sleeps between
@@ -1243,6 +1280,32 @@ static void wifi_task(void *arg)
          * while the link is up: while it is down the disconnect handler's own
          * roam path is already scanning, and two scans would fight. */
         if (b & BIT_CONNECTED) pref_scan_if_adrift();
+
+        /* Silent-connect watchdog - see s_last_wifi_evt_us. */
+        if (s_wifi_started && s_ssid[0] && !(b & BIT_CONNECTED) &&
+            !s_wifi_user_disabled && !s_scan_hold && s_last_wifi_evt_us &&
+            esp_timer_get_time() - s_last_wifi_evt_us >= WIFI_SILENT_KICK_US) {
+            const int silent_s = (int)((esp_timer_get_time() - s_last_wifi_evt_us) / 1000000);
+            if (s_silent_kicks < WIFI_SILENT_MAX_KICKS) {
+                s_silent_kicks++;
+                esp_err_t ed = esp_wifi_disconnect();
+                esp_err_t ec = esp_wifi_connect();
+                ESP_LOGW(TAG, "silent-connect watchdog: no WiFi event for %d s while not "
+                              "connected - re-issuing connect %d/%d (disconnect %s, connect %s)",
+                         silent_s, s_silent_kicks, WIFI_SILENT_MAX_KICKS,
+                         esp_err_to_name(ed), esp_err_to_name(ec));
+                /* Restart the silence clock, so the next kick is a full
+                 * WIFI_SILENT_KICK_US after this one, not 30 s later. */
+                s_last_wifi_evt_us = esp_timer_get_time();
+            } else if (s_silent_kicks == WIFI_SILENT_MAX_KICKS) {
+                s_silent_kicks++;   /* say it once per spell */
+                ESP_LOGE(TAG, "silent-connect watchdog: %d re-issued connects got no "
+                              "answer from the WiFi co-processor - a restart is needed",
+                         WIFI_SILENT_MAX_KICKS);
+                ui_toast_ms("WiFi is not answering. Restart the Tab5 to bring it back - "
+                            "your QMX will need a power cycle afterwards.", 15000);
+            }
+        }
 
         /* ⭐ HOSTED-LINK WATCHDOG - the C6 can stop answering and never come
          * back, and until now only a full reboot fixed it.
