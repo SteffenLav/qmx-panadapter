@@ -325,10 +325,10 @@ static void watchdog_task(void *arg)
         // wait before the loop - this is the standing MQTT client task
         // (esp-mqtt's own xTaskCreate() has no PSRAM option), so it is
         // exactly the feed RX audio needs the room back from (2026-09-20).
-        // rx_audio_is_enabled(), not net_quiet: that flag is OTA-only again,
-        // see net_quiet.h's 2026-09-20 note - this is a direct check because
-        // this feed's standing task is heavy enough to matter on its own.
-        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_any_listener();
+        // rx_audio_holds_off_feeds(), not net_quiet: that flag is OTA-only
+        // again, see net_quiet.h's 2026-09-20 note - this is a direct check
+        // because this feed's standing task is heavy enough to matter on its own.
+        bool want = settings_get_spotmap_en() && !net_quiet_active() && !rx_audio_holds_off_feeds();
 
         if (want && !started) {
             if (!staggered) { vTaskDelay(pdMS_TO_TICKS(8000)); staggered = true; }

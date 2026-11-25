@@ -25,7 +25,7 @@
 // POTA/SOTA and PSK Reporter's TX reports are periodic/batched with no
 // standing cost between fetches, and the operator asked to keep those
 // running once the Resource Management panel made the blanket rule
-// visible. Those feeds now check rx_audio_is_enabled() directly instead
+// visible. Those feeds now check rx_audio_holds_off_feeds() directly instead
 // (see audio/rx_audio.h) - this file went back to OTA-only, a single
 // holder, bare bool in spirit even though the refcount plumbing below is
 // left in place (harmless, and cheap insurance against a future second

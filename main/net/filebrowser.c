@@ -152,7 +152,7 @@ static void rm_rf(const char *path)
  * discipline, see their own comments) - RX audio was the one thing in that
  * bracket nobody had protected. A transfer long enough to matter can stall
  * the audio pipeline the same way the diag mirror does (see
- * sd_archive.c's rx_audio_any_listener() gate on that path); muting instead
+ * sd_archive.c's rx_audio_holds_off_feeds() gate on that path); muting instead
  * of pausing capture is enough, because the gap only needs to be inaudible,
  * not avoided.
  *
@@ -164,7 +164,12 @@ static void rm_rf(const char *path)
  * operator who had already muted by hand keeps that choice. */
 static bool fb_audio_pause_begin(void)
 {
-    if (!rx_audio_is_enabled() || rx_audio_is_muted()) return false;
+    /* rx_audio_holds_off_feeds() first: a host build that does not hold the
+     * feeds off has the headroom for SD access under audio too. On the Tab5
+     * it is rx_audio_any_listener(), which is always true when the speaker
+     * is enabled, so the Tab5 result is unchanged. rx_audio_is_enabled()
+     * stays: this mutes the SPEAKER, so it only applies when the speaker is on. */
+    if (!rx_audio_holds_off_feeds() || !rx_audio_is_enabled() || rx_audio_is_muted()) return false;
     rx_audio_set_muted(true);
     ui_toast("Pausing Tab5 audio for SD access");
     return true;

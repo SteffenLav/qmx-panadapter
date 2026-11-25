@@ -47,7 +47,7 @@
 
 #include "esp_log.h"
 #include "esp_attr.h"           // EXT_RAM_BSS_ATTR
-#include "audio/rx_audio.h"     // rx_audio_is_enabled() - the held-off banner
+#include "audio/rx_audio.h"     // rx_audio_holds_off_feeds() - the held-off banner
 #include "esp_heap_caps.h"      // the map cache's PSRAM buffer
 #include "esp_timer.h"          // the Exit button's press duration (logged)
 #include "esp_lcd_touch.h"      // raw multi-touch read for the MAP tab's pinch-zoom
@@ -2853,7 +2853,7 @@ static void refresh_timer_cb(lv_timer_t *t)
      * Resource Management modal), and a banner that only updated on entry
      * would be stale for anyone who left this screen open. */
     if (s_audio_warn) {
-        if (rx_audio_any_listener()) {
+        if (rx_audio_holds_off_feeds()) {
             lv_obj_clear_flag(s_audio_warn, LV_OBJ_FLAG_HIDDEN);
             /* ⛔ FOREGROUND IT EVERY TIME. It is created before the map
              * canvas and the tab panes, and LVGL draws siblings in creation

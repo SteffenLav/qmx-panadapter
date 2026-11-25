@@ -170,19 +170,28 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent)
     return cb;
 }
 
-// Only the rows with a standing task/connection are gated: SelfSpotter's
-// MQTT client, RBN and DX cluster's telnet sessions, PSK Reporter's "who's
-// hearing me" query (its own comment calls it "by far the largest periodic
-// allocation on the device"). POTA/SOTA and PSK Reporter's TX reports are
-// periodic/batched with nothing standing between fetches, and the operator
-// asked to keep those running - see rx_audio.h's 2026-09-20 note. Greyed +
-// un-clickable, not just informational: a checkbox the operator could tick
-// with no effect would be worse than one they can't reach.
+// Only the rows whose feed code really holds off under RX audio are gated:
+// SelfSpotter's MQTT client (pskr_self.c) and PSK Reporter's "who's hearing
+// me" query (psk_rx.c - its own comment calls it "by far the largest periodic
+// allocation on the device"). Both test rx_audio_holds_off_feeds(). POTA/SOTA
+// and PSK Reporter's TX reports are periodic/batched with nothing standing
+// between fetches, and the operator asked to keep those running - see
+// rx_audio.h's 2026-09-20 note. Greyed + un-clickable, not just informational:
+// a checkbox the operator could tick with no effect would be worse than one
+// they can't reach.
+//
+// RBN and DX cluster were gated here while they owned standing telnet sessions
+// (net/rbn.c, net/dxcluster.c), and both of those tested the listener flag.
+// 110dad07 (2026-11-06) moved them to spots.c's periodic spothole.app poll,
+// the same path SOTA uses, and that poll never checks audio. The rows stayed
+// gated, so the modal greyed two feeds that kept running. They are ungated to
+// show what the code does. If they must hold off again, the gate belongs in
+// spots.c first, and only then here.
 static const bool ROW_GATED[ROW_COUNT] = {
     [ROW_AUDIO]    = false,
     [ROW_SPOTMAP]  = true,
-    [ROW_RBN]      = true,
-    [ROW_CLUSTER]  = true,
+    [ROW_RBN]      = false,
+    [ROW_CLUSTER]  = false,
     [ROW_SPOTS]    = false,
     [ROW_PSKRX]    = true,
     [ROW_PSKTX]    = false,
@@ -191,7 +200,12 @@ static const bool ROW_GATED[ROW_COUNT] = {
 
 static void refresh_gating(void)
 {
-    bool audio_on = rx_audio_is_enabled();
+    /* Two different questions. audio_on is the SPEAKER chain (Binaural, the
+     * sliders and presets below shape it). feeds_held is whether the feed
+     * code is holding off right now, and must ask the same predicate the
+     * feeds ask, or the rows grey when nothing is held (or the reverse). */
+    bool audio_on   = rx_audio_is_enabled();
+    bool feeds_held = rx_audio_holds_off_feeds();
     bool any_gated_shown = false;
     /* Every row except RX Audio itself, which is the one doing the gating.
      * Deliberately NOT "from ROW_SPOTMAP": that only worked while SPOTMAP
@@ -200,7 +214,7 @@ static void refresh_gating(void)
         if (i == ROW_AUDIO) continue;
         if (!s_rows[i].cb || !ROW_GATED[i]) continue;
         any_gated_shown = true;
-        if (audio_on) {
+        if (feeds_held) {
             lv_obj_add_state(s_rows[i].cb, LV_STATE_DISABLED);
             if (s_rows[i].lbl) lv_obj_set_style_text_opa(s_rows[i].lbl, LV_OPA_50, 0);
         } else {
@@ -209,7 +223,7 @@ static void refresh_gating(void)
         }
     }
     if (s_gate_note) {
-        if (audio_on && any_gated_shown) lv_obj_clear_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
+        if (feeds_held && any_gated_shown) lv_obj_clear_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
         else                             lv_obj_add_flag(s_gate_note, LV_OBJ_FLAG_HIDDEN);
     }
 

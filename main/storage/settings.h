@@ -725,7 +725,7 @@ typedef struct {
     //
     // ⚠ RX AUDIO HOLDS IT OFF, which is what an operator actually sees.
     // resource_mgmt_modal.c's refresh_gating() greys and disables the Spot
-    // map, RBN, DX cluster and PSK-RX rows while rx_audio_is_enabled(), and
+    // map and PSK-RX rows while rx_audio_holds_off_feeds(), and
     // pskr_self.c:331 tears the MQTT session down on the same test. Gyula
     // HA3HZ reported it as "checking the Audio Setting causes these settings
     // to be cleared" - nothing is cleared, they are held off, and the modal

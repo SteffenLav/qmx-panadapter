@@ -81,11 +81,27 @@ bool rx_audio_restart_pending(void);
 // independent of it and of rx_audio_restart_pending(), because the use case is
 // a Tab5 sitting silent in another room. The chain runs for either consumer.
 // True when EITHER the speaker or a browser is listening. This, not
-// rx_audio_is_enabled(), is what the background spot feeds gate on: their
-// transfers pause the WebSocket that carries the browser's audio.
+// rx_audio_is_enabled(), is what the background spot feeds gate on (through
+// rx_audio_holds_off_feeds() below): their transfers pause the WebSocket that
+// carries the browser's audio.
 // ⛔ Enabling web audio MUTES the speaker - the operator's call, 2026-10-15:
 // "we do not need audio both places at once".
 bool     rx_audio_any_listener(void);
+
+/* Whether RX audio holds off the network/storage feeds (SelfSpotter's MQTT
+ * session, the PSK Reporter "who hears me" query, the SD diag-log drain, the
+ * file browser's speaker pause for SD access). Every hold-off site asks THIS,
+ * never rx_audio_any_listener() directly: that one still drives the audio path
+ * itself and must keep meaning "somebody is listening".
+ *
+ * RX_AUDIO_HOLDS_OFF_FEEDS = 1 (default): on the Tab5, internal RAM and core 0
+ * cannot serve RX audio and those feeds at the same time, so the feeds stop
+ * while anyone listens. A build for a host with spare RAM and CPU can define it
+ * to 0; the feeds then run alongside audio and this always returns false. */
+#ifndef RX_AUDIO_HOLDS_OFF_FEEDS
+#define RX_AUDIO_HOLDS_OFF_FEEDS 1
+#endif
+bool     rx_audio_holds_off_feeds(void);
 void     rx_audio_web_set_enabled(bool en);
 bool     rx_audio_web_is_enabled(void);
 // True while the panoramic (binaural) CW split is producing two different ears.

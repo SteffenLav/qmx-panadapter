@@ -2946,8 +2946,9 @@ void rx_audio_init(void)
     s_volume  = cfg.rx_audio_vol;
     rx_audio_apply_settings();   // gain ceiling, the three pan controls, binaural on/off
     // NOT net_quiet - that stays OTA-only (see net_quiet.h). Standing
-    // feeds that should hold off while RX audio is on (SelfSpotter, RBN,
-    // DX cluster, PSK Reporter RX) check rx_audio_is_enabled() directly
+    // feeds that should hold off while RX audio is on (SelfSpotter and
+    // PSK Reporter RX; RBN and DX cluster until 110dad07 moved them to a
+    // periodic poll) check rx_audio_holds_off_feeds() directly
     // instead, added 2026-09-20 - net_quiet was too blunt: it held off
     // POTA/SOTA and PSK Reporter TX too, which are periodic/batched, own no
     // standing task, and the operator specifically asked to keep running
@@ -3354,6 +3355,16 @@ bool rx_audio_is_enabled(void) { return s_enabled; }
  * pause the WebSocket for 300-716 ms EVERY ~31 SECONDS, which a web listener
  * hears as a break-up twice a minute. Same cost, same answer. */
 bool rx_audio_any_listener(void) { return s_enabled || s_web_en; }
+
+/* See rx_audio.h at RX_AUDIO_HOLDS_OFF_FEEDS for why this is separate. */
+bool rx_audio_holds_off_feeds(void)
+{
+#if RX_AUDIO_HOLDS_OFF_FEEDS
+    return rx_audio_any_listener();
+#else
+    return false;
+#endif
+}
 
 /* On, but the codec was never opened for this session - see rx_audio.h. */
 bool rx_audio_restart_pending(void) { return s_enabled && !s_codec_ready; }

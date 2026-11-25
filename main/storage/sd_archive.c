@@ -36,7 +36,7 @@
 // (it takes sd_archive_lock() for uploads); both live in the `main` component.
 #include "webserver_ws.h"   // webserver_ws_set_paused / _is_paused
 #include "rtty_log.h"         // R030 contest dupes from the archive
-#include "audio/rx_audio.h"  // rx_audio_any_listener() - no SD holds while listening
+#include "audio/rx_audio.h"  // rx_audio_holds_off_feeds() - no SD holds while listening
 
 static const char *TAG = "sd_arch";
 
@@ -1967,11 +1967,12 @@ static void sd_archive_task(void *arg)
                  * the diag log, which is the same exposure park_snapshot()
                  * already accepts whenever the card is parked.
                  *
-                 * rx_audio_any_listener() and not rx_audio_is_enabled(): the
-                 * Tab5's own speaker does not care about this pause, only a
-                 * network listener does, but the flag covers both and the
-                 * speaker case costs nothing extra. */
-                if (!rx_audio_any_listener() &&
+                 * rx_audio_holds_off_feeds() (= rx_audio_any_listener() on
+                 * the Tab5) and not rx_audio_is_enabled(): the Tab5's own
+                 * speaker does not care about this pause, only a network
+                 * listener does, but the flag covers both and the speaker
+                 * case costs nothing extra. */
+                if (!rx_audio_holds_off_feeds() &&
                     now_us - s_slow_last_us >= (int64_t)s_slow_interval_ms * 1000) {
                     s_slow_last_us = now_us;
                     if (s_sd_mutex && xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
