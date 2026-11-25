@@ -116,13 +116,17 @@ uint32_t ft8_slot_dial(int64_t slot_sec)
 /* ---- gates --------------------------------------------------------------------
  * Hopping is for an idle page only. Each line is a reason a hop would be wrong;
  * the string is shown to the operator. */
-static const char *blocked_reason(const qmx_settings_t *s)
+/* ⛔ NO qmx_settings_t IN THIS FILE. It is 4268 B, and ft8_hop_get_state()
+ * runs on httpd (/api/status) and taskLVGL (1 Hz): settings_load_all() here
+ * crashed httpd with a Stack protection fault (bench1, 2026-11-25, 7005d57a).
+ * Narrow getters only. */
+static const char *blocked_reason(void)
 {
     ft8_op_mode_t m = ft8_op_mode_get();
     if (m != FT8_OP_MODE_FT8 && m != FT8_OP_MODE_FT4) return "JS8";
     if (!cat_is_ready())                               return "radio not ready";
     if (cat_user_pause_active())                       return "radio paused";
-    if (s->ft8_filters.robot_en)                       return "auto-answer on";
+    if (settings_get_ft8_robot_en())                   return "auto-answer on";
     if (ft8_hound_enabled(ft8_hound_mode()) || ft8_qso_is_hound_active()) return "Hound";
     if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) return "TX armed";
     if (ft8_qso_is_busy(NULL, 0))                      return "QSO in progress";
@@ -157,10 +161,8 @@ static int next_band(uint16_t usable, int cur)
 bool ft8_hop_due(int64_t next_boundary_ms)
 {
     if ((next_boundary_ms / 1000) % HOP_DWELL_SEC != 0 || next_boundary_ms % 1000 != 0) return false;
-    qmx_settings_t s;
-    settings_load_all(&s);
-    if (__builtin_popcount(usable_mask(s.ft8_hop_mask, ft8_op_mode_get())) < 2) return false;
-    return blocked_reason(&s) == NULL;
+    if (__builtin_popcount(usable_mask(settings_get_ft8_hop_mask(), ft8_op_mode_get())) < 2) return false;
+    return blocked_reason() == NULL;
 }
 
 static uint32_t         s_own_hz;
@@ -180,12 +182,10 @@ bool ft8_hop_run(int64_t next_boundary_ms)
         return false;
     }
 
-    qmx_settings_t s;
-    settings_load_all(&s);
     ft8_op_mode_t mode = ft8_op_mode_get();
     uint32_t cur_hz = cat_get_frequency();
     int cur = band_index_for(cur_hz);
-    int nb  = next_band(usable_mask(s.ft8_hop_mask, mode), cur);
+    int nb  = next_band(usable_mask(settings_get_ft8_hop_mask(), mode), cur);
     if (nb < 0) return false;
     uint32_t hz = dial_for(nb, mode);
     if (!hz || hz == cur_hz) return false;
@@ -218,14 +218,12 @@ void ft8_hop_get_state(ft8_hop_state_t *out)
 {
     if (!out) return;
     memset(out, 0, sizeof *out);
-    qmx_settings_t s;
-    settings_load_all(&s);
     ft8_op_mode_t mode = ft8_op_mode_get();
-    uint16_t usable = usable_mask(s.ft8_hop_mask, mode);
+    uint16_t usable = usable_mask(settings_get_ft8_hop_mask(), mode);
     ft8_hop_mask_text(usable, out->bands, sizeof out->bands);
     out->hopping = __builtin_popcount(usable) >= 2;
     if (!out->hopping) return;
-    out->blocked = blocked_reason(&s);
+    out->blocked = blocked_reason();
     int nb = next_band(usable, band_index_for(cat_get_frequency()));
     if (nb >= 0) snprintf(out->next_band, sizeof out->next_band, "%s", kHopBands[nb]);
     time_t now = time(NULL);

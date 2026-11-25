@@ -1194,6 +1194,8 @@ void settings_set_ft8_filters(const ft8_filters_t *f);
 /* Narrow accessor for the row-tap path (taskLVGL) - see settings_get_ft8_skip_tx1(). */
 bool settings_get_ft8_tap_auto_work(void);
 bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read on taskLVGL
+uint16_t settings_get_ft8_hop_mask(void); // narrow: for ft8_hop.c on httpd / taskLVGL stacks
+bool settings_get_ft8_robot_en(void);     // narrow: ft8_filters.robot_en, same reason
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
 // RX audio output: enable demodulated audio on the Tab5 speaker/headphone

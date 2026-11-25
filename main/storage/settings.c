@@ -2505,6 +2505,28 @@ bool settings_get_ft8_tap_auto_work(void)
 // called directly from both ft8_screen_view.c's row touch handler and
 // ft8_pileup_modal.c's), where a full qmx_settings_t is the stack-overflow
 // class fixed elsewhere in this release.
+/* Narrow, for ft8_hop.c: it runs on httpd (/api/status) and taskLVGL (the
+ * Preset button, 1 Hz). A settings_load_all() there put a 4268 B
+ * qmx_settings_t on the stack and crashed httpd (Stack protection fault,
+ * bench1 2026-11-25, 7005d57a). */
+uint16_t settings_get_ft8_hop_mask(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t v = s_pending.ft8_hop_mask;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_ft8_robot_en(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.ft8_filters.robot_en;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
 bool settings_get_ft8_skip_tx1(void)
 {
     if (!s_ready) return false;

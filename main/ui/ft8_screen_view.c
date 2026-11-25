@@ -5869,9 +5869,8 @@ void ft8_screen_view_open_hop_picker(void)
         ch[n].bit  = (uint8_t)i;
         n++;
     }
-    qmx_settings_t hs;
-    settings_load_all(&hs);
+    /* The narrow getter, not settings_load_all(): taskLVGL - see ft8_hop.c. */
     band_hop_picker_open("Band hop (FT8/FT4)", FT8_HOP_HINT,
-                         ch, n, hs.ft8_hop_mask, ft8_hop_mask_changed,
+                         ch, n, settings_get_ft8_hop_mask(), ft8_hop_mask_changed,
                          ft8_screen_view_refresh_preset);
 }
