@@ -905,7 +905,7 @@ typedef struct {
      * 15 12 10 6). More than one bit = hopping on; there is no separate
      * switch, the same rule as wspr_hop_mask. A band the radio lacks is
      * skipped, not forgotten. 0 = off. */
-    uint16_t ft8_hop_mask;
+    uint16_t ft8_hop_mask;     /* ignored while FT8_HOP_ENABLED is 0 - see below */
     /* Minutes on each band before the next hop (operator, 2026-11-26). Only
      * 1 2 4 6 10 15 30 are used: each divides a UTC day and is a whole number
      * of FT8 and FT4 slots, so the hop lands on a slot boundary. Any other
@@ -1209,6 +1209,15 @@ void settings_set_ft8_filters(const ft8_filters_t *f);
 /* Narrow accessor for the row-tap path (taskLVGL) - see settings_get_ft8_skip_tx1(). */
 bool settings_get_ft8_tap_auto_work(void);
 bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read on taskLVGL
+/* ⛔ FT8/FT4 BAND HOPPING (T220) IS SWITCHED OFF FOR v2.1.2 (operator,
+ * 2026-11-26: release everything "except the band hopping"). Hopping is not
+ * tested on air under CQ/auto-work, and its commits share files with the fixes
+ * that must ship, so it is switched off here and not reverted. With 0:
+ * settings_get_ft8_hop_mask() returns 0, which is the never-ticked state every
+ * hop path already treats as "no hopping" (ft8_hop.c reads the mask only
+ * through it); the drawer section and the web rows are hidden. A stored mask
+ * is kept in NVS and returns when this goes back to 1. */
+#define FT8_HOP_ENABLED 0
 uint16_t settings_get_ft8_hop_mask(void); // narrow: for ft8_hop.c on httpd / taskLVGL stacks
 uint8_t  settings_get_ft8_hop_dwell_min(void);  // narrow, same reason
 int      settings_get_ft8_cq_parity(void);      // narrow: -1 any, 0 even, 1 odd

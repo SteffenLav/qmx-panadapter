@@ -7517,8 +7517,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         }
         cJSON_AddStringToObject(root, "wspr_hop_bands", hops);
     }
-    /* FT8/FT4 band hopping: band names, same rule as wspr_hop_bands above. */
-    {
+    /* FT8/FT4 band hopping: band names, same rule as wspr_hop_bands above.
+     * Not sent while FT8_HOP_ENABLED is 0 (settings.h): the page hides a row
+     * whose value is absent, so the three hop rows disappear with it. */
+    if (FT8_HOP_ENABLED) {
         char hops[64]; int hn = 0; hops[0] = 0;
         for (int i = 0; i < ft8_hop_band_count(); i++) {
             if (!(c.ft8_hop_mask & (1u << i))) continue;
@@ -7530,10 +7532,12 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     }
     /* Operator 2026-11-26: the stay per band and the TXCQ period sit with the
      * hop bands. Unknown stay values read as 2, as ft8_hop.c does. */
-    cJSON_AddNumberToObject(root, "ft8_hop_minutes",
-        ft8_hop_dwell_valid(c.ft8_hop_dwell_min) ? c.ft8_hop_dwell_min : 2);
+    if (FT8_HOP_ENABLED)
+        cJSON_AddNumberToObject(root, "ft8_hop_minutes",
+            ft8_hop_dwell_valid(c.ft8_hop_dwell_min) ? c.ft8_hop_dwell_min : 2);
     cJSON_AddNumberToObject(root, "ft8_cq_period", c.ft8_cq_parity);
-    cJSON_AddBoolToObject(root,   "ft8_hop_cq_split", c.ft8_hop_cq_split);
+    if (FT8_HOP_ENABLED)
+        cJSON_AddBoolToObject(root, "ft8_hop_cq_split", c.ft8_hop_cq_split);
     cJSON_AddNumberToObject(root, "wspr_hop_minutes", 2 * (c.wspr_hop_stay_cycles ? c.wspr_hop_stay_cycles : 1));
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.

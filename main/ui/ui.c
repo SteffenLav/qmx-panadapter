@@ -4325,8 +4325,8 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
         return ft8 && ft8_op_mode_get() == FT8_OP_MODE_JS8;
     /* FT8 and FT4 only: JS8 never hops (ft8_hop.c), so the control would
      * do nothing there. Same sub-mode test as DRAWER_SEC_JS8SUB above. */
-    if (id == DRAWER_SEC_FT8HOP)
-        return ft8 && ft8_op_mode_get() != FT8_OP_MODE_JS8;
+    if (id == DRAWER_SEC_FT8HOP)   /* FT8_HOP_ENABLED: off for v2.1.2, settings.h */
+        return FT8_HOP_ENABLED && ft8 && ft8_op_mode_get() != FT8_OP_MODE_JS8;
     if (id == DRAWER_SEC_SIMMODE) return ft8;
     if (id == DRAWER_SEC_DISTANCE) return ft8;
     /* CW practice has its own flag and its own page: showing it anywhere else

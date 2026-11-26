@@ -2535,6 +2535,7 @@ bool settings_get_ft8_tap_auto_work(void)
  * bench1 2026-11-25, 7005d57a). */
 uint16_t settings_get_ft8_hop_mask(void)
 {
+    if (!FT8_HOP_ENABLED) return 0;   /* switched off for v2.1.2 - settings.h */
     if (!s_ready) return 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     uint16_t v = s_pending.ft8_hop_mask;
