@@ -215,6 +215,8 @@ Tap **Choose bands…** and tick the bands you want. **Ticking two or more turns
 
 Only the bands your radio can actually reach are offered. A QMX is built with a fixed set of filters, so the list is asked of the radio rather than assumed — the bench QMX offers 60/40/30/20/17/15 while a QMX+ covers 160–6 m.
 
+**Stay on each band** (right side of the picker, and on the web page) sets how many WSPR cycles the radio stays on a band before it moves on: **-** and **+** step one cycle, from 1 to 30. One cycle is 2 minutes. Every Tab5 with the same setting hops at the same moment, because the hop is counted in cycles from a fixed UTC start.
+
 Hopping changes band **between** cycles, never during one, and the waterfall's noise floor is reset on each hop so a quiet band is not painted against the last one's noise.
 
 #### Publish spots to wsprnet
