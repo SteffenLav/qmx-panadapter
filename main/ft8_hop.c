@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "adif/adif_log.h"
 #include "cat/cat.h"
@@ -248,6 +249,24 @@ uint32_t ft8_hop_dial_now(void)
     const int64_t t = s_own_us;
     if (t && esp_timer_get_time() - t <= HOP_OWN_WINDOW_US && s_own_hz) return s_own_hz;
     return cat_get_frequency();
+}
+
+bool ft8_hop_wait_confirmed(int timeout_ms)
+{
+    const int64_t t = s_own_us;
+    if (!t || esp_timer_get_time() - t > HOP_OWN_WINDOW_US) return true;   /* no hop pending */
+    const int want = band_index_for(s_own_hz);
+    if (want < 0) return true;
+    /* The BAND, not the exact Hz: an operator who nudges the dial inside the
+     * window must not lose the slot. The FA poll runs every 150 ms. */
+    for (int waited = 0; ; waited += 20) {
+        if (band_index_for(cat_get_frequency()) == want) {
+            if (waited) ESP_LOGI(TAG, "hop confirmed by the radio after %d ms", waited);
+            return true;
+        }
+        if (waited >= timeout_ms) return false;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }
 
 /* ---- the stay -----------------------------------------------------------------

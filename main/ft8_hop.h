@@ -38,6 +38,11 @@ void     ft8_slot_dial_latch(int64_t slot_sec, uint32_t dial_hz);
 /* The dial now: the hop's target for a few seconds after a hop (the FA poll
  * has not confirmed it yet), else cat_get_frequency(). For the latch. */
 uint32_t ft8_hop_dial_now(void);
+
+/* Before a key-down: if a hop is pending, wait until the radio's FA answer
+ * names the hop's band, up to timeout_ms. True = no hop pending, or
+ * confirmed; false = the radio did not confirm (do not key). Blocks. */
+bool ft8_hop_wait_confirmed(int timeout_ms);
 uint32_t ft8_slot_dial(int64_t slot_sec);
 
 /* ---- the hop ----------------------------------------------------------------

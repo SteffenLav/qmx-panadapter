@@ -1279,17 +1279,25 @@ void ft8_tx_run(const ft8_tx_request_t *req)
      * most - checked, because a dial at the top band edge puts the top tone
      * outside while the base is inside. */
     char band_err[160] = "";
-    /* ft8_hop_dial_now(), not cat_get_frequency(): right after a band hop the
-     * FA poll has not confirmed the new dial, and the guard would judge the
-     * OLD band while the radio keys on the new one. Since 2026-11-26 a CQ run
-     * keys right after a hop. */
-    const uint32_t tx_dial = sim ? 0u : ft8_hop_dial_now();
+    /* ⛔ A HOP AT THE BOUNDARY KEYED 8 ms AFTER ITS FA WRITE (sim, 2026-11-26).
+     * Whether a real QMX had retuned by then was never measured, so key-down
+     * now waits until the radio itself reports the hop's band (FA poll, every
+     * 150 ms), up to 1 s, and skips the slot otherwise. A late start shifts
+     * the whole burst, as the hold-for-decode late fire already does. The FA
+     * answer proves the radio took the write; it is not an RF measurement.
+     * After that, cat_get_frequency() is the radio's own report, and the band
+     * guard judges it, not the hop's target. No-op when no hop is pending. */
+    const bool hop_confirmed = sim || ft8_hop_wait_confirmed(1000);
+    const uint32_t tx_dial = sim ? 0u : cat_get_frequency();
     const bool band_ok = sim ? true
         : tx_band_guard_allows(tx_dial + (uint32_t)req->audio_freq_hz,
                                tx_dial + (uint32_t)req->audio_freq_hz + 50u,
                                ftx_protocol_name(req->protocol),
                                band_err, sizeof band_err);
-    if (req->armed_in_sim && !sim) {
+    if (!hop_confirmed) {
+        ESP_LOGW(TAG, "TX skipped before key-down: the radio did not confirm the band hop within 1 s");
+        ft8_status_set("TX skipped: band hop not confirmed");
+    } else if (req->armed_in_sim && !sim) {
         /* See the stamp in ft8_tx_arm(). Sim went OFF after this was armed. */
         ESP_LOGW(TAG, "TX refused before key-down: '%s' was armed in simulation mode, "
                       "which is now off - not keyed", req->display_text);

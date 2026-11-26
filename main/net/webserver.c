@@ -8023,11 +8023,19 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         const uint32_t dial = (uint32_t)it->valuedouble;
         const bool changed = (dial != settings_get_wspr_dial_hz());
         settings_set_wspr_dial_hz(dial);
-        if (changed && dial) {
+        /* ⛔ ONLY WHILE THE WSPR RECEIVER RUNS (operator, 2026-11-26; the sim
+         * test retuned the radio with the FT8 page open). The same rule as the
+         * WSPR hop, which had this exact fault (Dirk DK7CVD, 2026-09-10:
+         * WSPR frequencies set during FT8). Otherwise the dial is only stored;
+         * the WSPR page's own dial push applies it when the page is entered. */
+        if (changed && dial && wspr_rx_running()) {
             wspr_rx_wf_floor_reset();      /* the new band has its own noise floor */
             cat_set_frequency_forced(dial);
             ui_update_frequency(dial);
             ESP_LOGW(TAG, "WSPR dial set to %lu Hz from the web - radio retuned",
+                     (unsigned long)dial);
+        } else if (changed && dial) {
+            ESP_LOGI(TAG, "WSPR dial set to %lu Hz from the web - stored; WSPR is not running, radio not retuned",
                      (unsigned long)dial);
         }
     }
