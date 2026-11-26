@@ -11,6 +11,8 @@
  * drawer with the page hidden. */
 #include <stdint.h>
 
+#include "lvgl.h"
+
 typedef struct {
     const char *name;   /* "40" */
     uint8_t     bit;    /* bit in the caller's mask */
@@ -19,8 +21,15 @@ typedef struct {
 typedef void (*band_hop_mask_cb_t)(uint16_t mask);
 
 /* `hint` is the explanation under the title. `changed` runs on every tick
- * with the new mask; `closed` (may be NULL) runs when the window closes. */
+ * with the new mask; `closed` (may be NULL) runs when the window closes.
+ * `extra` (may be NULL) adds the caller's own controls: the window widens to
+ * 1240 px and extra() gets the panel, with x >= BAND_HOP_EXTRA_X and
+ * y >= BAND_HOP_EXTRA_Y free (the bands use the left 500 px). FT8 puts the
+ * stay time and the TXCQ period there; WSPR passes NULL. */
+#define BAND_HOP_EXTRA_X 600
+#define BAND_HOP_EXTRA_Y 238
 void band_hop_picker_open(const char *title, const char *hint,
                           const band_hop_choice_t *choices, int n,
                           uint16_t mask,
-                          band_hop_mask_cb_t changed, void (*closed)(void));
+                          band_hop_mask_cb_t changed, void (*closed)(void),
+                          void (*extra)(lv_obj_t *panel));

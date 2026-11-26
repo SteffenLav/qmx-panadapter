@@ -45,7 +45,8 @@ static void close_cb(lv_event_t *e) { (void)e; close_modal(); }
 void band_hop_picker_open(const char *title, const char *hint,
                           const band_hop_choice_t *choices, int n,
                           uint16_t mask,
-                          band_hop_mask_cb_t changed, void (*closed)(void))
+                          band_hop_mask_cb_t changed, void (*closed)(void),
+                          void (*extra)(lv_obj_t *panel))
 {
     if (s_modal) return;
     if (n > MAX_CHOICES) n = MAX_CHOICES;
@@ -67,7 +68,8 @@ void band_hop_picker_open(const char *title, const char *hint,
     lv_obj_add_event_cb(s_modal, close_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 780, 660);
+    if (extra) lv_obj_set_size(panel, 1240, 690);   /* widen, never shrink the font */
+    else       lv_obj_set_size(panel, 780, 660);
     lv_obj_center(panel);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
@@ -121,9 +123,11 @@ void band_hop_picker_open(const char *title, const char *hint,
         s_cb[i] = cb;
     }
 
+    if (extra) extra(panel);
+
     lv_obj_t *done = lv_btn_create(panel);
     lv_obj_set_size(done, 200, 64);
-    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align(done, extra ? LV_ALIGN_BOTTOM_RIGHT : LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(done, 8, 0);
     lv_obj_add_event_cb(done, close_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *dl = lv_label_create(done);

@@ -274,9 +274,9 @@ void ft8_tx_get_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
 //                        never acted on. This is the "I chose this slot, stay
 //                        there" behaviour.
 //
-// Session-only, deliberately not persisted: the settings dirty bitmap is full
-// (see CLAUDE.md), and this sits next to the equally session-only CQ parity
-// preference. Both reset to their defaults on a reboot.
+// Saved in settings (tx_tone_hz / tx_tone_hold), as is the TXCQ period
+// (ft8_cq_parity, since 2026-11-26). An older note here said both were
+// session-only; that stopped being true when the dirty bitmap grew.
 int  ft8_tx_get_tone_pref_hz(void);
 void ft8_tx_set_tone_pref_hz(int hz);
 bool ft8_tx_get_tone_hold(void);

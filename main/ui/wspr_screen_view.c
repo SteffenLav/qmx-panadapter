@@ -847,7 +847,7 @@ static void hop_modal_open_cb(lv_event_t *e)
         "\n"
         "Fewer than two ticked means no hopping at all: the band\n"
         "selector on the page decides, and the radio stays there.",
-        ch, n, hs.wspr_hop_mask, hop_mask_changed, hop_button_refresh);
+        ch, n, hs.wspr_hop_mask, hop_mask_changed, hop_button_refresh, NULL);
 }
 
 /* Opened from the settings drawer now that the button has moved off this page.

@@ -903,6 +903,14 @@ typedef struct {
      * switch, the same rule as wspr_hop_mask. A band the radio lacks is
      * skipped, not forgotten. 0 = off. */
     uint16_t ft8_hop_mask;
+    /* Minutes on each band before the next hop (operator, 2026-11-26). Only
+     * 1 2 4 6 10 15 30 are used: each divides a UTC day and is a whole number
+     * of FT8 and FT4 slots, so the hop lands on a slot boundary. Any other
+     * value reads as 2 (ft8_hop.c). */
+    uint8_t  ft8_hop_dwell_min;
+    /* TXCQ period: -1 any, 0 EVEN only, 1 ODD only. Was session-only until
+     * 2026-11-26; saved now, like WSJT-X's "Tx even/1st". */
+    int8_t   ft8_cq_parity;
 
     /* ⭐ THE MASTER SWITCH FOR THE WHOLE WSPR PAGE, DEFAULT OFF.
      *
@@ -1195,6 +1203,8 @@ void settings_set_ft8_filters(const ft8_filters_t *f);
 bool settings_get_ft8_tap_auto_work(void);
 bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read on taskLVGL
 uint16_t settings_get_ft8_hop_mask(void); // narrow: for ft8_hop.c on httpd / taskLVGL stacks
+uint8_t  settings_get_ft8_hop_dwell_min(void);  // narrow, same reason
+int      settings_get_ft8_cq_parity(void);      // narrow: -1 any, 0 even, 1 odd
 bool settings_get_ft8_robot_en(void);     // narrow: ft8_filters.robot_en, same reason
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
@@ -1586,6 +1596,8 @@ bool settings_urgent_sync(uint32_t timeout_ms);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_ft8_hop_mask(uint16_t v);
+void settings_set_ft8_hop_dwell_min(uint8_t v);
+void settings_set_ft8_cq_parity(int v);   // anything but 0/1 stores -1 (any)
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
 void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default ON since 2026-11-19
 void settings_set_wspr_dump_cycles(uint8_t v);

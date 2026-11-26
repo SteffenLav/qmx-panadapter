@@ -7525,6 +7525,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
         }
         cJSON_AddStringToObject(root, "ft8_hop_bands", hops);
     }
+    /* Operator 2026-11-26: the stay per band and the TXCQ period sit with the
+     * hop bands. Unknown stay values read as 2, as ft8_hop.c does. */
+    cJSON_AddNumberToObject(root, "ft8_hop_minutes",
+        ft8_hop_dwell_valid(c.ft8_hop_dwell_min) ? c.ft8_hop_dwell_min : 2);
+    cJSON_AddNumberToObject(root, "ft8_cq_period", c.ft8_cq_parity);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -8104,6 +8109,13 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         }
         settings_set_ft8_hop_mask(mask);
     }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "ft8_hop_minutes"))
+        && ft8_hop_dwell_valid(it->valueint))
+        settings_set_ft8_hop_dwell_min((uint8_t)it->valueint);
+    /* Through the page's setter, not settings_ directly: it also repaints the
+     * Tab5's TXCQ button. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "ft8_cq_period")))
+        ft8_screen_view_set_cq_parity(it->valueint);
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not

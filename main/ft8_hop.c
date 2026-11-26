@@ -22,11 +22,33 @@
 
 static const char *TAG = "ft8_hop";
 
-/* 2 minutes per band, hop on the even UTC minute: WSJT-X improved's period
- * for FT8/FT4/MSK144 (mainwindow.cpp, bandHopping). 120 s is a whole number
- * of FT8 (15 s) and FT4 (7.5 s) slots, so the dwell ends on a slot boundary
- * in both modes. */
-#define HOP_DWELL_SEC 120
+/* Stay on each band: settings ft8_hop_dwell_min, default 2 minutes (WSJT-X
+ * improved's period for FT8/FT4/MSK144, mainwindow.cpp bandHopping). The hop
+ * is on a UTC multiple of the stay, so every allowed value must
+ *  - be a whole number of FT8 (15 s) and FT4 (7.5 s) slots: any whole minute
+ *    is, so the stay ends on a slot boundary in both modes;
+ *  - divide 1440, so the grid does not slip at midnight UTC.
+ * Any other stored value (a hand-edited config file) reads as 2. */
+static const uint8_t kDwellMin[] = { 1, 2, 4, 6, 10, 15, 30 };
+
+int ft8_hop_dwell_choices(const uint8_t **out)
+{
+    if (out) *out = kDwellMin;
+    return (int)(sizeof kDwellMin / sizeof kDwellMin[0]);
+}
+
+bool ft8_hop_dwell_valid(int min)
+{
+    for (size_t i = 0; i < sizeof kDwellMin; i++)
+        if (kDwellMin[i] == min) return true;
+    return false;
+}
+
+static int dwell_sec(void)
+{
+    int m = settings_get_ft8_hop_dwell_min();
+    return (ft8_hop_dwell_valid(m) ? m : 2) * 60;
+}
 
 /* Time the retune needs before the next boundary. ⚠ NOT MEASURED YET - the
  * QMX retune time has to be measured on the bench before this number is
@@ -160,7 +182,7 @@ static int next_band(uint16_t usable, int cur)
 
 bool ft8_hop_due(int64_t next_boundary_ms)
 {
-    if ((next_boundary_ms / 1000) % HOP_DWELL_SEC != 0 || next_boundary_ms % 1000 != 0) return false;
+    if ((next_boundary_ms / 1000) % dwell_sec() != 0 || next_boundary_ms % 1000 != 0) return false;
     if (__builtin_popcount(usable_mask(settings_get_ft8_hop_mask(), ft8_op_mode_get())) < 2) return false;
     return blocked_reason() == NULL;
 }
@@ -227,5 +249,7 @@ void ft8_hop_get_state(ft8_hop_state_t *out)
     int nb = next_band(usable, band_index_for(cat_get_frequency()));
     if (nb >= 0) snprintf(out->next_band, sizeof out->next_band, "%s", kHopBands[nb]);
     time_t now = time(NULL);
-    out->secs_to_hop = (now > 1600000000) ? (int)(HOP_DWELL_SEC - (now % HOP_DWELL_SEC)) : -1;
+    int ds = dwell_sec();
+    out->dwell_min = ds / 60;
+    out->secs_to_hop = (now > 1600000000) ? (int)(ds - (now % ds)) : -1;
 }

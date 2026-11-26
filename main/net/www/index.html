@@ -5425,7 +5425,16 @@ const SET_FIELDS = [
   /* Same rule and the same name format as WSPR's row below. FT8 and FT4 share
      the list; FT4 skips 160 and 60, which have no FT4 frequency. */
   ["FT8 filters", "ft8_hop_bands", "text", "FT8/FT4 band hopping",
-     "Comma-separated, e.g. 20,40,15. Two or more turns hopping on: two minutes per band, only while the page is idle. Leave empty to stay on one band"],
+     "Comma-separated, e.g. 20,40,15. Two or more turns hopping on, only while the page is idle. Leave empty to stay on one band"],
+  ["FT8 filters", "ft8_hop_minutes", "sel", "Hop: stay on each band",
+     "Minutes on each band before the next hop. The hop is on a UTC multiple of this time",
+     [["1","1 min"],["2","2 min"],["4","4 min"],["6","6 min"],["10","10 min"],["15","15 min"],["30","30 min"]]],
+  /* The same setting as the TXCQ button on the FT8 page (saved across reboot
+     since 2026-11-26). setSave() posts it only when changed here, so a Save
+     does not undo a press of that button made while this form was open. */
+  ["FT8 filters", "ft8_cq_period", "sel", "TX CQ period",
+     "Which 15 s period a CQ goes out in. A reply always takes the other station's opposite period",
+     [["-1","Any"],["0","Even (1st)"],["1","Odd (2nd)"]]],
   ["WSPR", "wspr_hop_bands", "text", "Band hopping",
      "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
@@ -6223,6 +6232,8 @@ async function setSave() {
     // A blank password means "keep the stored one" - the GET never returns it,
     // so sending "" would look like an instruction to erase it.
     if (path === "wifi_pass" && !v) continue;
+    /* Live elsewhere (the FT8 page's TXCQ button): send only a change made here. */
+    if (path === "ft8_cq_period" && setLoaded && v === setLoaded.ft8_cq_period) continue;
     setPut(patch, path, v);
   }
   /* CW profiles ride along with the ordinary Save. Only when the block is on
