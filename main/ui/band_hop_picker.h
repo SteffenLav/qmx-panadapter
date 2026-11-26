@@ -26,8 +26,15 @@ typedef void (*band_hop_mask_cb_t)(uint16_t mask);
  * 1240 px and extra() gets the panel, with x >= BAND_HOP_EXTRA_X and
  * y >= BAND_HOP_EXTRA_Y free (the bands use the left 500 px). FT8 puts the
  * stay time and the TXCQ period there; WSPR passes NULL. */
-#define BAND_HOP_EXTRA_X 600
-#define BAND_HOP_EXTRA_Y 238
+/* 2026-11-26 (operator, on glass): text one font step up, bands in THREE
+ * columns (two were too tight vertically and too wide horizontally), and the
+ * window narrowed so Done sits under the extra column. The bands now use the
+ * left ~510 px. ⚠ FT8's extra column was laid out for the old 1240 px window
+ * and has not been re-checked at this width - FT8 hopping is switched off for
+ * v2.1.2 (FT8_HOP_ENABLED), so only WSPR opens this window with extra(). */
+#define BAND_HOP_EXTRA_X 560
+#define BAND_HOP_EXTRA_Y 250
+#define BAND_HOP_PANEL_W_EXTRA 1060
 void band_hop_picker_open(const char *title, const char *hint,
                           const band_hop_choice_t *choices, int n,
                           uint16_t mask,

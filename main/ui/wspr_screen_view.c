@@ -859,7 +859,7 @@ static void hop_stay_btn(lv_obj_t *panel, const char *txt, int x, int y, intptr_
     lv_obj_add_event_cb(b, hop_stay_step_cb, LV_EVENT_CLICKED, (void *)dir);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, txt);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
     lv_obj_center(l);
 }
 
@@ -868,19 +868,19 @@ static void hop_picker_extra(lv_obj_t *panel)
     const int x = BAND_HOP_EXTRA_X, y = BAND_HOP_EXTRA_Y;
     lv_obj_t *t = lv_label_create(panel);
     lv_label_set_text(t, "Stay on each band");
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_26, 0);
     lv_obj_set_style_text_color(t, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_obj_align(t, LV_ALIGN_TOP_LEFT, x, y);
     hop_stay_btn(panel, LV_SYMBOL_MINUS, x, y + 40, -1);
     s_hop_stay_lbl = lv_label_create(panel);
-    lv_obj_set_width(s_hop_stay_lbl, 200);
+    lv_obj_set_width(s_hop_stay_lbl, 260);   /* "30 cycles" at 48 px */
     lv_obj_set_style_text_align(s_hop_stay_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_hop_stay_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(s_hop_stay_lbl, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_hop_stay_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_hop_stay_lbl, LV_ALIGN_TOP_LEFT, x + 96, y + 70);
-    hop_stay_btn(panel, LV_SYMBOL_PLUS, x + 296, y + 40, +1);
+    lv_obj_align(s_hop_stay_lbl, LV_ALIGN_TOP_LEFT, x + 96, y + 62);
+    hop_stay_btn(panel, LV_SYMBOL_PLUS, x + 356, y + 40, +1);
     s_hop_stay_note = lv_label_create(panel);
-    lv_obj_set_style_text_font(s_hop_stay_note, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_hop_stay_note, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_hop_stay_note, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_align(s_hop_stay_note, LV_ALIGN_TOP_LEFT, x, y + 150);
     hop_stay_paint();
