@@ -55,7 +55,12 @@ static const char *TAG = "psk_rx";
 // quiet band look identical, which is the same unverifiability trap the USB
 // patch counters exist to close (#189). Both limits are now generous AND both
 // say so when they bite.
-#define RESP_CAP              65536
+//
+// ⚠ 2026-11-26: "recent contacts present and older ones gone" was most likely
+// the collector's ONE-HOUR answer (psk_rx.h, PSK_RX_WINDOW_S), not this cap.
+// 64 KB -> 256 KB (PSRAM): a busy FT8 station returned 70 KB for 11 minutes
+// with lastseqno and ~330 KB for the hour a first query gets.
+#define RESP_CAP              (256 * 1024)
 
 static psk_rx_report_t  *s_store;         // PSRAM
 static int               s_count;
@@ -64,6 +69,11 @@ static SemaphoreHandle_t s_lock;
 static int64_t           s_last_ok_us;
 static int64_t           s_last_try_us;
 static volatile bool     s_refresh_req;
+/* Accumulation (2026-11-26, see PSK_RX_WINDOW_S in the header). Only the
+ * psk_rx task writes these; readers take s_lock. */
+static uint64_t          s_last_seq;        // lastSequenceNumber of the last complete answer
+static int64_t           s_last_ok_unix;    // wall clock of the last good query
+static int64_t           s_cover_from;      // see psk_rx_covered_from()
 
 /* ⛔ WHY NO QUERY RAN. Randy N4OPI, 2026-11-26: "it never shows who has heard
  * me" on one unit. His log had no psk_rx line in 27 min, so no query ran - but
@@ -193,6 +203,14 @@ int psk_rx_max_distance_km(void)
 const char *psk_rx_hold_reason(void) { return s_task_up ? s_hold : "receiver task not running"; }
 int  psk_rx_last_fail_status(void)    { return s_last_fail_status; }
 
+int64_t psk_rx_covered_from(void)
+{
+    if (!lock_ms(50)) return 0;
+    int64_t v = s_cover_from;
+    unlock();
+    return v;
+}
+
 int psk_rx_age_s(void)
 {
     if (!s_last_ok_us) return -1;
@@ -222,7 +240,24 @@ static esp_err_t on_data(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static int parse_body(const char *xml)
+/* Same receiver, same band (1 MHz bucket), same mode = one entry. */
+static bool same_key(const psk_rx_report_t *a, const psk_rx_report_t *b)
+{
+    return a->freq_hz / 1000000u == b->freq_hz / 1000000u &&
+           strcasecmp(a->rx_call, b->rx_call) == 0 &&
+           strcasecmp(a->mode, b->mode) == 0;
+}
+
+static int64_t wall_now(void)
+{
+    time_t t = time(NULL);
+    return (t > 1700000000) ? (int64_t)t : 0;   /* 0 = no wall clock yet */
+}
+
+/* Parses one answer and MERGES it into the store; returns the number of
+ * reports in the answer, -1 on no memory. *seq_out gets the answer's
+ * lastSequenceNumber (0 if absent). */
+static int parse_body(const char *xml, uint64_t *seq_out)
 {
     /* ⛔ NARROW, never settings_load_all(): parse_body() runs UNDER
        psk_rx_task() via fetch_once(), and that task had a qmx_settings_t of
@@ -239,37 +274,90 @@ static int parse_body(const char *xml)
                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!tmp) return -1;
 
+    *seq_out = 0;
+    {
+        const char *q = strstr(xml, "<lastSequenceNumber");
+        char v[24];
+        if (q) {
+            const char *e = strchr(q, '>');
+            size_t len = e ? (size_t)(e - q) : 0;
+            static char sq[96];
+            if (len && len < sizeof(sq)) {
+                memcpy(sq, q, len); sq[len] = '\0';
+                if (attr(sq, "value", v, sizeof(v))) *seq_out = strtoull(v, NULL, 10);
+            }
+        }
+    }
+
+    /* Start from what the store holds, minus what has aged out of the day. */
+    const int64_t now = wall_now();
+    int kept = 0;
+    bool evicted = false;
+    if (lock_ms(1000)) {
+        for (int i = 0; i < s_count; i++)
+            if (!now || s_store[i].heard_unix >= now - PSK_RX_WINDOW_S) tmp[kept++] = s_store[i];
+        evicted = s_truncated;
+        unlock();
+    }
+
     // File-static, not a local: this whole path runs only on psk_rx_task (the
     // one caller of fetch_once), and 512 bytes of stack is real money here -
     // see CLAUDE.md, "Task stacks on this board are TINY".
     static char elem[512];
 
+    /* ⛔ MERGE, NEVER REPLACE. Replacing the store with one answer is what
+     * made the panel empty an hour after the operator stopped transmitting:
+     * the collector serves only about the last hour (PSK_RX_WINDOW_S). */
     int n = 0;
-    bool hit_cap = false;
+    psk_rx_report_t r;
     const char *p = xml;
     while ((p = strstr(p, "<receptionReport")) != NULL) {
-        if (n >= PSK_RX_MAX) { hit_cap = true; break; }
         const char *end = strchr(p, '>');
         if (!end) break;
         size_t len = (size_t)(end - p);
         if (len >= sizeof(elem)) len = sizeof(elem) - 1;
         memcpy(elem, p, len);
         elem[len] = '\0';
-        if (psk_rx_parse_report(elem, &tmp[n])) {
-            add_geometry(&tmp[n], have_me, my_lat, my_lon);
-            n++;
-        }
         p = end + 1;
+        if (!psk_rx_parse_report(elem, &r)) continue;
+        n++;
+        int j = 0;
+        while (j < kept && !same_key(&tmp[j], &r)) j++;
+        if (j < kept) {                              /* known: keep the newest */
+            if (r.heard_unix > tmp[j].heard_unix) {
+                add_geometry(&r, have_me, my_lat, my_lon);
+                tmp[j] = r;
+            }
+            continue;
+        }
+        if (kept < PSK_RX_MAX) {
+            add_geometry(&r, have_me, my_lat, my_lon);
+            tmp[kept++] = r;
+            continue;
+        }
+        int old = 0;                                 /* full: the oldest makes room */
+        for (int k = 1; k < kept; k++) if (tmp[k].heard_unix < tmp[old].heard_unix) old = k;
+        if (r.heard_unix > tmp[old].heard_unix) {
+            add_geometry(&r, have_me, my_lat, my_lon);
+            tmp[old] = r;
+        }
+        evicted = true;
+    }
+    if (evicted && kept >= PSK_RX_MAX)
+        ESP_LOGW(TAG, "store full (%d receiver/band/mode entries) - the oldest made room", PSK_RX_MAX);
+
+    /* Newest first, as psk_rx_get() promises. Insertion sort: <= 384 entries. */
+    for (int i = 1; i < kept; i++) {
+        psk_rx_report_t x = tmp[i];
+        int k = i - 1;
+        while (k >= 0 && tmp[k].heard_unix < x.heard_unix) { tmp[k + 1] = tmp[k]; k--; }
+        tmp[k + 1] = x;
     }
 
-    if (hit_cap)
-        ESP_LOGW(TAG, "hit the %d-report cap - the collector had more for this "
-                      "window and the rest were not read", PSK_RX_MAX);
-
     if (lock_ms(1000)) {
-        memcpy(s_store, tmp, sizeof(psk_rx_report_t) * (size_t)n);
-        s_count = n;
-        s_truncated = hit_cap;
+        memcpy(s_store, tmp, sizeof(psk_rx_report_t) * (size_t)kept);
+        s_count = kept;
+        s_truncated = evicted && kept >= PSK_RX_MAX;
         unlock();
     }
     heap_caps_free(tmp);
@@ -283,10 +371,17 @@ static void fetch_once(const char *mycall)
     buf[0] = '\0';
     resp_buf_t ctx = { buf, 0, RESP_CAP, 0 };
 
-    char url[192];
-    snprintf(url, sizeof(url),
+    /* lastseqno: only records newer than the previous answer (tested 2026-11-26:
+     * 219 reports, all newer, instead of the whole hour).
+     * Smaller answers for us and less work for a free service. A record we
+     * already hold is merged as a no-op, so an overlap costs nothing. */
+    char url[224];
+    int ul = snprintf(url, sizeof(url),
              "https://retrieve.pskreporter.info/query?senderCallsign=%s"
              "&flowStartSeconds=-%d&rronly=1", mycall, PSK_RX_WINDOW_S);
+    if (s_last_seq && ul > 0 && ul < (int)sizeof(url))
+        snprintf(url + ul, sizeof(url) - (size_t)ul, "&lastseqno=%llu",
+                 (unsigned long long)(s_last_seq + 1));
 
     esp_http_client_config_t cfg = {
         .url               = url,
@@ -310,7 +405,8 @@ static void fetch_once(const char *mycall)
     esp_http_client_cleanup(client);
 
     if (status == 200) {
-        int n = parse_body(buf);
+        uint64_t seq = 0;
+        int n = parse_body(buf, &seq);
         if (n >= 0) {
             s_last_ok_us = esp_timer_get_time();
             s_last_fail_status = 0;
@@ -322,9 +418,31 @@ static void fetch_once(const char *mycall)
                          (unsigned)ctx.len, (unsigned)ctx.dropped);
                 if (lock_ms(200)) { s_truncated = true; unlock(); }
             }
-            ESP_LOGI(TAG, "%d report(s) of %s from %d receiver(s), furthest %d km%s",
-                     n, mycall, psk_rx_unique_receivers(), psk_rx_max_distance_km(),
-                     psk_rx_is_truncated() ? " [PARTIAL - see warning above]" : "");
+            /* Advance lastseqno even past a cut answer. The collector lists
+             * newest first (measured 2026-11-26), so a cut loses the OLDEST
+             * records; not advancing would re-read the same over-full hour on
+             * every query and never catch up. */
+            if (seq) s_last_seq = seq;
+            /* Coverage: continuous since the first good query of this run,
+             * minus the hour that query returned. A gap longer than that hour
+             * is a hole, so coverage restarts after it. */
+            const int64_t now = wall_now();
+            if (now) {
+                int64_t from;
+                if (lock_ms(200)) {
+                    if (!s_last_ok_unix || now - s_last_ok_unix > PSK_RX_API_WINDOW_S || !s_cover_from)
+                        s_cover_from = now - PSK_RX_API_WINDOW_S;
+                    if (s_cover_from < now - PSK_RX_WINDOW_S) s_cover_from = now - PSK_RX_WINDOW_S;
+                    from = s_cover_from;
+                    unlock();
+                } else from = 0;
+                s_last_ok_unix = now;
+                ESP_LOGI(TAG, "%d new report(s) of %s; holding %d entries from %d receiver(s), "
+                              "furthest %d km, complete for the last %lld min%s",
+                         n, mycall, psk_rx_count(), psk_rx_unique_receivers(), psk_rx_max_distance_km(),
+                         from ? (long long)((now - from) / 60) : -1LL,
+                         psk_rx_is_truncated() ? " [PARTIAL - see warning above]" : "");
+            }
         }
     } else {
         // A 4xx here usually means we queried too often. Backing off is the

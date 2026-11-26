@@ -8884,6 +8884,9 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     // "I'm not sure how long the history window is" was a fair question to be
     // left with (Randy N4OPI).
     cJSON_AddNumberToObject(root, "window_h",  PSK_RX_WINDOW_S / 3600);
+    // The collector serves only about the last hour, so the device builds the
+    // day itself; this is where its record becomes complete (0 = not yet).
+    cJSON_AddNumberToObject(root, "covered_from", (double)psk_rx_covered_from());
 
     cJSON *arr = cJSON_AddArrayToObject(root, "reports");
     for (int i = 0; i < n && arr; i++) {

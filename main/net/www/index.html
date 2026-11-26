@@ -5090,15 +5090,29 @@ function pskRenderTable() {
       (d.fail_status < 0 ? "no answer" : "HTTP " + d.fail_status) + ").");
   const whyHtml = why.length
     ? '<p style="color:#ffa040">' + why.join(" ") + '</p>' : "";
+  /* ⛔ PSK REPORTER SERVES ONLY ABOUT THE LAST HOUR (measured 2026-11-26,
+     Randy N4OPI: 396 reports on the map, 0 here). The device keeps what each
+     query returns; covered_from is where its record becomes complete. A
+     window reaching further back than that must say so, never read as
+     "nobody heard you". */
+  const cov = d.covered_from || 0;
+  const covShort = cov > 0 && cov > (nowS - winSec) + 60;
+  const covTxt = covShort ? new Date(cov * 1000).toISOString().substr(11, 5) + " UTC" : "";
+  const covHtml = covShort
+    ? '<p style="color:#ffa040">This device has the complete list only since ' + covTxt +
+      '. PSK Reporter answers each query with about the last hour, so the device keeps ' +
+      'the reports itself, and it has not been asking for the whole ' + winTxt +
+      ' yet. pskreporter.info has the full list.</p>' : "";
   if (!reps.length) {
     if (d.age_s < 0) {
       body.innerHTML = '<p style="color:#ffa040">This device has not had an answer from PSK Reporter ' +
                        'yet, so it cannot say who has heard you.</p>' + whyHtml;
       return;
     }
-    body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last ' + winTxt + '. ' +
+    body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you ' +
+                     (covShort ? 'since ' + covTxt : 'in the last ' + winTxt) + '. ' +
                      'That is the normal answer if you have not transmitted - it is not an error. ' +
-                     '(Checked ' + Math.round(d.age_s / 60) + ' min ago.)</p>' + whyHtml;
+                     '(Checked ' + Math.round(d.age_s / 60) + ' min ago.)</p>' + covHtml + whyHtml;
     return;
   }
   let notice = "";
@@ -5108,8 +5122,8 @@ function pskRenderTable() {
      fits inside what WAS read cannot be missing anything of its own. */
   if (d.truncated && pskState.windowMin >= 1440) {
     notice = '<p style="color:#ffa040">Showing ' + reps.length +
-             ' reports - the collector had more for the last ' + winTxt +
-             ' than this device could read in one query, so older ones may be missing. ' +
+             ' entries - this device keeps the newest report per receiver, band and mode, ' +
+             'and the oldest had to make room, so older ones may be missing. ' +
              'pskreporter.info has the complete list.</p>';
   }
   const col = PSK_COLS[pskState.sortKey];
@@ -5126,7 +5140,7 @@ function pskRenderTable() {
     ? '<span class="arrow">' + (pskState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
   const th = key => '<th class="sortable" onclick="pskSetSort(\'' + key + '\')">' +
                      PSK_COLS[key].label + arrow(key) + '</th>';
-  body.innerHTML = notice + whyHtml +
+  body.innerHTML = notice + covHtml + whyHtml +
     '<table style="width:100%; border-collapse:collapse;">' +
     '<tr style="color:#ffa040; text-align:left;">' +
     th("call") + th("dxcc") + th("km") + th("brg") + th("snr") + th("f") + th("mode") + th("age") +
