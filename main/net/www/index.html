@@ -5453,8 +5453,11 @@ const SET_FIELDS = [
      [["-1","Any"],["0","Even (1st)"],["1","Odd (2nd)"]]],
   ["WSPR", "wspr_hop_bands", "text", "Band hopping",
      "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
+  /* Labelled in CYCLES (operator, 2026-11-26): "2 min" first read as a fixed
+     2-minute step. The value stays minutes - it is the wire format. */
   ["WSPR", "wspr_hop_minutes", "sel", "Hop: stay on each band",
-     "One WSPR cycle is 2 minutes", Array.from({length: 30}, (_, i) => [String(2 * (i + 1)), (2 * (i + 1)) + " min"])],
+     "WSPR cycles on each band before the next hop. One cycle is 2 minutes",
+     Array.from({length: 30}, (_, i) => [String(2 * (i + 1)), (i + 1) + (i ? " cycles (" : " cycle (") + (2 * (i + 1)) + " min)"])],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
      "What your transmitter really produces - it is published worldwide",
      [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
@@ -5965,6 +5968,9 @@ function setBuildForm(cfg, ft8Opts) {
   for (const [grp, path, type, label, hint, opts] of SET_FIELDS) {
     const inFt8Opts = FT8_OPTS_GROUPS.includes(grp);
     if (ft8Opts ? !inFt8Opts : inFt8Opts) continue;
+    /* FT8/FT4 hopping rows only when the device sends them - it does not while
+       hopping is switched off in the firmware (FT8_HOP_ENABLED, settings.h). */
+    if (path.startsWith("ft8_hop_") && setGet(cfg, path) === undefined) continue;
     if (grp !== group) {
       if (group !== null) html += "</div>";
       html += '<div style="margin:14px 0 6px"><strong style="color:#ffa040">' + grp + "</strong></div><div>";

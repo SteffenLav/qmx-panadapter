@@ -822,14 +822,21 @@ static void hop_mask_changed(uint16_t mask)
     hop_button_refresh();
 }
 
-/* The picker's right column: stay per band, - / + in 2-minute steps (one WSPR
- * cycle). 96 px targets (~8 mm). The label pointer is NULLed on close. */
+/* The picker's right column: stay per band, - / + one WSPR CYCLE per step.
+ * Shown in cycles, not minutes (operator, 2026-11-26): "2 min" as the first
+ * value read as a fixed two-minute step, i.e. "always only one cycle". The
+ * minutes go on the note line under it. 96 px targets (~8 mm). Both label
+ * pointers are NULLed on close. */
 static lv_obj_t *s_hop_stay_lbl;
+static lv_obj_t *s_hop_stay_note;
 
 static void hop_stay_paint(void)
 {
+    const int c = (int)settings_get_wspr_hop_stay_cycles();
     if (s_hop_stay_lbl)
-        lv_label_set_text_fmt(s_hop_stay_lbl, "%d min", 2 * (int)settings_get_wspr_hop_stay_cycles());
+        lv_label_set_text_fmt(s_hop_stay_lbl, c == 1 ? "%d cycle" : "%d cycles", c);
+    if (s_hop_stay_note)
+        lv_label_set_text_fmt(s_hop_stay_note, "One cycle is 2 min: %d min per band.", 2 * c);
 }
 
 static void hop_stay_step_cb(lv_event_t *e)
@@ -839,7 +846,7 @@ static void hop_stay_step_cb(lv_event_t *e)
     if (c < 1) c = 1;
     if (c > 30) c = 30;
     settings_set_wspr_hop_stay_cycles((uint8_t)c);
-    ESP_LOGI(TAG, "WSPR hop stay: %d min", 2 * c);
+    ESP_LOGI(TAG, "WSPR hop stay: %d cycle(s) = %d min", c, 2 * c);
     hop_stay_paint();
 }
 
@@ -872,17 +879,17 @@ static void hop_picker_extra(lv_obj_t *panel)
     lv_obj_set_style_text_color(s_hop_stay_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_align(s_hop_stay_lbl, LV_ALIGN_TOP_LEFT, x + 96, y + 70);
     hop_stay_btn(panel, LV_SYMBOL_PLUS, x + 296, y + 40, +1);
-    lv_obj_t *n = lv_label_create(panel);
-    lv_label_set_text(n, "One WSPR cycle is 2 minutes.");
-    lv_obj_set_style_text_font(n, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(n, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(n, LV_ALIGN_TOP_LEFT, x, y + 150);
+    s_hop_stay_note = lv_label_create(panel);
+    lv_obj_set_style_text_font(s_hop_stay_note, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_hop_stay_note, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(s_hop_stay_note, LV_ALIGN_TOP_LEFT, x, y + 150);
     hop_stay_paint();
 }
 
 static void hop_picker_closed(void)
 {
     s_hop_stay_lbl = NULL;
+    s_hop_stay_note = NULL;
     hop_button_refresh();
 }
 
