@@ -263,6 +263,12 @@ static bool tx_cmd(int64_t t0, const char *fmt_freq)
 // dropped stop-transmit command with no retry left a radio keyed until a
 // manual power cycle). Retries hard and hands off to the CAT layer's own
 // force-RX reassert if it never gets through.
+//
+// ⛔ STOPS ONLY. cat_request_force_rx() logs "the radio may still be
+// transmitting", which is false for a key-down that never got through.
+// Randy N4OPI's log, 2026-11-26: the QMX had left USB, a slot ran anyway, and
+// TX; failing here raised that alarm for a radio that was never keyed. The
+// key-down uses tx_cmd_keydown() below.
 static bool tx_cmd_critical(int64_t t0, const char *cmd)
 {
     if (s_burst_sim) {
@@ -281,6 +287,36 @@ static bool tx_cmd_critical(int64_t t0, const char *cmd)
     }
     ESP_LOGE(TAG, "WSPR TX: %s NEVER GOT THROUGH - handing to CAT to re-assert", cmd);
     cat_request_force_rx();
+    return false;
+#else
+    ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
+    return true;
+#endif
+}
+
+// The key-down: same retries as a stop, but a failure is NOT handed to the
+// force-RX path. *link_gone is set when the CDC device vanished (the bytes
+// never left the Tab5), so the caller knows nothing can be keyed.
+static bool tx_cmd_keydown(int64_t t0, const char *cmd, bool *link_gone)
+{
+    *link_gone = false;
+    if (s_burst_sim) {
+        ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
+        return true;
+    }
+#if WSPR_TX_SEND_LIVE
+    esp_err_t err = ESP_FAIL;
+    for (int i = 0; i < WSPR_TX_STOP_RETRIES; i++) {
+        err = cat_send_raw_cmd("%s", cmd);
+        if (err == ESP_OK) {
+            if (i) ESP_LOGW(TAG, "%s succeeded on attempt %d", cmd, i + 1);
+            return true;
+        }
+        ESP_LOGW(TAG, "%s FAILED (0x%x), attempt %d/%d - retrying", cmd, err, i + 1, WSPR_TX_STOP_RETRIES);
+        if (err == ESP_ERR_INVALID_STATE) break;   // no CDC device: retrying cannot help
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    *link_gone = (err == ESP_ERR_INVALID_STATE) || !cat_is_ready();
     return false;
 #else
     ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
@@ -503,6 +539,19 @@ static void run_burst(const wspr_tx_request_t *req)
         }
     }
 
+    /* ⛔ NO RADIO, NO BURST. A LIVE build had no CAT check here; only the
+     * dry-run arm path had one. Randy N4OPI, 2026-11-26: the QMX had left USB,
+     * 325 s later the armed slot still ran - held the CAT poll for a burst and
+     * logged a lost stop for a radio that was not there. Skip the slot before
+     * the "burst starting" line, the poll hold and the key-down. The beacon
+     * stays armed for the next cycle, like the other refusals above. */
+    if (!s_burst_sim && WSPR_TX_SEND_LIVE && !cat_is_ready()) {
+        ESP_LOGW(TAG, "WSPR TX slot skipped: no radio (CAT link down) - nothing keyed");
+        ui_toast_ms("WSPR slot skipped: no radio connected.", 8000);
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
+
     uint32_t rf_hz = cat_get_frequency() + (uint32_t)req->audio_freq_hz;
     ESP_LOGW(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm declared, base=%d Hz "
                   "(RF %lu.%06lu MHz), PA=%d.%d V%s%s",
@@ -547,12 +596,15 @@ static void run_burst(const wspr_tx_request_t *req)
      * power readback; WSPR checked nothing at all for the one command its
      * whole burst depends on.
      *
-     * tx_cmd_critical() is the same retry-hard-then-force-RX helper this
-     * file already uses for the STOP command, reused here because a failed
-     * key-down deserves the same treatment: know for certain, and leave the
-     * radio in a safe, known state either way. */
-    bool keyed = tx_cmd_critical(t0, "TX;");
+     * tx_cmd_keydown() retries like the stop does, but does NOT raise
+     * force-RX (2026-11-26, see tx_cmd_critical()). When the device is gone
+     * the bytes never left the Tab5 and nothing was keyed. When the device is
+     * still there, a failed write may still have reached the radio, so a
+     * normal stop follows - and that stop keeps its force-RX fallback. */
+    bool link_gone = false;
+    bool keyed = tx_cmd_keydown(t0, "TX;", &link_gone);
     if (!keyed) {
+        if (!link_gone) tx_cmd_critical(t0, "RX;");
         ESP_LOGE(TAG, "WSPR TX FAILED: key-down (TX;) never reached the radio - "
                       "NOTHING WAS TRANSMITTED this cycle");
         ui_toast_ms("WSPR did not transmit: the key-down command never reached "

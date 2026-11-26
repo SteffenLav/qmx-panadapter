@@ -195,6 +195,10 @@ static void over_task(void *arg)
     /* ⛔ THE MODE SWITCH AND THE DIAL MOVE GO BEFORE cat_poll_hold(): with
      * the poll held, a write is parked, not sent, and its readback never
      * comes. The radio stays in DiGi after the over, as after FT8 TX. */
+    /* No radio, no over (2026-11-26, sibling of the WSPR fix): otherwise
+     * TX; fails silently and key_up()'s force-RX logs a false "may still be
+     * transmitting". */
+    if (!cat_is_ready()) { snprintf(err, sizeof err, "no radio connected"); goto refused; }
     if (s_need_digi && !to_digi(err, sizeof err)) goto refused;
     if (s_need_qsy && !qsy(&s_dial, &s_centre, err, sizeof err)) goto refused;
     /* ⛔ BAND GUARD, right above key-down, on the dial actually in force. */

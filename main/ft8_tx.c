@@ -1279,7 +1279,14 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                                tx_dial + (uint32_t)req->audio_freq_hz + 50u,
                                ftx_protocol_name(req->protocol),
                                band_err, sizeof band_err);
-    if (!band_ok) {
+    if (!sim && FT8_TX_SEND_LIVE && !cat_is_ready()) {
+        /* ⛔ NO RADIO, NO BURST (2026-11-26, sibling of the WSPR fix). The
+         * mode string and dial are CACHED, so with the QMX gone they still
+         * pass, the key-down fails silently and the stop's force-RX then logs
+         * "the radio may still be transmitting" for a radio that is absent. */
+        ESP_LOGW(TAG, "TX skipped before key-down: no radio (CAT link down)");
+        ft8_status_set("TX skipped: no radio");
+    } else if (!band_ok) {
         ESP_LOGE(TAG, "TX aborted before key-up: %s", band_err);
         ui_toast_alert_ms(band_err, 15000);
         ft8_status_set("%s", band_err);
