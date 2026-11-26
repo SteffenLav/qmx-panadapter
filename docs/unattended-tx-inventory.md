@@ -66,7 +66,9 @@ and called it "the automatic reply function", which is exactly what it is.
   That is not a defect: a beacon, a CQ run and an auto-answer are all features
   somebody asked for. The point is that the number should never be a surprise.
 - ⚠ **FT8/FT4 band hopping moves these sites to other bands** (operator,
-  2026-11-26). `ft8_hop.c` arms nothing, so it is not a row. But since then a
+  2026-11-26). ⛔ **Switched off in v2.1.2** (`FT8_HOP_ENABLED 0`,
+  `main/storage/settings.h`): the hop mask reads as 0, so nothing below
+  applies to a released build until it is switched back on. `ft8_hop.c` arms nothing, so it is not a row. But since then a
   CQ run, auto-answer and auto-work pileup keep running through a hop, so
   they transmit on every band the operator ticked, not only the one he
   dialled. The hop waits for a QSO with a partner; each key-down still passes
