@@ -394,6 +394,14 @@ static void run_burst(const wspr_tx_request_t *req)
 {
     s_abort_requested = false;
     s_burst_sim = sim_active();
+    /* ⛔ Armed in simulation, sim now OFF: never keyed for real (2026-11-26,
+     * the FT8 phantom reply that keyed 40 m). Same shape as the refusals
+     * below: back to IDLE, nothing keyed. */
+    if (req->armed_in_sim && !s_burst_sim) {
+        ESP_LOGW(TAG, "WSPR burst refused: armed in simulation mode, which is now off - not keyed");
+        s_state = WSPR_TX_IDLE;
+        return;
+    }
     /* ⭐ SELF-LABELLING. The PA voltage in force goes in the burst's OWN start
      * line, because attributing a burst to a voltage AFTERWARDS from separate
      * log lines is exactly what went wrong on 2026-08-29: three bursts, two
@@ -972,6 +980,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
         return false;
     }
     s_armed = *req;
+    s_armed.armed_in_sim = sim_active();   /* checked in run_burst(), as ft8_tx.c */
     s_state = WSPR_TX_ARMED;
     s_disarm_requested = false;
     unlock();

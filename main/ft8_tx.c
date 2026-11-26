@@ -958,6 +958,11 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
         return false;
     }
     s_armed = *req;
+    /* ⛔ STAMPED HERE, CHECKED IN ft8_tx_run(). A request armed in sim mode
+     * must never key the radio for real: sim was read when the burst RAN, so a
+     * reply to a phantom armed just before sim went OFF went out on 40 m into
+     * a 20 m antenna (shack sim, 2026-11-26, SWR latch). `sim` is read above. */
+    s_armed.armed_in_sim = sim;
     s_state = FT8_TX_ARMED;
     unlock();
 
@@ -1284,7 +1289,12 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                                tx_dial + (uint32_t)req->audio_freq_hz + 50u,
                                ftx_protocol_name(req->protocol),
                                band_err, sizeof band_err);
-    if (!sim && FT8_TX_SEND_LIVE && !cat_is_ready()) {
+    if (req->armed_in_sim && !sim) {
+        /* See the stamp in ft8_tx_arm(). Sim went OFF after this was armed. */
+        ESP_LOGW(TAG, "TX refused before key-down: '%s' was armed in simulation mode, "
+                      "which is now off - not keyed", req->display_text);
+        ft8_status_set("TX refused: armed in simulation");
+    } else if (!sim && FT8_TX_SEND_LIVE && !cat_is_ready()) {
         /* ⛔ NO RADIO, NO BURST (2026-11-26, sibling of the WSPR fix). The
          * mode string and dial are CACHED, so with the QMX gone they still
          * pass, the key-down fails silently and the stop's force-RX then logs

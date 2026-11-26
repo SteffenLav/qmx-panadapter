@@ -70,6 +70,9 @@ typedef struct {
     char     display_text[32];               // e.g. "K1ABC OZ1LAV JO45ab"
     char     extra_field[16];                // for ROGER_RPT: "R-10"; for 73: "73";
                                               // Field Day: "R 32A WCF" / "16A EMA"
+    bool     armed_in_sim;                   // set by ft8_tx_arm(), never by a caller:
+                                              // sim mode was ON when this was armed, so
+                                              // ft8_tx_run() never keys it for real
 } ft8_tx_request_t;
 
 // Default base audio tone (Hz) for an originated CQ call - there's no

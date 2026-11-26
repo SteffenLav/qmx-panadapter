@@ -24,6 +24,11 @@
 #include "ft8_qso.h"
 #include "ui/ft8_screen.h"
 #include "ft8_pileup.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - sim off ends auto-answer
+#include "js8_ftx.h"     // js8_ftx_cancel - sim off ends a free-text run
+
+/* Set by ft8_sim_turned_off() (sim switched OFF), drained by ft8_sim_task. */
+static volatile bool s_robot_down_pending;
 #include "storage/settings.h"
 #include "ft8/message.h"
 
@@ -606,6 +611,10 @@ static void ft8_sim_task(void *arg)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));
+        if (s_robot_down_pending) {
+            s_robot_down_pending = false;
+            ft8_robot_stand_down("simulation turned off");
+        }
 
         qmx_settings_t s;
         settings_load_all(&s);
@@ -853,8 +862,36 @@ static void ft8_sim_task(void *arg)
     }
 }
 
+/* ---- simulation turned OFF -------------------------------------------------
+ * ⛔ A REPLY TO A PHANTOM KEYED THE REAL RADIO (shack sim, 2026-11-26): sim
+ * went OFF with a phantom K9ZZ in the pileup and auto-answer on; a reply
+ * 'K9ZZ OZ1LAV +15' was armed and keyed for real on 40 m into a 20 m antenna
+ * (aborted at symbol 22, QMX+ SWR latch). This task only noticed sim was off
+ * on its next 500 ms loop, and it never touched an armed TX or the QSO.
+ *
+ * So the stand-down runs at the setting write itself (settings_on_sim_off),
+ * on the writer's task: httpd, taskLVGL or main. Everything here is small
+ * and lock-based, and each lock is NULL-safe before the FT8 engine has run.
+ * ft8_robot_stand_down() puts a qmx_settings_t on the stack, which httpd
+ * must not carry, so it is left to this task's loop.
+ *
+ * The second lock is in ft8_tx_run() / run_burst(): a request armed while
+ * sim was ON is never keyed for real, whatever this misses. */
+static void ft8_sim_turned_off(void)
+{
+    ESP_LOGW(TAG, "simulation OFF: disarming TX, ending the QSO/CQ run, clearing phantoms");
+    js8_ftx_cancel();          /* a multi-frame run would re-arm its next frame */
+    ft8_tx_disarm();           /* the ARMED request */
+    ft8_tx_request_abort();    /* a burst on air (a sim burst: latched at its start) */
+    ft8_qso_abort();           /* the exchange, and the CQ run with it */
+    ft8_pileup_clear();        /* phantom callers auto-work would call */
+    ft8_screen_clear();        /* phantom decodes the robot would answer */
+    s_robot_down_pending = true;
+}
+
 void ft8_sim_init(void)
 {
+    settings_on_sim_off(ft8_sim_turned_off);
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_sim_task, "ft8_sim", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,

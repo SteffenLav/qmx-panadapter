@@ -1521,6 +1521,10 @@ void settings_set_fd_section(const char *section);
 // FT8 simulation mode (debounced flush): phantom-station practice mode -
 // see ft8_sim.h. The real QMX is never keyed while this is on.
 void settings_set_sim_mode_en(bool v);
+/* Called synchronously, on the caller's task, when sim_mode_en changes from
+ * true to false - see ft8_sim_turned_off(). One hook; settings.c cannot
+ * depend on the FT8 modules. */
+void settings_on_sim_off(void (*cb)(void));
 void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_rx_cycles(uint8_t v);   // clamped 1-20

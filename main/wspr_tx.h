@@ -67,6 +67,7 @@ typedef struct {
     int     power_dbm;
     int     audio_freq_hz;      // base AF tone; the 4 FSK tones are this + tone*1.4648 Hz
     uint8_t tones[162];         // pre-encoded channel-order tone indices (0-3)
+    bool    armed_in_sim;       // set by wspr_tx_arm(): never keyed for real (see ft8_tx.h)
 } wspr_tx_request_t;
 
 // Usable WSPR audio passband on the QMX (Hz) - mirrors FT8_TX_TONE_MIN/MAX_HZ's

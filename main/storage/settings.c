@@ -4599,6 +4599,10 @@ void settings_set_fd_section(const char *section)
     mark_dirty(DIRTY_FD_SECTION);
 }
 
+static void (*s_sim_off_cb)(void);
+
+void settings_on_sim_off(void (*cb)(void)) { s_sim_off_cb = cb; }
+
 void settings_set_sim_mode_en(bool v)
 {
     if (!s_ready) return;
@@ -4607,6 +4611,9 @@ void settings_set_sim_mode_en(bool v)
     s_pending.sim_mode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SIM_MODE);
+    /* AFTER the write: anything that re-arms from here on reads sim OFF and
+     * finds nothing phantom left to answer. */
+    if (!v && s_sim_off_cb) s_sim_off_cb();
 }
 
 void settings_set_wspr_dial_hz(uint32_t v)
