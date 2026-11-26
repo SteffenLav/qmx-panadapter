@@ -114,15 +114,23 @@ static const char *TAG = "ui";
  * sites and WATERFALL_H derives from it at 32 more, so rather than edit 83
  * call sites the macro now expands to the variable and every site follows.
  *
- * ⛔ THE TWO CANVASES ARE ALLOCATED ONCE, AT SPECTRUM_H_MAX / the waterfall
- * height that goes with SPECTRUM_H_MIN - never re-allocated on a drag. Both
- * row strides are independent of the height (DISPLAY_H_RES and WF_CANVAS_W),
- * so a shorter canvas is simply the top of the same buffer. Re-allocating
- * PSRAM inside a touch handler, with the render task reading the old pointer
- * on the other core, is a use-after-free waiting for a busy band.
+ * ⛔⛔ THE CANVASES ARE SIZED TO THE CURRENT SPLIT, NOT TO THE RANGE.
  *
- * Costs ~1.3 MB more PSRAM of ~15 MB free. Measured sizes at the defaults:
- * spectrum 1280x200x2 = 500 KB, waterfall 1792x740x2 = 2.53 MB. */
+ * v2.1.1 allocated both at the maximum (spectrum 400 rows, waterfall 470) for
+ * the life of the session: +1.23 MB of PSRAM, measured as a 1.24 MB step in
+ * bench1's memledger "net/spot" line (13.24 -> 12.00 MB free). WSPR needs
+ * ~11.5 MB and no longer fit: Bryan N0LUF, 2026-11-26, "waiting for memory
+ * ... then out of memory", black waterfall, fixed by going back to v2.1.0.
+ *
+ * Now: allocated at the saved split - 3.16 MB at the default 200 rows, the
+ * same as v2.1.0; the waterfall's rows count double, so the worst case is
+ * 3.62 MB at 100 rows (+0.46 MB, WSPR keeps ~1.2 MB of margin) and 400 rows
+ * takes 2.24 MB. Grown to the maximum
+ * when a drag starts, cut back to the exact size on release - see
+ * split_canvases_resize(). That is safe: both writers (ui_push_spectrum,
+ * ui_push_waterfall_row) hold display_lock, and the drag handler runs on the
+ * LVGL task, which holds it. The waterfall is cleared on release anyway, so
+ * re-pointing its canvas twice per drag costs no history. */
 #define SPECTRUM_H_MIN  100
 #define SPECTRUM_H_MAX  400
 #define SPECTRUM_H_DEF  200
@@ -2611,8 +2619,8 @@ static void ui_set_zoom_pan(float zoom, int pan_bins)
 
 #define WF_H_OF(spec_h) (DISPLAY_V_RES - TOP_BAR_H - (spec_h) - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
 #define WATERFALL_H     WF_H_OF(SPECTRUM_H)
-/* The tallest waterfall is the one that goes with the SHORTEST spectrum - that
- * is the allocation, and it never changes. 470 rows at the current numbers. */
+/* The tallest waterfall is the one that goes with the SHORTEST spectrum - the
+ * allocation only DURING a split drag (see the note on SPECTRUM_H). 470 rows. */
 #define WATERFALL_H_MAX WF_H_OF(SPECTRUM_H_MIN)
 
 /* ⭐ THE WATERFALL CANVAS IS WIDER THAN THE SCREEN (#298 phase 3).
@@ -4889,6 +4897,10 @@ static int     s_wf_stroll_off = 0;   /* the pan gesture's own offset, added on 
 
 static void wf_apply_x(void);    /* defined beside the row push, used from ui_init */
 static void wf_clear_all(void);
+/* Rows the canvas buffers hold now (T216 / Bryan N0LUF - see SPECTRUM_H). The
+ * waterfall buffer is 2 x s_wf_alloc_h rows (the double-buffer scroll). */
+static int s_spec_alloc_h = 0;
+static int s_wf_alloc_h   = 0;
 /* T216. Declared here because split_drag_cb (build_label_bar, far above the
  * definition) calls it with final=false for the live drag. */
 static void ui_apply_spectrum_h(int h, bool final);
@@ -6660,11 +6672,9 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_spectrum_obj, 0, 0);
     lv_obj_clear_flag(s_spectrum_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* 1280 x 400 x 2 bytes = 1.02 MB in PSRAM - allocated at SPECTRUM_H_MAX,
-     * never re-allocated. A shorter spectrum uses the top SPECTRUM_H rows of
-     * this buffer; the row stride is DISPLAY_H_RES either way. See the note on
-     * SPECTRUM_H. */
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H_MAX, 16,
+    /* 1280 x SPECTRUM_H x 2 bytes in PSRAM, at the CURRENT split - see the
+     * note on SPECTRUM_H and split_canvases_resize(). */
+    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H, 16,
                                          LV_DRAW_BUF_STRIDE_ALIGN);
     s_spec_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_spec_canvas_buf) {
@@ -6672,6 +6682,7 @@ static void build_spectrum(lv_obj_t *parent)
         return;
     }
     memset(s_spec_canvas_buf, 0, buf_size);
+    s_spec_alloc_h = SPECTRUM_H;
 
     /* 2.5 KB in INTERNAL RAM: touched once per column per push on core 1, and
      * the whole point of it is to keep work off core 0. A failure here is not
@@ -7970,15 +7981,15 @@ static void build_waterfall(lv_obj_t *parent)
     // Allocate 2x WATERFALL_H so we can use the "double buffer" scroll trick:
     // new rows are written to both write_head and write_head+WATERFALL_H positions,
     // and the canvas view pointer moves through the buffer instead of memmove'ing.
-    /* At WATERFALL_H_MAX, not WATERFALL_H - the split moves, the buffer does
-     * not. 1792 x 940 x 2 = 3.37 MB. The mirror offset and the head modulus
-     * are the CURRENT WATERFALL_H, which is always <= this. */
-    size_t buf_size = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, WATERFALL_H_MAX * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    /* At the CURRENT WATERFALL_H (1792 x 740 x 2 = 2.65 MB at the default
+     * split), not WATERFALL_H_MAX - see the note on SPECTRUM_H. */
+    size_t buf_size = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
         ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_size);
         return;
     }
+    s_wf_alloc_h = WATERFALL_H;
 
     s_wf_canvas = lv_canvas_create(s_waterfall_obj);
     lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_CLICKABLE);
@@ -8042,12 +8053,11 @@ static void build_waterfall(lv_obj_t *parent)
      * So the canvas now owns the ENTIRE 2x-height buffer for the whole session,
      * and the view window is chosen with lv_image_set_offset_y(), which is a
      * field write plus an invalidate - no cache drop, no set_src. */
-    /* ⛔ THE SOURCE HEIGHT IS WATERFALL_H_MAX * 2 AND IS SET ONCE, EVER.
-     * Re-pointing it on a split change would reintroduce the blink described
-     * above, once per drag. Only the OBJECT's height follows the split, below;
-     * the window into this source stays an offset_y. */
+    /* The source height is 2 x the allocated rows. It is re-pointed only by
+     * split_canvases_resize() - twice per split drag, never per row, so the
+     * per-row blink described above cannot come back through it. */
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
-                         WF_CANVAS_W, WATERFALL_H_MAX * 2, LV_COLOR_FORMAT_RGB565);
+                         WF_CANVAS_W, s_wf_alloc_h * 2, LV_COLOR_FORMAT_RGB565);
     /* set_buffer sized the object to the SOURCE (2x tall). Clamp it back to one
      * screenful, which is what makes the offset a window rather than a scroll
      * of an oversized object. */
@@ -8062,7 +8072,7 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
-    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H_MAX * 2 * 2);
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * s_wf_alloc_h * 2 * 2);
     wf_apply_x();   /* the view starts centred in the slack, not at column 0 */
     lv_obj_invalidate(s_wf_canvas);
 
@@ -13902,10 +13912,10 @@ static void wf_apply_x(void)
 
 /* ⭐ MOVE THE SPECTRUM/WATERFALL BOUNDARY (T216, Robert VE7ZN).
  *
- * Everything that follows is pure geometry plus two invalidations. The buffers
- * are already big enough for any height in the range (see SPECTRUM_H) so
- * nothing is allocated or freed here - which is what makes it safe to call
- * from the drag handler while the render task is mid-push on the other core.
+ * Geometry plus two invalidations, and the canvas buffers are re-sized at the
+ * first drag step and on release (split_canvases_resize, see the note on
+ * SPECTRUM_H). Safe from the drag handler because the render task's pushes
+ * take display_lock, which the LVGL task holds while it runs this.
  *
  * ⛔ THE WATERFALL IS CLEARED, DELIBERATELY. Its rows live in a ring whose
  * modulus IS the old WATERFALL_H; reinterpreting them against a new modulus
@@ -13926,10 +13936,75 @@ static void wf_apply_x(void)
  * final=false (geometry only) and once with final=true on release. */
 void ui_set_spectrum_h(int h) { ui_apply_spectrum_h(h, true); }
 
+/* Re-size both canvas buffers to hold spec_rows / wf_rows (see the note on
+ * SPECTRUM_H). Caller holds display_lock - in practice the LVGL task. The new
+ * buffers are taken BEFORE the old are freed: a failure keeps the old ones
+ * and returns false, never leaves a canvas pointing at nothing. Contents are
+ * cleared; the callers clear them anyway. */
+static bool split_canvases_resize(int spec_rows, int wf_rows)
+{
+    if (spec_rows == s_spec_alloc_h && wf_rows == s_wf_alloc_h) return true;
+    if (!s_spec_canvas_buf || !s_wf_canvas_buf) return false;
+    const size_t spec_sz = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, spec_rows, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    const size_t wf_sz   = LV_CANVAS_BUF_SIZE(WF_CANVAS_W, wf_rows * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    uint8_t *sp = heap_caps_malloc(spec_sz, MALLOC_CAP_SPIRAM);
+    uint8_t *wf = heap_caps_malloc(wf_sz, MALLOC_CAP_SPIRAM);
+    if (!sp || !wf) {
+        heap_caps_free(sp);
+        heap_caps_free(wf);
+        ESP_LOGW(TAG, "split: no PSRAM to re-size the canvases to %d/%d rows - kept %d/%d",
+                 spec_rows, wf_rows, s_spec_alloc_h, s_wf_alloc_h);
+        return false;
+    }
+    memset(sp, 0, spec_sz);
+    memset(wf, 0, wf_sz);
+
+    /* Re-point first, free second: nothing may draw from a freed buffer. */
+    uint8_t *old_sp = s_spec_canvas_buf, *old_wf = s_wf_canvas_buf;
+    s_spec_canvas_buf = sp;
+    s_wf_canvas_buf   = wf;
+    s_spec_alloc_h    = spec_rows;
+    s_wf_alloc_h      = wf_rows;
+    if (s_spec_canvas) {
+        lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
+                             DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    }
+    if (s_wf_canvas) {
+        lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
+                             WF_CANVAS_W, s_wf_alloc_h * 2, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_size(s_wf_canvas, WF_CANVAS_W, WATERFALL_H);
+        lv_image_set_inner_align(s_wf_canvas, LV_IMAGE_ALIGN_TOP_LEFT);
+        s_wf_head = 0;
+        lv_image_set_offset_y(s_wf_canvas, 0);
+        wf_apply_x();
+        lv_obj_invalidate(s_wf_canvas);
+    }
+    s_frame_ytop_valid = false;
+    heap_caps_free(old_sp);
+    heap_caps_free(old_wf);
+    ESP_LOGI(TAG, "split: canvases now %d + 2x%d rows (%u KB)", spec_rows, wf_rows,
+             (unsigned)((spec_sz + wf_sz) / 1024));
+    return true;
+}
+
 static void ui_apply_spectrum_h(int h, bool final)
 {
     if (h < SPECTRUM_H_MIN) h = SPECTRUM_H_MIN;
     if (h > SPECTRUM_H_MAX) h = SPECTRUM_H_MAX;
+
+    /* A live drag step needs room for ANY height in the range: grow to the
+     * maximum once, at the first step that moves. If PSRAM cannot give it,
+     * the drag does not move - never a canvas taller than its buffer. */
+    if (!final && h != s_spectrum_h &&
+        (s_spec_alloc_h < SPECTRUM_H_MAX || s_wf_alloc_h < WATERFALL_H_MAX) &&
+        !split_canvases_resize(SPECTRUM_H_MAX, WATERFALL_H_MAX))
+        return;
+    /* A final call to a height the buffers cannot hold (a call that did not
+     * come through a drag): grow to exactly that height first. */
+    if (final && (h > s_spec_alloc_h || WF_H_OF(h) > s_wf_alloc_h) &&
+        !split_canvases_resize(h, WF_H_OF(h)))
+        return;
 
     /* ⛔ A final call with the height UNCHANGED still has work to do - it is
      * how the drag's release commits the clears it skipped per frame. Only the
@@ -13985,8 +14060,10 @@ static void ui_apply_spectrum_h(int h, bool final)
      * false peaks along the new bottom edge.
      *
      * This is deferred to `final` because a stale peak y is not a memory
-     * fault: the canvas buffer is allocated at SPECTRUM_H_MAX rows, so a write
-     * past the current height lands in allocated-but-unseen memory. It is a
+     * fault: during a drag the canvas buffer is grown to SPECTRUM_H_MAX rows
+     * (split_canvases_resize), so a write past the current height lands in
+     * allocated-but-unseen memory; the final call resets the peaks in the
+     * same locked call that cuts the buffer back. It is a
      * visual artefact for the length of the drag and nothing more. */
     s_frame_ytop_valid = false;             /* partial invalidate has no valid previous frame */
 
@@ -13997,6 +14074,9 @@ static void ui_apply_spectrum_h(int h, bool final)
     }   /* end if (changed) */
 
     if (final) {
+        /* Back to exactly what this split needs (see the note on SPECTRUM_H).
+         * A failure keeps the larger buffers, which is safe, only wasteful. */
+        split_canvases_resize(SPECTRUM_H, WATERFALL_H);
         if (s_peak_buk)
             for (int i = 0; i < PEAK_BUCKETS * DISPLAY_H_RES; i++)
                 s_peak_buk[i] = (int16_t)SPECTRUM_H;
@@ -14013,7 +14093,7 @@ int ui_get_spectrum_h(void) { return s_spectrum_h; }
 static void wf_clear_all(void)
 {
     if (!s_wf_canvas_buf) return;
-    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * WATERFALL_H_MAX * 2 * 2);
+    memset(s_wf_canvas_buf, 0, (size_t)WF_CANVAS_W * s_wf_alloc_h * 2 * 2);
     s_wf_view_x    = WF_MARGIN;
     s_wf_anchor_ok = false;          /* re-anchored on the next row */
     wf_apply_x();
