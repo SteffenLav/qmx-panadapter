@@ -251,6 +251,9 @@ browser: tap a signal, and **Auto** follows its speed, shift and polarity; **CQ*
 **Exch** and **73** in one press, or type live. **Receive audio no longer breaks up or drifts
 in pitch on a busy band.** See [RTTY](guide/rtty.md) and [Releases](releases.md).
 
+**v2.1.2 makes WSPR receive again** after v2.1.1 ran it out of memory, and "Who has heard me"
+now keeps the whole day of PSK Reporter reports. See [Releases](releases.md).
+
 **v2.1.1 brings a busy-dropped FT8 pounce back.** If the station answers within 5 minutes
 the QSO resumes, and when it finishes with the other station the Tab5 calls it again. Also
 Tap to Auto-work, a spectrum/waterfall boundary you can drag, stereo binaural CW in the
@@ -458,7 +461,7 @@ given a static IP address.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.1.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v2.1.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

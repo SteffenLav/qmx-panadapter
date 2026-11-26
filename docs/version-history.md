@@ -4943,3 +4943,29 @@ Commits: `v2.0.2..v2.1.0`.
 **What can key the radio** - no new arming site; the `rearm_current` row names the resume triggers.
 
 Commits: `v2.1.0..v2.1.1`.
+
+### Shipped in v2.1.2 — 2026-11-26
+
+**WSPR receives again, and "Who has heard me" keeps the whole day.**
+
+- **WSPR works again** *(Bryan N0LUF)*. In v2.1.1 the WSPR page said "waiting for memory", then "out of memory", and heard nothing. The resizable spectrum held memory that WSPR needs. It now takes that memory only while you drag the split.
+- **"Who has heard me" keeps 24 hours** *(Randy N4OPI)*. PSK Reporter answers each query with only about the last hour, so the list emptied an hour after you stopped transmitting. The Tab5 now adds each answer to what it holds. After a restart the panel says from what time its list is complete.
+- **"Who has heard me" says why when no query ran**, instead of "nobody heard you".
+- **Leaving WSPR puts back the radio's Max. PA voltage** *(Randy N4OPI)*. Before, the QMX stayed at the voltage WSPR set for its declared power.
+- **No TX, and no "may still be transmitting" warning, when the radio is not connected** *(Randy N4OPI)*. WSPR, FT8 and RTTY skip the slot.
+- **An FT8, FT4 or JS8 QSO is not logged without a received report.** If the report comes a slot late, the QSO is logged with it. If none comes within two of the other station's periods, the QSO is not logged.
+- **WSPR band hop: stay on each band for 1 to 30 cycles**, set with - / + in the band hop picker and on the web page. The picker has larger text and the bands in three columns.
+- **The TX CQ period is kept across a restart** and can be set on the web page.
+- **Web page: changing the WSPR dial retunes the radio only while WSPR runs.**
+- **ADIF log view: the list no longer goes blank after a single delete.**
+- **FT8 Simulation Mode: a TX armed in simulation never keys the radio after you switch simulation off.**
+- **The Tab5 retries WiFi by itself** when the WiFi chip stays silent after start-up, instead of waiting for a restart.
+- **One cause of a restart when the radio is unplugged or power-cycled during a USB reconnect is fixed.**
+
+**Known, not fixed**
+
+- Not seen on a Tab5 for this build: a late report completing a held QSO, the Max. PA voltage restore, the skip with no radio connected, and the WiFi retry.
+
+**What can key the radio** - the [unattended-TX inventory](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/unattended-tx-inventory.md) now lists the CW page's message send (`send_cw_text`), which was missing. It is a press or a browser request. Nothing new can key the radio.
+
+Commits: `v2.1.1..v2.1.2`.
