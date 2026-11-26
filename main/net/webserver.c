@@ -8825,10 +8825,16 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
 
     cJSON *root = cJSON_CreateObject();
     if (!root) { heap_caps_free(rep); return httpd_resp_send_500(req); }
-    qmx_settings_t qs;
-    settings_load_all(&qs);
-    cJSON_AddBoolToObject(root,   "enabled",   qs.psk_rx_en);
+    /* Narrow getters, not a qmx_settings_t: 4268 B on the httpd stack is the
+     * class that crashed httpd in a1fee563. */
+    cJSON_AddBoolToObject(root,   "enabled",   settings_get_psk_rx_en());
     cJSON_AddNumberToObject(root, "age_s",     psk_rx_age_s());
+    {
+        const char *held = psk_rx_hold_reason();
+        if (held) cJSON_AddStringToObject(root, "held", held);
+        int fs = psk_rx_last_fail_status();
+        if (fs) cJSON_AddNumberToObject(root, "fail_status", fs);
+    }
     cJSON_AddNumberToObject(root, "receivers", psk_rx_unique_receivers());
     cJSON_AddNumberToObject(root, "max_km",    psk_rx_max_distance_km());
     // Randy N4OPI: "Who Is Hearing Me: Distance is shown in km when it is
@@ -8838,7 +8844,7 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     // because this endpoint never had it. Sent rather than converted here so the
     // raw km stay authoritative and the browser does one conversion, exactly as
     // the decode list already does.
-    cJSON_AddBoolToObject(root,   "miles",     qs.distance_in_miles);
+    cJSON_AddBoolToObject(root,   "miles",     settings_get_distance_in_miles());
     // The set may be the part that fit rather than the whole answer - see
     // psk_rx_is_truncated(). The browser must be able to say so, because a
     // partial list and a quiet band look identical on screen.

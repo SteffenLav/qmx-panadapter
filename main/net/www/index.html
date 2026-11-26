@@ -5079,9 +5079,26 @@ function pskRenderTable() {
        ", last " + winTxt +
        ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
     : "";
+  /* ⛔ AN EMPTY LIST IS ONLY "NOBODY HEARD YOU" IF A QUERY ACTUALLY RAN.
+     Randy N4OPI, 2026-11-26: one unit "never shows who has heard me". Its log
+     had no query in 27 min, yet this said "Nobody has reported hearing you -
+     it is not an error". The device now says whether it queried and, if not,
+     what held it (d.held), and whether the last query failed (d.fail_status). */
+  const why = [];
+  if (d.held) why.push("Not asking PSK Reporter at the moment: " + d.held + ".");
+  if (d.fail_status) why.push("The last query to PSK Reporter failed (" +
+      (d.fail_status < 0 ? "no answer" : "HTTP " + d.fail_status) + ").");
+  const whyHtml = why.length
+    ? '<p style="color:#ffa040">' + why.join(" ") + '</p>' : "";
   if (!reps.length) {
+    if (d.age_s < 0) {
+      body.innerHTML = '<p style="color:#ffa040">This device has not had an answer from PSK Reporter ' +
+                       'yet, so it cannot say who has heard you.</p>' + whyHtml;
+      return;
+    }
     body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last ' + winTxt + '. ' +
-                     'That is the normal answer if you have not transmitted - it is not an error.</p>';
+                     'That is the normal answer if you have not transmitted - it is not an error. ' +
+                     '(Checked ' + Math.round(d.age_s / 60) + ' min ago.)</p>' + whyHtml;
     return;
   }
   let notice = "";
@@ -5109,7 +5126,7 @@ function pskRenderTable() {
     ? '<span class="arrow">' + (pskState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
   const th = key => '<th class="sortable" onclick="pskSetSort(\'' + key + '\')">' +
                      PSK_COLS[key].label + arrow(key) + '</th>';
-  body.innerHTML = notice +
+  body.innerHTML = notice + whyHtml +
     '<table style="width:100%; border-collapse:collapse;">' +
     '<tr style="color:#ffa040; text-align:left;">' +
     th("call") + th("dxcc") + th("km") + th("brg") + th("snr") + th("f") + th("mode") + th("age") +

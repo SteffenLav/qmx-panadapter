@@ -58,6 +58,12 @@ int  psk_rx_unique_receivers(void);
 // Seconds since the last successful query, or -1 if none has succeeded.
 int  psk_rx_age_s(void);
 
+// Why the last pass did NOT query, or NULL when nothing held it. Shown by the
+// web modal so "no query ran" never reads as "nobody heard you" (N4OPI).
+const char *psk_rx_hold_reason(void);
+// HTTP status of the last query when it failed (-1 = no answer), else 0.
+int  psk_rx_last_fail_status(void);
+
 // Furthest report in the current set, in km; -1 when no report carried a grid.
 int  psk_rx_max_distance_km(void);
 

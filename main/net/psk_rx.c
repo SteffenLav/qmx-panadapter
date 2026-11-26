@@ -65,6 +65,15 @@ static int64_t           s_last_ok_us;
 static int64_t           s_last_try_us;
 static volatile bool     s_refresh_req;
 
+/* ⛔ WHY NO QUERY RAN. Randy N4OPI, 2026-11-26: "it never shows who has heard
+ * me" on one unit. His log had no psk_rx line in 27 min, so no query ran - but
+ * the modal said "Nobody has reported hearing you... it is not an error",
+ * because an empty set read exactly like a quiet band. The task now records
+ * what stopped it, and the web modal says so. Pointers to string literals. */
+static const char * volatile s_hold;       // NULL = not held on the last pass
+static volatile bool     s_task_up;
+static volatile int      s_last_fail_status;   // 0 = last query OK or none yet
+
 static bool lock_ms(int ms)
 {
     return s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(ms)) == pdTRUE;
@@ -180,6 +189,9 @@ int psk_rx_max_distance_km(void)
     unlock();
     return best;
 }
+
+const char *psk_rx_hold_reason(void) { return s_task_up ? s_hold : "receiver task not running"; }
+int  psk_rx_last_fail_status(void)    { return s_last_fail_status; }
 
 int psk_rx_age_s(void)
 {
@@ -301,6 +313,7 @@ static void fetch_once(const char *mycall)
         int n = parse_body(buf);
         if (n >= 0) {
             s_last_ok_us = esp_timer_get_time();
+            s_last_fail_status = 0;
             if (ctx.dropped) {
                 // Say it out loud. This is the failure that used to be
                 // indistinguishable from "nobody heard you".
@@ -317,6 +330,7 @@ static void fetch_once(const char *mycall)
         // A 4xx here usually means we queried too often. Backing off is the
         // only correct response - retrying harder is how a client gets banned.
         ESP_LOGW(TAG, "query failed (status=%d err=0x%x)", status, err);
+        s_last_fail_status = status;   // -1 = no HTTP answer at all
     }
     heap_caps_free(buf);
 }
@@ -324,6 +338,7 @@ static void fetch_once(const char *mycall)
 static void psk_rx_task(void *arg)
 {
     (void)arg;
+    s_task_up = true;
     for (;;) {
         for (int i = 0; i < 20; i++) {          // 500 ms granularity for a prompt refresh
             vTaskDelay(pdMS_TO_TICKS(500));
@@ -335,14 +350,19 @@ static void psk_rx_task(void *arg)
         /* Narrow, same reason as parse_body() above. */
         char my_call[16] = {0};
         settings_get_my_callsign(my_call, sizeof(my_call));
-        if (!settings_get_psk_rx_en() || !my_call[0] || !wifi_is_connected()) continue;
+        if (!settings_get_psk_rx_en()) { s_hold = "switched off"; continue; }
+        if (!my_call[0])               { s_hold = "no callsign set"; continue; }
+        if (!wifi_is_connected())      { s_hold = "WiFi not connected"; continue; }
         // net_quiet: this query's response cap is 64 KB and it comes over TLS -
         // by far the largest periodic allocation on the device. Not during an
         // update, where internal free has been measured at 5 KB. See net_quiet.h.
         // Also not while RX audio is on (2026-09-20) - the single largest
         // periodic allocation on the device is exactly what audio needs the
         // room back from.
-        if (net_quiet_active() || bg_feed_gate_active() || rx_audio_holds_off_feeds()) continue;
+        if (net_quiet_active())        { s_hold = "a firmware update is running"; continue; }
+        if (bg_feed_gate_active())     { s_hold = "a full-screen page is open on the Tab5"; continue; }
+        if (rx_audio_holds_off_feeds()) { s_hold = "RX audio is on (Tab5 speaker or web audio)"; continue; }
+        s_hold = NULL;
 
         // One floor for both paths. An operator hammering a refresh button must
         // not be able to breach the collector's stated rate limit.
