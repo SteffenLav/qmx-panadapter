@@ -193,6 +193,8 @@ static const char *TAG = "settings";
 #define KEY_FT8_HOPM       "ft8_hopm"
 #define KEY_FT8_HOPDW      "ft8_hopdw"
 #define KEY_FT8_CQPAR      "ft8_cqpar"
+#define KEY_FT8_HOPSPL     "ft8_hopspl"
+#define KEY_WSPR_HOPST     "wspr_hopst"
 #define KEY_WSPR_EN        "wspr_en"
 #define KEY_WSPR_NET       "wspr_net"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
@@ -292,7 +294,7 @@ static const char *TAG = "settings";
  * taken every one of them while the comment still said 62. Bumped to 5 words
  * rather than land the next person on a full bitmap behind a wrong number.
  * Cost is 4 bytes. Recount before trusting this figure again. */
-#define DIRTY_WORDS      6                        /* 192 bits; highest used 166, 25 spare */
+#define DIRTY_WORDS      6                        /* 192 bits; highest used 168, 23 spare */
 #define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
 
 typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
@@ -515,6 +517,8 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_FT8_HOPM        164  /* FT8/FT4 receive band-hop mask */
 #define DIRTY_FT8_HOPDW       165  /* FT8/FT4 hop stay, minutes */
 #define DIRTY_FT8_CQPAR       166  /* TXCQ period: any / even / odd */
+#define DIRTY_FT8_HOPSPL      167  /* hop CQ split: EVEN 1st half, ODD 2nd */
+#define DIRTY_WSPR_HOPST      168  /* WSPR hop stay, 2-min cycles */
 #define DIRTY_MY_STATE        144  /* US state, for the directed-CQ filter */
 #define DIRTY_SPEC_PEAK       145  /* spectrum peak-hold window (A4) */
 #define DIRTY_CW_PEAK         146  /* CW audio peak filter width (A4) */
@@ -592,7 +596,7 @@ static const uint8_t s_config_export_bits[] = {
     /* config_io_export() prints these three. FT8_HOPM was missing from this
      * list when it was added (2026-11-25), so a hop-band change did not
      * re-mirror the file. */
-    DIRTY_FT8_HOPM, DIRTY_FT8_HOPDW, DIRTY_FT8_CQPAR,
+    DIRTY_FT8_HOPM, DIRTY_FT8_HOPDW, DIRTY_FT8_CQPAR, DIRTY_FT8_HOPSPL, DIRTY_WSPR_HOPST,
     /* ⛔ DIRTY_LOG_VIEW_ALL is deliberately NOT here, and neither are
      * DIRTY_CW_DECODE / DIRTY_CW_ROWS, although config_io_export() prints all
      * three. They are one-tap view preferences, and an SD mirror write per tap
@@ -967,6 +971,8 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_HOPM))     nvs_set_u16(s_nvs, KEY_FT8_HOPM, snap->ft8_hop_mask);
         if (dirty_test(&dirty_local, DIRTY_FT8_HOPDW))    nvs_set_u8(s_nvs, KEY_FT8_HOPDW, snap->ft8_hop_dwell_min);
         if (dirty_test(&dirty_local, DIRTY_FT8_CQPAR))    nvs_set_i8(s_nvs, KEY_FT8_CQPAR, snap->ft8_cq_parity);
+        if (dirty_test(&dirty_local, DIRTY_FT8_HOPSPL))   nvs_set_u8(s_nvs, KEY_FT8_HOPSPL, snap->ft8_hop_cq_split ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_HOPST))   nvs_set_u8(s_nvs, KEY_WSPR_HOPST, snap->wspr_hop_stay_cycles);
         if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap->wspr_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_NET))     nvs_set_u8(s_nvs, KEY_WSPR_NET,  snap->wspr_net_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap->ft8_op_mode);
@@ -1340,6 +1346,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->ft8_hop_mask  = 0;           /* FT8 hopping off until bands are ticked */
     out->ft8_hop_dwell_min = 2;       /* WSJT-X improved's period */
     out->ft8_cq_parity = -1;          /* TXCQ ANY */
+    out->ft8_hop_cq_split = false;    /* ANY: the TXCQ setting for the whole stay */
+    out->wspr_hop_stay_cycles = 1;    /* one 2-min cycle per band, as before */
     /* LAUNCHED 2026-08-28: the WSPR page is in the swipe cycle by default.
      * It shipped dark behind a seven-tap unlock while the bug rate had not
      * flattened; that is over. Transmitting is still opt-in (wspr_tx_en). */
@@ -1774,6 +1782,8 @@ static void load_from_nvs(qmx_settings_t *out)
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_FT8_HOPM, &u16v) == ESP_OK) out->ft8_hop_mask = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_FT8_HOPDW, &u8v) == ESP_OK) out->ft8_hop_dwell_min = u8v; }
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_FT8_CQPAR, &i8v) == ESP_OK) out->ft8_cq_parity = (i8v == 0 || i8v == 1) ? i8v : -1; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_FT8_HOPSPL, &u8v) == ESP_OK) out->ft8_hop_cq_split = (u8v != 0); }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_HOPST, &u8v) == ESP_OK) out->wspr_hop_stay_cycles = (u8v >= 1 && u8v <= 30) ? u8v : 1; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_EN,   &u8v) == ESP_OK) out->wspr_en   = (u8v != 0); }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_NET,  &u8v) == ESP_OK) out->wspr_net_en = (u8v != 0); }
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
@@ -2539,6 +2549,33 @@ uint8_t settings_get_ft8_hop_dwell_min(void)
     uint8_t v = s_pending.ft8_hop_dwell_min;
     xSemaphoreGive(s_mutex);
     return v;
+}
+
+bool settings_get_ft8_hop_cq_split(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.ft8_hop_cq_split;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+bool settings_get_ft8_auto_pileup(void)
+{
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool v = s_pending.ft8_filters.auto_pileup;
+    xSemaphoreGive(s_mutex);
+    return v;
+}
+
+uint8_t settings_get_wspr_hop_stay_cycles(void)
+{
+    if (!s_ready) return 1;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.wspr_hop_stay_cycles;
+    xSemaphoreGive(s_mutex);
+    return (v >= 1 && v <= 30) ? v : 1;
 }
 
 int settings_get_ft8_cq_parity(void)
@@ -4653,6 +4690,28 @@ void settings_set_ft8_hop_dwell_min(uint8_t v)
     s_pending.ft8_hop_dwell_min = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FT8_HOPDW);
+}
+
+void settings_set_ft8_hop_cq_split(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_hop_cq_split == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ft8_hop_cq_split = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_HOPSPL);
+}
+
+void settings_set_wspr_hop_stay_cycles(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v < 1) v = 1;
+    if (v > 30) v = 30;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_hop_stay_cycles == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_hop_stay_cycles = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_HOPST);
 }
 
 void settings_set_ft8_cq_parity(int v)

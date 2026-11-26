@@ -224,6 +224,8 @@ char *config_io_export(size_t *out_len)
     APP("ft8_hop_mask       = %u\n", (unsigned)c.ft8_hop_mask);
     APP("ft8_hop_minutes    = %u\n", (unsigned)c.ft8_hop_dwell_min);
     APP("ft8_cq_period      = %s\n", c.ft8_cq_parity == 0 ? "even" : c.ft8_cq_parity == 1 ? "odd" : "any");
+    APP("ft8_hop_cq_split   = %s\n", yn(c.ft8_hop_cq_split));
+    APP("wspr_hop_cycles    = %u\n", (unsigned)c.wspr_hop_stay_cycles);
     APP("wspr_publish       = %s\n", yn(c.wspr_net_en));
 
     // LoTW callsign cert + private key, single-line base64 DER (full-backup
@@ -643,6 +645,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "ft8_hop_minutes"))   settings_set_ft8_hop_dwell_min((uint8_t)atoi(val));
             else if (!strcasecmp(key, "ft8_cq_period"))     settings_set_ft8_cq_parity(
                          !strcasecmp(val, "even") ? 0 : !strcasecmp(val, "odd") ? 1 : -1);
+            else if (!strcasecmp(key, "ft8_hop_cq_split"))  settings_set_ft8_hop_cq_split(to_bool(val));
+            else if (!strcasecmp(key, "wspr_hop_cycles"))   settings_set_wspr_hop_stay_cycles((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wspr_publish"))      settings_set_wspr_net_en(to_bool(val));
             else break;   // unknown key: ignore, don't count
             applied++;

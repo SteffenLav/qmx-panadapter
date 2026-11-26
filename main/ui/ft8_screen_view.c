@@ -3248,7 +3248,9 @@ static void start_cq_run(bool interactive)
     char cq_text[28];
     ft8_cq_get_active_text(cq_text, sizeof(cq_text));
     if (ft8_tx_build_request_text(cq_text, cq_freq_hz, &req, err, sizeof(err))) {
-        const int cq_par = settings_get_ft8_cq_parity();
+        /* The hop's CQ split decides while hopping (ft8_hop_cq_parity). */
+        const int hop_par = ft8_hop_cq_parity();
+        const int cq_par = hop_par >= 0 ? hop_par : settings_get_ft8_cq_parity();
         if (cq_par >= 0) {
             req.use_parity     = true;
             req.want_even_slot = (cq_par == 0);
@@ -3453,8 +3455,13 @@ static void preset_button_paint(uint32_t hz)
         snprintf(h, sizeof h, "Hop paused: %s", hs.blocked);
         c = lv_color_hex(0xFFA040);                 /* amber: the TX-armed colour family */
     } else if (hs.next_band[0] && hs.secs_to_hop >= 0) {
-        snprintf(h, sizeof h, "Hop: next %sm in %d:%02d", hs.next_band,
-                 hs.secs_to_hop / 60, hs.secs_to_hop % 60);
+        if (hs.cq_period >= 0 && ft8_qso_get_state() == FT8_QSO_CQ)
+            snprintf(h, sizeof h, "Next %sm in %d:%02d, CQ %s"   /* 272 px at 18 pt: kept short */, hs.next_band,
+                     hs.secs_to_hop / 60, hs.secs_to_hop % 60,
+                     hs.cq_period == 0 ? "EVEN" : "ODD");
+        else
+            snprintf(h, sizeof h, "Hop: next %sm in %d:%02d", hs.next_band,
+                     hs.secs_to_hop / 60, hs.secs_to_hop % 60);
         c = lv_color_hex(0xA0E0A0);                 /* the drawer's section green */
     } else {
         snprintf(h, sizeof h, "Hop: %s", hs.bands);
@@ -5857,10 +5864,10 @@ void ft8_screen_view_request_refresh(void)
  * mask is shared by FT8 and FT4; FT4 has no 160 m or 60 m dial, so it skips
  * those (ft8_hop.c) - the hint says so rather than offering two lists. */
 #define FT8_HOP_HINT \
-    "Pick at least two bands. The radio moves to the next ticked\n" \
-    "band when the stay time ends, in the order below, then wraps.\n" \
-    "It hops only while the page is idle: never during a QSO,\n" \
-    "with TX armed, auto-answer or Hound on. FT4 skips 160 and 60."
+    "Pick at least two bands. The radio moves to the next ticked band\n" \
+    "when the stay ends. CQ, auto-answer and auto-work go with it, so\n" \
+    "it TRANSMITS on every ticked band. A QSO finishes before a hop.\n" \
+    "No hop with Hound on. FT4 skips 160 and 60."
 
 static void ft8_hop_mask_changed(uint16_t mask)
 {
@@ -5868,13 +5875,14 @@ static void ft8_hop_mask_changed(uint16_t mask)
     ft8_screen_view_refresh_preset();   /* the band line says what hops */
 }
 
-/* ---- the picker's right column: stay time and TXCQ period ------------------
- * Operator, 2026-11-26: the stay is adjustable (1-30 min) and the TXCQ period
- * sits here as well as on the page. Both are settings; these widgets only
- * show them. Touch targets 96 px (~8 mm). Pointers are NULLed when the window
- * closes - the picker deletes the objects. */
+/* ---- the picker's right column: stay time and the CQ period while hopping ---
+ * Operator, 2026-11-26: the stay is adjustable (1-30 min), and a CQ run either
+ * keeps the TXCQ period for the whole stay (ANY) or calls EVEN in the 1st
+ * half and ODD in the 2nd, so both periods of each band are covered. Both
+ * are settings; these widgets only show them. Touch targets 96 px (~8 mm).
+ * Pointers are NULLed when the window closes - the picker deletes them. */
 static lv_obj_t *s_hop_dwell_lbl;
-static lv_obj_t *s_hop_par_btn[3];      /* ANY, EVEN, ODD */
+static lv_obj_t *s_hop_par_btn[2];      /* ANY, EVEN then ODD */
 
 static void hop_extra_paint(void)
 {
@@ -5883,13 +5891,13 @@ static void hop_extra_paint(void)
         if (!ft8_hop_dwell_valid(m)) m = 2;
         lv_label_set_text_fmt(s_hop_dwell_lbl, "%d min", m);
     }
-    /* Same fills as the page's TXCQ button: grey ANY, steel blue EVEN,
-     * warm orange ODD. Unselected = the raised surface. */
-    const int p = settings_get_ft8_cq_parity();
-    static const uint32_t on_col[3] = { 0x606078, UI_COLOR_PRIMARY_BORDER, 0xE09040 };
-    for (int i = 0; i < 3; i++) {
+    /* Selected = steel blue, as the page's TXCQ EVEN; unselected = the raised
+     * surface. */
+    const bool split = settings_get_ft8_hop_cq_split();
+    static const uint32_t on_col[2] = { 0x606078, UI_COLOR_PRIMARY_BORDER };
+    for (int i = 0; i < 2; i++) {
         if (!s_hop_par_btn[i]) continue;
-        const bool on = (i == 0) ? (p < 0) : (p == i - 1);
+        const bool on = (i == 1) == split;
         lv_obj_set_style_bg_color(s_hop_par_btn[i],
             lv_color_hex(on ? on_col[i] : UI_COLOR_SURFACE_RAISED), 0);
         lv_obj_set_style_border_width(s_hop_par_btn[i], on ? 3 : 1, 0);
@@ -5915,8 +5923,11 @@ static void hop_dwell_step_cb(lv_event_t *e)
 
 static void hop_par_cb(lv_event_t *e)
 {
-    cq_parity_apply((int)(intptr_t)lv_event_get_user_data(e));
+    const bool split = (intptr_t)lv_event_get_user_data(e) != 0;
+    settings_set_ft8_hop_cq_split(split);
+    ESP_LOGI(TAG, "FT8 hop CQ period: %s", split ? "EVEN 1st half, ODD 2nd half" : "ANY (TXCQ)");
     hop_extra_paint();
+    ft8_screen_view_refresh_preset();
 }
 
 static lv_obj_t *hop_extra_btn(lv_obj_t *parent, const char *txt, int x, int y, int w,
@@ -5958,14 +5969,14 @@ static void ft8_hop_picker_extra(lv_obj_t *panel)
     lv_obj_align(s_hop_dwell_lbl, LV_ALIGN_TOP_LEFT, x + 96, y + 70);
     hop_extra_btn(panel, LV_SYMBOL_PLUS, x + 296, y + 40, 96, hop_dwell_step_cb, +1);
 
-    hop_extra_title(panel, "TX CQ period", y + 162);
-    static const char *const names[3] = { "ANY", "EVEN", "ODD" };
-    for (int i = 0; i < 3; i++)
-        s_hop_par_btn[i] = hop_extra_btn(panel, names[i], x + i * 192, y + 202, 180,
-                                         hop_par_cb, (intptr_t)(i - 1));
+    hop_extra_title(panel, "CQ period on each band", y + 162);
+    static const char *const names[2] = { "ANY", "EVEN, then ODD" };
+    s_hop_par_btn[0] = hop_extra_btn(panel, names[0], x, y + 202, 180, hop_par_cb, 0);
+    s_hop_par_btn[1] = hop_extra_btn(panel, names[1], x + 192, y + 202, 330, hop_par_cb, 1);
 
     lv_obj_t *n = lv_label_create(panel);
-    lv_label_set_text(n, "CQ only. A reply takes the other station's opposite period.");
+    lv_label_set_text(n, "ANY: the TXCQ button decides for the whole stay.\n"
+                         "EVEN, then ODD: 1st half EVEN, 2nd half ODD.");
     lv_obj_set_width(n, 560);
     lv_label_set_long_mode(n, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(n, &lv_font_montserrat_20, 0);
@@ -5978,7 +5989,7 @@ static void ft8_hop_picker_extra(lv_obj_t *panel)
 static void ft8_hop_picker_closed(void)
 {
     s_hop_dwell_lbl = NULL;
-    for (int i = 0; i < 3; i++) s_hop_par_btn[i] = NULL;
+    for (int i = 0; i < 2; i++) s_hop_par_btn[i] = NULL;
     ft8_screen_view_refresh_preset();
 }
 

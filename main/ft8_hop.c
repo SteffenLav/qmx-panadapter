@@ -13,6 +13,7 @@
 #include "adif/adif_log.h"
 #include "cat/cat.h"
 #include "ft8_hound.h"
+#include "ft8_pileup.h"
 #include "ft8_qso.h"
 #include "ft8_rcvd_hold.h"
 #include "ft8_test.h"
@@ -48,6 +49,11 @@ static int dwell_sec(void)
 {
     int m = settings_get_ft8_hop_dwell_min();
     return (ft8_hop_dwell_valid(m) ? m : 2) * 60;
+}
+
+static int64_t period_ms(void)
+{
+    return ft8_op_mode_get() == FT8_OP_MODE_FT4 ? 7500 : 15000;
 }
 
 /* Time the retune needs before the next boundary. ⚠ NOT MEASURED YET - the
@@ -136,8 +142,37 @@ uint32_t ft8_slot_dial(int64_t slot_sec)
 }
 
 /* ---- gates --------------------------------------------------------------------
- * Hopping is for an idle page only. Each line is a reason a hop would be wrong;
- * the string is shown to the operator. */
+ * Each line is a reason a hop would be wrong now; the string is shown to the
+ * operator.
+ *
+ * ⭐ HOPPING RUNS UNDER THE AUTOMATION (operator, 2026-11-26): "the whole idea
+ * with hopping is to be able do all that you would normally do (CQ calling,
+ * Auto-answer CQ, Auto-work pileup etc) but the band changes automatically.
+ * And yes, if any automatic qso is ongoing when the stay-window is used then
+ * wait until finished". Until then the hop was for an idle page only and
+ * auto-answer or an armed CQ stopped it.
+ *
+ * So a CQ run with nobody answering, and auto-answer with nobody being worked,
+ * do NOT block. A QSO with a partner, its 73 watch and report hold DO block;
+ * the hop then waits (ft8_hop_due() is true on any later boundary once the
+ * stay is used up, not only on the next stay boundary).
+ *
+ * The radio transmits on every ticked band. That is the operator's choice
+ * when he ticks it, the same as WSPR hopping. Every key-down still passes the
+ * band guard (check_tx_guard.py), so a ticked band outside the licence never
+ * transmits. */
+/* A pileup entry heard in the last two slots. */
+static bool pileup_has_fresh_caller(void)
+{
+    ft8_pileup_entry_t pe[FT8_PILEUP_MAX];
+    const int n = ft8_pileup_get_all(pe, FT8_PILEUP_MAX);
+    const int64_t now = (int64_t)time(NULL);
+    const int64_t win = 2 * period_ms() / 1000 + 1;
+    for (int i = 0; i < n; i++)
+        if (pe[i].call[0] && now - pe[i].last_seen_utc <= win) return true;
+    return false;
+}
+
 /* ⛔ NO qmx_settings_t IN THIS FILE. It is 4268 B, and ft8_hop_get_state()
  * runs on httpd (/api/status) and taskLVGL (1 Hz): settings_load_all() here
  * crashed httpd with a Stack protection fault (bench1, 2026-11-25, 7005d57a).
@@ -148,14 +183,23 @@ static const char *blocked_reason(void)
     if (m != FT8_OP_MODE_FT8 && m != FT8_OP_MODE_FT4) return "JS8";
     if (!cat_is_ready())                               return "radio not ready";
     if (cat_user_pause_active())                       return "radio paused";
-    if (settings_get_ft8_robot_en())                   return "auto-answer on";
     if (ft8_hound_enabled(ft8_hound_mode()) || ft8_qso_is_hound_active()) return "Hound";
-    if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) return "TX armed";
-    if (ft8_qso_is_busy(NULL, 0))                      return "QSO in progress";
+    /* The CQ loop is "busy" with an empty target until somebody answers. */
+    char who[16] = "";
+    const bool busy = ft8_qso_is_busy(who, sizeof who);
+    const bool cq_only = busy && !who[0] && ft8_qso_get_state() == FT8_QSO_CQ;
+    if (busy && !cq_only)                              return "QSO in progress";
+    /* An armed or on-air CQ goes with us to the next band; any other armed
+     * TX (a reply, free text, a manual message) holds the hop. */
+    if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE && !cq_only) return "TX armed";
     if (ft8_qso_final_watch(NULL, 0, NULL, NULL))      return "waiting for 73";
     if (ft8_qso_done_log_held() || ft8_rcvd_hold_any()) return "report hold";
     if (cat_radio_transmitting())                      return "transmitting";
     if (cat_poll_held_by_other(0))                     return "radio busy";
+    /* Auto-work pileup: a caller still calling us is an automatic QSO about
+     * to start. Older entries do not hold the hop (the list keeps them an
+     * hour); the hop clears them, they were heard on the old band. */
+    if (settings_get_ft8_auto_pileup() && pileup_has_fresh_caller()) return "callers waiting";
     return NULL;
 }
 
@@ -180,15 +224,90 @@ static int next_band(uint16_t usable, int cur)
     return -1;
 }
 
+static uint32_t         s_own_hz;
+static volatile int64_t s_own_us;
+
+/* The band the radio is on. cat_get_frequency() follows the FA poll, so for
+ * about a second after a hop it still names the old band; inside the hop's
+ * own window the hop's target is the answer. */
+static int current_band(void)
+{
+    const int64_t t = s_own_us;
+    if (t && esp_timer_get_time() - t <= HOP_OWN_WINDOW_US) return band_index_for(s_own_hz);
+    return band_index_for(cat_get_frequency());
+}
+
+uint32_t ft8_hop_dial_now(void)
+{
+    const int64_t t = s_own_us;
+    if (t && esp_timer_get_time() - t <= HOP_OWN_WINDOW_US && s_own_hz) return s_own_hz;
+    return cat_get_frequency();
+}
+
+/* ---- the stay -----------------------------------------------------------------
+ * s_stay_from_ms is the boundary the current band's stay began on. A stay
+ * normally starts on a UTC multiple of the stay time. A hop that had to wait
+ * for a QSO starts its new stay where it happened, so the next band gets a
+ * full stay; the grid is not caught up. A band change by the operator (or the
+ * first look at a band) starts the stay on the grid point before it.
+ * Written on ft8_task only; read elsewhere under s_stay_mux. */
+static portMUX_TYPE s_stay_mux = portMUX_INITIALIZER_UNLOCKED;
+static int64_t      s_stay_from_ms;
+static int          s_stay_band = -1;
+
+static void stay_set(int64_t from_ms, int band)
+{
+    portENTER_CRITICAL(&s_stay_mux);
+    s_stay_from_ms = from_ms;
+    s_stay_band    = band;
+    portEXIT_CRITICAL(&s_stay_mux);
+}
+
+static int64_t stay_from_ms(void)
+{
+    portENTER_CRITICAL(&s_stay_mux);
+    int64_t v = s_stay_from_ms;
+    portEXIT_CRITICAL(&s_stay_mux);
+    return v;
+}
+
+/* Keep the stay start current for the band the radio is on now. */
+static void stay_track(int64_t next_boundary_ms)
+{
+    const int band = current_band();
+    if (band == s_stay_band && s_stay_from_ms) return;
+    const int64_t d = (int64_t)dwell_sec() * 1000;
+    stay_set(((next_boundary_ms - 1) / d) * d, band);
+}
+
 bool ft8_hop_due(int64_t next_boundary_ms)
 {
-    if ((next_boundary_ms / 1000) % dwell_sec() != 0 || next_boundary_ms % 1000 != 0) return false;
     if (__builtin_popcount(usable_mask(settings_get_ft8_hop_mask(), ft8_op_mode_get())) < 2) return false;
+    stay_track(next_boundary_ms);
+    if (next_boundary_ms < stay_from_ms() + (int64_t)dwell_sec() * 1000) return false;
     return blocked_reason() == NULL;
 }
 
-static uint32_t         s_own_hz;
-static volatile int64_t s_own_us;
+int ft8_hop_cq_parity(void)
+{
+    if (!settings_get_ft8_hop_cq_split()) return -1;
+    if (__builtin_popcount(usable_mask(settings_get_ft8_hop_mask(), ft8_op_mode_get())) < 2) return -1;
+    const int64_t from = stay_from_ms();
+    if (!from) return -1;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    const int64_t now = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    const int64_t p = period_ms(), d = (int64_t)dwell_sec() * 1000;
+    const int64_t half = from + d / 2, end = from + d;
+    /* The first EVEN slot not yet started (slot k is even when k is even). */
+    int64_t k = (now + p - 1) / p;
+    if (k & 1) k++;
+    if (k * p < half) return 0;                /* still in the 1st half: EVEN */
+    int64_t ko = (now + p - 1) / p;
+    if (!(ko & 1)) ko++;
+    if (ko * p < end) return 1;                /* 2nd half: ODD */
+    return 0;                                  /* the next stay begins EVEN */
+}
 
 bool ft8_hop_run(int64_t next_boundary_ms)
 {
@@ -225,7 +344,21 @@ bool ft8_hop_run(int64_t next_boundary_ms)
     ESP_LOGI(TAG, "band hop %s -> %s m (%lu Hz), %lld ms before the boundary",
              cur >= 0 ? kHopBands[cur] : "?", kHopBands[nb], (unsigned long)hz,
              (long long)lead_ms);
+    stay_set(next_boundary_ms, nb);
+    /* Callers in the pileup were heard on the old band; auto-work would call
+     * them here. The operator's own band change clears it the same way
+     * (ft8_band_change_stand_down); the hop keeps the CQ run and auto-answer,
+     * so only this part of that function applies. */
+    ft8_pileup_clear();
     return true;
+}
+
+bool ft8_hop_slot_on_current_band(int64_t slot_sec)
+{
+    const uint32_t d = ft8_slot_dial(slot_sec);
+    if (!d) return true;                     /* not latched: as before the latch */
+    const int a = band_index_for(d), b = current_band();
+    return a < 0 || b < 0 || a == b;
 }
 
 bool ft8_hop_owns_band_change(uint32_t dial_hz)
@@ -251,5 +384,12 @@ void ft8_hop_get_state(ft8_hop_state_t *out)
     time_t now = time(NULL);
     int ds = dwell_sec();
     out->dwell_min = ds / 60;
-    out->secs_to_hop = (now > 1600000000) ? (int)(ds - (now % ds)) : -1;
+    const int64_t from = stay_from_ms();
+    if (now > 1600000000 && from) {
+        int64_t left = (from / 1000 + ds) - (int64_t)now;
+        out->secs_to_hop = left < 0 ? 0 : (int)left;
+    } else {
+        out->secs_to_hop = -1;
+    }
+    out->cq_period = ft8_hop_cq_parity();
 }

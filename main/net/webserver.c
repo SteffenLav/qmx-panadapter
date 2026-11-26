@@ -279,6 +279,9 @@ static void add_ft8_tx_status(cJSON *root)
                 if (hs.blocked) cJSON_AddStringToObject(h, "blocked", hs.blocked);
                 if (hs.next_band[0]) cJSON_AddStringToObject(h, "next", hs.next_band);
                 cJSON_AddNumberToObject(h, "secs", hs.secs_to_hop);
+                /* The CQ split's period, while a CQ run is calling. */
+                if (hs.cq_period >= 0 && ft8_qso_get_state() == FT8_QSO_CQ)
+                    cJSON_AddStringToObject(h, "cq", hs.cq_period == 0 ? "EVEN" : "ODD");
             }
         }
     }
@@ -7530,6 +7533,8 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ft8_hop_minutes",
         ft8_hop_dwell_valid(c.ft8_hop_dwell_min) ? c.ft8_hop_dwell_min : 2);
     cJSON_AddNumberToObject(root, "ft8_cq_period", c.ft8_cq_parity);
+    cJSON_AddBoolToObject(root,   "ft8_hop_cq_split", c.ft8_hop_cq_split);
+    cJSON_AddNumberToObject(root, "wspr_hop_minutes", 2 * (c.wspr_hop_stay_cycles ? c.wspr_hop_stay_cycles : 1));
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -8116,6 +8121,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
      * Tab5's TXCQ button. */
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "ft8_cq_period")))
         ft8_screen_view_set_cq_parity(it->valueint);
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ft8_hop_cq_split")))
+        settings_set_ft8_hop_cq_split(cJSON_IsTrue(it));
+    /* WSPR stay in minutes, even, 2..60; stored as 2-minute cycles. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_hop_minutes"))
+        && it->valueint >= 2 && it->valueint <= 60 && (it->valueint % 2) == 0)
+        settings_set_wspr_hop_stay_cycles((uint8_t)(it->valueint / 2));
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
         int v = it->valueint;
         /* Clamped to 0..37, which is what BOTH dropdowns can display - not

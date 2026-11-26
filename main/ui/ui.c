@@ -11081,7 +11081,16 @@ static void topbar_reconcile_cb(lv_timer_t *t)
     // nothing.
     if (s_band_changed_pending) {
         s_band_changed_pending = false;
-        ft8_band_change_stand_down("band changed");
+        /* ⭐ NOT FOR AN FT8/FT4 BAND HOP (operator, 2026-11-26). Hopping is
+         * meant to carry the CQ run, auto-answer and pileup work to each ticked
+         * band; ticking a band is the operator saying the antenna is fit for
+         * it, as WSPR hopping already is. The hop clears the pileup itself
+         * (ft8_hop_run) and never fires during a QSO. Any other band change
+         * still stands everything down (#144, Roy KI0ER). */
+        if (ft8_hop_owns_band_change(cat_get_frequency()))
+            ESP_LOGI(TAG, "band hop: CQ run and auto-answer kept");
+        else
+            ft8_band_change_stand_down("band changed");
         // General Output power is per-band and mode-agnostic (unlike WSPR's
         // own declared-power reapply, which only runs from that page's own
         // dial-push) - a band change from ANY source (tap, memory recall,

@@ -5425,10 +5425,12 @@ const SET_FIELDS = [
   /* Same rule and the same name format as WSPR's row below. FT8 and FT4 share
      the list; FT4 skips 160 and 60, which have no FT4 frequency. */
   ["FT8 filters", "ft8_hop_bands", "text", "FT8/FT4 band hopping",
-     "Comma-separated, e.g. 20,40,15. Two or more turns hopping on, only while the page is idle. Leave empty to stay on one band"],
+     "Comma-separated, e.g. 20,40,15. Two or more turns hopping on. CQ, auto-answer and auto-work go with it, so it transmits on every listed band. A QSO finishes before a hop. Leave empty to stay on one band"],
   ["FT8 filters", "ft8_hop_minutes", "sel", "Hop: stay on each band",
      "Minutes on each band before the next hop. The hop is on a UTC multiple of this time",
      [["1","1 min"],["2","2 min"],["4","4 min"],["6","6 min"],["10","10 min"],["15","15 min"],["30","30 min"]]],
+  ["FT8 filters", "ft8_hop_cq_split", "bool", "Hop: CQ EVEN in the 1st half of each stay, ODD in the 2nd",
+     "Off: the TX CQ period below decides for the whole stay"],
   /* The same setting as the TXCQ button on the FT8 page (saved across reboot
      since 2026-11-26). setSave() posts it only when changed here, so a Save
      does not undo a press of that button made while this form was open. */
@@ -5437,6 +5439,8 @@ const SET_FIELDS = [
      [["-1","Any"],["0","Even (1st)"],["1","Odd (2nd)"]]],
   ["WSPR", "wspr_hop_bands", "text", "Band hopping",
      "Comma-separated, e.g. 40,30,20. One band means stay there; two or more turns hopping on. Leave empty to stay on the band you picked"],
+  ["WSPR", "wspr_hop_minutes", "sel", "Hop: stay on each band",
+     "One WSPR cycle is 2 minutes", Array.from({length: 30}, (_, i) => [String(2 * (i + 1)), (2 * (i + 1)) + " min"])],
   ["WSPR", "wspr_tx_dbm", "sel",  "Declared power",
      "What your transmitter really produces - it is published worldwide",
      [["0","0 dBm (1 mW)"],["3","3 dBm (2 mW)"],["7","7 dBm (5 mW)"],
@@ -9480,7 +9484,8 @@ async function tick() {
           let t = "", c = "#a0e0a0";
           if (h && h.blocked) { t = "Hop paused: " + h.blocked; c = "#ffa040"; }
           else if (h && h.next && h.secs >= 0)
-            t = "Hop: next " + h.next + "m in " + Math.floor(h.secs / 60) + ":" + String(h.secs % 60).padStart(2, "0");
+            t = "Hop: next " + h.next + "m in " + Math.floor(h.secs / 60) + ":" + String(h.secs % 60).padStart(2, "0") +
+                (h.cq ? ", CQ " + h.cq : "");
           else if (h) t = "Hop: " + h.bands;
           el.textContent = t;
           el.style.color = c;

@@ -35,11 +35,15 @@ bool ft8_hop_dwell_valid(int min);
  * slot it does not know (older than the ring); callers then fall back to the
  * current dial, which is what they did before the latch existed. */
 void     ft8_slot_dial_latch(int64_t slot_sec, uint32_t dial_hz);
+/* The dial now: the hop's target for a few seconds after a hop (the FA poll
+ * has not confirmed it yet), else cat_get_frequency(). For the latch. */
+uint32_t ft8_hop_dial_now(void);
 uint32_t ft8_slot_dial(int64_t slot_sec);
 
 /* ---- the hop ----------------------------------------------------------------
- * ft8_hop_due(): the slot that ends at next_boundary_ms is the last of a
- * stay AND hopping is on AND nothing blocks it. ft8_task asks this before the
+ * ft8_hop_due(): the stay on this band is used up by next_boundary_ms AND
+ * hopping is on AND nothing blocks it (a QSO, an armed non-CQ TX, ...). A hop
+ * that was held stays due on every later boundary until it can run. ft8_task asks this before the
  * capture so it can force the early cut (13.2 s FT8, 5.6 s FT4), which is what
  * makes a gap to retune in.
  *
@@ -54,6 +58,17 @@ bool ft8_hop_run(int64_t next_boundary_ms);
  * list (with a separator) instead of clearing it. */
 bool ft8_hop_owns_band_change(uint32_t dial_hz);
 
+/* False when slot_sec was captured on another band than the one the radio is
+ * on now: the last slot before a hop is decoded after the hop. Its decodes
+ * must not start or advance a QSO, or the reply goes out on the wrong band.
+ * True when the slot's dial is unknown. */
+bool ft8_hop_slot_on_current_band(int64_t slot_sec);
+
+/* The CQ period the hop wants for the next CQ: 0 EVEN (1st half of the stay),
+ * 1 ODD (2nd half), -1 = no say (split off or not hopping; the TXCQ setting
+ * decides). */
+int ft8_hop_cq_parity(void);
+
 /* For the page and /api/status. hopping = mask has two or more of the radio's
  * bands. blocked = why it is not hopping right now, or NULL. next_band and
  * secs_to_hop are valid when hopping and not blocked. */
@@ -64,5 +79,6 @@ typedef struct {
     char        next_band[6];   /* "40" */
     int         secs_to_hop;
     int         dwell_min;      /* stay per band in force */
+    int         cq_period;      /* ft8_hop_cq_parity(): -1, 0 EVEN, 1 ODD */
 } ft8_hop_state_t;
 void ft8_hop_get_state(ft8_hop_state_t *out);

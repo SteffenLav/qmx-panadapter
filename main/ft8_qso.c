@@ -27,6 +27,7 @@
 
 #include "esp_timer.h"   // the sticky-timeout expiry clock
 #include "ft8_qso.h"
+#include "ft8_hop.h"     // ft8_hop_cq_parity - the CQ period while hopping
 #include "ft8_robot.h"   // ft8_band_change_stand_down also stands the robot down
 #include "ft8_pileup.h"
 #include "ft8_greylist.h"
@@ -1190,6 +1191,18 @@ static void rearm_current(void)
             ft8_status_set("listening (after %d CQ calls)", cq_sent);
             ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);
             return;
+        }
+    }
+
+    /* Band hop with the CQ split on: EVEN in the 1st half of each stay, ODD in
+     * the 2nd (operator, 2026-11-26 - the two periods are two channels on one
+     * band, and both should be called). Only the CQ itself; a reply's period
+     * comes from the station it answers. */
+    if (st == FT8_QSO_CQ) {
+        const int hp = ft8_hop_cq_parity();
+        if (hp >= 0) {
+            req.use_parity     = true;
+            req.want_even_slot = (hp == 0);
         }
     }
 

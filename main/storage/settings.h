@@ -897,6 +897,9 @@ typedef struct {
      * 0 bands ticked, or hopping off, means stay on wspr_dial_hz. */
     uint16_t wspr_hop_mask;
     bool     wspr_hop_en;
+    /* WSPR stay per band in 2-minute cycles, 1..30 (2..60 min). 1 = one
+     * cycle per band, the behaviour before 2026-11-26. */
+    uint8_t  wspr_hop_stay_cycles;
     /* FT8/FT4 receive band hopping (Mark N8MH, 2026-11-25). Bit i = band i of
      * ft8_hop.c's kHopBands (the same order as WSPR's: 160 80 60 40 30 20 17
      * 15 12 10 6). More than one bit = hopping on; there is no separate
@@ -911,6 +914,10 @@ typedef struct {
     /* TXCQ period: -1 any, 0 EVEN only, 1 ODD only. Was session-only until
      * 2026-11-26; saved now, like WSJT-X's "Tx even/1st". */
     int8_t   ft8_cq_parity;
+    /* CQ period while FT8/FT4 hopping (operator, 2026-11-26): false = ANY,
+     * the TXCQ setting for the whole stay; true = EVEN in the 1st half of
+     * each stay, ODD in the 2nd, so both periods of every band are called. */
+    bool     ft8_hop_cq_split;
 
     /* ⭐ THE MASTER SWITCH FOR THE WHOLE WSPR PAGE, DEFAULT OFF.
      *
@@ -1205,6 +1212,9 @@ bool settings_get_ft8_skip_tx1(void);     // narrow: ft8_filters.skip_tx1, read 
 uint16_t settings_get_ft8_hop_mask(void); // narrow: for ft8_hop.c on httpd / taskLVGL stacks
 uint8_t  settings_get_ft8_hop_dwell_min(void);  // narrow, same reason
 int      settings_get_ft8_cq_parity(void);      // narrow: -1 any, 0 even, 1 odd
+bool     settings_get_ft8_hop_cq_split(void);   // narrow
+bool     settings_get_ft8_auto_pileup(void);    // narrow: ft8_filters.auto_pileup
+uint8_t  settings_get_wspr_hop_stay_cycles(void); // narrow, 1..30
 bool settings_get_ft8_robot_en(void);     // narrow: ft8_filters.robot_en, same reason
 void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
@@ -1598,6 +1608,8 @@ void settings_set_wspr_hop_en(bool v);
 void settings_set_ft8_hop_mask(uint16_t v);
 void settings_set_ft8_hop_dwell_min(uint8_t v);
 void settings_set_ft8_cq_parity(int v);   // anything but 0/1 stores -1 (any)
+void settings_set_ft8_hop_cq_split(bool v);
+void settings_set_wspr_hop_stay_cycles(uint8_t v);   // clamped 1..30
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
 void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default ON since 2026-11-19
 void settings_set_wspr_dump_cycles(uint8_t v);

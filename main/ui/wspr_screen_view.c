@@ -822,6 +822,70 @@ static void hop_mask_changed(uint16_t mask)
     hop_button_refresh();
 }
 
+/* The picker's right column: stay per band, - / + in 2-minute steps (one WSPR
+ * cycle). 96 px targets (~8 mm). The label pointer is NULLed on close. */
+static lv_obj_t *s_hop_stay_lbl;
+
+static void hop_stay_paint(void)
+{
+    if (s_hop_stay_lbl)
+        lv_label_set_text_fmt(s_hop_stay_lbl, "%d min", 2 * (int)settings_get_wspr_hop_stay_cycles());
+}
+
+static void hop_stay_step_cb(lv_event_t *e)
+{
+    const int dir = (int)(intptr_t)lv_event_get_user_data(e);
+    int c = (int)settings_get_wspr_hop_stay_cycles() + dir;
+    if (c < 1) c = 1;
+    if (c > 30) c = 30;
+    settings_set_wspr_hop_stay_cycles((uint8_t)c);
+    ESP_LOGI(TAG, "WSPR hop stay: %d min", 2 * c);
+    hop_stay_paint();
+}
+
+static void hop_stay_btn(lv_obj_t *panel, const char *txt, int x, int y, intptr_t dir)
+{
+    lv_obj_t *b = lv_btn_create(panel);
+    lv_obj_set_size(b, 96, 96);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, x, y);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_add_event_cb(b, hop_stay_step_cb, LV_EVENT_CLICKED, (void *)dir);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+    lv_obj_center(l);
+}
+
+static void hop_picker_extra(lv_obj_t *panel)
+{
+    const int x = BAND_HOP_EXTRA_X, y = BAND_HOP_EXTRA_Y;
+    lv_obj_t *t = lv_label_create(panel);
+    lv_label_set_text(t, "Stay on each band");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, x, y);
+    hop_stay_btn(panel, LV_SYMBOL_MINUS, x, y + 40, -1);
+    s_hop_stay_lbl = lv_label_create(panel);
+    lv_obj_set_width(s_hop_stay_lbl, 200);
+    lv_obj_set_style_text_align(s_hop_stay_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_hop_stay_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(s_hop_stay_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_align(s_hop_stay_lbl, LV_ALIGN_TOP_LEFT, x + 96, y + 70);
+    hop_stay_btn(panel, LV_SYMBOL_PLUS, x + 296, y + 40, +1);
+    lv_obj_t *n = lv_label_create(panel);
+    lv_label_set_text(n, "One WSPR cycle is 2 minutes.");
+    lv_obj_set_style_text_font(n, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(n, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(n, LV_ALIGN_TOP_LEFT, x, y + 150);
+    hop_stay_paint();
+}
+
+static void hop_picker_closed(void)
+{
+    s_hop_stay_lbl = NULL;
+    hop_button_refresh();
+}
+
 static void hop_modal_open_cb(lv_event_t *e)
 {
     (void)e;
@@ -842,12 +906,12 @@ static void hop_modal_open_cb(lv_event_t *e)
      *   - so what should I do?       pick at least two - say it plainly */
     band_hop_picker_open("Band hop",
         "Pick at least two bands.\n"
-        "The radio moves to the next ticked band every cycle -\n"
-        "two minutes on each - in the order listed below, then wraps.\n"
+        "The radio moves to the next ticked band when the stay\n"
+        "set on the right ends, in the order below, then wraps.\n"
         "\n"
         "Fewer than two ticked means no hopping at all: the band\n"
         "selector on the page decides, and the radio stays there.",
-        ch, n, hs.wspr_hop_mask, hop_mask_changed, hop_button_refresh, NULL);
+        ch, n, hs.wspr_hop_mask, hop_mask_changed, hop_picker_closed, hop_picker_extra);
 }
 
 /* Opened from the settings drawer now that the button has moved off this page.
@@ -1089,6 +1153,15 @@ static void hop_maybe(void)
     const int64_t next_cycle = (int64_t)(now / 120) + 1;
     if ((now % 120) < (120 - HOP_LEAD_SEC)) return;
     if (s_hop_done_cycle == next_cycle) return;  /* already hopped for it */
+    /* Stay on each band for N cycles (operator, 2026-11-26: "wspr band hopping
+     * does not make sense if it is only one cycle for each stay-window"). The
+     * hop is on a cycle count that is a multiple of N since the epoch, so every
+     * Tab5 with the same setting hops together. N = 1 is the old behaviour. */
+    {
+        const int stay = (hs.wspr_hop_stay_cycles >= 1 && hs.wspr_hop_stay_cycles <= 30)
+                       ? hs.wspr_hop_stay_cycles : 1;
+        if (next_cycle % stay != 0) return;
+    }
 
     /* Next ticked band AFTER the current one, wrapping - so the rotation is the
      * table's order and an operator can predict where it goes next. */

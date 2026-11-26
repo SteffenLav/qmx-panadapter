@@ -65,6 +65,13 @@ and called it "the automatic reply function", which is exactly what it is.
 - **Some of these sites can transmit with nobody deciding at that moment.**
   That is not a defect: a beacon, a CQ run and an auto-answer are all features
   somebody asked for. The point is that the number should never be a surprise.
+- ⚠ **FT8/FT4 band hopping moves these sites to other bands** (operator,
+  2026-11-26). `ft8_hop.c` arms nothing, so it is not a row. But since then a
+  CQ run, auto-answer and auto-work pileup keep running through a hop, so
+  they transmit on every band the operator ticked, not only the one he
+  dialled. The hop waits for a QSO with a partner; each key-down still passes
+  the band guard. A band change by any other route still stands them down
+  (`ft8_band_change_stand_down`, #144).
 - ⚠ **The `human` column is read by a person and can rot like any comment.**
   The checker proves the table lists the right SITES; it cannot prove these
   answers. Re-read it when touching the QSO machine.
