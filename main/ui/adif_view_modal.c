@@ -966,6 +966,17 @@ static void list_render_now(void)
         return;
     }
 
+    /* ⛔ THE CACHE FIRST, THEN THE MATCH LIST. cache_load() calls
+     * adif_view_cache_invalidate() whenever the record count changed, and that
+     * frees s_match too. It used to run AFTER s_match was allocated, so every
+     * render after a count change stored no matches: the title showed the
+     * counts over an empty list. Operator 2026-11-26: blank list after a single
+     * delete. It also hit every first open, hidden there only because the
+     * Today->All fallback below re-renders when nothing showed - likely
+     * Gyula HA3HZ's 2026-09-10 "the initial press shows only the summary". */
+    int64_t t_read_start = esp_timer_get_time();
+    bool have = cache_load(total);
+
     // Which records matched, as indices into the cache - no record TEXT is
     // copied any more. The old version staged the newest 200 matches into a
     // 200 KB ring of 1024-byte slots so the build loop had something to read
@@ -987,8 +998,6 @@ static void list_render_now(void)
         return;
     }
 
-    int64_t t_read_start = esp_timer_get_time();
-    bool have = cache_load(total);
     int matched = 0;      // records passing the current filter (all, when All)
     int today_count = 0;  // records dated today UTC, counted regardless of filter
     if (have) {
