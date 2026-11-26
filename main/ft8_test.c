@@ -4976,6 +4976,10 @@ static void ft8_task(void *arg)
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
         last_boundary_ms = boundary_ms;
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
+        /* A band hop the gap before this boundary could not take (our own CQ
+         * ended too late): take it now, before the latch and the TX check, so
+         * this slot's CQ and capture are on the new band. No-op otherwise. */
+        ft8_hop_run_at_boundary(boundary_ms);
         /* The dial THIS slot is captured on. Decodes land after the boundary,
          * and after a band hop the radio is already elsewhere - every spot and
          * band lookup for this slot reads the latch, not cat_get_frequency().

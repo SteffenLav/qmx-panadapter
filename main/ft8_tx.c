@@ -4,6 +4,7 @@
 // synthesis + envelope shaping; we just feed it tone frequencies).
 
 #include "ft8_tx.h"
+#include "ft8_hop.h"   // ft8_hop_dial_now - the dial the guard checks after a hop
 #include "ft8_hash.h"
 #include "ft8_msg_guard.h"
 #include "ft8_status.h"
@@ -1273,7 +1274,11 @@ void ft8_tx_run(const ft8_tx_request_t *req)
      * most - checked, because a dial at the top band edge puts the top tone
      * outside while the base is inside. */
     char band_err[160] = "";
-    const uint32_t tx_dial = sim ? 0u : cat_get_frequency();
+    /* ft8_hop_dial_now(), not cat_get_frequency(): right after a band hop the
+     * FA poll has not confirmed the new dial, and the guard would judge the
+     * OLD band while the radio keys on the new one. Since 2026-11-26 a CQ run
+     * keys right after a hop. */
+    const uint32_t tx_dial = sim ? 0u : ft8_hop_dial_now();
     const bool band_ok = sim ? true
         : tx_band_guard_allows(tx_dial + (uint32_t)req->audio_freq_hz,
                                tx_dial + (uint32_t)req->audio_freq_hz + 50u,

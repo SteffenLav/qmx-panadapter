@@ -1199,8 +1199,13 @@ static void rearm_current(void)
      * band, and both should be called). Only the CQ itself; a reply's period
      * comes from the station it answers. */
     if (st == FT8_QSO_CQ) {
-        const int hp = ft8_hop_cq_parity();
-        if (hp >= 0) {
+        int hp = -1;
+        const int plan = ft8_hop_cq_plan(&hp);
+        if (plan == 1) {
+            ESP_LOGI(TAG, "CQ split: waiting for the %s slot of this half", hp ? "ODD" : "EVEN");
+            return;    /* cq_listen_for_answers() re-arms next RX slot */
+        }
+        if (plan == 0) {
             req.use_parity     = true;
             req.want_even_slot = (hp == 0);
         }
@@ -2130,6 +2135,15 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     // lock to the parity of the first TX slot so re-arms always target the
     // same slot type and the opposite slot stays free for RX.
     ft8_tx_request_t req_copy = *cq_req;
+    /* Band hop CQ split: its period wins, and a WAIT defers the first CQ to
+     * the run's per-slot re-arm (Sim 2026-11-26: the first CQ ignored the
+     * split). */
+    int hop_par = -1;
+    const int hop_plan = ft8_hop_cq_plan(&hop_par);
+    if (hop_plan >= 0) {
+        req_copy.use_parity     = true;
+        req_copy.want_even_slot = (hop_par == 0);
+    }
     if (!req_copy.use_parity) {
         int64_t next_slot = next_slot_sec(false, false, req_copy.protocol);
         req_copy.use_parity     = true;
@@ -2137,7 +2151,9 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     }
 
     char arm_err[64];
-    if (!ft8_tx_arm(&req_copy, arm_err, sizeof(arm_err))) {
+    if (hop_plan == 1)
+        ESP_LOGI(TAG, "CQ split: first CQ waits for the %s slot of this half", hop_par ? "ODD" : "EVEN");
+    else if (!ft8_tx_arm(&req_copy, arm_err, sizeof(arm_err))) {
         if (err) snprintf(err, err_len, "%s", arm_err);
         return false;
     }

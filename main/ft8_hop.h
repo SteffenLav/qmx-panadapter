@@ -53,6 +53,13 @@ uint32_t ft8_slot_dial(int64_t slot_sec);
 bool ft8_hop_due(int64_t next_boundary_ms);
 bool ft8_hop_run(int64_t next_boundary_ms);
 
+/* The hop at a boundary, before that slot's TX check and dial latch. Runs
+ * only when the hop in the gap before this boundary did not (a CQ held for
+ * the previous slot's decode starts up to 2.3 s late and ends too close to
+ * the boundary). Without it that slot's CQ went out on the OLD band and the
+ * stay grew by a slot (Sim 2026-11-26). The slot loses the retune time. */
+bool ft8_hop_run_at_boundary(int64_t boundary_ms);
+
 /* True when the radio was retuned to dial_hz's band by a hop in the last few
  * seconds. The band-change handler in ui.c asks this so a hop keeps the decode
  * list (with a separator) instead of clearing it. */
@@ -64,9 +71,13 @@ bool ft8_hop_owns_band_change(uint32_t dial_hz);
  * True when the slot's dial is unknown. */
 bool ft8_hop_slot_on_current_band(int64_t slot_sec);
 
-/* The CQ period the hop wants for the next CQ: 0 EVEN (1st half of the stay),
- * 1 ODD (2nd half), -1 = no say (split off or not hopping; the TXCQ setting
- * decides). */
+/* The CQ split's plan for the next CQ. Returns -1: no say (split off or not
+ * hopping; the TXCQ setting decides). 0: arm now with *parity (0 EVEN in the
+ * 1st half of the stay, 1 ODD in the 2nd). 1: WAIT - the next slot of
+ * *parity is in the wrong half; do not arm, ask again next slot. */
+int ft8_hop_cq_plan(int *parity);
+
+/* The period the split wants now, for display: -1, 0 EVEN, 1 ODD. */
 int ft8_hop_cq_parity(void);
 
 /* For the page and /api/status. hopping = mask has two or more of the radio's

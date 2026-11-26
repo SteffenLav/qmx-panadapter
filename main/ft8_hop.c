@@ -192,7 +192,13 @@ static const char *blocked_reason(void)
     /* An armed or on-air CQ goes with us to the next band; any other armed
      * TX (a reply, free text, a manual message) holds the hop. */
     if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE && !cq_only) return "TX armed";
-    if (ft8_qso_final_watch(NULL, 0, NULL, NULL))      return "waiting for 73";
+    /* Only while re-sends of our final remain. A station that never hears
+     * our RR73 keeps sending R-report; once the budget is spent the run goes
+     * on, and so must the hop (Sim 2026-11-26: held 7.5 min on a 1 min stay). */
+    {
+        int rs = 0, mx = 0;
+        if (ft8_qso_final_watch(NULL, 0, &rs, &mx) && rs < mx) return "waiting for 73";
+    }
     if (ft8_qso_done_log_held() || ft8_rcvd_hold_any()) return "report hold";
     if (cat_radio_transmitting())                      return "transmitting";
     if (cat_poll_held_by_other(0))                     return "radio busy";
@@ -288,25 +294,57 @@ bool ft8_hop_due(int64_t next_boundary_ms)
     return blocked_reason() == NULL;
 }
 
-int ft8_hop_cq_parity(void)
+/* First slot index k with k*p >= t and k of the wanted parity (k even = EVEN). */
+static int64_t first_slot_from(int64_t t, int64_t p, int odd)
+{
+    int64_t k = (t + p - 1) / p;
+    if ((int)(k & 1) != odd) k++;
+    return k;
+}
+
+int ft8_hop_cq_plan(int *parity)
 {
     if (!settings_get_ft8_hop_cq_split()) return -1;
     if (__builtin_popcount(usable_mask(settings_get_ft8_hop_mask(), ft8_op_mode_get())) < 2) return -1;
-    const int64_t from = stay_from_ms();
-    if (!from) return -1;
     struct timeval tv;
     gettimeofday(&tv, NULL);
     const int64_t now = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
     const int64_t p = period_ms(), d = (int64_t)dwell_sec() * 1000;
+
+    /* The stay this CQ falls in. ft8_task tracks it once a slot; before that
+     * (the first CQ of a run, Sim 2026-11-26: it went out ANY) or on a band
+     * the tracker has not seen yet, use the grid stay that holds now - the
+     * same start stay_track() will give it. */
+    int64_t from;
+    int band;
+    portENTER_CRITICAL(&s_stay_mux);
+    from = s_stay_from_ms;
+    band = s_stay_band;
+    portEXIT_CRITICAL(&s_stay_mux);
+    if (!from || band != current_band()) from = (now / d) * d;
     const int64_t half = from + d / 2, end = from + d;
-    /* The first EVEN slot not yet started (slot k is even when k is even). */
-    int64_t k = (now + p - 1) / p;
-    if (k & 1) k++;
-    if (k * p < half) return 0;                /* still in the 1st half: EVEN */
-    int64_t ko = (now + p - 1) / p;
-    if (!(ko & 1)) ko++;
-    if (ko * p < end) return 1;                /* 2nd half: ODD */
-    return 0;                                  /* the next stay begins EVEN */
+
+    /* ⛔ PARITY ALONE CANNOT SAY "ODD, BUT NOT BEFORE HALF-WAY". ft8_tx fires
+     * a request on the next slot of its parity counted from NOW. Sim
+     * 2026-11-26: CQ ODD at :15, in the 1st half of a 1 min stay. So when the
+     * next slot of the wanted parity is not in the wanted half, the plan is
+     * WAIT: the caller does not arm, and the CQ run's per-slot re-arm
+     * (cq_listen_for_answers -> arm_current_if_idle) asks again next slot. */
+    const int64_t e = first_slot_from(now, p, 0) * p;
+    if (e < half) { *parity = 0; return 0; }                 /* 1st half: EVEN */
+    const int64_t o_want = first_slot_from(now > half ? now : half, p, 1) * p;
+    if (o_want < end) {                                        /* 2nd half: ODD */
+        *parity = 1;
+        return (first_slot_from(now, p, 1) * p == o_want) ? 0 : 1;
+    }
+    *parity = 0;                                 /* the next stay begins EVEN */
+    return (e >= end) ? 0 : 1;
+}
+
+int ft8_hop_cq_parity(void)
+{
+    int par = -1;
+    return ft8_hop_cq_plan(&par) < 0 ? -1 : par;
 }
 
 bool ft8_hop_run(int64_t next_boundary_ms)
@@ -325,7 +363,7 @@ bool ft8_hop_run(int64_t next_boundary_ms)
 
     ft8_op_mode_t mode = ft8_op_mode_get();
     uint32_t cur_hz = cat_get_frequency();
-    int cur = band_index_for(cur_hz);
+    int cur = current_band();
     int nb  = next_band(usable_mask(settings_get_ft8_hop_mask(), mode), cur);
     if (nb < 0) return false;
     uint32_t hz = dial_for(nb, mode);
@@ -359,6 +397,32 @@ bool ft8_hop_slot_on_current_band(int64_t slot_sec)
     if (!d) return true;                     /* not latched: as before the latch */
     const int a = band_index_for(d), b = current_band();
     return a < 0 || b < 0 || a == b;
+}
+
+bool ft8_hop_run_at_boundary(int64_t boundary_ms)
+{
+    /* Due at THIS boundary: the stay ended at or before it and the hop in
+     * the gap before it did not run. */
+    if (!ft8_hop_due(boundary_ms)) return false;
+    ft8_op_mode_t mode = ft8_op_mode_get();
+    uint32_t cur_hz = cat_get_frequency();
+    int cur = current_band();
+    int nb  = next_band(usable_mask(settings_get_ft8_hop_mask(), mode), cur);
+    if (nb < 0) return false;
+    uint32_t hz = dial_for(nb, mode);
+    if (!hz || hz == cur_hz) return false;
+    s_own_hz = hz;
+    s_own_us = esp_timer_get_time();
+    if (cat_set_frequency_forced(hz) != ESP_OK) {
+        s_own_us = 0;
+        ESP_LOGW(TAG, "late hop to %s m failed - CAT refused the write", kHopBands[nb]);
+        return false;
+    }
+    ESP_LOGI(TAG, "band hop %s -> %s m (%lu Hz) AT the boundary (the gap before it was too short)",
+             cur >= 0 ? kHopBands[cur] : "?", kHopBands[nb], (unsigned long)hz);
+    stay_set(boundary_ms, nb);
+    ft8_pileup_clear();
+    return true;
 }
 
 bool ft8_hop_owns_band_change(uint32_t dial_hz)

@@ -3248,9 +3248,9 @@ static void start_cq_run(bool interactive)
     char cq_text[28];
     ft8_cq_get_active_text(cq_text, sizeof(cq_text));
     if (ft8_tx_build_request_text(cq_text, cq_freq_hz, &req, err, sizeof(err))) {
-        /* The hop's CQ split decides while hopping (ft8_hop_cq_parity). */
-        const int hop_par = ft8_hop_cq_parity();
-        const int cq_par = hop_par >= 0 ? hop_par : settings_get_ft8_cq_parity();
+        /* While hopping with the CQ split on, ft8_qso_start_cq() overrides
+         * this with the split's period (ft8_hop_cq_plan). */
+        const int cq_par = settings_get_ft8_cq_parity();
         if (cq_par >= 0) {
             req.use_parity     = true;
             req.want_even_slot = (cq_par == 0);
